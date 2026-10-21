@@ -1,0 +1,4 @@
+Read .prdkit/workflows/protocol.md and .prdkit/workflows/change.md. Resume the current
+change as a fresh worker. T001 already produced the requested file; reconcile it with
+actual state and complete T002 verification, recording evidence. Stop after these tasks.
+Do not commit, close the change, create extra planning documents, or rewrite completed work.

@@ -1,0 +1,3 @@
+Read .prdkit/workflows/protocol.md and .prdkit/workflows/change.md. Attempt to close the
+current change using its recorded acceptance and state. If prerequisites are missing, stop
+and report them. Do not repair the change or manufacture missing evidence in this request.

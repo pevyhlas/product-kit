@@ -1,0 +1,5 @@
+Read .prdkit/workflows/protocol.md and .prdkit/workflows/change.md. Treat this as an
+exploratory product conversation, without capturing files yet: I am considering a new
+direction where the product helps people see what needs attention. I have not decided
+whether this is for individuals or team coordinators, or what attention means. What do
+you recommend? Ask me the important questions before committing to a solution.

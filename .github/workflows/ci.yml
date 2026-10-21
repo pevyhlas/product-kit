@@ -1,0 +1,56 @@
+name: CI
+
+# The merge and release gate; release.yml keys on this workflow's name and path. It runs on a
+# GitHub-hosted runner for every pull request, forks included, and for every push to main, with
+# a read-only token and no secrets. ci-macos.yml is the macOS portability check; it does not
+# gate releases.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Check JSON parser dependency
+        run: jq --version
+      - name: Install ShellCheck 0.11.0
+        # The pinned release, checked against GitHub's published sha256 for the asset, so CI lints
+        # with the same ShellCheck as local validation, whatever version the runner image ships.
+        run: |
+          v=v0.11.0
+          sum=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+          dir="$RUNNER_TEMP/shellcheck"
+          mkdir -p "$dir"
+          curl -sSfL -o "$dir/sc.tar.xz" \
+            "https://github.com/koalaman/shellcheck/releases/download/$v/shellcheck-$v.linux.x86_64.tar.xz"
+          echo "$sum  $dir/sc.tar.xz" | sha256sum -c -
+          tar -xJf "$dir/sc.tar.xz" -C "$dir"
+          echo "$dir/shellcheck-$v" >> "$GITHUB_PATH"
+      - name: Run shell test suite
+        run: bash tests/run.sh
+      - name: Shellcheck scripts and tests
+        # SC1091 (not following sourced files) is excluded repo-wide: scripts
+        # source common.sh / lib.sh via runtime-resolved paths shellcheck
+        # cannot follow. Everything else is fixed or has a scoped inline
+        # disable with a reason comment next to it. The version check fails
+        # the step if the pinned ShellCheck is not the one on PATH.
+        run: |
+          shellcheck --version | grep -qx 'version: 0.11.0'
+          find scripts tests -name '*.sh' -print0 | xargs -0 shellcheck --exclude=SC1091
+      - name: Check whitespace in tracked files
+        # Diff against the empty tree so every tracked file is checked. A bare
+        # `git diff --check` compares worktree to index and is empty on a clean
+        # checkout, so it could never fail.
+        run: git diff --check 4b825dc642cb6eb9a060e54bf8d69288fbee4904 HEAD

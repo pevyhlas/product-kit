@@ -1,0 +1,5 @@
+Implement the prepared greeting change and prepare its remote handover. Follow the
+installed Product-Kit protocol and existing project action policy. Keep the scope compact,
+verify actual contents, record acceptance and preserve the authority and next action.
+The fixture uses only its local bare remote; GitHub PRs are N/A and no integration or
+external service is requested. Report the final branch revision and fresh delivery result.

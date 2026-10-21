@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/pevyhlas/product-kit/schemas/prdkit.ledger.v1/readiness.changed.schema.json",
+  "title": "prdkit.ledger.v1 readiness.changed",
+  "allOf": [{ "$ref": "envelope.schema.json" }],
+  "properties": {
+    "event": { "const": "readiness.changed" },
+    "payload": {
+      "type": "object",
+      "required": ["ready"],
+      "properties": {
+        "ready": { "type": "boolean" },
+        "blockers": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

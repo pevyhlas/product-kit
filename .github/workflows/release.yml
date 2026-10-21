@@ -1,0 +1,135 @@
+name: Release
+
+# Automatic kit releases (CONTRIBUTING.md, "Releases"). When CI (ci.yml, never "CI (macOS)")
+# succeeds for a push to main, the exact commit CI verified (workflow_run.head_sha, never
+# "current main") is released if it bumps VERSION: an annotated tag vX.Y.Z on that commit plus a
+# GitHub release whose notes are its CHANGELOG section and a generated Verification block. Every
+# other main push is a no-op.
+# workflow_dispatch re-evaluates one main commit for recovery; it finds and verifies a successful
+# CI push run for that SHA. Decisions live in scripts/maintainer/.
+#
+# The tooling runs from this workflow's own commit; only the released tree comes from the SHA.
+# Both jobs take the SHA and CI run from the event and verify them independently: the release
+# job trusts nothing from the gate except whether to start. Both run on fresh GitHub-hosted
+# runners. workflow_run also fires for pull-request CI runs, forks included, and always runs this
+# file from the default branch; the gate's if: skips every run that is not a push to main in this
+# repository, so no pull request reaches either job.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full 40-character SHA of a commit on main whose CI push run succeeded
+        required: true
+        type: string
+      dry_run:
+        description: Only report the decision; create no tag or release
+        required: false
+        type: boolean
+        default: false
+      allow_backfill:
+        description: Allow releasing a version older than the newest vX.Y.Z tag
+        required: false
+        type: boolean
+        default: false
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  gate:
+    name: gate
+    # workflow_run: only a successful CI run for a push to main in this repository.
+    # workflow_dispatch: only the main branch's copy of this workflow.
+    if: >-
+      (github.event_name == 'workflow_run'
+        && github.event.workflow_run.conclusion == 'success'
+        && github.event.workflow_run.event == 'push'
+        && github.event.workflow_run.head_branch == 'main'
+        && github.event.workflow_run.head_repository.full_name == github.repository)
+      || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    # Read-only token: decides whether the release job starts at all.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      action: ${{ steps.gate.outputs.action }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0 # full first-parent history of main and all tags
+          persist-credentials: false
+      - name: Verify CI and plan the release
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.event.workflow_run.head_sha || inputs.sha }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
+          ALLOW_BACKFILL: ${{ inputs.allow_backfill }}
+        run: |
+          set -- gate --sha "$SHA"
+          if [ -n "$CI_RUN_ID" ]; then set -- "$@" --ci-run-id "$CI_RUN_ID"; fi
+          if [ "$ALLOW_BACKFILL" = true ]; then set -- "$@" --allow-backfill; fi
+          out="$(bash scripts/maintainer/release-github.sh "$@")"
+          printf '%s\n' "$out"
+          action="$(printf '%s\n' "$out" | sed -n 's/^action=//p')"
+          case "$action" in
+            create|release-only|none) ;;
+            *) echo "unexpected gate action '$action'" >&2; exit 1 ;;
+          esac
+          printf 'action=%s\n' "$action" >> "$GITHUB_OUTPUT"
+
+  release:
+    name: release
+    needs: gate
+    if: >-
+      (needs.gate.outputs.action == 'create' || needs.gate.outputs.action == 'release-only')
+      && inputs.dry_run != true
+    # The only job with a write-scoped token, on a fresh GitHub-hosted runner that runs nothing
+    # else. This job's own steps never persist the token; only the publishing step's environment
+    # carries it. actions/checkout (whose token input defaults to the job token) also receives it
+    # and keeps it in the fresh .git/config from its auth setup to the end of that step, fetch and
+    # checkout included; persist-credentials: false and its post step remove it. GitHub revokes
+    # the token when the job ends.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # One release at a time: each job plans against the tags that earlier jobs created. GitHub
+    # keeps one pending job per group, so a third queued release cancels the pending one; that
+    # run shows "cancelled", and re-running it fails and names the allow_backfill dispatch
+    # (CONTRIBUTING.md, "Releases"). A release job overtaken by a newer version fails the same way.
+    concurrency:
+      group: product-kit-release
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify CI again, then tag and publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.event.workflow_run.head_sha || inputs.sha }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
+          ALLOW_BACKFILL: ${{ inputs.allow_backfill }}
+          RELEASE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -- publish --sha "$SHA" --release-run-url "$RELEASE_RUN_URL"
+          if [ -n "$CI_RUN_ID" ]; then set -- "$@" --ci-run-id "$CI_RUN_ID"; fi
+          if [ "$ALLOW_BACKFILL" = true ]; then set -- "$@" --allow-backfill; fi
+          bash scripts/maintainer/release-github.sh "$@"

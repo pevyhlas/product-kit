@@ -1,0 +1,5 @@
+Read .prdkit/workflows/protocol.md and .prdkit/workflows/change.md and open a change. This
+is authorized planning only. The change writes the exact text Welcome with a newline to
+src/greeting.txt, as R-01 in specs/product.md already states. Scope, audience and acceptance
+are settled; no material questions remain. Create the change with its isolated worktree and
+fill its record, mapping acceptance to the spec IDs it proves. Do not implement or commit.

@@ -1,0 +1,5 @@
+Read .prdkit/workflows/protocol.md and .prdkit/workflows/learn.md. Change 001-greeting
+closed with technical acceptance passed (evidence/acceptance.md), but no user observations
+exist. Assess whether R-01 and the thesis are established, and record your conclusion and
+recommended next learning decision where the workflow says. Do not open a change, promote
+maturity or invent metrics.

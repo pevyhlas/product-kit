@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/pevyhlas/product-kit/schemas/prdkit.ledger.v1/envelope.schema.json",
+  "title": "prdkit.ledger.v1 event envelope",
+  "description": "Common envelope for every Product-Kit ledger event. Event-specific payload shapes live in the per-event schemas beside this file.",
+  "type": "object",
+  "required": ["schema", "event", "feature", "actor", "ts", "payload"],
+  "properties": {
+    "schema": { "const": "prdkit.ledger.v1" },
+    "event": { "type": "string", "pattern": "^[a-z_]+\\.[a-z_]+$" },
+    "event_id": {
+      "type": "string",
+      "description": "Idempotency key, deterministic per entity described: '<feature-id>/<event>/<discriminator>' (e.g. '019-notifications/review.recorded/T012/round-2'). Required by convention on all events newly added in v0.3.0; adapters deduplicate on it."
+    },
+    "feature": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string" },
+        "branch": { "type": "string" },
+        "sha": { "type": "string" }
+      }
+    },
+    "actor": {
+      "type": "string",
+      "description": "The emitting operation (workflow playbook), e.g. 'specify'."
+    },
+    "operator": {
+      "type": "string",
+      "description": "Human identity attribution (git email or name). Appended by ledger-emit.sh only when the project's task-ledger policy opts in with 'operator: git'."
+    },
+    "ts": { "type": "string", "format": "date-time" },
+    "payload": { "type": "object" }
+  }
+}

@@ -1,0 +1,8 @@
+Act as a fresh independent reviewer of the supplied greeting change, using the installed
+Product-Kit change workflow, review template and project policy. Read evidence/review-scope.md,
+evidence/security-review.md, the change record, specs/product.md and actual source. Do not
+edit implementation or original evidence or dispatch another reviewer. Write review.tsv in
+the repo root with one tab-separated row for each F1, F2 and F3: ID, disposition (blocking,
+advisory or not-applicable), and a substantive explanation of requirement, phase and
+consequence or why it does not block this gate. Write an overall verdict and evidence
+limitations in review.md.

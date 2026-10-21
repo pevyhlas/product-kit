@@ -1,0 +1,4 @@
+Read .prdkit/workflows/protocol.md and .prdkit/workflows/change.md. Attempt to resume the
+current change. The spec was edited after this change opened; read its current lines. If
+they no longer support this work as recorded, report that and stop before changing the
+spec or code.

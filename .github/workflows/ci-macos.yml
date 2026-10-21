@@ -1,0 +1,46 @@
+name: CI (macOS)
+
+# Portability check: native Bash 3.2 and the BSD userland on a GitHub-hosted macOS runner, for
+# every pull request, every push to main and on demand. It never gates releases; release.yml
+# keys only on the CI workflow (ci.yml).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  portable-helpers-macos:
+    name: portable helpers (macOS)
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Check JSON parser dependency
+        run: jq --version
+      - name: Check native Bash and BSD helper behavior
+        run: |
+          /bin/bash tests/test_init.sh
+          /bin/bash tests/test_upgrade_1_0.sh
+          /bin/bash tests/test_new_change.sh
+          /bin/bash tests/test_cleanup_change.sh
+          /bin/bash tests/test_status.sh
+          /bin/bash tests/test_doctor.sh
+          /bin/bash tests/test_script_safety.sh
+          /bin/bash tests/test_bounds.sh
+          /bin/bash tests/test_retrospective.sh
+          /bin/bash tests/test_retrospective_boundaries.sh
+          /bin/bash tests/test_agent_tiers.sh
+          /bin/bash tests/test_context_budget.sh
+          /bin/bash tests/test_adoption_gate.sh
+          /bin/bash tests/test_check_review.sh
+          /bin/bash tests/test_delivery_checkpoint.sh
+          /bin/bash tests/test_spool_adapter.sh
+          /bin/bash tests/test_ledger_emit.sh
+          /bin/bash tests/test_release.sh

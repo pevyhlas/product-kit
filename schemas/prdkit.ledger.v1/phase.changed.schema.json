@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/pevyhlas/product-kit/schemas/prdkit.ledger.v1/phase.changed.schema.json",
+  "title": "prdkit.ledger.v1 phase.changed",
+  "allOf": [{ "$ref": "envelope.schema.json" }],
+  "properties": {
+    "event": { "const": "phase.changed" },
+    "payload": {
+      "type": "object",
+      "required": ["phase"],
+      "properties": {
+        "phase": { "enum": ["in-progress", "feature-complete"] },
+        "rigor": { "enum": ["light", "full"] }
+      }
+    }
+  }
+}

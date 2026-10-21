@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/pevyhlas/product-kit/schemas/prdkit.ledger.v1/tasks.generated.schema.json",
+  "title": "prdkit.ledger.v1 tasks.generated",
+  "allOf": [{ "$ref": "envelope.schema.json" }],
+  "properties": {
+    "event": { "const": "tasks.generated" },
+    "payload": {
+      "type": "object",
+      "required": ["total"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "by_label": {
+          "type": "object",
+          "description": "Task counts keyed by type label, e.g. {\"IMPL\": 4, \"TEST\": 2}.",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        }
+      }
+    }
+  }
+}

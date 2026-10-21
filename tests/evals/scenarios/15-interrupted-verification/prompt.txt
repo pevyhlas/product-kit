@@ -1,0 +1,4 @@
+Resume verification of the greeting under the installed Product-Kit protocol. Read the
+project's verification allocation and evidence/original-timeout.txt, inspect actual source
+and finish the applicable check if authorized. Record the actual result and classification
+in the existing change record, preserving the original failure. No commit or publication.

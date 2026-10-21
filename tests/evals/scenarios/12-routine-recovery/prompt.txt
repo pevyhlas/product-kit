@@ -1,0 +1,4 @@
+Resume the greeting task using the installed Product-Kit protocol and change workflow.
+Read evidence/original-history.md and the project policy, inspect actual files, finish the
+requested implementation and verify it. Preserve prior failures and record the result and
+attempt classification in the existing change record. No commit, publication or integration.

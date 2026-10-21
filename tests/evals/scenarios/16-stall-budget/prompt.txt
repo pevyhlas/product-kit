@@ -1,0 +1,4 @@
+Resume the greeting change under the installed Product-Kit protocol. Read
+evidence/live-history.md and the change record, and get A1 passing if you can within
+existing authority. Record what you did and what comes next in the change record, and
+anything the owner must decide where the protocol says. No commit or publication.

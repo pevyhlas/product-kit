@@ -1,0 +1,67 @@
+name: Bug report
+description: A script, command or agent workflow did not do what the docs say
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Product-Kit is experimental and has one maintainer, so replies are best effort.
+        Report security vulnerabilities privately as SECURITY.md describes, never here.
+        Include only shareable excerpts: no secrets, private paths or private project data.
+  - type: input
+    id: version
+    attributes:
+      label: Kit version
+      description: The VERSION file in your kit checkout, or the tag or commit you pinned.
+      placeholder: 1.1.0
+    validations:
+      required: true
+  - type: input
+    id: harness
+    attributes:
+      label: Agent harness and version
+      description: For example Claude Code, OpenCode or Codex CLI, with the model if it matters. Write "none" for a script you ran by hand.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: OS and shell
+      description: For example macOS 15 with /bin/bash 3.2, or Ubuntu 24.04 with Bash 5.2.
+    validations:
+      required: true
+  - type: textarea
+    id: intent
+    attributes:
+      label: What were you trying to do?
+      description: The outcome you wanted and, for an agent run, the request you gave it.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The smallest sequence that shows the problem, from a fresh or minimal project if you can. Say whether it was a real agent run or a script.
+      placeholder: |
+        1. bash .product-kit/scripts/init.sh --harness claude
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Relevant output
+      description: Error messages, script output or the agent's reply, as text.
+      render: text

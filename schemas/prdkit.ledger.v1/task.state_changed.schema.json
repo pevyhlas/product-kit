@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/pevyhlas/product-kit/schemas/prdkit.ledger.v1/task.state_changed.schema.json",
+  "title": "prdkit.ledger.v1 task.state_changed",
+  "allOf": [{ "$ref": "envelope.schema.json" }],
+  "properties": {
+    "event": { "const": "task.state_changed" },
+    "payload": {
+      "type": "object",
+      "required": ["changes"],
+      "properties": {
+        "changes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["task", "to"],
+            "properties": {
+              "task": { "type": "string", "pattern": "^T[0-9]+$" },
+              "from": { "type": "string" },
+              "to": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

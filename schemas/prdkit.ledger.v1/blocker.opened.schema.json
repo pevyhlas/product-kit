@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/pevyhlas/product-kit/schemas/prdkit.ledger.v1/blocker.opened.schema.json",
+  "title": "prdkit.ledger.v1 blocker.opened",
+  "allOf": [{ "$ref": "envelope.schema.json" }],
+  "properties": {
+    "event": { "const": "blocker.opened" },
+    "payload": {
+      "type": "object",
+      "required": ["reason"],
+      "properties": {
+        "reason": { "type": "string" },
+        "task": { "type": "string" },
+        "severity": { "type": "string" }
+      }
+    }
+  }
+}

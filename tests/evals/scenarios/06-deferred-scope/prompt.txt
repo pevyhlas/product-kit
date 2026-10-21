@@ -1,0 +1,4 @@
+Read .prdkit/workflows/protocol.md and .prdkit/workflows/spec.md. Owner direction, verbatim,
+2026-10-17: "The first release is one predictable greeting in src/greeting.txt, which R-01
+already states. Notifications are a later-horizon opportunity; defer them." Record this
+direction where it belongs in the spec. Do not open a change or implement code.
