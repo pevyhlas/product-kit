@@ -113,8 +113,12 @@ run bash -c 'set -e; source "$1/tests/lib.sh"; run bash -c "exit 7"; test "$STAT
 assert_eq 0 "$STATUS" "run preserves nonzero status without aborting the suite"
 
 it "missing temporary storage stops a suite before it can mutate the caller repository"
+# A failing mktemp first on PATH stands in for unavailable storage. A missing TMPDIR is not
+# enough: macOS mktemp still allocates in its per-user temporary directory.
+NOTMP="$(mktemp -d)"; track_tmp "$NOTMP"
+printf '#!/bin/sh\nexit 1\n' > "$NOTMP/mktemp"; chmod +x "$NOTMP/mktemp"
 refs_before="$(git -C "$PROJ" show-ref)"
-run bash -c 'cd "$1" && TMPDIR="$1/missing-temp-dir" bash "$2/tests/test_delivery_checkpoint.sh"' _ "$PROJ" "$PK_ROOT"
+run bash -c 'cd "$1" && PATH="$3:$PATH" bash "$2/tests/test_delivery_checkpoint.sh"' _ "$PROJ" "$PK_ROOT" "$NOTMP"
 assert_eq 1 "$STATUS" 'fixture storage failure stops the test process'
 assert_contains "$OUTPUT" 'No tests were started' 'failure is explicit'
 assert_eq "$refs_before" "$(git -C "$PROJ" show-ref)" 'caller refs remain untouched'
