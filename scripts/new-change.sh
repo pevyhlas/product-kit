@@ -187,21 +187,25 @@ number_owner() { # zero-padded number; prints the claiming source
 # Automatic numbering reads the claims, then creates one. Concurrent runs, in this checkout or
 # in linked worktrees of the same repository, serialize on one lock in the Git common directory
 # (the project's .prdkit/ without Git), held from computing the number until the change's branch
-# and record exist, so each run sees the claims made before it. mkdir is the atomic step; the
-# lock's owner file names the holder's PID and host. A lock whose holder is gone (a dead PID on
-# this host, or no owner after a minute) is removed by one reaper at a time, which re-checks it
-# first. PRDKIT_NUMBER_LOCK_WAIT bounds the wait in seconds (default 120).
+# and record exist, so each run sees the claims made before it. The lock is a file the shell
+# creates exclusively (noclobber opens it with O_EXCL), naming the holder's PID and host; mkdir
+# is not used because some coreutils (uutils) report success when another run created the
+# directory first. A lock whose holder is gone (a dead PID on this host, or no owner after a
+# minute) is removed by one reaper at a time, which re-checks it first. PRDKIT_NUMBER_LOCK_WAIT
+# bounds the wait in seconds (default 120).
 NUMBER_LOCK=""
-release_number_lock() { [ -z "$NUMBER_LOCK" ] || rm -rf "$NUMBER_LOCK"; NUMBER_LOCK=""; }
-number_lock_stale() { # lock dir -> 0 when its holder is gone
+HOST_NAME="$(uname -n)"
+create_exclusive() { ( set -C; printf '%s %s\n' "$$" "$HOST_NAME" > "$1" ) 2>/dev/null; }
+release_number_lock() { [ -z "$NUMBER_LOCK" ] || rm -f "$NUMBER_LOCK"; NUMBER_LOCK=""; }
+number_lock_stale() { # lock file -> 0 when its holder is gone
     local owner pid
-    owner="$(cat "$1/owner" 2>/dev/null)" || owner=""
+    owner="$(cat "$1" 2>/dev/null)" || owner=""
     if [ -z "$owner" ]; then
         [ -n "$(find "$1" -maxdepth 0 -mmin +1 2>/dev/null)" ]
         return
     fi
     pid="${owner%% *}"
-    [ "${owner#* }" = "$(uname -n)" ] && ! ps -p "$pid" >/dev/null 2>&1
+    [ "${owner#* }" = "$HOST_NAME" ] && ! ps -p "$pid" >/dev/null 2>&1
 }
 acquire_number_lock() {
     local base lock waited=0 limit="${PRDKIT_NUMBER_LOCK_WAIT:-120}"
@@ -213,17 +217,17 @@ acquire_number_lock() {
         base="$REPO_ROOT"
     fi
     lock="$base/prdkit-change-number.lock"
-    while ! mkdir "$lock" 2>/dev/null; do
-        if number_lock_stale "$lock" && mkdir "$lock.reap" 2>/dev/null; then
+    while ! create_exclusive "$lock"; do
+        if number_lock_stale "$lock" && create_exclusive "$lock.reap"; then
             if number_lock_stale "$lock"; then
-                rm -rf "$lock"
+                rm -f "$lock"
                 echo "[prdkit] Notice: removed a stale change-number lock left by an ended run: $lock" >&2
             fi
-            rmdir "$lock.reap"
+            rm -f "$lock.reap"
             continue
         fi
         if [ "$waited" -ge "$limit" ]; then
-            echo "[prdkit] Error: another run has held the change-number lock for over ${limit}s: $lock (holder: $(cat "$lock/owner" 2>/dev/null || echo unknown)). If no new-change.sh run is in progress, remove it and retry." >&2
+            echo "[prdkit] Error: another run has held the change-number lock for over ${limit}s: $lock (holder: $(cat "$lock" 2>/dev/null || echo unknown)). If no new-change.sh run is in progress, remove it and retry." >&2
             exit 1
         fi
         sleep 1
@@ -232,7 +236,6 @@ acquire_number_lock() {
     NUMBER_LOCK="$lock"
     trap release_number_lock EXIT
     trap 'exit 1' INT TERM HUP
-    printf '%s %s\n' "$$" "$(uname -n)" > "$lock/owner"
 }
 
 if [ -n "$SHORT_NAME" ]; then SLUG="$(slugify "$SHORT_NAME")"; else SLUG="$(generate_slug "$INTENT")"; fi
