@@ -893,11 +893,12 @@ fi
 # --- Seed .gitignore entries for kit-managed local state ---------------------
 # .prdkit/ledger/ is the local event spool (unbounded working record, never
 # committed); .prdkit/cache/ holds raw evidence (review packages, test output),
-# which records link instead of committing; .worktrees/ is where
+# which records link instead of committing; .prdkit/retrospective/ holds optional
+# usage-enrichment inputs (agent names, token counts, costs, notes); .worktrees/ is where
 # new-change.sh puts isolated change checkouts. Seeding them here means no later command has to mutate a tracked
 # .gitignore mid-run (which would dirty the tree it is about to check). A symlinked .gitignore is
 # edited at its target only while that stays inside the project.
-IGNORE_ENTRIES=".prdkit/ledger/ .prdkit/cache/ .worktrees/"
+IGNORE_ENTRIES=".prdkit/ledger/ .prdkit/cache/ .prdkit/retrospective/ .worktrees/"
 if GITIGNORE="$(root_file_path .gitignore)"; then
     for ignore_entry in $IGNORE_ENTRIES; do
         if ! grep -qxF "$ignore_entry" "$GITIGNORE" 2>/dev/null; then
