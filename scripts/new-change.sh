@@ -184,6 +184,57 @@ number_owner() { # zero-padded number; prints the claiming source
     return 1
 }
 
+# Automatic numbering reads the claims, then creates one. Concurrent runs, in this checkout or
+# in linked worktrees of the same repository, serialize on one lock in the Git common directory
+# (the project's .prdkit/ without Git), held from computing the number until the change's branch
+# and record exist, so each run sees the claims made before it. mkdir is the atomic step; the
+# lock's owner file names the holder's PID and host. A lock whose holder is gone (a dead PID on
+# this host, or no owner after a minute) is removed by one reaper at a time, which re-checks it
+# first. PRDKIT_NUMBER_LOCK_WAIT bounds the wait in seconds (default 120).
+NUMBER_LOCK=""
+release_number_lock() { [ -z "$NUMBER_LOCK" ] || rm -rf "$NUMBER_LOCK"; NUMBER_LOCK=""; }
+number_lock_stale() { # lock dir -> 0 when its holder is gone
+    local owner pid
+    owner="$(cat "$1/owner" 2>/dev/null)" || owner=""
+    if [ -z "$owner" ]; then
+        [ -n "$(find "$1" -maxdepth 0 -mmin +1 2>/dev/null)" ]
+        return
+    fi
+    pid="${owner%% *}"
+    [ "${owner#* }" = "$(uname -n)" ] && ! ps -p "$pid" >/dev/null 2>&1
+}
+acquire_number_lock() {
+    local base lock waited=0 limit="${PRDKIT_NUMBER_LOCK_WAIT:-120}"
+    if [ "$HAS_GIT" = true ]; then
+        base="$(CDPATH="" cd "$(git rev-parse --git-common-dir)" && pwd -P)"
+    elif [ -d "$REPO_ROOT/.prdkit" ]; then
+        base="$REPO_ROOT/.prdkit"
+    else
+        base="$REPO_ROOT"
+    fi
+    lock="$base/prdkit-change-number.lock"
+    while ! mkdir "$lock" 2>/dev/null; do
+        if number_lock_stale "$lock" && mkdir "$lock.reap" 2>/dev/null; then
+            if number_lock_stale "$lock"; then
+                rm -rf "$lock"
+                echo "[prdkit] Notice: removed a stale change-number lock left by an ended run: $lock" >&2
+            fi
+            rmdir "$lock.reap"
+            continue
+        fi
+        if [ "$waited" -ge "$limit" ]; then
+            echo "[prdkit] Error: another run has held the change-number lock for over ${limit}s: $lock (holder: $(cat "$lock/owner" 2>/dev/null || echo unknown)). If no new-change.sh run is in progress, remove it and retry." >&2
+            exit 1
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    NUMBER_LOCK="$lock"
+    trap release_number_lock EXIT
+    trap 'exit 1' INT TERM HUP
+    printf '%s %s\n' "$$" "$(uname -n)" > "$lock/owner"
+}
+
 if [ -n "$SHORT_NAME" ]; then SLUG="$(slugify "$SHORT_NAME")"; else SLUG="$(generate_slug "$INTENT")"; fi
 SLUG="$(printf '%s' "$SLUG" | cut -c1-60 | sed 's/-$//')"
 if [ -z "$SLUG" ]; then echo "Error: could not derive a short name; pass --short-name" >&2; exit 1; fi
@@ -204,6 +255,7 @@ if [ -z "$CHANGE_NUMBER" ]; then
             echo "[prdkit] Warning: shallow clone: 0.x feature folders removed from main are not in its history, so their numbers are not reserved; fetch the full history or pass --number." >&2
         fi
     fi
+    acquire_number_lock
     CHANGE_NUMBER="$(next_number)"; AUTO_NUMBER=true
 fi
 NUM="$(printf '%03d' "$((10#$CHANGE_NUMBER))")"
@@ -316,6 +368,8 @@ if [ -f "$TEMPLATE" ]; then
 else
     printf '# Change: %s\n\n**Opened**: %s\n' "$INTENT" "$TODAY" > "$CHANGE_FILE"
 fi
+# The branch and record now claim the number; the next run may compute its own.
+release_number_lock
 
 # A new worktree starts from committed HEAD: owner context still uncommitted under specs/ in this
 # checkout (a fresh inbox line, a spec edit) is not in it. Name it so the agent carries it over.

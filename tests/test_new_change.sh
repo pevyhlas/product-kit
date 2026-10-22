@@ -365,5 +365,41 @@ assert_contains "$OUTPUT" "--upgrade --copy" "copy fix named"
 git -C "$SWT" -c protocol.file.allow=always submodule update --init -q .product-kit >/dev/null 2>&1
 run bash -c 'cd "$1" && bash .prdkit/scripts/bash/doctor.sh' _ "$SWT"
 assert_eq 0 "$STATUS" "the named fix makes doctor pass"
+# --- Concurrent runs serialize on the change-number lock in the Git common directory -----------
+it "concurrent runs with different short names get distinct numbers"
+PROJ6="$(make_inited_project)"; track_tmp "$PROJ6"
+PROJ6="$(cd "$PROJ6" && pwd -P)"
+git -C "$PROJ6" add -A >/dev/null 2>&1; git -C "$PROJ6" commit -qm installed >/dev/null 2>&1
+cd "$PROJ6" || exit 1
+PIDS=()
+for i in 0 1 2 3 4 5; do
+    bash "$PROJ6/.prdkit/scripts/bash/new-change.sh" --json --short-name "parallel-$i" "parallel $i" \
+        > "$PROJ6/.git/par-$i.out" 2>&1 &
+    PIDS+=("$!")
+done
+FAILED=0
+for pid in "${PIDS[@]}"; do wait "$pid" || FAILED=$((FAILED + 1)); done
+assert_eq 0 "$FAILED" "all six runs succeed"
+NUMS="$(cat "$PROJ6"/.git/par-*.out | sed -n 's/.*"CHANGE_ID":"\([0-9]*\)-.*/\1/p' | sort | tr '\n' ' ')"
+assert_eq "001 002 003 004 005 006 " "$NUMS" "six distinct numbers, 001 to 006"
+assert_eq 6 "$(git -C "$PROJ6" for-each-ref refs/heads | grep -c 'parallel-')" "six change branches"
+if [ ! -e "$PROJ6/.git/prdkit-change-number.lock" ]; then _ok "the lock is released"; else _no "the lock is released"; fi
+
+it "a lock left by an ended run is reclaimed; a live holder makes the run wait, then stop"
+sleep 0 & DEAD_PID=$!; wait "$DEAD_PID"
+mkdir "$PROJ6/.git/prdkit-change-number.lock"
+printf '%s %s\n' "$DEAD_PID" "$(uname -n)" > "$PROJ6/.git/prdkit-change-number.lock/owner"
+run bash "$PROJ6/.prdkit/scripts/bash/new-change.sh" --json --short-name "after-crash" "after a crash"
+assert_eq 0 "$STATUS" "a stale lock does not block the run"
+assert_contains "$OUTPUT" "removed a stale change-number lock" "the reclaim is reported"
+assert_contains "$OUTPUT" '"CHANGE_ID":"007-after-crash"' "numbering continues"
+mkdir "$PROJ6/.git/prdkit-change-number.lock"
+printf '%s %s\n' "$$" "$(uname -n)" > "$PROJ6/.git/prdkit-change-number.lock/owner"
+run env PRDKIT_NUMBER_LOCK_WAIT=1 bash "$PROJ6/.prdkit/scripts/bash/new-change.sh" --json --short-name "blocked" "blocked"
+assert_eq 1 "$STATUS" "a live holder past the wait stops the run"
+assert_contains "$OUTPUT" "$PROJ6/.git/prdkit-change-number.lock" "the error names the lock"
+assert_file "$PROJ6/.git/prdkit-change-number.lock/owner" "a live holder's lock is never removed"
+if ! git -C "$PROJ6" show-ref --verify --quiet refs/heads/008-blocked; then _ok "no branch was created"; else _no "no branch was created"; fi
+rm -rf "$PROJ6/.git/prdkit-change-number.lock"
 
 finish
