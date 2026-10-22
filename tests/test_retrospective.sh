@@ -115,4 +115,42 @@ assert_eq 1 "$STATUS" "unsupported historical fields diagnosed"
 assert_contains "$OUTPUT" 'translate the export' "one-off conversion explained"
 assert_eq "$before" "$(cat "$RETRO")" "existing report preserved"
 
+it "every field comes from its own scope, so reordered keys and nested decoys change nothing"
+# The same events twice: envelope first, then payload first with decoys ahead of the real
+# fields. The decoys are a nested event, ts, event_id, verdict, findings, agent, round, a task
+# outside payload.changes, merge totals and another change naming this one, and key-like text
+# inside a string. json_object_normalize keeps the caller's key order, so both spools are valid.
+SFID="056-scope"
+SRETRO="$PROJ/.prdkit/cache/retrospectives/$SFID.md"
+cat > "$PROJ/.prdkit/ledger/events.jsonl" <<'JSONL'
+{"schema":"prdkit.ledger.v1","event":"feature.created","event_id":"056-scope/feature.created","feature":{"id":"056-scope"},"actor":"a","ts":"2026-09-01T09:00:00Z","payload":{"title":"Ship \"v2\" — café {\"event\":\"blocker.opened\"}","context":{"event":"feature.merged","ts":"1999-01-01T00:00:00Z"}}}
+{"schema":"prdkit.ledger.v1","event":"task.state_changed","event_id":"056-scope/tasks/1","feature":{"id":"056-scope"},"actor":"a","ts":"2026-09-02T09:00:00Z","payload":{"changes":[{"task":"T001","to":"[x]"}],"note":{"task":"T009","to":"x"}}}
+{"schema":"prdkit.ledger.v1","event":"review.recorded","event_id":"056-scope/review/1","feature":{"id":"056-scope"},"actor":"a","ts":"2026-09-03T10:00:00Z","payload":{"scope":"task","round":1,"verdict":"FAIL","findings":{"critical":0,"high":1,"medium":0,"low":2},"agent":"code-reviewer","context":{"event":"blocker.opened","event_id":"dup","verdict":"PASS","findings":{"high":9},"agent":"decoy","round":7}}}
+{"schema":"prdkit.ledger.v1","event":"review.recorded","event_id":"056-scope/review/2","feature":{"id":"056-scope"},"actor":"a","ts":"2026-09-03T11:00:00Z","payload":{"scope":"task","round":2,"verdict":"PASS","agent":"build-agent","context":{"event_id":"dup","verdict":"WAIVED"}}}
+{"schema":"prdkit.ledger.v1","event":"review.recorded","event_id":"777-other/review/1","feature":{"id":"777-other"},"actor":"a","ts":"2026-09-03T12:00:00Z","payload":{"scope":"task","round":9,"verdict":"FAIL","agent":"intruder","origin":{"feature":{"id":"056-scope"}}}}
+{"schema":"prdkit.ledger.v1","event":"feature.merged","event_id":"056-scope/feature.merged","feature":{"id":"056-scope"},"actor":"a","ts":"2026-09-05T09:00:00Z","payload":{"tasks_total":1,"duration_days":4,"context":{"duration_days":99,"tasks_total":99}}}
+JSONL
+run bash "$RS" "$SFID"
+assert_eq 0 "$STATUS" "envelope-first spool reports"
+canonical="$(cat "$SRETRO")"
+assert_contains "$canonical" "# Retrospective — $SFID (Ship \"v2\" — café {\"event\":\"blocker.opened\"})" "title decoded, key-like text kept as text"
+assert_contains "$canonical" "Tasks completed: 1" "only payload.changes count"
+assert_contains "$canonical" "Review rounds: 2 total — PASS 1 · FAIL 1 · WAIVED 0" "verdicts from payload"
+assert_contains "$canonical" "Findings: 0 critical · 1 high · 0 medium · 2 low" "findings from payload.findings"
+assert_contains "$canonical" "Duration: 4 days" "duration from payload"
+assert_contains "$canonical" "| 1 | task | code-reviewer | FAIL | 0 / 1 / 0 / 2 |" "round-1 row"
+assert_not_contains "$canonical" "decoy" "nested agent ignored"
+assert_not_contains "$canonical" "intruder" "another change naming this one stays out"
+cat > "$PROJ/.prdkit/ledger/events.jsonl" <<'JSONL'
+{"payload":{"context":{"event":"feature.merged","ts":"1999-01-01T00:00:00Z"},"title":"Ship \"v2\" — café {\"event\":\"blocker.opened\"}"},"ts":"2026-09-01T09:00:00Z","actor":"a","feature":{"id":"056-scope"},"event_id":"056-scope/feature.created","event":"feature.created","schema":"prdkit.ledger.v1"}
+{"payload":{"note":{"task":"T009","to":"x"},"changes":[{"to":"[x]","task":"T001"}]},"ts":"2026-09-02T09:00:00Z","actor":"a","feature":{"id":"056-scope"},"event_id":"056-scope/tasks/1","event":"task.state_changed","schema":"prdkit.ledger.v1"}
+{"payload":{"context":{"round":7,"agent":"decoy","findings":{"high":9},"verdict":"PASS","event_id":"dup","event":"blocker.opened"},"agent":"code-reviewer","findings":{"low":2,"medium":0,"high":1,"critical":0},"verdict":"FAIL","round":1,"scope":"task"},"ts":"2026-09-03T10:00:00Z","actor":"a","feature":{"id":"056-scope"},"event_id":"056-scope/review/1","event":"review.recorded","schema":"prdkit.ledger.v1"}
+{"payload":{"context":{"verdict":"WAIVED","event_id":"dup"},"agent":"build-agent","verdict":"PASS","round":2,"scope":"task"},"ts":"2026-09-03T11:00:00Z","actor":"a","feature":{"id":"056-scope"},"event_id":"056-scope/review/2","event":"review.recorded","schema":"prdkit.ledger.v1"}
+{"payload":{"origin":{"feature":{"id":"056-scope"}},"agent":"intruder","verdict":"FAIL","round":9,"scope":"task"},"ts":"2026-09-03T12:00:00Z","actor":"a","feature":{"id":"777-other"},"event_id":"777-other/review/1","event":"review.recorded","schema":"prdkit.ledger.v1"}
+{"payload":{"context":{"tasks_total":99,"duration_days":99},"duration_days":4,"tasks_total":1},"ts":"2026-09-05T09:00:00Z","actor":"a","feature":{"id":"056-scope"},"event_id":"056-scope/feature.merged","event":"feature.merged","schema":"prdkit.ledger.v1"}
+JSONL
+run bash "$RS" "$SFID"
+assert_eq 0 "$STATUS" "payload-first spool reports"
+assert_eq "$canonical" "$(cat "$SRETRO")" "reordered keys give a byte-identical report"
+
 finish

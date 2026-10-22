@@ -8,6 +8,9 @@ change by change.
 
 ## [Unreleased]
 
+- `retrospective.sh` reads each ledger field from its own JSON scope: event, event_id, ts and
+  feature.id from the envelope, everything else from payload. Reordered keys, nested objects
+  and key-like text inside strings no longer change review rounds, findings or totals.
 - The installer ignores `.prdkit/retrospective/` in Git (added on the next upgrade), so optional
   usage-enrichment inputs with agent names, costs and notes are not committed by a routine
   `git add -A`. Change cleanup copies them out of the worktree like evidence.
