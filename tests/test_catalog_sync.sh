@@ -5,7 +5,8 @@ index="$(cat "$PK_ROOT/docs/commands.md")"
 it "catalogs expose every public entry point including bare /prdkit"
 for file in "$PK_ROOT"/commands/*.md; do
     name="$(basename "$file" .md)"
-    assert_contains "$readme" "| \`/$name\` |" "README lists $name"
+    # A command table row, padded or not: | `/name` |
+    if printf '%s\n' "$readme" | grep -qE "^\| \`/$name\` +\|"; then _ok "README lists $name"; else _no "README lists $name"; fi
     assert_contains "$index" "[\`/$name\`](../commands/$name.md)" "index links $name"
 done
 it "catalogs do not expose missing or internal commands"
