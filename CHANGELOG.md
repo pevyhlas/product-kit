@@ -8,6 +8,8 @@ change by change.
 
 ## [Unreleased]
 
+- Releases and their tag messages are titled `Product Kit - vX.Y.Z`. The CHANGELOG heading keeps
+  its subtitle, and the release notes still open with it.
 - The README leads with the pitch, how Product-Kit differs from per-feature spec tools and
   its principles, in less text.
 

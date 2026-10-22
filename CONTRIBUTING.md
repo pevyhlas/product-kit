@@ -98,8 +98,8 @@ releases by hand.
    [`.github/workflows/release.yml`](.github/workflows/release.yml) evaluates exactly the
    commit CI verified, never whatever main points at by then. If that commit changed `VERSION`
    against its first parent and tag `vX.Y.Z` does not exist, the workflow creates the annotated
-   tag `vX.Y.Z` on that commit, with message `vX.Y.Z — subtitle`, and a GitHub release with the
-   same title. The body is the CHANGELOG section plus a generated Verification block: merged
+   tag `vX.Y.Z` on that commit, with message `Product Kit - vX.Y.Z`, and a GitHub release with
+   the same title. The body is the CHANGELOG section plus a generated Verification block: merged
    commit, gating CI run, release PR and publishing run. The release is marked latest only if
    it is the highest semver tag.
 3. Any other push to main (docs, CI, a fix without a version bump) releases nothing. An
