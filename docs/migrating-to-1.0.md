@@ -28,13 +28,14 @@ never edits `specs/`, and a one-time cutover between changes, which an agent doe
 ## Step 1: upgrade the kit
 
 ```bash
-git -C .product-kit fetch --tags && git -C .product-kit checkout v1.1.0
+git -C .product-kit fetch --tags && git -C .product-kit checkout v1.1.1
 bash .product-kit/scripts/init.sh --check     # RETIRED lists what the upgrade removes
 bash .product-kit/scripts/init.sh --upgrade
 ```
 
-This guide follows release 1.1.0, whose cutover writes the 1.1 layout. A project already on 1.0
-upgrades the same way, then [restructures](#already-on-10-restructure) instead of Step 2.
+This guide follows release 1.1.1; the 1.1 layout its cutover writes arrived in 1.1.0. A project
+already on 1.0 upgrades the same way, then [restructures](#already-on-10-restructure) instead of
+Step 2.
 
 The upgrade installs the 1.0 commands, workflows, templates and helpers and removes retired
 kit files: the per-phase workflows, the 0.x helpers and every retired template you never
