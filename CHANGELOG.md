@@ -8,43 +8,68 @@ change by change.
 
 ## [Unreleased]
 
-- The README is reorganized for readers deciding whether to adopt the kit: a comparison with
-  Spec Kit, what each area gets, how it works, where it fits and where it does not, a quick start
-  an agent can follow, and reference sections. The catalog test accepts aligned command tables.
-- LICENSE is the plain MIT text, so GitHub and license scanners recognize it. The Spec Kit
-  attribution and its full MIT notice moved to `THIRD_PARTY_NOTICES.md`.
+## [1.1.1] — 2026-10-22 — installer containment and review fixes
+
+Fixes from an independent review of the public 1.1.0 release. The installer now keeps every
+write and deletion inside the project, change worktrees keep their slash commands, and several
+helpers stop trusting input they should check.
+
+### Fixed
+
+- The installer keeps every write and deletion inside the project. A manifest entry outside the
+  installed layout is ignored, a symlinked or escaping managed directory is refused before
+  anything is written, kit-owned files replace a symlink instead of writing through it, and a
+  symlinked template or memory file is kept, even with `--force`.
+- The behavioral eval runner stops before setting up a scenario when it cannot allocate a
+  fixture directory, and fixture setup refuses an empty or reused root, so a scenario never
+  initializes Git or commits in the caller's checkout.
+- `ledger-emit.sh` refuses an adapter `command:` that is a symlink, so the inside-repository rule
+  cannot be bypassed by linking to an executable elsewhere.
+- `new-change.sh` serializes automatic numbering on a lock in the Git common directory, so
+  concurrent runs, linked worktrees included, no longer open changes with the same number. The
+  lock is a file the shell creates exclusively, not a directory: uutils `mkdir` (Ubuntu 26.04's
+  default) can report success to two runs creating the same one.
+- The installer ignores `.prdkit/retrospective/` in Git (added on the next upgrade), so optional
+  usage-enrichment inputs with agent names, costs and notes are not committed by a routine
+  `git add -A`. Change cleanup copies them out of the worktree like evidence.
+- `retrospective.sh` reads each ledger field from its own JSON scope: event, event_id, ts and
+  feature.id from the envelope, everything else from payload. Reordered keys, nested objects
+  and key-like text inside strings no longer change review rounds, findings or totals.
 - `render-agents.sh` copies a multiline (block or folded) neutral `description:` whole into a new
   projection instead of only its first line, which left an empty description.
 - `cleanup-change.sh` states its actual contract: it refuses uncommitted or untracked changes,
   never checks whether committed work merged (that work stays on its branch), and copies
   evidence, retrospectives and ledger events out before ignored files go with the worktree.
-- `retrospective.sh` reads each ledger field from its own JSON scope: event, event_id, ts and
-  feature.id from the envelope, everything else from payload. Reordered keys, nested objects
-  and key-like text inside strings no longer change review rounds, findings or totals.
-- The installer ignores `.prdkit/retrospective/` in Git (added on the next upgrade), so optional
-  usage-enrichment inputs with agent names, costs and notes are not committed by a routine
-  `git add -A`. Change cleanup copies them out of the worktree like evidence.
-- `new-change.sh` serializes automatic numbering on a lock in the Git common directory, so
-  concurrent runs, linked worktrees included, no longer open changes with the same number. The
-  lock is a file the shell creates exclusively, not a directory: uutils `mkdir` (Ubuntu 26.04's
-  default) can report success to two runs creating the same one.
-- `ledger-emit.sh` refuses an adapter `command:` that is a symlink, so the inside-repository rule
-  cannot be bypassed by linking to an executable elsewhere.
+
+### Changed
+
 - `init.sh` installs commands as copies by default, so a change worktree keeps its slash commands
   without an initialized submodule. `--symlink` stays available, and an existing symlink install
   keeps its links until you pass `--copy` once; `new-change.sh` now warns when a new worktree's
   command links do not resolve and names the fix.
-- The behavioral eval runner stops before setting up a scenario when it cannot allocate a
-  fixture directory, and fixture setup refuses an empty or reused root, so a scenario never
-  initializes Git or commits in the caller's checkout.
-- The installer keeps every write and deletion inside the project. A manifest entry outside the
-  installed layout is ignored, a symlinked or escaping managed directory is refused before
-  anything is written, kit-owned files replace a symlink instead of writing through it, and a
-  symlinked template or memory file is kept, even with `--force`.
 - Releases and their tag messages are titled `Product Kit - vX.Y.Z`. The CHANGELOG heading keeps
   its subtitle, and the release notes still open with it.
-- The README leads with the pitch, how Product-Kit differs from per-feature spec tools and
-  its principles, in less text.
+- LICENSE is the plain MIT text, so GitHub and license scanners recognize it. The Spec Kit
+  attribution and its full MIT notice moved to `THIRD_PARTY_NOTICES.md`.
+- The README is reorganized for readers deciding whether to adopt the kit: the pitch and
+  principles first, a comparison with Spec Kit, what each area gets, how it works, where it fits
+  and where it does not, a quick start an agent can follow, and reference sections. The catalog
+  test accepts aligned command tables.
+
+### Adoption
+
+- Move `.product-kit` to `v1.1.1`, run `bash .product-kit/scripts/init.sh --upgrade`, and commit
+  the result. The upgrade adds `.prdkit/retrospective/` to `.gitignore`.
+- A symlink install keeps its command links. To switch to copies, which work in a change
+  worktree without an initialized submodule, run the upgrade once with `--copy` and commit the
+  copied commands.
+- If the installer refuses and lists paths, `.prdkit/`, `.claude/`, `.opencode/` or a directory
+  the kit writes into under them is a symlink, not a directory, or leads outside the project,
+  or a directory sits where the kit installs a file. Replace each with a real directory (or move
+  it aside) and re-run; nothing was written. A symlinked template or memory file is kept and
+  reported, never written.
+- A ledger adapter configured through a symlink is refused: point `command:` at the executable
+  file itself.
 
 ## [1.1.0] — 2026-10-19 — journeys first, an executive page and a readable inbox
 
