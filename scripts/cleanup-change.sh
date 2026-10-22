@@ -36,15 +36,19 @@ Remove a finished change's isolated worktree, or clear stale registrations.
 
 Options:
   --json        Output in JSON format
-  --force       Remove even when the worktree has uncommitted or unintegrated
-                work (git worktree remove --force). Discards that work.
+  --force       Remove even when the worktree has uncommitted or untracked
+                changes (git worktree remove --force). Discards those changes.
   --prune       Only clear stale ("prunable") worktree registrations left behind
                 when a worktree directory was deleted without this helper.
   --help, -h    Show this help message
 
 Run from the MAIN checkout, not from inside the worktree being removed.
-A worktree is removed non-forced by default, so uncommitted or unintegrated
-work is preserved and the removal is refused until it is dealt with.
+A worktree is removed non-forced by default: uncommitted or untracked changes
+refuse the removal until they are committed, stashed or discarded. Committed
+work is not checked for integration; it stays on the change's branch, which
+is never deleted. Ignored files go with the worktree, except evidence,
+retrospectives, usage-enrichment inputs and ledger events, which are first
+copied to this checkout.
 
 Examples:
   cleanup-change.sh 007-user-auth      # remove that change's worktree
@@ -196,7 +200,7 @@ if [ "$ROOT_TOP" = "$MATCH_TOP" ]; then
 fi
 
 refuse_dirty() { # git's reason
-    msg="Refusing to remove $MATCH_PATH: it has uncommitted or unintegrated work. Integrate or commit it first, or pass --force to discard it."
+    msg="Refusing to remove $MATCH_PATH: it has uncommitted or untracked changes, or git refused the removal. Commit, stash or discard them first, or pass --force to discard them."
     if $JSON_MODE; then
         emit_json refused remove "$msg"
     else
@@ -262,5 +266,6 @@ if RM_ERR="$(git -C "$ROOT" worktree remove "${REMOVE_ARGS[@]}" 2>&1 >/dev/null)
     exit 0
 fi
 
-# Non-forced removal refused: almost always uncommitted or unintegrated work.
+# Non-forced removal refused by git after a clean status: for example a locked worktree or one
+# with initialized submodules. git's reason is reported.
 refuse_dirty "$RM_ERR"
