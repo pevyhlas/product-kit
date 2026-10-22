@@ -88,6 +88,16 @@ The AGENTS.md managed section has its own manifest hash; surrounding consumer te
 preserved. Doctor and the adoption gate check manifest-listed file presence and kit-owned
 content without a source checkout, while customized template/policy hashes remain allowed.
 
+### Command install mode
+
+Commands install as copies by default, so they work in any checkout: a change worktree or a CI
+checkout needs no initialized submodule. `--symlink` installs relative links into the kit
+instead; they resolve only where the kit is checked out, so each new change worktree then needs
+`git -C <worktree> submodule update --init <kit path>`, and `new-change.sh` says so when they
+dangle. The manifest records the mode and later runs keep it; pass `--copy` or `--symlink` to
+switch. An install made before copies became the default keeps its symlinks until you pass
+`--copy` once.
+
 ## Agent context budget
 
 Agent context files (`CLAUDE.md`, `AGENTS.md` and harness equivalents) hold stable orientation

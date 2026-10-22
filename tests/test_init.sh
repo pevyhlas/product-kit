@@ -15,7 +15,13 @@ assert_file "$PROJ/.prdkit/workflows/protocol.md"
 assert_file "$PROJ/.prdkit/scripts/bash/new-change.sh"
 if [ -e "$PROJ/.prdkit/memory/signoff-requirements.md" ]; then _no "retired sign-off policy seeded"; else _ok "no sign-off policy seeded"; fi
 if [ -e "$PROJ/specs" ]; then _no "installer created specs/"; else _ok "installer leaves specs/ to the project"; fi
-assert_symlink "$PROJ/.claude/commands/prdkit.md" "bare entry point linked"
+if [ -f "$PROJ/.claude/commands/prdkit.md" ] && [ ! -L "$PROJ/.claude/commands/prdkit.md" ]; then
+    _ok "bare entry point installed as a copy by default"
+else
+    _no "bare entry point installed as a copy by default"
+fi
+assert_contains "$(cat "$PROJ/.prdkit/.manifest")" 'mode: copy' "copy mode recorded by default"
+assert_not_contains "$OUTPUT" "Symlinked commands resolve only" "no symlink note for copies"
 files=("$PROJ"/.claude/commands/*.md)
 assert_eq 8 "${#files[@]}" "exactly eight public commands"
 if [ -e "$PROJ/.claude/commands/prdkit-implement.md" ]; then _no 'internal operation leaked'; else _ok 'internal operation outside menu'; fi
@@ -195,17 +201,27 @@ PROJ5="$(make_project)"; track_tmp "$PROJ5"
 assert_contains "$(cat "$PROJ5/.prdkit/.manifest")" 'mode: copy' "copy mode recorded"
 ( cd "$PROJ5" && bash .product-kit/scripts/init.sh --upgrade ) >/dev/null 2>&1
 if [ -L "$PROJ5/.claude/commands/prdkit.md" ]; then _no "plain upgrade preserves copy mode" "re-linked as symlink"; else _ok "plain upgrade preserves copy mode"; fi
-( cd "$PROJ5" && bash .product-kit/scripts/init.sh --upgrade --symlink ) >/dev/null 2>&1
+run bash -c 'cd "$1" && bash .product-kit/scripts/init.sh --upgrade --symlink' _ "$PROJ5"
 assert_contains "$(cat "$PROJ5/.prdkit/.manifest")" 'mode: symlink' "explicit --symlink wins and is recorded"
 assert_symlink "$PROJ5/.claude/commands/prdkit.md" "explicit --symlink re-links"
-it "pre-0.10 copy installs are inferred; default symlinks are relative"
+assert_eq "../../.product-kit/commands/prdkit.md" "$(readlink "$PROJ5/.claude/commands/prdkit.md")" "symlinks are relative"
+assert_contains "$OUTPUT" "git submodule update --init .product-kit" "symlink install names what a new checkout needs"
+run bash -c 'cd "$1" && bash .product-kit/scripts/init.sh --upgrade' _ "$PROJ5"
+assert_symlink "$PROJ5/.claude/commands/prdkit.md" "plain upgrade preserves symlink mode"
+assert_contains "$(cat "$PROJ5/.prdkit/.manifest")" 'mode: symlink' "symlink mode stays recorded"
+it "pre-0.10 installs are inferred from their command files"
 ( cd "$PROJ5" && bash .product-kit/scripts/init.sh --upgrade --copy ) >/dev/null 2>&1
 grep -v '^mode: ' "$PROJ5/.prdkit/.manifest" > "$PROJ5/.prdkit/.manifest.tmp"
 mv "$PROJ5/.prdkit/.manifest.tmp" "$PROJ5/.prdkit/.manifest"
 ( cd "$PROJ5" && bash .product-kit/scripts/init.sh --upgrade ) >/dev/null 2>&1
 if [ -L "$PROJ5/.claude/commands/prdkit.md" ]; then _no "mode inferred from installed copies" "flipped to symlink"; else _ok "mode inferred from installed copies"; fi
 assert_contains "$(cat "$PROJ5/.prdkit/.manifest")" 'mode: copy' "inferred mode re-recorded"
-assert_eq "../../.product-kit/commands/prdkit.md" "$(readlink "$PROJ/.claude/commands/prdkit.md")" "default symlink is relative"
+( cd "$PROJ5" && bash .product-kit/scripts/init.sh --upgrade --symlink ) >/dev/null 2>&1
+grep -v '^mode: ' "$PROJ5/.prdkit/.manifest" > "$PROJ5/.prdkit/.manifest.tmp"
+mv "$PROJ5/.prdkit/.manifest.tmp" "$PROJ5/.prdkit/.manifest"
+( cd "$PROJ5" && bash .product-kit/scripts/init.sh --upgrade ) >/dev/null 2>&1
+assert_symlink "$PROJ5/.claude/commands/prdkit.md" "mode inferred from installed symlinks"
+assert_contains "$(cat "$PROJ5/.prdkit/.manifest")" 'mode: symlink' "inferred symlink mode re-recorded"
 it "upgrade removes kit-installed commands the kit no longer ships"
 PROJ6="$(make_project)"; track_tmp "$PROJ6"
 ( cd "$PROJ6" && bash .product-kit/scripts/init.sh --copy --harness claude,opencode ) >/dev/null 2>&1

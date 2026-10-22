@@ -35,6 +35,7 @@
 | Upgrade kept an edited retired template | Fold what you need into the constitution or a 1.0 template, then delete it |
 | A helper exits 2: resolved root has no `.prdkit/` | Run the installed copy under `<project>/.prdkit/scripts/bash/` from a project whose Git root holds `.prdkit/` |
 | `init.sh` exits 2: unknown harness, or the list would drop a recorded one | Separate names with commas or spaces and keep every recorded harness; see [removing a harness](harnesses.md#removing-a-harness) |
+| Slash commands missing in a change worktree; `new-change.sh` warns that links do not resolve | The install uses `--symlink` and the worktree lacks the kit: run the `git submodule update --init` it names, or switch once with `init.sh --upgrade --copy` and commit |
 | Doctor or gate: kit-named command not recorded in the manifest | Re-run `init.sh --upgrade` with the full `--harness` list, or remove the file |
 | Agent definition: `'harnesses:' must be a bracketed list` | Write `harnesses: [opencode]` (or `[claude, opencode]`), or delete the line |
 | Agent projection is unowned | Add a neutral definition and run `render-agents.sh`, remove the file, or list it under `Hand-owned agents:` in `.prdkit/memory/agents.md` |

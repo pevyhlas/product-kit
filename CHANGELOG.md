@@ -8,6 +8,10 @@ change by change.
 
 ## [Unreleased]
 
+- `init.sh` installs commands as copies by default, so a change worktree keeps its slash commands
+  without an initialized submodule. `--symlink` stays available, and an existing symlink install
+  keeps its links until you pass `--copy` once; `new-change.sh` now warns when a new worktree's
+  command links do not resolve and names the fix.
 - The behavioral eval runner stops before setting up a scenario when it cannot allocate a
   fixture directory, and fixture setup refuses an empty or reused root, so a scenario never
   initializes Git or commits in the caller's checkout.

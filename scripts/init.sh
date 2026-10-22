@@ -7,9 +7,12 @@
 #   bash .product-kit/scripts/init.sh [options]
 #
 # Options:
-#   --copy          Copy command files instead of symlinking them (default: symlink,
-#                   as relative links; the recorded mode wins on later runs)
-#   --symlink       Switch an install back to symlinked command files
+#   --copy          Install command files as copies (the default): they work in any
+#                   checkout, change worktrees and CI included
+#   --symlink       Install command files as relative symlinks into the kit instead; they
+#                   resolve only where the kit is checked out (a new change worktree needs
+#                   its submodule initialized). The recorded mode wins on later runs; pass
+#                   --copy or --symlink to switch
 #   --harness LIST  Harness(es) to install commands for: claude|opencode|codex|agents|all
 #                   (repeatable; comma- and/or space-separated; an unknown name is an
 #                   error; default: the manifest's recorded set, else claude,agents plus
@@ -44,7 +47,7 @@ PK_VERSION="unknown"
 [ -f "$PK_ROOT/VERSION" ] && PK_VERSION="$(head -n 1 "$PK_ROOT/VERSION" | tr -d '[:space:]')"
 
 # --- Defaults ---
-MODE_COPY=false
+MODE_COPY=true
 MODE_EXPLICIT=false
 UPGRADE=false
 CHECK=false
@@ -185,15 +188,19 @@ fi
 has_harness codex && add_harness agents
 
 # The previous install's command mode wins unless --copy/--symlink is passed
-# explicitly, so an upgrade never silently flips tracked copies back to symlinks.
-# Pre-0.10 manifests recorded no mode; infer it from the installed files.
+# explicitly, so an upgrade never silently flips an install between copies and symlinks.
+# Pre-0.10 manifests recorded no mode; infer it from the installed files (any regular
+# copy means copies; otherwise an installed symlink means symlinks).
 if ! $MODE_EXPLICIT && [ -f "$MANIFEST" ]; then
-    if grep -q '^mode: copy$' "$MANIFEST"; then
-        MODE_COPY=true
+    if grep -q '^mode: symlink$' "$MANIFEST"; then
+        MODE_COPY=false
     elif ! grep -q '^mode: ' "$MANIFEST"; then
+        saw_copy=false; saw_link=false
         for probe in "$TARGET/.claude/commands/prdkit.md" "$TARGET/.opencode/commands/prdkit.md"; do
-            if [ -e "$probe" ] && [ ! -L "$probe" ]; then MODE_COPY=true; break; fi
+            if [ -L "$probe" ]; then saw_link=true
+            elif [ -e "$probe" ]; then saw_copy=true; fi
         done
+        if ! $saw_copy && $saw_link; then MODE_COPY=false; fi
     fi
 fi
 
@@ -675,15 +682,15 @@ while IFS=$'\t' read -r src rel; do
     dest="$TARGET/$rel"
     case "$rel" in
         .claude/commands/*|.opencode/commands/*)
-            # Commands are kit-owned: always re-linked (or re-copied with --copy).
+            # Commands are kit-owned: always re-copied (or re-linked under --symlink).
             if file_locally_edited "$rel" "$src"; then KIT_OVERWRITTEN+=("$rel"); fi
             rm -f "$dest"
             if $MODE_COPY; then
                 cp "$src" "$dest"
             else
                 # Relative symlink (both command dirs sit two levels under the
-                # project root), so a committed link works in any checkout.
-                # Fall back to copy if symlinking fails.
+                # project root), so a committed link resolves in any checkout that
+                # has the kit checked out. Fall back to copy if symlinking fails.
                 case "$src" in
                     "$TARGET"/*) link_target="../../${src#"$TARGET"/}" ;;
                     *)           link_target="$src" ;;
@@ -831,6 +838,14 @@ if has_harness claude; then
 fi
 if has_harness opencode; then
     echo "✓ Installed $oc_linked /prdkit-* command(s) into .opencode/commands/ ($([ "$MODE_COPY" = true ] && echo copied || echo symlinked))"
+fi
+if ! $MODE_COPY && { has_harness claude || has_harness opencode; }; then
+    case "$PK_ROOT" in
+        "$TARGET"/*) kit_rel="${PK_ROOT#"$TARGET"/}"
+            echo "  Symlinked commands resolve only where $kit_rel is checked out: a new change worktree or"
+            echo "  CI checkout needs 'git submodule update --init $kit_rel'. Re-run with --copy to install copies." ;;
+        *)  echo "  Symlinked commands resolve only where $PK_ROOT exists. Re-run with --copy to install copies." ;;
+    esac
 fi
 if has_harness agents; then
     agents_outcome="$(write_agents_section)"

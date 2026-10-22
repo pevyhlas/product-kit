@@ -320,4 +320,50 @@ next4 "$SHALLOW" "$(printf '# Demo — archive\n\n**Base**: %s.' "$BASE4")"
 assert_eq "" "$ID4" "a base the clone lacks and no Last line: numbering stops"
 assert_contains "$OUTPUT" "an old feature number could be reused" "and says why"
 
+
+it "a submodule install keeps its slash commands in a new change worktree"
+# The documented install: the kit as a real submodule, the default installer, a committed install,
+# then a change in its own worktree, where git leaves the submodule uninitialized.
+KITSRC="$(mktemp -d)"; track_tmp "$KITSRC"
+cp -r "$PK_ROOT/commands" "$PK_ROOT/workflows" "$PK_ROOT/scripts" "$PK_ROOT/templates" "$PK_ROOT/VERSION" "$KITSRC/"
+git -C "$KITSRC" init -q
+git -C "$KITSRC" add -A
+git -C "$KITSRC" -c user.email=t@example.com -c user.name=test commit -qm kit
+sub_project() { # [init.sh options] -> SUB: a project with a committed submodule install
+    SUB="$(mktemp -d)"; track_tmp "$SUB"; SUB="$(cd "$SUB" && pwd -P)"
+    git -C "$SUB" init -q
+    git -C "$SUB" config user.email t@example.com
+    git -C "$SUB" config user.name test
+    git -C "$SUB" commit -q --allow-empty -m init
+    git -C "$SUB" -c protocol.file.allow=always submodule add -q "$KITSRC" .product-kit >/dev/null 2>&1
+    ( cd "$SUB" && bash .product-kit/scripts/init.sh "$@" ) >/dev/null 2>&1
+    git -C "$SUB" add -A >/dev/null 2>&1
+    git -C "$SUB" commit -qm installed >/dev/null 2>&1
+}
+sub_project
+run bash -c 'cd "$1" && bash .prdkit/scripts/bash/new-change.sh --short-name sub-default "Use the kit"' _ "$SUB"
+assert_eq 0 "$STATUS" "change opened"
+SWT="$SUB/.worktrees/001-sub-default"
+if [ -f "$SWT/.claude/commands/prdkit.md" ] && [ ! -L "$SWT/.claude/commands/prdkit.md" ]; then
+    _ok "the worktree has command copies"
+else
+    _no "the worktree has command copies"
+fi
+assert_not_contains "$OUTPUT" "do not resolve" "no dangling-link warning"
+run bash -c 'cd "$1" && bash .prdkit/scripts/bash/doctor.sh' _ "$SWT"
+assert_eq 0 "$STATUS" "doctor passes inside the change worktree"
+
+it "symlinked commands are opt-in, and a worktree that cannot resolve them says how to fix it"
+sub_project --symlink
+assert_symlink "$SUB/.claude/commands/prdkit.md" "--symlink installs links"
+run bash -c 'cd "$1" && bash .prdkit/scripts/bash/new-change.sh --short-name sub-links "Use the kit"' _ "$SUB"
+assert_eq 0 "$STATUS" "the change still opens"
+SWT="$SUB/.worktrees/001-sub-links"
+assert_contains "$OUTPUT" "slash-command link(s) in the new worktree do not resolve" "dangling links reported"
+assert_contains "$OUTPUT" "git -C $SWT submodule update --init .product-kit" "submodule fix named"
+assert_contains "$OUTPUT" "--upgrade --copy" "copy fix named"
+git -C "$SWT" -c protocol.file.allow=always submodule update --init -q .product-kit >/dev/null 2>&1
+run bash -c 'cd "$1" && bash .prdkit/scripts/bash/doctor.sh' _ "$SWT"
+assert_eq 0 "$STATUS" "the named fix makes doctor pass"
+
 finish
