@@ -8,6 +8,9 @@ change by change.
 
 ## [Unreleased]
 
+- The behavioral eval runner stops before setting up a scenario when it cannot allocate a
+  fixture directory, and fixture setup refuses an empty or reused root, so a scenario never
+  initializes Git or commits in the caller's checkout.
 - The installer keeps every write and deletion inside the project. A manifest entry outside the
   installed layout is ignored, a symlinked or escaping managed directory is refused before
   anything is written, kit-owned files replace a symlink instead of writing through it, and a

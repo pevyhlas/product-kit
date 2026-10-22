@@ -80,4 +80,35 @@ run env EVAL_RESULTS_DIR="$RES3" bash "$RUNNER" --driver mock --scenario 99-does
 assert_eq 1 "$STATUS" "bogus scenario exits 1"
 assert_contains "$OUTPUT" "No scenario matched" "explains the miss"
 
+# --- fixture storage failure ---
+# A failing mktemp first on PATH stands in for unavailable storage. An empty fixture path once
+# made a scenario set up Git, install the kit and commit in the caller's current directory.
+CALLER="$(make_project)"; track_tmp "$CALLER"
+NOTMP="$(mktemp -d)"; track_tmp "$NOTMP"
+printf '#!/bin/sh\nexit 1\n' > "$NOTMP/mktemp"; chmod +x "$NOTMP/mktemp"
+RES4="$(mktemp -d)"; track_tmp "$RES4"
+caller_state() {
+    git -C "$CALLER" rev-parse HEAD
+    git -C "$CALLER" show-ref
+    git -C "$CALLER" config --local --list
+    git -C "$CALLER" status --porcelain --untracked-files=all
+}
+state_before="$(caller_state)"
+
+it "unavailable fixture storage stops the runner before it touches the caller repository"
+run bash -c 'cd "$1" && PATH="$2:$PATH" EVAL_RESULTS_DIR="$3" bash "$4" --driver mock --scenario 01-open-change' \
+    _ "$CALLER" "$NOTMP" "$RES4" "$RUNNER"
+assert_eq 1 "$STATUS" "the runner stops"
+assert_contains "$OUTPUT" "Cannot allocate an eval fixture for 01-open-change" "the failure is explicit"
+assert_eq "$state_before" "$(caller_state)" "caller HEAD, refs, Git config and files untouched"
+
+it "fixture setup refuses an empty, missing or non-empty fixture root"
+for bad in "" "$NOTMP/missing" "$NOTMP"; do
+    run bash -c 'cd "$1" && export FIXTURE="$2" PK_ROOT="$3" && source "$3/tests/evals/fixture.sh" && fixture_project' \
+        _ "$CALLER" "$bad" "$PK_ROOT"
+    assert_eq 1 "$STATUS" "refused: '$bad'"
+    assert_contains "$OUTPUT" "must name a new, empty directory" "explicit refusal: '$bad'"
+done
+assert_eq "$state_before" "$(caller_state)" "caller repository still untouched"
+
 finish
