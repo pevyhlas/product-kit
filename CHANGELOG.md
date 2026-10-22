@@ -8,6 +8,9 @@ change by change.
 
 ## [Unreleased]
 
+- The README leads with the pitch, how Product-Kit differs from per-feature spec tools and
+  its principles, in less text.
+
 ## [1.1.0] — 2026-10-19 — journeys first, an executive page and a readable inbox
 
 1.1.0 is the first public release. The public repository starts at this version; the entries
