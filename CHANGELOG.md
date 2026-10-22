@@ -8,6 +8,9 @@ change by change.
 
 ## [Unreleased]
 
+- The README is reorganized for readers deciding whether to adopt the kit: a comparison with
+  Spec Kit, what each area gets, how it works, where it fits and where it does not, a quick start
+  an agent can follow, and reference sections. The catalog test accepts aligned command tables.
 - LICENSE is the plain MIT text, so GitHub and license scanners recognize it. The Spec Kit
   attribution and its full MIT notice moved to `THIRD_PARTY_NOTICES.md`.
 - `render-agents.sh` copies a multiline (block or folded) neutral `description:` whole into a new
