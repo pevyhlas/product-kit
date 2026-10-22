@@ -8,6 +8,9 @@ change by change.
 
 ## [Unreleased]
 
+- `cleanup-change.sh` states its actual contract: it refuses uncommitted or untracked changes,
+  never checks whether committed work merged (that work stays on its branch), and copies
+  evidence, retrospectives and ledger events out before ignored files go with the worktree.
 - `retrospective.sh` reads each ledger field from its own JSON scope: event, event_id, ts and
   feature.id from the envelope, everything else from payload. Reordered keys, nested objects
   and key-like text inside strings no longer change review rounds, findings or totals.

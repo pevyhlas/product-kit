@@ -24,7 +24,7 @@ git -C "$PROJ" worktree add -qb 011-dirty "$PROJ/.worktrees/011-dirty" >/dev/nul
 echo "uncommitted" > "$PROJ/.worktrees/011-dirty/scratch.txt"
 run bash "$CLEAN" 011-dirty
 assert_eq 1 "$STATUS" "dirty worktree not removed"
-assert_contains "$OUTPUT" "uncommitted or unintegrated" "explains the refusal"
+assert_contains "$OUTPUT" "uncommitted or untracked changes" "explains the refusal"
 run test -d "$PROJ/.worktrees/011-dirty"
 assert_eq 0 "$STATUS" "dirty worktree left intact"
 
@@ -33,6 +33,16 @@ run bash "$CLEAN" --force 011-dirty
 assert_eq 0 "$STATUS" "force removes dirty worktree"
 run test ! -d "$PROJ/.worktrees/011-dirty"
 assert_eq 0 "$STATUS" "dirty worktree gone after --force"
+
+it "committed work is not checked for integration: it stays on the change's branch"
+git -C "$PROJ" worktree add -qb 022-committed "$PROJ/.worktrees/022-committed" >/dev/null 2>&1
+echo work > "$PROJ/.worktrees/022-committed/work.txt"
+git -C "$PROJ/.worktrees/022-committed" add work.txt
+git -C "$PROJ/.worktrees/022-committed" commit -qm 'unmerged work'
+tip="$(git -C "$PROJ/.worktrees/022-committed" rev-parse HEAD)"
+run bash "$CLEAN" 022-committed
+assert_eq 0 "$STATUS" "a clean worktree with unmerged commits is removed"
+assert_eq "$tip" "$(git -C "$PROJ" rev-parse --verify -q refs/heads/022-committed)" "branch and its commits kept"
 
 it "prunes the stale registration a manual rm -rf leaves behind"
 git -C "$PROJ" worktree add -qb 012-stale "$PROJ/.worktrees/012-stale" >/dev/null 2>&1
