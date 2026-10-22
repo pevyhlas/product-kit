@@ -10,7 +10,7 @@ fail without changing the spool. Original top-level attribution is preserved.
 
 The [configuration template](../templates/task-ledger-template.md) describes filtering,
 best-effort/strict adapter behavior, and optional Git operator attribution. Adapters are
-repository-contained executable paths and own credentials/network access.
+repository-contained executable files, never symlinks, and own credentials/network access.
 
 The kit ships one ready-made adapter: `command: .prdkit/scripts/bash/ledger-spool-adapter.sh`
 mirrors every event into a durable per-host central spool

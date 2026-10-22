@@ -8,6 +8,8 @@ change by change.
 
 ## [Unreleased]
 
+- `ledger-emit.sh` refuses an adapter `command:` that is a symlink, so the inside-repository rule
+  cannot be bypassed by linking to an executable elsewhere.
 - `init.sh` installs commands as copies by default, so a change worktree keeps its slash commands
   without an initialized submodule. `--symlink` stays available, and an existing symlink install
   keeps its links until you pass `--copy` once; `new-change.sh` now warns when a new worktree's

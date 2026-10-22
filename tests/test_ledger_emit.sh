@@ -456,6 +456,32 @@ else
     _no "'..' adapter path should be rejected"
 fi
 
+# --- Test: a symlinked adapter is rejected and never runs ---
+it "Adapter command that is a symlink is rejected and never runs"
+dir="$(setup_test_project)"; track_tmp "$dir"
+outside="$(mktemp -d)"; track_tmp "$outside"
+printf '#!/usr/bin/env bash\ncat > /dev/null\ntouch "%s/ran"\n' "$outside" > "$outside/evil.sh"
+chmod +x "$outside/evil.sh"
+ln -s "$outside/evil.sh" "$dir/linked-adapter.sh"
+cat > "$dir/.prdkit/memory/task-ledger.md" <<'EOF'
+# Task Ledger
+
+## Configuration
+
+- backend: command
+- mode: best-effort
+- command: linked-adapter.sh
+EOF
+echo '{"event":"test"}' | run_emit "$dir" "test.event" > "$dir/emit.out" 2>&1 && status=$? || status=$?
+assert_eq 1 "$status" "a symlink to an outside executable is refused, even in best-effort mode"
+assert_contains "$(cat "$dir/emit.out")" "must not be a symlink" "the refusal names the rule"
+if [ ! -e "$outside/ran" ]; then _ok "the link target never runs"; else _no "the link target never runs"; fi
+printf '#!/usr/bin/env bash\ncat > /dev/null\n' > "$dir/inside-adapter.sh"
+chmod +x "$dir/inside-adapter.sh"
+rm "$dir/linked-adapter.sh"; ln -s inside-adapter.sh "$dir/linked-adapter.sh"
+echo '{"event":"test"}' | run_emit "$dir" "test.event" 2>/dev/null && status=$? || status=$?
+assert_eq 1 "$status" "a symlink to an executable inside the repository is refused too"
+
 # --- Test: non-executable adapter is rejected ---
 it "Non-executable adapter file is rejected"
 dir="$(setup_test_project)"; track_tmp "$dir"
