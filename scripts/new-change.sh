@@ -331,6 +331,29 @@ if [ "${#UNCARRIED[@]}" -gt 0 ]; then
     echo "[prdkit] Record what this change needs inside the worktree." >&2
 fi
 
+# Symlinked commands (init.sh --symlink) point into the kit checkout, which a new worktree lacks
+# until its submodule is initialized there. Say so instead of handing over a worktree whose
+# slash commands silently fail to load; never fetch anything here.
+if [ "$CREATED_WORKTREE" = true ]; then
+    DANGLING=0; KIT_DIR=""
+    for link in "$WORKTREE_PATH"/.claude/commands/prdkit*.md "$WORKTREE_PATH"/.opencode/commands/prdkit*.md; do
+        { [ -L "$link" ] && [ ! -e "$link" ]; } || continue
+        DANGLING=$((DANGLING + 1))
+        if [ -z "$KIT_DIR" ]; then
+            case "$(readlink "$link")" in
+                ../../*/commands/*) KIT_DIR="$(readlink "$link")"; KIT_DIR="${KIT_DIR#../../}"; KIT_DIR="${KIT_DIR%/commands/*}" ;;
+            esac
+        fi
+    done
+    if [ "$DANGLING" -gt 0 ]; then
+        echo "[prdkit] Warning: $DANGLING slash-command link(s) in the new worktree do not resolve${KIT_DIR:+: they point into $KIT_DIR, which is not checked out there}." >&2
+        if [ -n "$KIT_DIR" ] && [ "$(git -C "$WORKTREE_PATH" ls-files -s -- "$KIT_DIR" 2>/dev/null | cut -d' ' -f1)" = 160000 ]; then
+            echo "[prdkit]   Fix: git -C $WORKTREE_PATH submodule update --init $KIT_DIR" >&2
+        fi
+        echo "[prdkit]   Or install command copies, which work in every checkout: bash ${KIT_DIR:-<kit>}/scripts/init.sh --upgrade --copy (in $REPO_ROOT, then commit)." >&2
+    fi
+fi
+
 if $JSON_MODE; then
     uncarried_json=""
     for entry in ${UNCARRIED[@]+"${UNCARRIED[@]}"}; do

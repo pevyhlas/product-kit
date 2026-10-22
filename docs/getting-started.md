@@ -10,7 +10,8 @@ Product-Kit is experimental and may not fit every project: see the note in the [
    ```
 
    Select `--harness opencode`, `--harness agents`, or a comma-separated set when appropriate.
-   Pin the submodule to a reviewed tag or commit.
+   Pin the submodule to a reviewed tag or commit. Commands install as copies, which work in
+   every checkout, change worktrees and CI included ([install mode](customization.md#command-install-mode)).
 
 2. Run `/prdkit-init`. The agent reads your repository before asking setup questions, fills
    `.prdkit/memory/constitution.md` (intent owner, action policy, actual commands, review and
