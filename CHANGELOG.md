@@ -8,6 +8,8 @@ change by change.
 
 ## [Unreleased]
 
+- `render-agents.sh` copies a multiline (block or folded) neutral `description:` whole into a new
+  projection instead of only its first line, which left an empty description.
 - `cleanup-change.sh` states its actual contract: it refuses uncommitted or untracked changes,
   never checks whether committed work merged (that work stays on its branch), and copies
   evidence, retrospectives and ledger events out before ignored files go with the worktree.
