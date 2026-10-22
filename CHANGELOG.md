@@ -22,7 +22,9 @@ change by change.
   usage-enrichment inputs with agent names, costs and notes are not committed by a routine
   `git add -A`. Change cleanup copies them out of the worktree like evidence.
 - `new-change.sh` serializes automatic numbering on a lock in the Git common directory, so
-  concurrent runs, linked worktrees included, no longer open changes with the same number.
+  concurrent runs, linked worktrees included, no longer open changes with the same number. The
+  lock is a file the shell creates exclusively, not a directory: uutils `mkdir` (Ubuntu 26.04's
+  default) can report success to two runs creating the same one.
 - `ledger-emit.sh` refuses an adapter `command:` that is a symlink, so the inside-repository rule
   cannot be bypassed by linking to an executable elsewhere.
 - `init.sh` installs commands as copies by default, so a change worktree keeps its slash commands
