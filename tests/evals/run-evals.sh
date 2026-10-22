@@ -193,7 +193,12 @@ for sdir in "$SCENARIOS_DIR"/*/; do
     if [ -n "$ONLY" ] && [ "$s" != "$ONLY" ]; then continue; fi
     matched=$((matched + 1))
 
-    fixture="$(mktemp -d)"
+    # Stop before any setup or driver call when fixture storage is unavailable: an empty path
+    # would make the scenario set up Git and commit in the current directory instead.
+    if ! fixture="$(mktemp -d)" || [ -z "$fixture" ] || [ ! -d "$fixture" ]; then
+        echo "Cannot allocate an eval fixture for $s; check TMPDIR. Stopped before setting it up." >&2
+        exit 1
+    fi
     transcript="$RUN_DIR/$s.transcript.txt"
     export FIXTURE="$fixture" PK_ROOT EVAL_SCENARIO="$s" TRANSCRIPT="$transcript"
 

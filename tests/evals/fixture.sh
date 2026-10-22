@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Shared real/mock eval fixture, only inside the runner's throwaway project.
 fixture_project() {
+    # The runner allocates FIXTURE fresh and empty. Refuse anything else, so an empty or wrong
+    # path can never turn the setup below on the caller's checkout (`cd ""` stays put).
+    if [ -z "${FIXTURE:-}" ] || [ ! -d "$FIXTURE" ] || [ -n "$(ls -A "$FIXTURE")" ]; then
+        echo "fixture_project: FIXTURE must name a new, empty directory; got '${FIXTURE:-}'" >&2
+        exit 1
+    fi
     cd "$FIXTURE" || exit 1
     git init -q
     git config user.email eval@example.com
