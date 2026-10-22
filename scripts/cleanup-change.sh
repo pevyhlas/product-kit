@@ -210,14 +210,15 @@ if [ "$FORCE" = false ] && [ -n "$(git -C "$MATCH_PATH" status --porcelain --unt
     refuse_dirty "uncommitted or untracked files in the worktree (git status)"
 fi
 
-# Review packages, check outputs, retrospectives and the ledger spool live in the worktree's
-# gitignored .prdkit/cache/ and .prdkit/ledger/, which `git worktree remove` deletes without
-# counting them as dirty. Copy every evidence and retrospective file into this checkout's cache
-# and verify it first; a copy that fails or would overwrite a different file refuses the removal.
+# Review packages, check outputs, retrospectives, usage-enrichment inputs and the ledger spool live
+# in the worktree's gitignored .prdkit/cache/, .prdkit/retrospective/ and .prdkit/ledger/, which
+# `git worktree remove` deletes without counting them as dirty. Copy every evidence, retrospective
+# and enrichment file into this checkout's .prdkit/ and verify it first; a copy that fails or
+# would overwrite a different file refuses the removal.
 # The worktree's ledger events are appended to this checkout's spool, skipping lines it has.
 PRESERVED=0; EVENTS=0; CONFLICT=""
-preserve() { # path relative to .prdkit/cache/ (a directory or a file)
-    local src="$MATCH_PATH/.prdkit/cache/$1" dest="$ROOT/.prdkit/cache/$1" file rel
+preserve() { # path relative to .prdkit/ (a directory or a file)
+    local src="$MATCH_PATH/.prdkit/$1" dest="$ROOT/.prdkit/$1" file rel
     [ -e "$src" ] || return 0
     while IFS= read -r -d '' file; do
         rel="${file#"$src"}"
@@ -242,7 +243,8 @@ merge_events() {
     printf '%s\n' "$new" >> "$dest" || return 1
     EVENTS="$(printf '%s\n' "$new" | wc -l | tr -d ' ')"
 }
-if ! preserve evidence || ! preserve retrospectives || ! merge_events; then
+if ! preserve cache/evidence || ! preserve cache/retrospectives || ! preserve retrospective ||
+    ! merge_events; then
     msg="Refusing to remove $MATCH_PATH: could not preserve its evidence at $CONFLICT (a different file is already there, or the copy failed). Resolve it, then rerun."
     if $JSON_MODE; then emit_json refused remove "$msg"; else >&2 echo "[prdkit] $msg"; fi
     exit 1
@@ -254,7 +256,7 @@ if [ "$FORCE" = true ]; then REMOVE_ARGS=(--force "$MATCH_PATH"); fi
 if RM_ERR="$(git -C "$ROOT" worktree remove "${REMOVE_ARGS[@]}" 2>&1 >/dev/null)"; then
     git -C "$ROOT" worktree prune >/dev/null 2>&1 || true
     msg="Removed worktree for '$TARGET': $MATCH_PATH"
-    [ "$PRESERVED" -eq 0 ] || msg="$msg; preserved $PRESERVED evidence file(s) in $ROOT/.prdkit/cache/"
+    [ "$PRESERVED" -eq 0 ] || msg="$msg; preserved $PRESERVED evidence file(s) in $ROOT/.prdkit/"
     [ "$EVENTS" -eq 0 ] || msg="$msg; appended $EVENTS ledger event(s) to $ROOT/.prdkit/ledger/events.jsonl"
     if $JSON_MODE; then emit_json ok remove "$msg" "$MATCH_PATH"; else echo "[prdkit] $msg"; fi
     exit 0

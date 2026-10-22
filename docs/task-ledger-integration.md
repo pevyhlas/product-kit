@@ -54,7 +54,10 @@ or enrichment means an explicit lack of observations, not fabricated results.
 
 ## Optional enrichment contract
 
-An external adapter may provide `.prdkit/retrospective/<change-id>.enrich.json`:
+An external adapter may provide `.prdkit/retrospective/<change-id>.enrich.json`. The file stays
+local: the installer ignores `.prdkit/retrospective/` in Git, because it can name agents, costs,
+sources and free-text notes, and change cleanup keeps it like evidence. Share usage data
+deliberately, outside the repository.
 
 ```json
 {

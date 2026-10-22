@@ -33,9 +33,23 @@ for file in "${maintainer[@]}"; do
     if [ -e "$PROJ/.prdkit/scripts/bash/$(basename "$file")" ]; then _no "$(basename "$file") leaked"; else _ok "$(basename "$file") not installed"; fi
 done
 if [ -e "$PROJ/.prdkit/scripts/bash/maintainer" ] || grep -q 'maintainer' "$PROJ/.prdkit/.manifest"; then _no 'maintainer tooling leaked'; else _ok 'maintainer tooling outside the install and manifest'; fi
-for entry in .prdkit/ledger/ .prdkit/cache/ .worktrees/; do
+for entry in .prdkit/ledger/ .prdkit/cache/ .prdkit/retrospective/ .worktrees/; do
     if grep -qxF "$entry" "$PROJ/.gitignore"; then _ok "$entry ignored"; else _no "$entry ignored"; fi
 done
+mkdir -p "$PROJ/.prdkit/retrospective"
+printf '{}\n' > "$PROJ/.prdkit/retrospective/001-x.enrich.json"
+run git -C "$PROJ" check-ignore -q .prdkit/retrospective/001-x.enrich.json
+assert_eq 0 "$STATUS" "usage-enrichment input ignored by Git"
+rm -rf "$PROJ/.prdkit/retrospective"
+it "an upgrade adds the enrichment ignore entry once to a project seeded before it"
+grep -vxF '.prdkit/retrospective/' "$PROJ/.gitignore" > "$PROJ/.gitignore.old" || true
+mv "$PROJ/.gitignore.old" "$PROJ/.gitignore"
+run bash .product-kit/scripts/init.sh --upgrade
+assert_eq 0 "$STATUS" "upgrade succeeds"
+assert_contains "$OUTPUT" "Added '.prdkit/retrospective/' to .gitignore" "entry added on upgrade"
+run bash .product-kit/scripts/init.sh --upgrade
+assert_not_contains "$OUTPUT" "Added '.prdkit/retrospective/'" "not added twice"
+assert_eq 1 "$(grep -cxF '.prdkit/retrospective/' "$PROJ/.gitignore")" "entry present exactly once"
 it "manifest covers every installed file and includes workflow hashes"
 assert_contains "$(cat "$PROJ/.prdkit/.manifest")" "version: $(cat "$PK_ROOT/VERSION")" "version recorded"
 expected=0

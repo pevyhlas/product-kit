@@ -70,11 +70,15 @@ mkdir -p "$EV/evidence/016-evidence/reviews/round-1" "$EV/retrospectives"
 printf 'Verdict: PASS\n' > "$EV/evidence/016-evidence/reviews/round-1/report.md"
 printf 'diff\n' > "$EV/evidence/016-evidence/reviews/round-1/package.diff"
 printf 'lessons\n' > "$EV/retrospectives/016-evidence.md"
+# Usage-enrichment input is gitignored too, so it is not dirt; it must not vanish with the worktree.
+mkdir -p "$PROJ/.worktrees/016-evidence/.prdkit/retrospective"
+printf '{"tokens":{"total":1}}\n' > "$PROJ/.worktrees/016-evidence/.prdkit/retrospective/016-evidence.enrich.json"
 run bash "$CLEAN" --json 016-evidence
 assert_eq 0 "$STATUS" "worktree removed"
-assert_contains "$OUTPUT" "preserved 3 evidence file(s)" "preservation reported"
+assert_contains "$OUTPUT" "preserved 4 evidence file(s)" "preservation reported"
 assert_eq "Verdict: PASS" "$(cat "$PROJ/.prdkit/cache/evidence/016-evidence/reviews/round-1/report.md" 2>/dev/null)" "review report kept"
 assert_eq "lessons" "$(cat "$PROJ/.prdkit/cache/retrospectives/016-evidence.md" 2>/dev/null)" "retrospective kept"
+assert_eq '{"tokens":{"total":1}}' "$(cat "$PROJ/.prdkit/retrospective/016-evidence.enrich.json" 2>/dev/null)" "enrichment input kept"
 
 it "every change's evidence in the worktree and its ledger events survive removal"
 # new-change.sh run inside a worktree opens the next change there, so one worktree can hold

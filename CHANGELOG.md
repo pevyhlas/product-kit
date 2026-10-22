@@ -8,6 +8,9 @@ change by change.
 
 ## [Unreleased]
 
+- The installer ignores `.prdkit/retrospective/` in Git (added on the next upgrade), so optional
+  usage-enrichment inputs with agent names, costs and notes are not committed by a routine
+  `git add -A`. Change cleanup copies them out of the worktree like evidence.
 - `new-change.sh` serializes automatic numbering on a lock in the Git common directory, so
   concurrent runs, linked worktrees included, no longer open changes with the same number.
 - `ledger-emit.sh` refuses an adapter `command:` that is a symlink, so the inside-repository rule
