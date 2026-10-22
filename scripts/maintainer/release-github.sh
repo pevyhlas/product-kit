@@ -28,7 +28,8 @@
 #   own plan refuses a backfill, for example after a newer release overtook this one.
 #
 # SHA must be the full 40-hex commit. --allow-backfill lets the plan release a version older than
-# the newest vX.Y.Z tag. Environment: GH_REPO=owner/name (required); gh reads GH_TOKEN. Exit 0:
+# the newest vX.Y.Z tag. Environment: GH_REPO=owner/name (required); gh reads GH_TOKEN;
+# RELEASE_API_RETRY_DELAY (seconds, default 3) spaces the retries of a failed read. Exit 0:
 # done or nothing to do. Exit 1: verification or publication failed. Exit 2: usage error.
 
 set -euo pipefail
@@ -89,14 +90,25 @@ WORK="$(mktemp -d)" || die "cannot allocate a temporary directory"
 trap 'rm -rf "$WORK"' EXIT
 
 # api ARGS...: gh api with stdout as the (--jq filtered) body. Returns 0 on success, 4 on HTTP
-# 404, 3 on HTTP 422 and 1 otherwise; error text goes to stderr except for a 404.
+# 404, 3 on HTTP 422 and 1 otherwise; error text goes to stderr except for a 404. A read (no -X)
+# that fails any other way is tried up to three times: GitHub occasionally returns a truncated
+# body ("unexpected end of JSON input") or a server error, which once failed a release gate.
+# Writes are never retried; re-running the workflow is their recovery.
 api() {
-    local rc=0
-    gh api "$@" >"$WORK/api.out" 2>"$WORK/api.err" || rc=$?
-    if [ "$rc" -eq 0 ]; then cat "$WORK/api.out"; return 0; fi
-    if grep -q '(HTTP 404)' "$WORK/api.err"; then return 4; fi
+    local rc attempt=1 read=true arg
+    for arg in "$@"; do [ "$arg" != -X ] || read=false; done
+    while :; do
+        rc=0
+        gh api "$@" >"$WORK/api.out" 2>"$WORK/api.err" || rc=$?
+        if [ "$rc" -eq 0 ]; then cat "$WORK/api.out"; return 0; fi
+        if grep -q '(HTTP 404)' "$WORK/api.err"; then return 4; fi
+        if grep -q '(HTTP 422)' "$WORK/api.err"; then cat "$WORK/api.err" >&2; return 3; fi
+        [ "$read" = true ] && [ "$attempt" -lt 3 ] || break
+        log "read of $1 failed ($(head -n 1 "$WORK/api.err")); retrying"
+        sleep "$((attempt * ${RELEASE_API_RETRY_DELAY:-3}))"
+        attempt=$((attempt + 1))
+    done
     cat "$WORK/api.err" >&2
-    if grep -q '(HTTP 422)' "$WORK/api.err"; then return 3; fi
     return 1
 }
 

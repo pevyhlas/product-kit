@@ -580,6 +580,11 @@ case "$method $path" in
     "GET actions/workflows/ci.yml/runs?"*)
         printf '%s\n' "$path" > "$S/runs-query"; out "$(cat "$S/runs-list.json")" ;;
     "GET commits/"*"/pulls")
+        # pulls-flaky holds how many more lookups fail the way GitHub's truncated bodies do.
+        if [ -s "$S/pulls-flaky" ] && [ "$(cat "$S/pulls-flaky")" -gt 0 ]; then
+            echo "$(( $(cat "$S/pulls-flaky") - 1 ))" > "$S/pulls-flaky"
+            echo 'unexpected end of JSON input' >&2; exit 1
+        fi
         out "$(cat "$S/pulls.json")" ;;
     "GET git/ref/tags/"*)
         f="$S/refs/${path#git/ref/tags/}"; [ -f "$f" ] || notfound; out "$(cat "$f")" ;;
@@ -589,6 +594,7 @@ case "$method $path" in
         if [ -e "$S/releases-500" ]; then echo 'gh: Server Error (HTTP 500)' >&2; exit 1; fi
         f="$S/releases/${path#releases/tags/}"; [ -f "$f" ] || notfound; out "$(cat "$f")" ;;
     "POST git/tags")
+        if [ -e "$S/tags-500" ]; then echo 'gh: Server Error (HTTP 500)' >&2; exit 1; fi
         cp "$S/req.fields" "$S/tag-request"
         obj="ab$(printf '%038d' "$(wc -l < "$S/calls.log" | tr -d ' ')")"
         printf '{"sha":"%s","object":{"type":"commit","sha":"%s"}}\n' "$obj" "$(field object)" > "$S/tagobjs/$obj.json"
@@ -635,7 +641,7 @@ gh_run() { # STATE ARGS... → release-github.sh inside the fixture with the fak
     local s="$1"; shift
     # shellcheck disable=SC2016 # the inner shell expands its own positional parameters
     run env PATH="$BIN:$PATH" FAKE_GH="$s" GH_REPO=acme/kit GITHUB_STEP_SUMMARY="$s/summary.md" \
-        bash -c 'cd "$1" && shift && bash "$@"' _ "$GHREPO" "$GHS" "$@" --main-ref main
+        RELEASE_API_RETRY_DELAY=0 bash -c 'cd "$1" && shift && bash "$@"' _ "$GHREPO" "$GHS" "$@" --main-ref main
 }
 writes() { grep -c -e '-X POST' -e '^release create' "$1/calls.log" || true; }
 creates() { grep -c '^release create' "$1/calls.log" || true; }
@@ -898,5 +904,22 @@ gh_run "$ST11" publish --sha "$R" --ci-run-id 101
 assert_eq 1 "$STATUS" "a server error reading the release is not 'missing'"
 assert_contains "$OUTPUT" "could not read the release for v0.2.0" "error explained"
 assert_eq 0 "$(creates "$ST11")" "no release created on a lookup error"
+
+it "a failed read is retried; a failed write is not"
+ST13="$(new_state)"; track_tmp "$ST13"
+echo 1 > "$ST13/pulls-flaky"
+gh_run "$ST13" gate --sha "$R" --ci-run-id 101
+assert_eq 0 "$STATUS" "one truncated response does not fail the gate"
+assert_eq https://github.com/acme/kit/pull/7 "$(val pr_url)" "the retry finds the pull request"
+assert_contains "$OUTPUT" "unexpected end of JSON input); retrying" "the retry is logged"
+echo 3 > "$ST13/pulls-flaky"
+gh_run "$ST13" gate --sha "$R" --ci-run-id 101
+assert_eq 1 "$STATUS" "a read that keeps failing fails the gate"
+assert_contains "$OUTPUT" "could not look up the pull request" "failure explained"
+assert_eq 5 "$(grep -c '/pulls ' "$ST13/calls.log")" "three attempts after the earlier two"
+echo 0 > "$ST13/pulls-flaky"; : > "$ST13/tags-500"
+gh_run "$ST13" publish --sha "$R" --ci-run-id 101
+assert_eq 1 "$STATUS" "a failed tag write fails the run"
+assert_eq 1 "$(grep -c 'git/tags -X POST' "$ST13/calls.log")" "a failed write is made once"
 
 finish
