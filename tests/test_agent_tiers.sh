@@ -487,6 +487,19 @@ assert_eq 0 "$STATUS" "clean after the block-scalar repair"
 printf -- '---\nname: own-a\ndomain: Review\ntier: high\ndescription: |\n  Block description stays project-owned.\n---\n\n# own-a\n\nReview carefully.\n' > .prdkit/agents/own-a.md
 run bash "$R2" --check
 assert_eq 0 "$STATUS" "a block-scalar neutral description is not compared"
+printf -- '---\nname: own-c\ndomain: Review\ntier: high\ndescription: |\n  Reviews the first concern.\n\n  Then the second.\ntools: Read\n---\n\n# own-c\n\nReview carefully.\n' > .prdkit/agents/own-c.md
+grep -qF '| own-c |' "$MAP2" || printf '| Review | own-c | test |\n' >> "$MAP2"
+run bash "$R2"
+assert_eq 0 "$STATUS" "a new projection renders from a block-scalar description"
+for proj in .claude/agents/own-c.md .opencode/agents/own-c.md; do
+    assert_contains "$(cat "$proj")" "$(printf 'description: |\n  Reviews the first concern.\n\n  Then the second.\nm')" "$proj copies the whole block, blank line included"
+    assert_not_contains "$(cat "$proj")" "tools: Read" "$proj stops at the next neutral key"
+done
+before="$(cat .claude/agents/own-c.md .opencode/agents/own-c.md | cksum)"
+run bash "$R2"
+assert_eq "$before" "$(cat .claude/agents/own-c.md .opencode/agents/own-c.md | cksum)" "a second render leaves the block alone"
+run bash "$R2" --check
+assert_eq 0 "$STATUS" "check is clean after creating from a block description"
 cd "$PROJ" || exit 1
 
 it "a kit-source run refuses instead of treating the kit checkout as the project"

@@ -24,11 +24,12 @@ Resolution: shared baseline (explicit `Local tier -> Library tier` row, else the
 of the same name, else the aliases `frontier`->`verydeep`, `high`->`deep`, `fast`->`light`)
 or, without a baseline, the legacy literal table; then `tier:` overrides, then `agent:`
 overrides (a specific harness beats `*`). The renderer owns `model`, OpenCode `variant`,
-`description` (copied from a single-line neutral description; a block scalar stays
-project-owned) and the prompt body (the whole neutral body, local overlay included). Every
-other projection frontmatter key and leading generated-marker comments are preserved; files
-are rewritten only when content changes. A new projection gets name, description and model
-(plus `mode: subagent` and variant for OpenCode); add native extras once and they persist.
+`description` (copied from a single-line neutral description; a block scalar is copied whole
+into a new projection, then stays project-owned) and the prompt body (the whole neutral body,
+local overlay included). Every other projection frontmatter key and leading generated-marker
+comments are preserved; files are rewritten only when content changes. A new projection gets
+name, description and model (plus `mode: subagent` and variant for OpenCode); add native
+extras once and they persist.
 
 A definition limits its harnesses only with a bracketed list of projection harnesses,
 `harnesses: [opencode]` or `harnesses: [claude, opencode]`. A bare value, an empty list or an
