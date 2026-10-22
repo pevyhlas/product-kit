@@ -8,6 +8,10 @@ change by change.
 
 ## [Unreleased]
 
+- The installer keeps every write and deletion inside the project. A manifest entry outside the
+  installed layout is ignored, a symlinked or escaping managed directory is refused before
+  anything is written, kit-owned files replace a symlink instead of writing through it, and a
+  symlinked template or memory file is kept, even with `--force`.
 - Releases and their tag messages are titled `Product Kit - vX.Y.Z`. The CHANGELOG heading keeps
   its subtitle, and the release notes still open with it.
 - The README leads with the pitch, how Product-Kit differs from per-feature spec tools and

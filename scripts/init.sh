@@ -295,6 +295,52 @@ is_kit_command_link() {
     [ "$dir" = "$kitdir" ]
 }
 
+# --- Containment ---------------------------------------------------------------
+# Every write and deletion stays inside TARGET. Manifest paths are data from a file a pull
+# request can edit, so one becomes a filesystem operand only when it names the exact layout the
+# kit installs (a single file name, never a `/` or `..` segment); case patterns are no check,
+# since `*` also matches `/`. A directory the installer writes into must be a real directory
+# inside TARGET, and a kit-owned file is replaced rather than written through a symlink.
+NAME_RE='[A-Za-z0-9_][A-Za-z0-9_.-]*'
+KIT_FILE_RE="^\\.prdkit/(scripts/bash/$NAME_RE\\.sh|workflows/$NAME_RE\\.md|templates/$NAME_RE\\.md)\$"
+INSTALLED_RE="^(\\.(claude|opencode)/commands/$NAME_RE\\.md|\\.prdkit/memory/$NAME_RE\\.md)\$"
+
+# Physical path of a file, following a chain of symlinks (no readlink -f or realpath, which
+# macOS lacks). Fails for an unresolvable directory or a chain longer than 40 links.
+physical_path() {
+    local path="$1" link n=0 dir
+    while [ -L "$path" ]; do
+        n=$((n + 1)); [ "$n" -le 40 ] || return 1
+        link="$(readlink "$path")" || return 1
+        case "$link" in /*) path="$link" ;; *) path="$(dirname "$path")/$link" ;; esac
+    done
+    dir="$(CDPATH="" cd -P -- "$(dirname "$path")" 2>/dev/null && pwd -P)" || return 1
+    printf '%s/%s\n' "$dir" "$(basename "$path")"
+}
+
+# Prints why an existing directory the installer writes into is unsafe (a symlink, not a
+# directory, or resolving outside TARGET) and returns 0; returns 1 when it is safe or absent.
+managed_dir_problem() {
+    local path="$TARGET/$1" phys
+    if [ -L "$path" ]; then printf '%s is a symlink\n' "$1"; return 0; fi
+    [ -e "$path" ] || return 1
+    if [ ! -d "$path" ]; then printf '%s is not a directory\n' "$1"; return 0; fi
+    phys="$(CDPATH="" cd -P -- "$path" 2>/dev/null && pwd -P)" || { printf '%s cannot be resolved\n' "$1"; return 0; }
+    case "$phys/" in "$TARGET"/*) return 1 ;; esac
+    printf '%s resolves outside the target (%s)\n' "$1" "$phys"
+    return 0
+}
+
+# Where an in-place edit of a root file (AGENTS.md, .gitignore) lands: the file itself, or, for
+# a symlink (AGENTS.md -> CLAUDE.md is common), its physical target while that stays inside
+# TARGET. Fails for a link that leads outside TARGET or cannot be resolved.
+root_file_path() {
+    local path="$TARGET/$1"
+    if [ ! -L "$path" ]; then printf '%s\n' "$path"; return 0; fi
+    path="$(physical_path "$path")" || return 1
+    case "$path" in "$TARGET"/*) printf '%s\n' "$path" ;; *) return 1 ;; esac
+}
+
 # Kit-named commands installed in a harness command directory that the current kit no
 # longer ships (retired or formerly disabled/unsupported entry points). They would keep
 # loading into every session's command listing. Emits "<rel>\t<remove|keep>": remove when
@@ -305,6 +351,9 @@ list_retired_commands() {
     local dir file name rel
     for dir in .claude/commands .opencode/commands; do
         [ -d "$TARGET/$dir" ] || continue
+        # A command directory that is not a real directory inside TARGET is never cleaned (the
+        # install refuses it for a selected harness before writing anything).
+        if managed_dir_problem "${dir%/*}" >/dev/null || managed_dir_problem "$dir" >/dev/null; then continue; fi
         for file in "$TARGET/$dir"/prdkit*.md; do
             { [ -e "$file" ] || [ -L "$file" ]; } || continue
             name="$(basename "$file")"
@@ -322,22 +371,28 @@ list_retired_commands() {
 # Kit-owned scripts/workflows and templates that the previous manifest recorded but the
 # current kit no longer ships (for example a retired helper). Emits "<rel>\t<remove|keep>":
 # kit-owned files and templates still matching their recorded hash are removed; an edited
-# template is project-owned content and is kept with a warning.
+# template is project-owned content and is kept with a warning, as is a symlinked one. A
+# manifest path outside the installed layout is ignored with a warning, never touched.
 list_retired_kit_files() {
     local line rel src
     [ -f "$MANIFEST" ] || return 0
     while IFS= read -r line; do
+        case "$line" in version:*|harnesses:*|mode:*|agents-section:*|'') continue ;; esac
         rel="${line#*  }"
+        if ! [[ $rel =~ $KIT_FILE_RE ]]; then
+            [[ $rel =~ $INSTALLED_RE ]] ||
+                printf 'Warning: ignoring a .prdkit/.manifest entry outside the installed layout: %s\n' "$rel" >&2
+            continue
+        fi
         case "$rel" in
-            .prdkit/scripts/bash/*.sh) src="$PK_ROOT/scripts/${rel##*/}" ;;
-            .prdkit/workflows/*.md) src="$PK_ROOT/workflows/${rel##*/}" ;;
-            .prdkit/templates/*.md) src="$PK_ROOT/templates/${rel##*/}" ;;
-            *) continue ;;
+            .prdkit/scripts/bash/*) src="$PK_ROOT/scripts/${rel##*/}" ;;
+            .prdkit/workflows/*) src="$PK_ROOT/workflows/${rel##*/}" ;;
+            *) src="$PK_ROOT/templates/${rel##*/}" ;;
         esac
         { [ ! -e "$src" ] && [ -f "$TARGET/$rel" ]; } || continue
         case "$rel" in
             .prdkit/templates/*)
-                if [ "$(hash_file "$TARGET/$rel")" = "${line%%  *}" ]; then printf '%s\tremove\n' "$rel"
+                if [ ! -L "$TARGET/$rel" ] && [ "$(hash_file "$TARGET/$rel")" = "${line%%  *}" ]; then printf '%s\tremove\n' "$rel"
                 else printf '%s\tkeep\n' "$rel"; fi ;;
             *) printf '%s\tremove\n' "$rel" ;;
         esac
@@ -540,6 +595,26 @@ if $CHECK; then
 fi
 
 # --- Install / upgrade -------------------------------------------------------
+# Refuse before writing anything when a directory the installer writes into is a symlink, is
+# not a directory or resolves outside TARGET, or when a directory sits where the kit installs a
+# file. Directories that do not exist yet are created below as real directories.
+containment_problems() {
+    local rel src dirs=".prdkit .prdkit/scripts .prdkit/scripts/bash .prdkit/templates .prdkit/memory .prdkit/workflows .prdkit/agents"
+    if has_harness claude; then dirs="$dirs .claude .claude/commands"; fi
+    if has_harness opencode; then dirs="$dirs .opencode .opencode/commands"; fi
+    for rel in $dirs; do managed_dir_problem "$rel" || true; done
+    while IFS=$'\t' read -r src rel; do
+        if [ -d "$TARGET/$rel" ] && [ ! -L "$TARGET/$rel" ]; then printf '%s is a directory where the kit installs a file\n' "$rel"; fi
+    done < <(list_kit_files; printf 'manifest\t.prdkit/.manifest\nmanifest\t.prdkit/.manifest.tmp\n')
+}
+PROBLEMS="$(containment_problems)"
+if [ -n "$PROBLEMS" ]; then
+    echo "Error: refusing to install into $TARGET; nothing was written:" >&2
+    printf '%s\n' "$PROBLEMS" | sed 's/^/  /' >&2
+    echo "The installer writes only into real directories inside the project. Replace each path above with a real directory (or move it aside), then re-run." >&2
+    exit 1
+fi
+
 echo "Product-Kit: $PK_ROOT (version $PK_VERSION)"
 echo "Target:     $TARGET"
 echo "Harnesses:  $HARNESSES"
@@ -556,8 +631,13 @@ if has_harness opencode; then mkdir -p "$OC_CMD_DIR"; fi
 #   refreshed  → overwritten (--force, or unmodified-since-install + kit newer)
 #   current    → already identical to the kit version
 #   kept       → consumer edited it: preserved untouched
+#   symlinked  → a symlink, project-owned: never written through, even with --force
 install_conffile() {
     local src="$1" rel="$2" dest="$TARGET/$2" cur kit rec
+    if [ -L "$dest" ]; then
+        echo symlinked
+        return 0
+    fi
     if [ ! -e "$dest" ]; then
         cp "$src" "$dest"
         echo added
@@ -589,6 +669,7 @@ oc_linked=0
 tpl_added=0; tpl_refreshed=0; tpl_current=0; tpl_kept=0
 mem_added=0; mem_refreshed=0; mem_current=0; mem_kept=0
 CF_MODIFIED=()
+CF_SYMLINKED=()
 KIT_OVERWRITTEN=()
 while IFS=$'\t' read -r src rel; do
     dest="$TARGET/$rel"
@@ -615,13 +696,16 @@ while IFS=$'\t' read -r src rel; do
             esac
             ;;
         .prdkit/scripts/bash/*)
-            # Workflow scripts are kit-owned: always refreshed.
+            # Workflow scripts are kit-owned: always refreshed, replacing the file (or a
+            # symlink in its place) rather than writing through it.
             if file_locally_edited "$rel" "$src"; then KIT_OVERWRITTEN+=("$rel"); fi
+            rm -f "$dest"
             cp "$src" "$dest"
             chmod +x "$dest"
             ;;
         .prdkit/workflows/*)
             if file_locally_edited "$rel" "$src"; then KIT_OVERWRITTEN+=("$dest"); fi
+            rm -f "$dest"
             cp "$src" "$dest"
             ;;
         .prdkit/templates/*)
@@ -631,6 +715,7 @@ while IFS=$'\t' read -r src rel; do
                 refreshed) tpl_refreshed=$((tpl_refreshed + 1)) ;;
                 current)   tpl_current=$((tpl_current + 1)) ;;
                 kept)      tpl_kept=$((tpl_kept + 1)); CF_MODIFIED+=("$dest|$src") ;;
+                symlinked) tpl_kept=$((tpl_kept + 1)); CF_SYMLINKED+=("$rel") ;;
             esac
             ;;
         .prdkit/memory/*)
@@ -640,6 +725,7 @@ while IFS=$'\t' read -r src rel; do
                 refreshed) mem_refreshed=$((mem_refreshed + 1)) ;;
                 current)   mem_current=$((mem_current + 1)) ;;
                 kept)      mem_kept=$((mem_kept + 1)); CF_MODIFIED+=("$dest|$src") ;;
+                symlinked) mem_kept=$((mem_kept + 1)); CF_SYMLINKED+=("$rel") ;;
             esac
             ;;
     esac
@@ -677,9 +763,15 @@ done < <(list_retired_kit_files)
 # markers; everything outside them belongs to the consumer and is never touched.
 
 # Writes/updates the managed section and prints one outcome word:
-# created | updated | current | appended
+# created | updated | current | appended. A symlinked AGENTS.md is edited at its target, which
+# keeps the link, while that target stays inside the project; otherwise it is skipped.
 write_agents_section() {
-    local agents_file="$TARGET/AGENTS.md" sec tmp
+    local agents_file sec tmp
+    if ! agents_file="$(root_file_path AGENTS.md)"; then
+        echo "Warning: AGENTS.md is a symlink that leads outside $TARGET; leaving it untouched." >&2
+        echo "skipped (symlink outside the project)"
+        return 0
+    fi
     sec="$(mktemp)"
     render_agents_section > "$sec"
 
@@ -754,6 +846,11 @@ if [ ${#CF_MODIFIED[@]} -gt 0 ]; then
         echo "    diff ${entry%%|*} ${entry#*|}"
     done
 fi
+if [ ${#CF_SYMLINKED[@]} -gt 0 ]; then
+    echo "⚠ Kept ${#CF_SYMLINKED[@]} symlinked template/memory file(s); the installer never writes through a"
+    echo "  symlink, even with --force. Compare each with the kit's version by hand:"
+    for rel in "${CF_SYMLINKED[@]}"; do echo "    $rel"; done
+fi
 if [ ${#RETIRED_REMOVED[@]} -gt 0 ]; then
     echo "✓ Removed ${#RETIRED_REMOVED[@]} retired kit command(s) no longer shipped:"
     for rel in "${RETIRED_REMOVED[@]}"; do echo "    $rel"; done
@@ -783,22 +880,29 @@ fi
 # committed); .prdkit/cache/ holds raw evidence (review packages, test output),
 # which records link instead of committing; .worktrees/ is where
 # new-change.sh puts isolated change checkouts. Seeding them here means no later command has to mutate a tracked
-# .gitignore mid-run (which would dirty the tree it is about to check).
-for ignore_entry in ".prdkit/ledger/" ".prdkit/cache/" ".worktrees/"; do
-    if ! grep -qxF "$ignore_entry" "$TARGET/.gitignore" 2>/dev/null; then
-        if [ -f "$TARGET/.gitignore" ] && [ -s "$TARGET/.gitignore" ] && [ -n "$(tail -c 1 "$TARGET/.gitignore")" ]; then
-            echo >> "$TARGET/.gitignore"
+# .gitignore mid-run (which would dirty the tree it is about to check). A symlinked .gitignore is
+# edited at its target only while that stays inside the project.
+IGNORE_ENTRIES=".prdkit/ledger/ .prdkit/cache/ .worktrees/"
+if GITIGNORE="$(root_file_path .gitignore)"; then
+    for ignore_entry in $IGNORE_ENTRIES; do
+        if ! grep -qxF "$ignore_entry" "$GITIGNORE" 2>/dev/null; then
+            if [ -f "$GITIGNORE" ] && [ -s "$GITIGNORE" ] && [ -n "$(tail -c 1 "$GITIGNORE")" ]; then
+                echo >> "$GITIGNORE"
+            fi
+            echo "$ignore_entry" >> "$GITIGNORE"
+            echo "✓ Added '$ignore_entry' to .gitignore"
         fi
-        echo "$ignore_entry" >> "$TARGET/.gitignore"
-        echo "✓ Added '$ignore_entry' to .gitignore"
-    fi
-done
+    done
+else
+    echo "⚠ .gitignore is a symlink that leads outside the project; left untouched. Ignore these by hand: $IGNORE_ENTRIES"
+fi
 
 # --- Write the install manifest ----------------------------------------------
 # Records the kit version, harnesses, and one "<sha256>  <path>"
 # line per installed file. For a preserved (consumer-edited) file the previously
 # recorded pristine hash is carried forward so future runs still detect the edit.
 manifest_tmp="$MANIFEST.tmp"
+rm -f "$manifest_tmp"
 {
     echo "version: $PK_VERSION"
     echo "harnesses: $HARNESSES"
@@ -819,6 +923,8 @@ manifest_tmp="$MANIFEST.tmp"
         fi
     done < <(list_kit_files)
 } > "$manifest_tmp"
+# A symlinked manifest is replaced, never written through or moved into.
+[ ! -L "$MANIFEST" ] || rm -f "$MANIFEST"
 mv "$manifest_tmp" "$MANIFEST"
 echo "✓ Manifest written to .prdkit/.manifest"
 

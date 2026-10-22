@@ -259,4 +259,117 @@ assert_file "$PROJ7/.prdkit/templates/old-template.md" "edited template preserve
 assert_not_contains "$(cat "$PROJ7/.prdkit/.manifest")" "record-analysis.sh" "manifest no longer records the retired helper"
 run bash -c "cd '$PROJ7' && bash .prdkit/scripts/bash/doctor.sh --json"
 assert_not_contains "$OUTPUT" "Missing installed file" "doctor reports nothing missing after the upgrade"
+
+# Containment: each project below sits in its own base directory, so a sentinel next to it is
+# outside the target but inside the test's scratch space.
+contained_project() { # echoes the project dir, inside a fresh tracked base directory
+    local base proj
+    base="$(mktemp -d)" || return 1
+    base="$(cd "$base" && pwd -P)"
+    proj="$(make_project)" || return 1
+    mv "$proj" "$base/proj" && echo "$base/proj"
+}
+hash_of() { (sha256sum "$1" 2>/dev/null || shasum -a 256 "$1") | cut -d' ' -f1; }
+ZERO_HASH="$(printf '%064d' 0)"
+
+it "a manifest path outside the installed layout is ignored, never deleted"
+PROJ8="$(contained_project)"; track_tmp "${PROJ8%/proj}"
+( cd "$PROJ8" && bash .product-kit/scripts/init.sh --copy ) >/dev/null 2>&1
+printf 'outside\n' > "${PROJ8%/proj}/victim.sh"
+printf '%s  .prdkit/scripts/bash/../../../../victim.sh\n' "$ZERO_HASH" >> "$PROJ8/.prdkit/.manifest"
+run bash -c "cd '$PROJ8' && bash .product-kit/scripts/init.sh --check"
+assert_not_contains "$OUTPUT" "RETIRED — installed kit files" "check does not list it as retired"
+assert_contains "$OUTPUT" "ignoring a .prdkit/.manifest entry outside the installed layout" "check warns"
+run bash -c "cd '$PROJ8' && bash .product-kit/scripts/init.sh --upgrade"
+assert_eq 0 "$STATUS" "upgrade succeeds"
+assert_file "${PROJ8%/proj}/victim.sh" "a file outside the project survives the upgrade"
+assert_contains "$OUTPUT" "ignoring a .prdkit/.manifest entry outside the installed layout" "upgrade warns"
+assert_not_contains "$(cat "$PROJ8/.prdkit/.manifest")" "victim.sh" "the rewritten manifest drops the entry"
+
+it "a kit-owned file replaced by a symlink is replaced, never written through"
+PROJ9="$(contained_project)"; track_tmp "${PROJ9%/proj}"
+( cd "$PROJ9" && bash .product-kit/scripts/init.sh --copy ) >/dev/null 2>&1
+printf 'outside\n' > "${PROJ9%/proj}/sentinel"
+rm "$PROJ9/.prdkit/scripts/bash/status.sh" "$PROJ9/.prdkit/workflows/change.md"
+ln -s "${PROJ9%/proj}/sentinel" "$PROJ9/.prdkit/scripts/bash/status.sh"
+ln -s "${PROJ9%/proj}/sentinel" "$PROJ9/.prdkit/workflows/change.md"
+run bash -c "cd '$PROJ9' && bash .product-kit/scripts/init.sh --upgrade"
+assert_eq 0 "$STATUS" "upgrade succeeds"
+assert_eq "outside" "$(cat "${PROJ9%/proj}/sentinel")" "the link target outside the project is unchanged"
+if [ -x "${PROJ9%/proj}/sentinel" ]; then _no "the link target gains no execute bit"; else _ok "the link target gains no execute bit"; fi
+for rel in .prdkit/scripts/bash/status.sh .prdkit/workflows/change.md; do
+    if [ -L "$PROJ9/$rel" ]; then _no "$rel is a regular file again"; else _ok "$rel is a regular file again"; fi
+done
+assert_eq "$(hash_of "$PK_ROOT/scripts/status.sh")" "$(hash_of "$PROJ9/.prdkit/scripts/bash/status.sh")" "the kit's status.sh is installed"
+
+it "a symlinked or escaping managed directory is refused before anything is written"
+PROJ10="$(contained_project)"; track_tmp "${PROJ10%/proj}"
+( cd "$PROJ10" && bash .product-kit/scripts/init.sh --copy ) >/dev/null 2>&1
+mv "$PROJ10/.prdkit/workflows" "${PROJ10%/proj}/workflows"
+ln -s "${PROJ10%/proj}/workflows" "$PROJ10/.prdkit/workflows"
+printf 'outside edit\n' > "${PROJ10%/proj}/workflows/change.md"
+manifest_before="$(hash_of "$PROJ10/.prdkit/.manifest")"
+run bash -c "cd '$PROJ10' && bash .product-kit/scripts/init.sh --upgrade"
+assert_eq 1 "$STATUS" "upgrade refused"
+assert_contains "$OUTPUT" ".prdkit/workflows is a symlink" "the unsafe directory is named"
+assert_contains "$OUTPUT" "nothing was written" "refusal says nothing was written"
+assert_eq "outside edit" "$(cat "${PROJ10%/proj}/workflows/change.md")" "files behind the link are untouched"
+assert_eq "$manifest_before" "$(hash_of "$PROJ10/.prdkit/.manifest")" "the manifest is untouched"
+PROJ11="$(contained_project)"; track_tmp "${PROJ11%/proj}"
+mkdir "${PROJ11%/proj}/claude"
+ln -s "${PROJ11%/proj}/claude" "$PROJ11/.claude"
+run bash -c "cd '$PROJ11' && bash .product-kit/scripts/init.sh --harness claude,agents"
+assert_eq 1 "$STATUS" "fresh install into a symlinked .claude refused"
+assert_contains "$OUTPUT" ".claude is a symlink" "the symlinked harness directory is named"
+assert_eq "" "$(ls -A "${PROJ11%/proj}/claude")" "nothing written behind the link"
+if [ -e "$PROJ11/.prdkit" ]; then _no "no .prdkit created on refusal"; else _ok "no .prdkit created on refusal"; fi
+run bash -c "cd '$PROJ11' && bash .product-kit/scripts/init.sh --harness agents"
+assert_eq 0 "$STATUS" "a symlinked directory of an unselected harness does not block the install"
+assert_eq "" "$(ls -A "${PROJ11%/proj}/claude")" "and is never cleaned"
+PROJ12="$(contained_project)"; track_tmp "${PROJ12%/proj}"
+( cd "$PROJ12" && bash .product-kit/scripts/init.sh --copy ) >/dev/null 2>&1
+rm "$PROJ12/.prdkit/templates/spec-template.md" && mkdir "$PROJ12/.prdkit/templates/spec-template.md"
+run bash -c "cd '$PROJ12' && bash .product-kit/scripts/init.sh --upgrade"
+assert_eq 1 "$STATUS" "a directory where the kit installs a file is refused"
+assert_contains "$OUTPUT" ".prdkit/templates/spec-template.md is a directory where the kit installs a file" "the directory is named"
+
+it "a symlinked template or memory file is kept, even with --force"
+PROJ13="$(contained_project)"; track_tmp "${PROJ13%/proj}"
+( cd "$PROJ13" && bash .product-kit/scripts/init.sh --copy ) >/dev/null 2>&1
+printf 'SHARED POLICY\n' > "${PROJ13%/proj}/constitution.md"
+rm "$PROJ13/.prdkit/memory/constitution.md" "$PROJ13/.prdkit/templates/spec-template.md"
+ln -s "${PROJ13%/proj}/constitution.md" "$PROJ13/.prdkit/memory/constitution.md"
+ln -s "${PROJ13%/proj}/missing.md" "$PROJ13/.prdkit/templates/spec-template.md"
+run bash -c "cd '$PROJ13' && bash .product-kit/scripts/init.sh --upgrade --force"
+assert_eq 0 "$STATUS" "forced upgrade succeeds"
+assert_eq "SHARED POLICY" "$(cat "${PROJ13%/proj}/constitution.md")" "the shared policy behind the link is unchanged"
+assert_symlink "$PROJ13/.prdkit/memory/constitution.md" "the memory link is kept"
+assert_symlink "$PROJ13/.prdkit/templates/spec-template.md" "the dangling template link is kept"
+if [ -e "${PROJ13%/proj}/missing.md" ]; then _no "nothing created behind a dangling link"; else _ok "nothing created behind a dangling link"; fi
+assert_contains "$OUTPUT" "symlinked template/memory file(s)" "kept links are reported"
+
+it "AGENTS.md and .gitignore are edited through a symlink only inside the project"
+PROJ14="$(contained_project)"; track_tmp "${PROJ14%/proj}"
+printf '# Notes\n' > "$PROJ14/CLAUDE.md"
+ln -s CLAUDE.md "$PROJ14/AGENTS.md"
+run bash -c "cd '$PROJ14' && bash .product-kit/scripts/init.sh --harness claude,agents"
+assert_eq 0 "$STATUS" "install through an in-project link succeeds"
+assert_contains "$(cat "$PROJ14/CLAUDE.md")" 'BEGIN PRODUCT-KIT MANAGED SECTION' "the section lands in the link target"
+sed 's/protocol\.md/protocol-old.md/' "$PROJ14/CLAUDE.md" > "${PROJ14%/proj}/edited" && cat "${PROJ14%/proj}/edited" > "$PROJ14/CLAUDE.md"
+run bash -c "cd '$PROJ14' && bash .product-kit/scripts/init.sh --upgrade"
+assert_contains "$OUTPUT" "AGENTS.md managed section: updated" "an outdated section is rewritten"
+assert_symlink "$PROJ14/AGENTS.md" "the update keeps AGENTS.md a link"
+assert_not_contains "$(cat "$PROJ14/CLAUDE.md")" 'protocol-old.md' "the target holds the current section"
+assert_contains "$(cat "$PROJ14/CLAUDE.md")" '# Notes' "the target keeps its own content"
+PROJ15="$(contained_project)"; track_tmp "${PROJ15%/proj}"
+printf 'outside agents\n' > "${PROJ15%/proj}/AGENTS.md"
+printf 'outside ignore\n' > "${PROJ15%/proj}/gitignore"
+ln -s "${PROJ15%/proj}/AGENTS.md" "$PROJ15/AGENTS.md"
+ln -s "${PROJ15%/proj}/gitignore" "$PROJ15/.gitignore"
+run bash -c "cd '$PROJ15' && bash .product-kit/scripts/init.sh --harness claude,agents"
+assert_eq 0 "$STATUS" "install with outside links succeeds"
+assert_eq "outside agents" "$(cat "${PROJ15%/proj}/AGENTS.md")" "an AGENTS.md outside the project is untouched"
+assert_eq "outside ignore" "$(cat "${PROJ15%/proj}/gitignore")" "a .gitignore outside the project is untouched"
+assert_contains "$OUTPUT" "AGENTS.md managed section: skipped (symlink outside the project)" "AGENTS.md skip reported"
+assert_contains "$OUTPUT" ".gitignore is a symlink that leads outside the project" ".gitignore skip reported"
 finish

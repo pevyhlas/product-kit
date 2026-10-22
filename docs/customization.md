@@ -64,6 +64,16 @@ are kit-owned and refreshed; `--check` reports KIT-OWNED EDITS honestly. Files u
 are not managed installer files. Customize policy and templates instead of forking operational
 instructions. `--force` deliberately resets template/memory copies to kit defaults.
 
+The installer writes and deletes only inside the project. It refuses, before writing anything,
+when a directory it writes into (`.prdkit/` and its subdirectories, or a selected harness's
+`.claude/commands/` or `.opencode/commands/`) is a symlink or resolves outside the project, or when
+a directory sits where it installs a file. A kit-owned file replaced by a symlink is replaced
+again by a regular file, never written through. A symlinked template or memory file is
+project-owned: it is kept and reported, even with `--force`, so a shared policy can be a link.
+AGENTS.md and `.gitignore` are edited through a symlink only while its target stays inside the
+project (`AGENTS.md` linking to `CLAUDE.md` works); otherwise they are left untouched with a
+warning. A manifest entry outside the installed layout is ignored with a warning, never deleted.
+
 The manifest records selected harnesses and pristine hashes. It supports drift detection and
 safe ordinary upgrades, not automatic conversion of a 0.x spec ([migrating to 1.0](migrating-to-1.0.md)).
 Commands the kit no longer ships (retired, disabled or unsupported entry points) are
