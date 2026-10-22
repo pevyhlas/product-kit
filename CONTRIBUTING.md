@@ -79,8 +79,8 @@ contributor waits for the maintainer's approval.
 ## License
 
 Product-Kit is released under the [MIT License](LICENSE). By contributing, you agree that your
-contribution is licensed under the same license (inbound = outbound). Keep the upstream Spec Kit
-notice in LICENSE intact.
+contribution is licensed under the same license (inbound = outbound). Keep LICENSE the plain MIT
+text, and the upstream Spec Kit notice in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) intact.
 
 ## Releases
 

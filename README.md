@@ -132,5 +132,5 @@ pull requests are welcome; only the maintainer merges. See [CONTRIBUTING.md](CON
 
 ## License
 
-[MIT](LICENSE). Product-Kit originates from GitHub's [Spec Kit](https://github.com/github/spec-kit),
-with upstream attribution preserved.
+[MIT](LICENSE). Product-Kit originates from GitHub's [Spec Kit](https://github.com/github/spec-kit);
+its notice is in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -8,6 +8,8 @@ change by change.
 
 ## [Unreleased]
 
+- LICENSE is the plain MIT text, so GitHub and license scanners recognize it. The Spec Kit
+  attribution and its full MIT notice moved to `THIRD_PARTY_NOTICES.md`.
 - `render-agents.sh` copies a multiline (block or folded) neutral `description:` whole into a new
   projection instead of only its first line, which left an empty description.
 - `cleanup-change.sh` states its actual contract: it refuses uncommitted or untracked changes,
