@@ -135,7 +135,8 @@ top_section() {
 }
 
 # validate_section CHANGELOG_TEXT VERSION: sets SECTION, SUBTITLE and TITLE and returns 0, or
-# sets SECTION_ERROR and returns 1.
+# sets SECTION_ERROR and returns 1. The title names only the product and version; the subtitle
+# stays in the heading that opens the notes.
 validate_section() {
     local heading hv rest date expected
     SECTION=""; SUBTITLE=""; TITLE=""; SECTION_ERROR=""
@@ -164,7 +165,7 @@ validate_section() {
     if ! [[ $date =~ $DATE_RE ]] || [ -z "$SUBTITLE" ]; then
         SECTION_ERROR="CHANGELOG.md heading must read $expected: $heading"; return 1
     fi
-    TITLE="v$2$DASH$SUBTITLE"
+    TITLE="Product Kit - v$2"
     return 0
 }
 
