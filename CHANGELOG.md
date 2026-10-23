@@ -8,6 +8,10 @@ change by change.
 
 ## [Unreleased]
 
+- The release gate retries a failed GitHub read up to three times. The 1.1.1 gate failed on
+  one truncated API response ("unexpected end of JSON input") and needed a manual re-run.
+  Writes are never retried; a 404 or 422 is still an answer, not a failure.
+
 ## [1.1.1] — 2026-10-22 — installer containment and review fixes
 
 Fixes from an independent review of the public 1.1.0 release. The installer now keeps every
