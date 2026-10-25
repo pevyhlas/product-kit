@@ -8,20 +8,51 @@ change by change.
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-10-26 — cross-layer planning and PR-scoped execution
+
+Product-Kit connects living product intent and architecture/design to a temporary implementation
+flow, using the existing commands. Implementation work finalizes in its own PR; useful context and
+evidence remain there while execution detail is discarded.
+
+### Added
+
 - Product/programme planning now discovers features and necessary enabling work across product
   intent, architecture and part contracts, with coverage, dependency outcomes and ready-work bounds.
 - Ready work uses an execution-focused plan/tasks/analyze/implement/verify playbook through the
   existing commands. Optional ignored detail and a PR summary template preserve structure without
   a second product spec, mandatory document bundle or extra command chain. Implementation findings
   cannot manufacture requirements; consequential gaps return to Product-Kit's decision process.
+
+### Changed
+
 - Implementation changes finalize in the same PR: useful context, evidence and explicit unknowns
   stay there; required acceptance/review still gate, while later non-gating runtime observations
   use ordinary linked fixes rather than cleanup PRs. Existing required checks are not demoted.
-  Upgrades preserve customized change/review templates; compare them with the updated templates
-  and adopt the new PR-scoped acceptance guidance deliberately for existing open work.
+- A containing PR can finalize its programme through one review carrier that retains combined
+  acceptance, findings, limits and review concerns. Parent deletion remains reviewed content;
+  the review helper gains no broad record-path exemption.
+- Acceptance tables keep helper-readable status tokens, with evidence outside the Result cell.
+  Initial baseline evidence is distinguished from repair attempts, and held observations update
+  State without rewriting held acceptance or granting another attempt.
+
+### Fixed
+
 - The release gate retries a failed GitHub read up to three times. The 1.1.1 gate failed on
   one truncated API response ("unexpected end of JSON input") and needed a manual re-run.
   Writes are never retried; a 404 or 422 is still an answer, not a failure.
+
+### Adoption
+
+- Pin the kit to `v1.2.0`, then run `bash .product-kit/scripts/init.sh --check` and
+  `bash .product-kit/scripts/init.sh --upgrade`. Kit-owned commands/playbooks refresh; customized
+  templates and memory remain project-owned. Compare customized change/review templates with the
+  new versions and adopt the optional execution-plan and PR-summary templates when useful.
+- Existing open acceptance rows remain required gates unless their authorized owner changes them.
+  Apply PR-scoped finalization deliberately; do not erase required work, holds or failed attempts
+  while upgrading. Missing non-gating runtime observations stay unknown, never PASS.
+- See [feature delivery](https://github.com/pevyhlas/product-kit/blob/v1.2.0/docs/feature-delivery.md)
+  for the worked flow. There is no new public
+  command chain, task-system adapter or background scheduler.
 
 ## [1.1.1] — 2026-10-22 — installer containment and review fixes
 
