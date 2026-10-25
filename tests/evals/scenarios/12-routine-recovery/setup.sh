@@ -19,7 +19,7 @@ printf 'PASS: exact greeting bytes checked\n' > .eval-state/verified.txt
 EOF
 cat > evidence/original-history.md <<'EOF'
 # Historical fixture handback
-Initial verification: wrong greeting, FAIL.
+Initial baseline verification (before any corrective change): wrong greeting, FAIL.
 Substantive correction round 1: wrong capitalization, FAIL.
 Substantive correction round 2: extra trailing text, FAIL.
 Tool invocation: scripts/verify-greeting.sh not found; listing showed scripts/check-greeting.sh.

@@ -8,6 +8,17 @@ change by change.
 
 ## [Unreleased]
 
+- Product/programme planning now discovers features and necessary enabling work across product
+  intent, architecture and part contracts, with coverage, dependency outcomes and ready-work bounds.
+- Ready work uses an execution-focused plan/tasks/analyze/implement/verify playbook through the
+  existing commands. Optional ignored detail and a PR summary template preserve structure without
+  a second product spec, mandatory document bundle or extra command chain. Implementation findings
+  cannot manufacture requirements; consequential gaps return to Product-Kit's decision process.
+- Implementation changes finalize in the same PR: useful context, evidence and explicit unknowns
+  stay there; required acceptance/review still gate, while later non-gating runtime observations
+  use ordinary linked fixes rather than cleanup PRs. Existing required checks are not demoted.
+  Upgrades preserve customized change/review templates; compare them with the updated templates
+  and adopt the new PR-scoped acceptance guidance deliberately for existing open work.
 - The release gate retries a failed GitHub read up to three times. The 1.1.1 gate failed on
   one truncated API response ("unexpected end of JSON input") and needed a manual re-run.
   Writes are never retried; a 404 or 422 is still an answer, not a failure.

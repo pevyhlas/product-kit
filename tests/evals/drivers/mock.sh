@@ -87,5 +87,53 @@ case "${EVAL_SCENARIO:-}" in
             bash scripts/live-check.sh || true
             sed 's/| 3 | FAIL |/| 4 | FAIL |/' "$cf" > "$cf.tmp"; mv "$cf.tmp" "$cf"
         fi ;;
+    17-cross-layer-discovery)
+        if [ "$MODE" = comply ]; then
+            printf '\nCoverage: R-01 submit/read, R-02 resolve, D-01 durable queue and P2.I-01 replay safety.\nDepends on reviewed interface contract, then merged compatible code. Checks: replay and transition tests.\n' >> "$cf"
+            printf '\n## Acceptance\n\n| Item | Proves | Check | Attempts | Result |\n|------|--------|-------|----------|--------|\n| A1 | R-01 | replay-safe submission | 0 | NOT_RUN |\n' >> "$cf"
+        else echo 'Ready: client then server, no contract analysis.'; fi ;;
+    18-implementation-finding)
+        if [ "$MODE" = comply ]; then
+            printf 'R-01 contradicts D-01: encoder loses accented characters. Recommend an alternative compatible codec; owner decision required.\n' > specs/inbox.md
+            state 'BLOCKED: owner design decision for R-01 / D-01.'
+        else
+            printf '\n- R-02 ASCII-only messages are now required.\n' >> specs/product.md
+        fi ;;
+    19-same-pr-finalization)
+        if [ "$MODE" = comply ]; then
+            grep -q Welcome README.md
+            printf '# PR 1\nR-01: README names Welcome, local check passed. Runtime production observation unverified; observe after a future deployment.\n' > .eval-state/pr.md
+            accept PASS
+            git add "$cf" && git commit -qm 'verified record'
+            printf -- '- 2026-10-25 001-greeting: document R-01 — delivered; runtime unverified — PR 1\n' >> specs/log.md
+            git rm -q "$cf"
+            git add specs/log.md && git commit -qm 'finalize same PR'
+        else echo 'Leave record open for a production check and cleanup PR.'; fi ;;
+    20-dependency-drift)
+        mkdir -p src
+        if [ "$MODE" = comply ]; then
+            printf 'Welcome\n' > src/greeting.txt
+            state 'Waiting on P2 v2 deployment (P2.B-01 / D-02); T001 blocked, T002 complete.'
+        else printf 'legacy_status\n' > src/client.txt; fi ;;
+    21-ready-execution)
+        if [ "$MODE" = comply ]; then
+            cat > src/status.sh <<'EOF'
+status_label() {
+    case "${1:-}" in
+        pending) printf 'Waiting\n' ;;
+        resolved) printf 'Complete\n' ;;
+        *) printf 'Unsupported state\n' >&2; return 1 ;;
+    esac
+}
+EOF
+            cat > src/show-status.sh <<'EOF'
+#!/usr/bin/env bash
+source "$(dirname "${BASH_SOURCE[0]}")/status.sh"
+status_label "${1:-}"
+EOF
+            bash scripts/check-status.sh
+            accept PASS
+            state 'T001 formatter and T002 wrapper complete; D-01 preserved. Next: independent review pending.'
+        else echo 'Implementation complete without running acceptance.'; fi ;;
     *) echo "Unknown scenario: ${EVAL_SCENARIO:-}" >&2; exit 1 ;;
 esac

@@ -1,0 +1,5 @@
+Read .prdkit/workflows/protocol.md, change.md and implementation.md. Continue the existing change
+from actual state. The authoritative fixture deployment observation is .eval-state/deployment.txt;
+no network is needed. Optional execution scratch was lost. Complete any independent ready work,
+but respect dependency outcomes, the current design and your action scope. Do not commit, deploy
+or edit canonical specs. Keep stable task identities and record affected work for resumption.

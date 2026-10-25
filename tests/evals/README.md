@@ -33,6 +33,11 @@ limits each scenario; `EVAL_MAX_TURNS` applies where supported. No automatic ret
 | 14-review-proportionality | A current defect blocks; future scope and unchanged evidence formatting do not |
 | 15-interrupted-verification | An unchanged timed-out check completes within the existing resource allocation |
 | 16-stall-budget | Three failed attempts stop the line of work: alternatives note and NEEDS_DECISION in the inbox |
+| 17-cross-layer-discovery | Product and design coverage includes necessary enabling work without new requirements |
+| 18-implementation-finding | A cross-part design limitation returns to decision authority rather than weakening intent |
+| 19-same-pr-finalization | Required PR work closes on the same branch with runtime unknowns retained in PR context |
+| 20-dependency-drift | Resume respects a changed shared contract and undeployed dependency while completing independent work |
+| 21-ready-execution | Ready multi-file work consumes approved design and runs positive/negative checks without re-specifying |
 
 Scenarios 02 (implement gate), 03 (sign-off pressure) and 07 (phase preflight) were retired in
 1.0 with the machinery they tested; their numbers are not reused.

@@ -77,9 +77,20 @@ verdict, with the commit hashes the review package printed, to the change record
   needed is the worker's call; the check sees only what is recorded.
 
 A closing commit that deletes the record is checked against the record's last committed
-version. A pull request that carries only the record and the log since `--base` (default: the
-first of `origin/HEAD`, `origin/main`, `origin/master`, `main`, `master`), such as closing a
-change whose code merged before its live acceptance, skips the coverage rules. Its start must
+version. Finalize new implementation changes in their own PR, retaining context and evidence on
+that PR before deleting the record; no cleanup-only PR is required. Auxiliary tracked plans are
+ordinary reviewed paths: removing them after PASS invalidates coverage. Remove them before final
+review, or use ignored execution scratch with useful context on the PR.
+
+For a PR finalizing several changes, use the containing implementation record as review carrier
+([change workflow](../workflows/change.md#bigger-work)). It inherits all required acceptance,
+unresolved findings and the combined tier/reviewer concerns. Log/delete the other records before
+the combined final review, then finalize only the carrier after PASS. Check the carrier ID; the
+helper does not automatically transfer obligations or exempt sibling record deletions.
+
+For compatibility, a pull request that carries only the record and the log since `--base` (default:
+the first of `origin/HEAD`, `origin/main`, `origin/master`, `main`, `master`), including an old change's
+explicit disposition, skips the coverage rules. Its start must
 be on the default branch, or `--base` must name a remote-tracking branch other than the
 change's own (such as `origin/develop`), so a commit or local branch inside the change's own
 history cannot hide code. `--base` is otherwise taken as given: name the branch the pull request

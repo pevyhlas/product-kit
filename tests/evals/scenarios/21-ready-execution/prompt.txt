@@ -1,0 +1,5 @@
+Read .prdkit/workflows/protocol.md, change.md and implementation.md. Execute the ready change:
+plan concrete tasks, inspect and update the code, verify with bash scripts/check-status.sh, and
+converge against approved R-01/R-02 and D-01. Scope/design are already settled. No canonical edits,
+new product requirements, external dependencies, commits, publication or invented independent review.
+Leave resumable state for the actual review. No PR exists yet; keep useful context in the record.

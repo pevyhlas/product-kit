@@ -33,7 +33,9 @@ past their reading budgets are tightened or split, never trimmed of items.
 
 ## During a change
 
-Exploration discusses options, planning writes a change record, execution performs the
+Exploration discusses options. Product/programme planning combines intent, journeys and requirements
+with architecture/design to discover justified features and enabling work. Ready work gets a
+proportional execution plan and tasks; it does not repeat product discovery. Execution performs the
 bounded work under your project's action policy. Say which you want when it matters; an
 uncertain idea does not become a branch and code.
 
@@ -50,10 +52,13 @@ the actual repository.
 
 ## Completion and learning
 
-Merged is not live, and live is not validated. A change closes when its acceptance passes,
-live checks included, or when you close it. Passing tests is not evidence of user value.
+Merged is not live, and live is not validated. A bounded implementation change finalizes in its
+own PR once required acceptance/review pass, or by your explicit disposition. Runtime observations
+that are not PR gates stay unknown on that PR; later findings use ordinary linked fixes. Existing
+required checks, including live gates, cannot be silently downgraded. No cleanup PR is needed.
+Passing tests is not evidence of user value.
 `/prdkit-learn` compares what users actually did with the thesis and proposes promotions,
 revisions or retirements through the inbox; inconclusive is a valid answer.
 
-See [the request-service example](../examples/request-service/README.md) and the
+See [feature delivery](feature-delivery.md), [the request-service example](../examples/request-service/README.md) and the
 [public commands](commands.md).
