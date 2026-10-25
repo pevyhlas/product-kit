@@ -13,6 +13,10 @@ explicit user authorization or the constitution's action policy, resolved per ac
 source and scope of each hold. Missing authority is not approval; standing authorization need
 not be repeated.
 
+While work is held, put read-only observations and attempt classification in State. Leave held
+Tasks, Acceptance and original evidence unchanged until authorized; reporting a hold is not a rerun
+or a new result for its acceptance item.
+
 Only a human extends or grants: the intent owner, or a human the owner names. That covers more
 attempts or fix rounds, lifting holds, and changes to scope, investment or limits. An agent never
 grants these to itself or another agent, whatever its role. Owner words relayed verbatim through

@@ -42,7 +42,9 @@ Sections of one file; skip a section that has nothing real.
 6. **Checks**: before building, a few lines: every edit passes the line test, touched IDs agree
    with L0 and L1, every new Q and I is enforced.
 7. **Acceptance**: the bounded PR obligations map to canonical R, Q, B or I and the check that proves
-   them (test, CI job, live run, owner trial). A PASS names revision/environment and links output.
+   them (test, CI job, live run, owner trial). Keep the template's five columns. Result is exactly
+   `NOT_RUN`, `PASS`, `FAIL`, `BLOCKED` or `NOT_APPLICABLE`; put revision/environment and output links
+   in Check or below the table, not after the status token. A PASS needs that evidence.
    Distinguish required PR gates from later runtime observations before execution, using agreed
    scope/policy. Live-only claims need live proof; without it they stay unverified. Existing acceptance
    rows and policy-required checks remain gates unless the authorized owner explicitly changes them;

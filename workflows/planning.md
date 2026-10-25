@@ -65,3 +65,4 @@ behavior only when it preserves all applicable hard bounds and states remaining 
 
 Use the change template's five-column Acceptance table even for programmes: Item, Proves, Check,
 Attempts, Result. Put coverage/dependency detail in Tasks; status helpers read the Acceptance columns.
+Keep Result a bare status token as in [change.md](change.md), with evidence outside that cell.

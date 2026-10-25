@@ -41,7 +41,8 @@ useful context/progress on the same PR. Product/programme discovery uses workflo
 
 <!-- Required PR obligations. Distinguish later non-gating runtime observations on the PR before
 execution; existing required checks cannot be demoted to finish. Live-only claims need live proof.
-Keep these five columns for status helpers, including on a parent programme. -->
+Keep these five columns for status helpers, including on a parent programme. Result is exactly
+NOT_RUN/PASS/FAIL/BLOCKED/NOT_APPLICABLE; evidence/revision/environment go in Check or below the table. -->
 
 | Item | Proves | Check | Attempts | Result |
 |------|--------|-------|----------|--------|
