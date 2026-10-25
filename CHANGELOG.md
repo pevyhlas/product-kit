@@ -50,7 +50,8 @@ evidence remain there while execution detail is discarded.
 - Existing open acceptance rows remain required gates unless their authorized owner changes them.
   Apply PR-scoped finalization deliberately; do not erase required work, holds or failed attempts
   while upgrading. Missing non-gating runtime observations stay unknown, never PASS.
-- See [feature delivery](docs/feature-delivery.md) for the worked flow. There is no new public
+- See [feature delivery](https://github.com/pevyhlas/product-kit/blob/v1.2.0/docs/feature-delivery.md)
+  for the worked flow. There is no new public
   command chain, task-system adapter or background scheduler.
 
 ## [1.1.1] — 2026-10-22 — installer containment and review fixes
