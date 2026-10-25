@@ -145,3 +145,16 @@ Tasks map coverage and children with dependency outcomes and owner gates, State 
 PR closing does not prove the parent's integrated outcome. Update the parent in relevant child PRs;
 finalize it in the last relevant PR when its required outcomes pass or the owner disposes of it,
 keeping non-gating observations explicit. No separate cleanup PR. Edit it in place; no amendment journals.
+
+When one PR also finalizes a parent or older change, its implementation record is the **review
+carrier**. Before final review, bring the other record's remaining required acceptance, unresolved
+findings, attempts, holds and disposition into that carrier, labelled with their origin. Preserve
+verdict/report history; unresolved FAILs need a clean later verdict from the same reviewer/concern,
+not disappearance during transfer. The carrier takes the combined scope's highest applicable tier
+and all required reviewer concerns, including owner approval where required. Post the other record's
+useful context/evidence on this PR, add its log disposition and delete it **before** the carrier's
+final review. That review covers the combined diff and integrated outcomes, including these deletions.
+Only the carrier's verdict metadata/deletion and log may change after PASS. Run `check-review.sh`
+for the carrier at the exact final head; do not start mutually dependent post-review updates to two
+records. An inherited approval is not fresh coverage for changed work. This uses one PR review
+transaction without exempting arbitrary change-record paths or dropping the parent's obligations.

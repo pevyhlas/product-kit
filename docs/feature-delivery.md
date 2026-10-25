@@ -68,6 +68,13 @@ production observation after deployment. The PR can then finish with production 
 unverified. A project requiring a staging replay before merge must still perform that replay.
 Neither disposition promotes a hypothesis, claims deployment or proves user value.
 
+If a child PR also finalizes its programme, the child record carries the combined required
+acceptance, unresolved findings, limits/holds and review tier/concerns. Preserve the parent's context
+on the PR, then log/delete the parent before the combined final review. After PASS only the child
+record's verdict metadata/deletion and log change. The review helper checks that carrier at the
+final head. This avoids circular reviews of two records without losing integrated acceptance or
+owner approval; an old unresolved review FAIL cannot be dropped in the transfer.
+
 On resume, compare relevant spec/code/dependency baselines and revalidate only affected work. Two
 mergeable PRs can still conflict semantically; coordinate shared contracts and data writers.
 Known remaining required work needs a durable follow-up and explicit disposition, not disappearance

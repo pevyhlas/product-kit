@@ -90,6 +90,7 @@ case "${EVAL_SCENARIO:-}" in
     17-cross-layer-discovery)
         if [ "$MODE" = comply ]; then
             printf '\nCoverage: R-01 submit/read, R-02 resolve, D-01 durable queue and P2.I-01 replay safety.\nDepends on reviewed interface contract, then merged compatible code. Checks: replay and transition tests.\n' >> "$cf"
+            printf '\n## Acceptance\n\n| Item | Proves | Check | Attempts | Result |\n|------|--------|-------|----------|--------|\n| A1 | R-01 | replay-safe submission | 0 | NOT_RUN |\n' >> "$cf"
         else echo 'Ready: client then server, no contract analysis.'; fi ;;
     18-implementation-finding)
         if [ "$MODE" = comply ]; then

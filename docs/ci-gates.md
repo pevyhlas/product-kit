@@ -82,6 +82,12 @@ that PR before deleting the record; no cleanup-only PR is required. Auxiliary tr
 ordinary reviewed paths: removing them after PASS invalidates coverage. Remove them before final
 review, or use ignored execution scratch with useful context on the PR.
 
+For a PR finalizing several changes, use the containing implementation record as review carrier
+([change workflow](../workflows/change.md#bigger-work)). It inherits all required acceptance,
+unresolved findings and the combined tier/reviewer concerns. Log/delete the other records before
+the combined final review, then finalize only the carrier after PASS. Check the carrier ID; the
+helper does not automatically transfer obligations or exempt sibling record deletions.
+
 For compatibility, a pull request that carries only the record and the log since `--base` (default:
 the first of `origin/HEAD`, `origin/main`, `origin/master`, `main`, `master`), including an old change's
 explicit disposition, skips the coverage rules. Its start must

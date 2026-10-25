@@ -78,7 +78,9 @@ Fix routine path, invocation and local setup errors and continue; that is no fix
 no installation, shared-host change, destructive cleanup or retry of an ambiguous external effect.
 
 Count attempts per acceptance item and per blocker (an outcome that keeps failing: a live check,
-an integration, a deploy) in the change's State, across tasks, PRs and sessions. Each real run of
+an integration, a deploy) in the change's State, across tasks, PRs and sessions. The initial baseline
+run before any corrective change is retained evidence, not a repair attempt. Never relabel a retry
+as a fresh baseline to reset the budget. Each real run of
 that outcome after a change meant to fix it is an attempt; a merged PR whose own checks pass while
 the outcome still fails is an attempt, not progress. Review allows at most three fix rounds after
 the initial failing review. After three attempts, or two that produced no new information, stop

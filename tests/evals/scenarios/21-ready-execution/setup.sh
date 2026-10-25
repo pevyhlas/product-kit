@@ -28,11 +28,15 @@ cat > scripts/check-status.sh <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 source src/status.sh
-test "$(status_label pending)" = Waiting
-test "$(status_label resolved)" = Complete
-test "$(bash src/show-status.sh pending)" = Waiting
-test "$(bash src/show-status.sh resolved)" = Complete
 mkdir -p .eval-state
+status_label pending > .eval-state/out
+cmp -s .eval-state/out <(printf 'Waiting\n')
+status_label resolved > .eval-state/out
+cmp -s .eval-state/out <(printf 'Complete\n')
+bash src/show-status.sh pending > .eval-state/out
+cmp -s .eval-state/out <(printf 'Waiting\n')
+bash src/show-status.sh resolved > .eval-state/out
+cmp -s .eval-state/out <(printf 'Complete\n')
 if status_label unknown > .eval-state/out 2> .eval-state/err; then exit 1; fi
 test ! -s .eval-state/out && test -s .eval-state/err
 if bash src/show-status.sh unknown > .eval-state/out 2> .eval-state/err; then exit 1; fi

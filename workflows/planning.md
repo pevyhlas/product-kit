@@ -62,3 +62,6 @@ tracker status. Note shared interface/data writers and sequence overlapping work
 For several PRs, give each a bounded outcome and its own change; use a programme only when useful
 for integrated outcomes or coordination, not as a cleanup vehicle. Changes can ship intermediate
 behavior only when it preserves all applicable hard bounds and states remaining intent honestly.
+
+Use the change template's five-column Acceptance table even for programmes: Item, Proves, Check,
+Attempts, Result. Put coverage/dependency detail in Tasks; status helpers read the Acceptance columns.

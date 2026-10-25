@@ -40,7 +40,8 @@ useful context/progress on the same PR. Product/programme discovery uses workflo
 ## Acceptance
 
 <!-- Required PR obligations. Distinguish later non-gating runtime observations on the PR before
-execution; existing required checks cannot be demoted to finish. Live-only claims need live proof. -->
+execution; existing required checks cannot be demoted to finish. Live-only claims need live proof.
+Keep these five columns for status helpers, including on a parent programme. -->
 
 | Item | Proves | Check | Attempts | Result |
 |------|--------|-------|----------|--------|
