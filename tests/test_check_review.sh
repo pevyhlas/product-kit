@@ -49,6 +49,23 @@ assert_eq 1 "$STATUS" "fails"
 assert_contains "$OUTPUT" "changed since the reviewed head $REVIEWED: src/app.txt" "names the unreviewed path"
 git reset -q --hard HEAD~1
 
+it "tracked execution-plan deletion needs coverage; same-PR finalization does not exempt it"
+BEFORE_PLAN="$(git rev-parse HEAD)"
+mkdir -p specs/changes/001-greet
+printf 'Temporary plan with review-relevant choices\n' > specs/changes/001-greet/plan.md
+git add specs/changes/001-greet/plan.md; git commit -qm 'tracked plan' >/dev/null
+PLAN_HEAD="$(git rev-parse HEAD)"
+record T1 "$(verdict code PASS "$CLEAN" "$BASE..$PLAN_HEAD")"
+git rm -q specs/changes/001-greet/plan.md; git commit -qm 'delete plan after review' >/dev/null
+run bash "$CHECK"
+assert_eq 1 "$STATUS" "plan deletion after PASS is not metadata"
+assert_contains "$OUTPUT" 'specs/changes/001-greet/plan.md' "unreviewed deletion identified"
+REMOVED_HEAD="$(git rev-parse HEAD)"
+record T1 "$(verdict code PASS "$CLEAN" "$BASE..$REMOVED_HEAD")"
+run bash "$CHECK"
+assert_eq 0 "$STATUS" "review after removing tracked detail covers the final PR diff"
+git reset -q --hard "$BEFORE_PLAN"
+
 it "the reviewed head must be a commit hash, never a name that moves"
 for range in "$BASE..HEAD" "$BASE..001-greet" "$BASE..HEAD~1" "$BASE..@" "$REVIEWED"; do
     record T1 "$(verdict code PASS "$CLEAN" "$range")"

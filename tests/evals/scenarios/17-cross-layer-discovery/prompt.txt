@@ -1,0 +1,5 @@
+Read .prdkit/workflows/protocol.md, planning.md and change.md. Plan the existing programme
+specs/changes/001-greeting.md from the approved product AND architecture/part contracts.
+Use this checkout, no new worktrees. Populate its work coverage, dependency outcomes and checks;
+detail only near-ready work. No implementation, commits, external calls or canonical spec changes.
+The approved scope/design already exist; ask only if you discover a consequential unresolved choice.

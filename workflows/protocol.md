@@ -45,6 +45,7 @@ harness memory or a session log.
 | Owner direction and open questions | `specs/inbox.md` |
 | Holds, waivers, attestations, deployments | `specs/records.md` |
 | Open change (deleted when it closes) | `specs/changes/<id>.md` |
+| Optional execution scratch (never the sole handover) | gitignored `.prdkit/cache/implementation/<id>.md`; useful context on the same PR |
 | Closed changes, one line each | `specs/log.md` |
 | Archive: directions tried and why they stopped, lessons (read on demand, never by default) | `specs/archive.md` |
 
@@ -85,6 +86,9 @@ that line of work and write an alternatives note in the change: what was learned
 unknown, and at least two alternatives, one managed or off-the-shelf and one relaxing or dropping
 what forces the work. Report NEEDS_DECISION through the inbox and continue other work. Only the
 owner grants further attempts, with a stated limit; a reset or a new task name does not.
+
+When a PR closes, retain unresolved outcome attempts, limits and holds on its PR/follow-up. A new
+fix change inherits them; deleting an execution record does not reset a failing product outcome.
 
 ## External systems
 

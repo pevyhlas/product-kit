@@ -12,6 +12,10 @@ for file in constitution.md agents.md config.md task-ledger.md; do assert_file "
 assert_file "$PROJ/.prdkit/templates/spec-template.md"
 assert_file "$PROJ/.prdkit/workflows/change.md"
 assert_file "$PROJ/.prdkit/workflows/protocol.md"
+assert_file "$PROJ/.prdkit/workflows/planning.md"
+assert_file "$PROJ/.prdkit/workflows/implementation.md"
+assert_file "$PROJ/.prdkit/templates/implementation-plan-template.md"
+assert_file "$PROJ/.prdkit/templates/pr-summary-template.md"
 assert_file "$PROJ/.prdkit/scripts/bash/new-change.sh"
 if [ -e "$PROJ/.prdkit/memory/signoff-requirements.md" ]; then _no "retired sign-off policy seeded"; else _ok "no sign-off policy seeded"; fi
 if [ -e "$PROJ/specs" ]; then _no "installer created specs/"; else _ok "installer leaves specs/ to the project"; fi
@@ -41,6 +45,14 @@ printf '{}\n' > "$PROJ/.prdkit/retrospective/001-x.enrich.json"
 run git -C "$PROJ" check-ignore -q .prdkit/retrospective/001-x.enrich.json
 assert_eq 0 "$STATUS" "usage-enrichment input ignored by Git"
 rm -rf "$PROJ/.prdkit/retrospective"
+it "execution scratch stays ignored while templates and neutral playbooks install"
+mkdir -p "$PROJ/.prdkit/cache/implementation"
+printf 'unfinished task details\n' > "$PROJ/.prdkit/cache/implementation/001-demo.md"
+run git -C "$PROJ" check-ignore -q .prdkit/cache/implementation/001-demo.md
+assert_eq 0 "$STATUS" "execution scratch cannot enter a routine add"
+run bash .product-kit/scripts/init.sh --upgrade
+assert_eq 0 "$STATUS" "upgrade with execution scratch succeeds"
+assert_eq 'unfinished task details' "$(cat "$PROJ/.prdkit/cache/implementation/001-demo.md")" "upgrade leaves consumer scratch untouched"
 it "an upgrade adds the enrichment ignore entry once to a project seeded before it"
 grep -vxF '.prdkit/retrospective/' "$PROJ/.gitignore" > "$PROJ/.gitignore.old" || true
 mv "$PROJ/.gitignore.old" "$PROJ/.gitignore"

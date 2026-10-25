@@ -35,7 +35,8 @@ other severity names must be translated once before the current reporter consume
 
 The [configuration template](../templates/task-ledger-template.md) names the boundary of each
 event 1.0 emits: `feature.created`, `review.recorded`, `evidence.recorded`, `blocker.opened`,
-`blocker.resolved` and `feature.merged` (after the closing PR merges). The 0.x events
+`blocker.resolved` and `feature.merged` (after the implementation PR merges, not proof of runtime
+acceptance). The 0.x events
 `tasks.generated`, `task.state_changed`, `phase.changed`, `readiness.changed` and
 `exploration.converged` stay schema-valid in existing spools; 1.0 workflows do not emit them.
 Events are diagnostics; the change record's acceptance and the original review reports are

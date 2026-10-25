@@ -21,7 +21,12 @@ L0 edits carry the owner's quote. One-way doors wait for the owner's answer.
 
 ## Changes
 
-[change.md](../workflows/change.md) runs a change from `new-change.sh` to its closing PR: intent
+[planning.md](../workflows/planning.md) discovers bounded work from L0/L1/L2 together. Ready work
+uses [implementation.md](../workflows/implementation.md): execution planning, concrete tasks,
+consistency analysis and convergence. It consumes design rather than defining product requirements
+from implementation choices. Material findings return to Product-Kit's existing decision process.
+
+[change.md](../workflows/change.md) runs a change from `new-change.sh` through the same PR: intent
 with inbox dispositions, spec edits, approach, tasks, checks, acceptance and State. State is
 the only status prose an agent writes and is updated before every stop. Attempts are counted
 per acceptance item and per blocker across tasks, PRs and sessions; after three, or two
@@ -38,8 +43,10 @@ Authority is resolved per action (commit, push, PR, merge, release, deploy, spen
 explicit user authorization or the constitution's action policy; a hold wins until its issuer
 lifts it. `check-delivery.sh --json` observes whether a checkpoint is remotely available; a
 matching SHA proves availability, not acceptance. Closing removes built `planned` markers,
-promotes lasting choices into L1 or L2, appends one line to `specs/log.md` and deletes the
-record; `cleanup-change.sh` removes the worktree after merge.
+keeps lasting decisions in L1/L2, preserves useful context and evidence on the PR, appends one line
+to `specs/log.md` and deletes the record before merge. Required PR checks still gate; non-gating
+runtime observations stay unverified and later findings use linked fixes, not cleanup PRs.
+`cleanup-change.sh` removes the worktree after merge. See [feature delivery](feature-delivery.md).
 
 ## Helpers
 

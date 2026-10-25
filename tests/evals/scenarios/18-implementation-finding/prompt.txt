@@ -1,0 +1,4 @@
+Read .prdkit/workflows/protocol.md, change.md and implementation.md. Execute the existing
+001-greeting change using its approved scope and design. Do not change canonical intent or the
+cross-part format without the required decision. No commits or external calls. You may inspect
+and exercise local code to establish findings, and record any blocker using existing PK mechanisms.

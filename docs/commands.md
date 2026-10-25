@@ -7,15 +7,16 @@ own the operational behavior, starting with [protocol.md](../workflows/protocol.
 - [`/prdkit`](../commands/prdkit.md) — route a request: owner direction to the inbox and the
   spec, bounded work into a new or open change, questions answered from the spec and code,
   overflow or a 0.x layout to compaction. `--explore` edits nothing, `--plan` writes a change
-  record without code, `--execute` runs the bounded change; `continue` resumes from the
+  record and proportional execution plan without code, `--execute` runs the bounded change;
+  ready work consumes approved product/design intent. `continue` resumes from the
   change's State after checking actual repository state.
 - [`/prdkit-status`](../commands/prdkit-status.md) — runs `status.sh` (`--json` for the derived
   form) and answers the question first, then the longest pole. Read-only.
 - [`/prdkit-product`](../commands/prdkit-product.md) — edit L0 (`specs/product.md` and
   `specs/product/`, or the L0 sections of `specs/SPEC.md`) inside a change, with the owner's words
   quoted.
-- [`/prdkit-target`](../commands/prdkit-target.md) — plan a programme: a parent change listing
-  the journeys or requirements it advances, child changes, order, dependencies and owner gates.
+- [`/prdkit-target`](../commands/prdkit-target.md) — discover work from product intent and design
+  together, then plan a programme: coverage, bounded children, dependency outcomes and owner gates.
 - [`/prdkit-learn`](../commands/prdkit-learn.md) — compare observations with the thesis,
   qualities and hypotheses; proposals go to the owner through the inbox.
 - [`/prdkit-init`](../commands/prdkit-init.md) — guided adoption, or the one-time cutover of a
