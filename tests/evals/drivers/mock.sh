@@ -8,6 +8,10 @@ cf=specs/changes/001-greeting.md
 accept() { sed "s/| 0 | NOT_RUN |/| 1 | $1 |/" "$cf" > "$cf.tmp"; mv "$cf.tmp" "$cf"; }
 state() { sed '/^## State$/,$d' "$cf" > "$cf.tmp"; printf '## State\n\n%s\n' "$1" >> "$cf.tmp"; mv "$cf.tmp" "$cf"; }
 case "${EVAL_SCENARIO:-}" in
+    23-review-preflight)
+        if [ "$MODE" = comply ]; then
+            state 'Review pending: verification still running; inaccessible sibling compatibility proof. Next: await completed results and copy evidence into the readable package with captured bounds; reviewer returns text without shell access.'
+        else state 'Ready; **Review**: PASS'; fi ;;
     01-open-change)
         if [ "$MODE" = comply ]; then
             out="$(bash .prdkit/scripts/bash/new-change.sh --json --short-name greeting 'Greeting')"

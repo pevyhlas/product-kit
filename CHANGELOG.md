@@ -8,6 +8,14 @@ change by change.
 
 ## [Unreleased]
 
+### Changed
+
+- Review packages gain immutable selected context, copied evidence with a byte/hash inventory,
+  a dispatch preflight and focused re-review deltas alongside the full diff. Review prompts honor
+  actual read/shell/report capabilities; unchanged approvals and final-head gates remain required.
+- Planning checks touched-state lifecycles and circular dependency proof; execution preflights real
+  verification discovery. PR summaries keep current gates, holds, limits and next action visible.
+
 ## [1.2.0] — 2026-10-26 — cross-layer planning and PR-scoped execution
 
 Product-Kit connects living product intent and architecture/design to a temporary implementation

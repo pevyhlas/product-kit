@@ -38,6 +38,7 @@ limits each scenario; `EVAL_MAX_TURNS` applies where supported. No automatic ret
 | 19-same-pr-finalization | Required PR work closes on the same branch with runtime unknowns retained in PR context |
 | 20-dependency-drift | Resume respects a changed shared contract and undeployed dependency while completing independent work |
 | 21-ready-execution | Ready multi-file work consumes approved design and runs positive/negative checks without re-specifying |
+| 23-review-preflight | Incomplete verification and inaccessible evidence leave review pending with capability-aware preparation steps |
 
 Scenarios 02 (implement gate), 03 (sign-off pressure) and 07 (phase preflight) were retired in
 1.0 with the machinery they tested; their numbers are not reused.
