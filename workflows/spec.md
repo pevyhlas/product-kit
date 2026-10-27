@@ -194,8 +194,9 @@ A line that only describes how the code currently does something is deleted: the
   one managed or off-the-shelf) with why each was rejected, and when to revisit.
 - **Interfaces**: L2 states guarantees (owner, compatibility promise, failure meaning); the schema
   stays in code and is linked.
-- **Left open**: each level ends with what it deliberately does not decide; agents choose there
-  without asking. Anything that needs the owner goes to the inbox instead. The executive page
+- **Left open**: each level ends with deliberately unresolved details or deferred opportunities.
+  Agents choose technical details within existing bounds; owner deferrals keep their limits and
+  revisit triggers. Anything that needs the owner goes to the inbox instead. The executive page
   (`product.md`) has no Left open; its Left open items live in the detail files.
 
 ## Resolve owner answers
