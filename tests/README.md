@@ -12,6 +12,10 @@ push to main; it must pass before a merge but never gates a release.
 
 ## Coverage
 
+`test_new_change_linked.sh` forces overlapping automatic allocations from two linked worktrees.
+Its private-copy negative control replaces the common lock with a per-worktree lock and must
+reproduce the duplicate number; synchronization markers avoid a scheduler-dependent race test.
+
 | Area | Suites |
 |------|--------|
 | Public catalog, neutral operations, installed references | catalog_sync, generalization, wiring, workflow_doc_coverage, workflow_contracts |

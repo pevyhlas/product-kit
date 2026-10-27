@@ -74,8 +74,9 @@ Between changes, run `/prdkit-init`; the agent follows Cutover in `.prdkit/workf
    instructions stop naming them, and links into them are repointed or dropped. Raw evidence
    elsewhere under `specs/` is untracked (`git rm --cached`) and kept under
    `.prdkit/cache/evidence/`.
-5. Copy owner direction found in agent memory, plans and worklogs into `specs/inbox.md` as
-   headed items (`.prdkit/templates/inbox-template.md`); an older prose preamble becomes the
+5. Fold owner direction found in agent memory, plans and worklogs into the spec or policy with
+   provenance per `spec.md`; only unresolved items stay in `specs/inbox.md` as headed items
+   (`.prdkit/templates/inbox-template.md`). An older prose preamble becomes the
    template's comment.
 6. Read every file once more for the reader: crisp wording, roles not names, repo-relative
    paths. Run doctor and status. The owner reads L0 and L1 and confirms or corrects them.
@@ -101,7 +102,7 @@ until then.
 | `specs/features/<id>/` (`spec.md`, `tasks.md`, `acceptance.md`, `readiness.md`) | `specs/changes/<id>.md`, deleted on close, plus one line in `specs/log.md` |
 | Closed features, superseded canon and targets | what binds in the spec; directions tried and lessons in `specs/archive.md`; the files in git only |
 | Holds, owner gates and approvals in task State or targets | `HOLD`, `WAIVER`, `ATTEST`, `DEPLOY` lines in `specs/records.md` |
-| Opportunities and later horizons | inbox items `deferred:`, or `Left open` in L0 |
+| Opportunities and later horizons | Decided deferrals with a revisit trigger in L0; unresolved questions in the inbox |
 | Evidence and review packs under `specs/` | `.prdkit/cache/evidence/`, CI and PR links |
 | `signoff-requirements.md`, Stage | the constitution's `Review and checks`; review tiers T0–T3 |
 | `create-new-feature.sh`, `setup-plan.sh`, `check-prerequisites.sh`, `resolve-context.sh` | `new-change.sh`; the context order is in `protocol.md` |
