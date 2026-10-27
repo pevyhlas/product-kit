@@ -8,6 +8,11 @@ change by change.
 
 ## [Unreleased]
 
+## [1.2.1] — 2026-10-27 — inbox resolution and review readiness
+
+Follow-up improvements to 1.2: resolved owner answers leave the inbox, reviewers receive accessible
+revision-bound inputs, and usage analysis can distinguish event-time kit and checkout context.
+
 ### Added
 
 - Ledger emission snapshots observed repository/head/branch and installed kit version/manifest
@@ -30,6 +35,24 @@ change by change.
 
 - Added deterministic linked-worktree automatic-numbering contention coverage, including a
   per-worktree-lock negative control, on Linux and macOS to prevent duplicate-number regressions.
+
+### Adoption
+
+- Pin the kit to `v1.2.1`, then run `bash .product-kit/scripts/init.sh --check` and
+  `bash .product-kit/scripts/init.sh --upgrade`. Compare customized inbox, review-prompt and
+  PR-summary templates with their updated versions; customized templates and memory remain
+  project-owned.
+- Reconcile existing answered inbox items: incorporate each decision and its provenance into the
+  spec or policy, transfer remaining work and holds, then remove the resolved item. The installer
+  does not clean consumer inboxes automatically; partial questions and owner limits stay intact.
+- Before review, check the reviewer's actual read/shell/report capabilities and package completed
+  evidence with its source revision. Scoped deltas retain the full diff; required reviewer policy
+  and final-head gates still apply.
+- Existing ledger events remain valid. New emissions add `observed_context`; replay stored events
+  through the configured adapter rather than the emitter. Manifest versions alone do not prove
+  installation integrity or identify which kit a long-running session loaded. See
+  [ledger integration](https://github.com/pevyhlas/product-kit/blob/v1.2.1/docs/task-ledger-integration.md)
+  for attribution and token-accounting guidance.
 
 ## [1.2.0] — 2026-10-26 — cross-layer planning and PR-scoped execution
 
