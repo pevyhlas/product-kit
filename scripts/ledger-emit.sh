@@ -104,14 +104,15 @@ fi
 
 # --- Capture observed work context once, separate from declared session/feature attribution ---
 # No origin credentials or machine-local paths enter the envelope. Local origins stay unknown.
+# BSD awk requires slash delimiters escaped even inside bracket expressions.
 origin="$(git -C "$REPO_ROOT" config --get remote.origin.url 2>/dev/null || true)"
 repository="$(printf '%s\n' "$origin" | LC_ALL=C awk '
     NR > 1 { invalid=1 }
     NR == 1 {
         s=$0
         if (s ~ /^(https?|ssh):\/\//) {
-            sub(/^[^:]*:\/\//, "", s); sub(/^[^/]*@/, "", s)
-        } else if (s ~ /^[^/@:]+@[^/:]+:/) {
+            sub(/^[^:]*:\/\//, "", s); sub(/^[^\/]*@/, "", s)
+        } else if (s ~ /^[^\/@:]+@[^\/:]+:/) {
             sub(/^[^@]*@/, "", s); sub(/:/, "/", s)
         } else { invalid=1; next }
         sub(/\.git$/, "", s)
