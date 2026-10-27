@@ -20,6 +20,11 @@ change by change.
 - The owner inbox holds open items only. Answers are incorporated into canonical spec/policy
   with provenance, remaining work and holds transferred, then removed without waiting for merge.
   Partial answers stay open; doctor advises reconciling retained legacy dispositions.
+- Review packages gain immutable selected context, copied evidence with a byte/hash inventory,
+  a dispatch preflight and focused re-review deltas alongside the full diff. Review prompts honor
+  actual read/shell/report capabilities; unchanged approvals and final-head gates remain required.
+- Planning checks touched-state lifecycles and circular dependency proof; execution preflights real
+  verification discovery. PR summaries keep current gates, holds, limits and next action visible.
 
 ### Fixed
 

@@ -12,6 +12,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 SCRIPT="$PK_ROOT/scripts/build-review-package.sh"
+STATUS=0 # assigned by run() in lib.sh
 
 # A fixture repo: an initial commit (the BASE), then two commits touching different files.
 setup_fixture_repo() {
@@ -90,5 +91,37 @@ it "Missing arguments and a non-change id are errors"
 assert_eq "1" "$status" "missing BASE_SHA exits 1"
 (cd "$dir" && bash "$SCRIPT" "specs/features/001-demo" "$BASE" 2>/dev/null) && status=$? || status=$?
 assert_eq "1" "$status" "a feature directory path is not a change id"
+
+it "Selected context is frozen at HEAD; evidence is copied and indexed; focused delta keeps full context"
+printf 'dirty working copy\n' > "$dir/alpha.txt"
+mkdir -p "$dir/results"
+printf 'command: test; revision: %s; exit: 0; PASS\n' "$(git -C "$dir" rev-parse HEAD)" > "$dir/results/check.txt"
+out="$(cd "$dir" && bash "$SCRIPT" 004-prepared "$BASE" --since "$FIX_BASE" --context alpha.txt --evidence results/check.txt)"
+prepared="$dir/.prdkit/cache/evidence/004-prepared/reviews/round-1"
+assert_contains "$out" "\"SINCE_SHA\":\"$FIX_BASE\"" "focused range resolved"
+assert_contains "$(cat "$prepared/diff.patch")" 'second change' "full diff retained"
+assert_not_contains "$(cat "$prepared/delta.patch")" 'second change' "delta excludes earlier unaffected source"
+assert_contains "$(cat "$prepared/delta.patch")" '+fix' "delta contains fix"
+assert_eq "$(git -C "$dir" show HEAD:alpha.txt)" "$(cat "$prepared/context/alpha.txt")" "context ignores dirty worktree"
+printf 'overwritten\n' > "$dir/results/check.txt"
+assert_contains "$(cat "$prepared/evidence/results/check.txt")" 'exit: 0; PASS' "evidence remains the packaged copy"
+assert_contains "$(cat "$prepared/manifest.tsv")" "$(git -C "$dir" hash-object --no-filters "$prepared/evidence/results/check.txt")" "inventory binds exact copied bytes"
+assert_contains "$(cat "$prepared/index.md")" 'not proof of completion' "preflight does not claim semantic readiness"
+
+it "Bad context, path traversal, directories and symlinks fail before a round is allocated"
+ln -s results "$dir/linked"
+for path in ../outside /outside results linked/check.txt results/missing; do
+    run bash -c 'cd "$1" && bash "$2" 005-invalid "$3" --evidence "$4"' _ "$dir" "$SCRIPT" "$BASE" "$path"
+    assert_eq 1 "$STATUS" "rejects evidence $path"
+done
+run bash -c 'cd "$1" && bash "$2" 005-invalid "$3" --context results/check.txt' _ "$dir" "$SCRIPT" "$BASE"
+assert_eq 1 "$STATUS" 'untracked context cannot masquerade as HEAD content'
+assert_eq absent "$([ -e "$dir/.prdkit/cache/evidence/005-invalid" ] && echo present || echo absent)" 'invalid input leaves no round'
+
+it "Focused ranges must chain within the full range"
+run bash -c 'cd "$1" && bash "$2" 006-invalid "$3" --since HEAD' _ "$dir" "$SCRIPT" "$BASE"
+assert_eq 1 "$STATUS" 'unchanged head cannot request a focused round'
+run bash -c 'cd "$1" && bash "$2" 006-invalid HEAD "$3"' _ "$dir" "$SCRIPT" "$BASE"
+assert_eq 1 "$STATUS" 'backwards full range rejected'
 
 finish
