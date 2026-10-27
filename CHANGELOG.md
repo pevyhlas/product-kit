@@ -8,6 +8,13 @@ change by change.
 
 ## [Unreleased]
 
+### Added
+
+- Ledger emission snapshots observed repository/head/branch and installed kit version/manifest
+  identity separately from declared session/change attribution, without local paths or credentials.
+  Legacy events and adapter replay preserve history; usage guidance distinguishes version coverage,
+  attribution conflicts, token types and cost assumptions.
+
 ## [1.2.0] — 2026-10-26 — cross-layer planning and PR-scoped execution
 
 Product-Kit connects living product intent and architecture/design to a temporary implementation
