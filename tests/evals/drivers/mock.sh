@@ -8,6 +8,18 @@ cf=specs/changes/001-greeting.md
 accept() { sed "s/| 0 | NOT_RUN |/| 1 | $1 |/" "$cf" > "$cf.tmp"; mv "$cf.tmp" "$cf"; }
 state() { sed '/^## State$/,$d' "$cf" > "$cf.tmp"; printf '## State\n\n%s\n' "$1" >> "$cf.tmp"; mv "$cf.tmp" "$cf"; }
 case "${EVAL_SCENARIO:-}" in
+    22-inbox-resolution)
+        if [ "$MODE" = comply ]; then
+            cat >> specs/product.md <<'EOF'
+
+R-01 update (hypothesis, planned: 001-greeting): Hello in English; punctuation undecided.
+Source: owner, 2026-10-27, owner-message-22: "1. Record it now, implement later."
+Option 1 means replace Welcome with Hello. "English. I have not decided punctuation."
+EOF
+            printf '\nPending: implement Hello after the execution hold is lifted.\n' >> "$cf"
+            printf 'HOLD execution owner=owner scope=001-greeting since=2026-10-27 until=owner lifts — owner-message-22: "No implementation or retries until I lift this hold."\n' > specs/records.md
+            printf '# Owner inbox\n\n### Punctuation\n*2026-10-27 · agent · open*\n\nPunctuation undecided; English recorded in specs/product.md.\n' > specs/inbox.md
+        else printf '# Owner inbox\n' > specs/inbox.md; fi ;;
     01-open-change)
         if [ "$MODE" = comply ]; then
             out="$(bash .prdkit/scripts/bash/new-change.sh --json --short-name greeting 'Greeting')"

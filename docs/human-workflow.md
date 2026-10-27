@@ -22,9 +22,12 @@ answer. You do not write the spec yourself unless you want to.
   and the risks. Then `specs/architecture/`: decisions and one file per topic, including why the
   design works, with the alternatives it rejected and when to revisit them.
 - `specs/inbox.md`: questions waiting for you, each with numbered options and a recommendation
-  (answer with a number or your own words), and your direction, word for word, each item open,
-  folded, declined or deferred, so a new session or another harness finds it. Words relayed verbatim by another
-  session count as yours; an agent's summary of them does not.
+  (answer with a number or your own words), and direction awaiting incorporation. The agent folds
+  your answer into the spec or policy with its words, date and source, tracks remaining work and
+  holds, then removes the answered item without waiting for implementation or merge. Partial
+  answers keep only the unresolved question open. Declines and deferrals live with the relevant
+  spec decision and revisit trigger. Words relayed verbatim by another session count as yours;
+  an agent's summary of them does not.
 - `/prdkit-status`: what is true now, what is in flight, what is live, holds and waivers, what
   waits on you, and the longest pole. It is generated, never written as prose.
 

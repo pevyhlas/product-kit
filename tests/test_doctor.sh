@@ -120,6 +120,7 @@ assert_contains "$OUTPUT" "advisory: Owner inbox: 3 open item(s), oldest from 20
 assert_contains "$OUTPUT" "advisory: Owner inbox: 1 item(s) without an open" "missing disposition"
 assert_contains "$OUTPUT" "advisory: Owner inbox: specs/inbox.md line(s) 7 are not" "an unparsed line is reported"
 assert_contains "$OUTPUT" "advisory: Owner inbox: 8 item(s) in the one-line form" "one-line items are asked to move to headings"
+assert_contains "$OUTPUT" "Owner inbox: 4 resolved-state item(s) retained" "legacy dispositions require reconciliation before removal"
 
 it "the owner inbox: headed items with options, a missing meta line, prose under a section"
 cat > specs/inbox.md <<'MD'
@@ -159,6 +160,8 @@ assert_contains "$OUTPUT" "advisory: Owner inbox: 1 item(s) without an open" "a 
 assert_contains "$OUTPUT" "line(s) 29 are not inbox items" "a heading without a meta line"
 assert_not_contains "$OUTPUT" "line(s) 22" "prose in a headed inbox is ordinary text"
 assert_contains "$OUTPUT" "advisory: Owner inbox: 1 item(s) in the one-line form" "only the one-line item is asked to move"
+assert_contains "$OUTPUT" "Owner inbox: 1 resolved-state item(s) retained" "headed deferred item is diagnosed too"
+assert_contains "$(cat specs/inbox.md)" "Ship before the fair" "doctor preserves owner words"
 rm specs/inbox.md
 
 it "budgets are advisories, never targets"
