@@ -81,7 +81,8 @@ Documentation example (must NOT be parsed as config):
 
 - backend: also-not-config
 EOF
-( cd "$LPROJ" && echo '{"event":"test"}' | bash .prdkit/scripts/bash/ledger-emit.sh test.event ) >/dev/null 2>&1
+run bash -c 'cd "$1" && echo '\''{"event":"test"}'\'' | bash .prdkit/scripts/bash/ledger-emit.sh test.event' _ "$LPROJ"
+assert_eq 0 "$STATUS" "emission succeeds: $OUTPUT"
 assert_file "$LPROJ/adapter-received.json" "adapter ran: Configuration section won over the decoy line above it"
 
 # ---------------------------------------------------------------------------

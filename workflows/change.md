@@ -64,7 +64,10 @@ Sections of one file; skip a section that has nothing real.
 - Evidence stays in CI, the PR or `.prdkit/cache/evidence/`; Acceptance links it. The cache is
   local to one machine: link a CI run or PR comment for evidence anyone else needs. A green PR
   does not pass an acceptance item.
-- Emit the ledger events `.prdkit/memory/task-ledger.md` lists, at their boundaries.
+- Emit the ledger events `.prdkit/memory/task-ledger.md` lists, at their boundaries. Validate the
+  declared project/change/session assignment against the actual checkout and work at dispatch and
+  emission; retain session/parent IDs and reviewed range in payload when available. A stale session
+  tag is not event-time provenance; the emitter's observed context stays separate.
 
 ## Review
 
