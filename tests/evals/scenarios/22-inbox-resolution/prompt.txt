@@ -1,0 +1,1 @@
+Read .prdkit/workflows/protocol.md and follow the installed Product-Kit workflows. Process my answers already recorded in specs/inbox.md: incorporate and record the decisions, and clean the inbox. This is spec/policy maintenance only. Preserve pending execution and limits; do not implement, retry, commit, push or merge.

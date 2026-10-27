@@ -19,7 +19,7 @@
 | Doctor: closed without a `specs/log.md` line | Add `- <date> <id>: <what changed>` to `specs/log.md` in the PR that deletes the change record |
 | Doctor: local machine path | Rewrite it relative to the repository, or as `org/repo` plus a path for another repository |
 | Doctor: raw evidence under `specs/` | `git rm --cached` it, keep it under `.prdkit/cache/evidence/`, and link it from Acceptance |
-| The owner's answer was asked for again | Record owner words relayed verbatim in `specs/inbox.md` with date and source; they need no re-asking |
+| The owner's answer was asked for again | Fold the answer into the canonical spec/policy with its words, date and source; then remove the resolved inbox item. Relayed verbatim answers need no re-asking |
 | The same check keeps failing | After three attempts, or two without new information, stop: alternatives note in the change and NEEDS_DECISION in the inbox |
 | A typo, rejected patch or local setup error | Fix it and continue; it is no attempt or fix round and grants no extra authority |
 | Verification timed out without a verdict | A failed tool run is not a product FAIL; rerun within existing authority, never past an owner limit or hold |

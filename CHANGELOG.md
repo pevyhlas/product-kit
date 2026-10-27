@@ -8,6 +8,12 @@ change by change.
 
 ## [Unreleased]
 
+### Changed
+
+- The owner inbox holds open items only. Answers are incorporated into canonical spec/policy
+  with provenance, remaining work and holds transferred, then removed without waiting for merge.
+  Partial answers stay open; doctor advises reconciling retained legacy dispositions.
+
 ## [1.2.0] — 2026-10-26 — cross-layer planning and PR-scoped execution
 
 Product-Kit connects living product intent and architecture/design to a temporary implementation
