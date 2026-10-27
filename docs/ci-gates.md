@@ -138,7 +138,7 @@ It reports, as advisories: a 0.x layout or two canons, a `specs/archive/` folder
 `specs/archive.md` whose base commit or last 0.x feature cannot be read, agent context naming
 removed 0.x paths, spec files over their reading budgets,
 cited IDs that are undefined or retired (in spec files and tests), expired holds and waivers,
-open inbox items and their age, inbox items in the old one-line form, local machine paths in
+open inbox items and their age, retained resolved items, inbox items in the old one-line form, local machine paths in
 specs and agent context, links to missing files in the spec and `specs/archive.md`, spec files
 that no chain of links from
 `product.md` or `architecture.md` reaches (1.1 layout; retired files exempt) and `observed.md`

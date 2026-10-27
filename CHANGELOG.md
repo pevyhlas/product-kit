@@ -8,6 +8,12 @@ change by change.
 
 ## [Unreleased]
 
+### Changed
+
+- The owner inbox holds open items only. Answers are incorporated into canonical spec/policy
+  with provenance, remaining work and holds transferred, then removed without waiting for merge.
+  Partial answers stay open; doctor advises reconciling retained legacy dispositions.
+
 ### Fixed
 
 - Added deterministic linked-worktree automatic-numbering contention coverage, including a

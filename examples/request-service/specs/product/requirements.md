@@ -9,4 +9,5 @@
 
 ## Left open
 
-- Operator prioritization (deferred in the inbox).
+- Operator prioritization: agent default, 2026-10-17, from the example's inbox proposal:
+  "Not yet": nobody has reported ordering as a problem. Revisit when operators report it.
