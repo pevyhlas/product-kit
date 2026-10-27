@@ -8,6 +8,22 @@ Emission validates one JSON object before writing. Missing top-level event metad
 injected from the CLI name; nested keys do not suppress it. Invalid/ambiguous envelopes
 fail without changing the spool. Original top-level attribution is preserved.
 
+New emissions also capture `observed_context`: capture time, credential-free network-origin
+host/path, Git head/branch, installed manifest version and exact manifest/emitter Git blob IDs.
+Absent or unrecognizable data is `unknown`; no local paths or remote credentials are recorded.
+These fields are observations from the installed emitter's checkout, including linked worktrees,
+not inferred from a mutable session tag. They are snapshots, not signed attestations: the manifest's
+version does not prove installation integrity or identify which kit a long-running session loaded.
+Git head does not capture uncommitted source. For version-specific analysis, retain adoption-gate
+evidence and installed input hashes too.
+
+`observed_context` is emitter-owned; supplying it to `ledger-emit.sh` fails before spooling rather
+than overwriting history or accepting stale observations. Replay a stored event directly through
+the configured adapter, which preserves this context. Legacy events remain valid without it and
+must not be backfilled from today's checkout. Declared `project`, `feature` and session IDs remain
+unchanged even when they conflict with observations; collectors flag/quarantine that assignment
+instead of silently attributing its usage. A branch name alone does not identify a feature.
+
 The [configuration template](../templates/task-ledger-template.md) describes filtering,
 best-effort/strict adapter behavior, and optional Git operator attribution. Adapters are
 repository-contained executable files, never symlinks, and own credentials/network access.
@@ -81,3 +97,18 @@ Enrichment uses jq 1.6+; ledger-only reports need Bash and standard utilities. M
 invalid enrichment fails clearly without replacing the previous report. The kit installs
 no dependencies and requires no private monitoring host. Usage analysis is not product-value
 validation; see [learning](../workflows/learn.md).
+
+## Versioned usage attribution
+
+At dispatch and each event boundary, validate the declared project/change against the actual work
+assignment, checkout and installed kit; re-tag an incorrectly assigned session before new work.
+Keep session/parent IDs, reviewer concern, model and range in the event payload when available.
+Collectors join event-time observations and message-level usage by explicit IDs/time intervals;
+latest session tags are only hints. Split mixed-project/version sessions only with verified message
+boundaries; otherwise report them as mixed/unattributed. Exclude missing counters from totals and
+state coverage, rather than counting absence as zero or treating a sample as a project total.
+
+Report uncached input, cache-read, cache-write, output and reasoning separately using the provider's
+definitions. Reasoning may be included in output; avoid double counting. Cached and uncached input
+are not interchangeable cost units. A monetary estimate needs the applicable model, rate/date and
+cache treatment; token volume alone establishes neither waste nor a before/after efficiency gain.

@@ -31,6 +31,9 @@ run_emit() {
     (cd "$dir" && .prdkit/scripts/bash/ledger-emit.sh "$@")
 }
 
+# The emitter appends its observation last; original JSON text is otherwise retained.
+declared_event() { sed 's/, "observed_context": {.*}$/}/'; }
+
 # --- Test: No policy file = spool only, exit 0 ---
 it "No policy file spools locally and exits 0 (no backend dispatch)"
 dir="$(setup_test_project)"; track_tmp "$dir"
@@ -70,7 +73,8 @@ echo "$input_event" | run_emit "$dir" "readiness.changed" && status=$? || status
 assert_eq "0" "$status" "exit code is 0 with backend: command"
 assert_file "$output_file" "adapter receives event"
 output="$(cat "$output_file")"
-assert_eq "$input_event" "$output" "adapter receives exact event JSON"
+assert_eq "$input_event" "$(printf '%s\n' "$output" | declared_event)" "adapter receives original fields unchanged"
+assert_eq "$(cat "$dir/.prdkit/ledger/events.jsonl")" "$output" "adapter and local spool share the same observation"
 
 # --- Test: Event filter - only matching events emitted ---
 it "Event filter limits emission to matching events"
@@ -178,7 +182,7 @@ input_event='{"schema":"prdkit.ledger.v1","event":"task.upserted"}'
 echo "$input_event" | run_emit "$dir" "task.upserted" && status=$? || status=$?
 assert_eq "0" "$status" "exit code is 0 with backend: none"
 assert_file "$dir/.prdkit/ledger/events.jsonl" "spool file created with backend: none"
-assert_eq "$input_event" "$(cat "$dir/.prdkit/ledger/events.jsonl")" "spool contains exact event line"
+assert_eq "$input_event" "$(declared_event < "$dir/.prdkit/ledger/events.jsonl")" "spool preserves declared event"
 
 # --- Test: spool line appended when policy file absent ---
 it "Spool records event when policy file absent"
@@ -186,7 +190,7 @@ dir="$(setup_test_project)"; track_tmp "$dir"
 input_event='{"event":"test"}'
 echo "$input_event" | run_emit "$dir" "test.event"
 assert_file "$dir/.prdkit/ledger/events.jsonl" "spool file created without policy file"
-assert_eq "$input_event" "$(cat "$dir/.prdkit/ledger/events.jsonl")" "spool contains exact event line"
+assert_eq "$input_event" "$(declared_event < "$dir/.prdkit/ledger/events.jsonl")" "spool preserves declared event"
 
 # --- Test: spool write happens before command backend runs ---
 it "Spool is written before the adapter command runs"
@@ -209,7 +213,7 @@ EOF
 input_event='{"event":"readiness.changed"}'
 echo "$input_event" | run_emit "$dir" "readiness.changed"
 assert_file "$snapshot_file" "spool existed when adapter ran"
-assert_eq "$input_event" "$(cat "$snapshot_file")" "spool already contained the event when adapter ran"
+assert_eq "$input_event" "$(declared_event < "$snapshot_file")" "spool already contained the event when adapter ran"
 
 # --- Test: two emissions append two lines ---
 it "Two emissions append two spool lines"
@@ -218,8 +222,8 @@ echo '{"event":"first"}' | run_emit "$dir" "test.first"
 echo '{"event":"second"}' | run_emit "$dir" "test.second"
 line_count="$(wc -l < "$dir/.prdkit/ledger/events.jsonl" | tr -d ' ')"
 assert_eq "2" "$line_count" "spool has two lines after two emissions"
-assert_eq '{"event":"first"}' "$(head -1 "$dir/.prdkit/ledger/events.jsonl")" "first line is first event"
-assert_eq '{"event":"second"}' "$(tail -1 "$dir/.prdkit/ledger/events.jsonl")" "second line is second event"
+assert_eq '{"event":"first"}' "$(head -1 "$dir/.prdkit/ledger/events.jsonl" | declared_event)" "first line is first event"
+assert_eq '{"event":"second"}' "$(tail -1 "$dir/.prdkit/ledger/events.jsonl" | declared_event)" "second line is second event"
 
 # --- Test: missing "event" field is injected from the CLI event type ---
 # Downstream collectors silently drop spool lines without "event"; the emitter
@@ -230,7 +234,7 @@ echo '{"event_id":"001-x/feature.created","payload":{"title":"X"}}' | run_emit "
 assert_contains "$(cat "$dir/.prdkit/ledger/events.jsonl")" '"event": "feature.created"' "event type injected into spooled line"
 assert_contains "$(cat "$dir/.prdkit/ledger/events.jsonl")" '"event_id":"001-x/feature.created"' "original payload preserved"
 echo '{"event":"task.upserted","detail":1}' | run_emit "$dir" "task.upserted"
-assert_eq '{"event":"task.upserted","detail":1}' "$(tail -1 "$dir/.prdkit/ledger/events.jsonl")" "payload already carrying event stays byte-identical"
+assert_eq '{"event":"task.upserted","detail":1}' "$(tail -1 "$dir/.prdkit/ledger/events.jsonl" | declared_event)" "declared fields stay byte-identical"
 
 it "empty objects and nested event keys produce valid top-level events"
 dir="$(setup_test_project)"; track_tmp "$dir"
@@ -244,7 +248,7 @@ assert_eq nested "$(printf '%s\n' "$line" | jq -r .payload.event)" "nested conte
 it "escaped top-level event keys are recognized rather than duplicated"
 input_event='{"\u0065vent":"feature.created","payload":{"quote":"a\"b","slash":"a\\b"}}'
 printf '%s\n' "$input_event" | run_emit "$dir" feature.created
-assert_eq "$input_event" "$(tail -1 "$dir/.prdkit/ledger/events.jsonl")" "escaped JSON key preserved"
+assert_eq "$input_event" "$(tail -1 "$dir/.prdkit/ledger/events.jsonl" | declared_event)" "escaped JSON key preserved"
 
 it "malformed or ambiguous envelopes never enter the spool"
 before="$(cat "$dir/.prdkit/ledger/events.jsonl")"
@@ -388,7 +392,7 @@ cat > "$dir/.prdkit/memory/task-ledger.md" <<'EOF'
 EOF
 input_event='{"event":"test","operator":"someone-else"}'
 echo "$input_event" | run_emit "$dir" "test.event"
-assert_eq "$input_event" "$(cat "$dir/.prdkit/ledger/events.jsonl")" "pre-set operator passes through unchanged"
+assert_eq "$input_event" "$(declared_event < "$dir/.prdkit/ledger/events.jsonl")" "pre-set operator passes through unchanged"
 
 it "nested operator keys do not suppress real top-level operator attribution"
 printf '%s\n' '{"payload":{"operator":"nested"}}' | run_emit "$dir" feature.created
@@ -536,5 +540,65 @@ if [ "$status" -ne 0 ]; then
 else
     _no "missing command with backend: command should be an error"
 fi
+
+it "event-time version and repository observations do not overwrite declared attribution or history"
+dir="$(setup_test_project)"; track_tmp "$dir"
+git -C "$dir" remote add origin https://user:secret@example.invalid/owner/project.git
+printf 'version: 1.2.0\n' > "$dir/.prdkit/.manifest"
+git -C "$dir" add -A && git -C "$dir" commit -qm baseline
+sha="$(git -C "$dir" rev-parse HEAD)"
+printf '%s\n' '{"event":"review.recorded","project":"stale-project","feature":{"id":"099-other"}}' | run_emit "$dir" review.recorded
+spool="$dir/.prdkit/ledger/events.jsonl"
+first="$(cat "$spool")"
+assert_eq example.invalid/owner/project "$(jq -r .observed_context.repository "$spool")" 'origin credentials stripped'
+assert_not_contains "$first" secret 'no origin password'
+assert_not_contains "$first" "$dir" 'no machine-local path'
+assert_eq stale-project "$(jq -r .project "$spool")" 'conflicting declared project preserved for diagnosis'
+assert_eq 099-other "$(jq -r .feature.id "$spool")" 'feature never inferred from a branch'
+assert_eq "$sha" "$(jq -r .observed_context.head "$spool")" 'actual head captured'
+assert_eq 1.2.0 "$(jq -r .observed_context.kit_version "$spool")" 'manifest version captured'
+assert_eq "$(git -C "$dir" hash-object --no-filters "$dir/.prdkit/.manifest")" "$(jq -r .observed_context.manifest_blob "$spool")" 'exact manifest identity captured'
+printf 'version: 1.3.0\n' > "$dir/.prdkit/.manifest"
+printf '{"event":"evidence.recorded"}\n' | run_emit "$dir" evidence.recorded
+assert_eq "$first" "$(head -1 "$spool")" 'upgrade leaves prior observation immutable'
+assert_eq 1.3.0 "$(tail -1 "$spool" | jq -r .observed_context.kit_version)" 'new event observes new installed version'
+
+it "caller-supplied observed context is rejected, including escaped keys; replay preserves it"
+before="$(cat "$spool")"
+for input in '{"observed_context":{}}' '{"\u006fbserved_context":{}}'; do
+    if printf '%s\n' "$input" | run_emit "$dir" review.recorded 2>/dev/null; then _no 'reserved observation accepted'; else _ok 'reserved observation rejected'; fi
+done
+assert_eq "$before" "$(cat "$spool")" 'rejected observations leave spool untouched'
+replay="$(mktemp -d)"; track_tmp "$replay"
+(cd "$dir" && printf '%s\n' "$first" | env XDG_DATA_HOME="$replay" bash "$PK_ROOT/scripts/ledger-spool-adapter.sh")
+assert_eq "$first" "$(cat "$replay/prdkit/ledger/project/events.jsonl")" 'adapter replay keeps original observation'
+
+it "linked worktree emitter observes its own checkout even when invoked from another cwd"
+wt_parent="$(mktemp -d)"; track_tmp "$wt_parent"
+git -C "$dir" worktree add -q -b 002-linked "$wt_parent/linked"
+printf '{"event":"review.recorded"}\n' | bash "$wt_parent/linked/.prdkit/scripts/bash/ledger-emit.sh" review.recorded
+linked_spool="$wt_parent/linked/.prdkit/ledger/events.jsonl"
+assert_eq 002-linked "$(jq -r .observed_context.branch "$linked_spool")" 'linked checkout branch captured'
+assert_eq 1.2.0 "$(jq -r .observed_context.kit_version "$linked_spool")" 'linked checkout uses its installed manifest, not sibling version'
+
+it "SSH origins use the same credential-free identity and malformed origins stay unknown"
+for origin in git@example.invalid:owner/project.git ssh://git@example.invalid/owner/project.git; do
+    git -C "$dir" remote set-url origin "$origin"
+    printf '{"event":"review.recorded"}\n' | run_emit "$dir" review.recorded
+    assert_eq example.invalid/owner/project "$(tail -1 "$spool" | jq -r .observed_context.repository)" 'SSH origin normalized'
+done
+git -C "$dir" remote set-url origin 'https://example.invalid/owner/project?token=secret'
+printf '{"event":"review.recorded"}\n' | run_emit "$dir" review.recorded
+assert_eq unknown "$(tail -1 "$spool" | jq -r .observed_context.repository)" 'query-bearing remote not recorded'
+
+it "missing or ambiguous manifests and local origins are explicitly unknown"
+printf 'version: 1.2.0\nversion: 1.3.0\n' > "$dir/.prdkit/.manifest"
+git -C "$dir" remote set-url origin "$dir/private-origin"
+printf '{"event":"review.recorded"}\n' | run_emit "$dir" review.recorded
+assert_eq unknown "$(tail -1 "$spool" | jq -r .observed_context.kit_version)" 'ambiguous version excluded from cohorts'
+assert_eq unknown "$(tail -1 "$spool" | jq -r .observed_context.repository)" 'local origin never exposes machine path'
+rm "$dir/.prdkit/.manifest"
+printf '{"event":"review.recorded"}\n' | run_emit "$dir" review.recorded
+assert_eq unknown "$(tail -1 "$spool" | jq -r .observed_context.manifest_blob)" 'missing manifest remains unknown'
 
 finish

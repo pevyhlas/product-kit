@@ -8,13 +8,28 @@ change by change.
 
 ## [Unreleased]
 
+### Added
+
+- Ledger emission snapshots observed repository/head/branch and installed kit version/manifest
+  identity separately from declared session/change attribution, without local paths or credentials.
+  Legacy events and adapter replay preserve history; usage guidance distinguishes version coverage,
+  attribution conflicts, token types and cost assumptions.
+
 ### Changed
 
+- The owner inbox holds open items only. Answers are incorporated into canonical spec/policy
+  with provenance, remaining work and holds transferred, then removed without waiting for merge.
+  Partial answers stay open; doctor advises reconciling retained legacy dispositions.
 - Review packages gain immutable selected context, copied evidence with a byte/hash inventory,
   a dispatch preflight and focused re-review deltas alongside the full diff. Review prompts honor
   actual read/shell/report capabilities; unchanged approvals and final-head gates remain required.
 - Planning checks touched-state lifecycles and circular dependency proof; execution preflights real
   verification discovery. PR summaries keep current gates, holds, limits and next action visible.
+
+### Fixed
+
+- Added deterministic linked-worktree automatic-numbering contention coverage, including a
+  per-worktree-lock negative control, on Linux and macOS to prevent duplicate-number regressions.
 
 ## [1.2.0] — 2026-10-26 — cross-layer planning and PR-scoped execution
 

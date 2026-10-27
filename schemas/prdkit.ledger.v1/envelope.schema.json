@@ -29,6 +29,21 @@
       "type": "string",
       "description": "Human identity attribution (git email or name). Appended by ledger-emit.sh only when the project's task-ledger policy opts in with 'operator: git'."
     },
+    "observed_context": {
+      "type": "object",
+      "description": "Emitter-observed context at this event boundary, distinct from declared project/feature/session metadata. Absent on legacy events. A manifest version is not installation-integrity proof.",
+      "required": ["captured_at", "repository", "head", "branch", "kit_version", "manifest_blob", "emitter_blob"],
+      "properties": {
+        "captured_at": { "type": "string", "format": "date-time" },
+        "repository": { "type": "string", "description": "Credential-free network-origin host/path, or unknown for local/absent/unrecognized origins." },
+        "head": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64}|unknown)$" },
+        "branch": { "type": "string" },
+        "kit_version": { "type": "string", "pattern": "^([0-9]+\\.[0-9]+\\.[0-9]+|unknown)$" },
+        "manifest_blob": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64}|unknown)$" },
+        "emitter_blob": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64}|unknown)$" }
+      },
+      "additionalProperties": false
+    },
     "ts": { "type": "string", "format": "date-time" },
     "payload": { "type": "object" }
   }
