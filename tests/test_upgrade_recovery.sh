@@ -42,6 +42,9 @@ for tool in cp mv rm mktemp; do ln -s fault "$SHIMS/$tool"; done
 for fault in copy interrupt kill retire agents manifest storage; do
     it "$fault failure remains explicit and the same-source retry preserves consumer bytes"
     PROJ="$(make_project)"; track_tmp "$PROJ"
+    # The installer canonicalizes /var to /private/var on macOS; fault operands
+    # must identify the same physical paths, not silently miss every boundary.
+    PROJ="$(CDPATH='' cd "$PROJ" && pwd -P)"
     printf '#!/bin/sh\nexit 0\n' > "$PROJ/.product-kit/scripts/retired-probe.sh"
     printf 'User prefix.\n' > "$PROJ/AGENTS.md"
     bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --harness all >/dev/null
@@ -109,6 +112,7 @@ done
 
 it "overlapping writers refuse before mutation and the original writer finishes coherently"
 PROJ="$(make_inited_project)"; track_tmp "$PROJ"
+PROJ="$(CDPATH='' cd "$PROJ" && pwd -P)"
 env PATH="$SHIMS:$PATH" FAULT=hold FAULT_ROOT="$PROJ" bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade > "$PROJ/first.log" 2>&1 &
 first=$!
 for ((i=0;i<300;i++)); do [ ! -f "$PROJ/ready" ] || break; sleep 0.1; done
