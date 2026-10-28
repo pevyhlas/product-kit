@@ -22,6 +22,8 @@ change by change.
 
 ### Fixed
 
+- Submodule/worktree fixtures use Git's file transport, avoiding intermittent hosted-Linux
+  failures in Git's local loose-object copy optimization before installation begins.
 - JSON helpers escape every control character representable in a Bash string, preserving
   Unicode and literal escape sequences. Policy-section safety tests use a repository-relative
   adapter path and separately verify the existing prohibition on paths containing spaces.

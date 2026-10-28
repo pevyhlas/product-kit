@@ -343,7 +343,9 @@ sub_project() { # [init.sh options] -> SUB: a project with a committed submodule
     sub_step git -C "$SUB" config user.email t@example.com
     sub_step git -C "$SUB" config user.name test
     sub_step git -C "$SUB" commit -q --allow-empty -m init
-    sub_step git -C "$SUB" -c protocol.file.allow=always submodule add -q "$KITSRC" .product-kit
+    # Use Git's transport, not the local-clone loose-object copy optimization.
+    # Hosted Linux has intermittently failed inside that copy before init.sh runs.
+    sub_step git -C "$SUB" -c protocol.file.allow=always submodule add -q "file://$KITSRC" .product-kit
     # shellcheck disable=SC2016 # Positional arguments are expanded by the child shell.
     sub_step bash -c 'cd "$1" && shift && bash .product-kit/scripts/init.sh "$@"' _ "$SUB" "$@"
     sub_step git -C "$SUB" add -A
