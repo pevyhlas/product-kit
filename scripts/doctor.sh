@@ -2,7 +2,7 @@
 # doctor.sh — Read-only diagnostics: installation, spec layout and budgets, IDs, records,
 # owner inbox, raw evidence, agent context and agent projections. Never repairs anything.
 #
-# Usage: doctor.sh [--json] [--strict]
+# Usage: doctor.sh [--json] [--strict] [--inventory]
 # Errors (failing findings): installation drift, malformed IDs, malformed records, agent
 # tier-map problems, a change record deleted without its specs/log.md line. Everything else is an advisory; --strict makes advisories fail too.
 set -euo pipefail
@@ -12,12 +12,14 @@ source "$SCRIPT_DIR/install-lib.sh"
 source "$SCRIPT_DIR/context-budget-lib.sh"
 source "$SCRIPT_DIR/agent-tiers-lib.sh"
 source "$SCRIPT_DIR/spec-lib.sh"
-json=false; strict=false
+source "$SCRIPT_DIR/diagnostics-lib.sh"
+json=false; strict=false; inventory=false
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --json) json=true ;;
         --strict) strict=true ;;
-        *) echo 'Usage: doctor.sh [--json] [--strict]' >&2; exit 2 ;;
+        --inventory) inventory=true ;;
+        *) echo 'Usage: doctor.sh [--json] [--strict] [--inventory]' >&2; exit 2 ;;
     esac
     shift
 done
@@ -463,13 +465,19 @@ fi
 if $strict; then findings+=(${advisories[@]+"${advisories[@]}"}); advisories=(); fi
 result=pass; [ "${#findings[@]}" -eq 0 ] || result=fail
 if $json; then
-    printf '{"result":"%s","findings":%s,"advisories":%s,"strict":%s,"readiness":"not-evaluated"}\n' \
+    printf '{"result":"%s","findings":%s,"advisories":%s,"strict":%s,"readiness":"not-evaluated"' \
         "$result" "$(json_array ${findings[@]+"${findings[@]}"})" "$(json_array ${advisories[@]+"${advisories[@]}"})" "$strict"
+    if $inventory; then printf ',"configuration":%s' "$(diagnostic_configuration "$root")"; fi
+    printf '}\n'
 else
     printf 'Product-Kit doctor: %s\n' "$result"
     for reason in ${findings[@]+"${findings[@]}"}; do printf '  %s\n' "$reason"; done
     for reason in ${advisories[@]+"${advisories[@]}"}; do printf '  advisory: %s\n' "$reason"; done
     [ "${#advisories[@]}" -eq 0 ] || printf 'Advisories do not fail doctor; --strict makes them failing findings.\n'
     printf 'No repairs performed. A clean report is not readiness.\n'
+    if $inventory; then
+        printf 'Effective configuration (JSON; null means unknown, not a default):\n'
+        diagnostic_configuration "$root"; printf '\n'
+    fi
 fi
 [ "$result" = pass ]

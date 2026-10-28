@@ -28,6 +28,8 @@ reproduce the duplicate number; synchronization markers avoid a scheduler-depend
 | Shell escaping, path-escaping IDs, JSON safety | script_safety |
 | Generated status: markers, change State and Acceptance, records, inbox, longest pole | status |
 | Diagnostics: IDs, records, layout, ceilings, citations, inbox, evidence, example spec | doctor |
+| Effective provenance, ownership, winning model rules and explicit runtime unknowns | diagnostics_inventory |
+| Current-source consumer installation, repeated upgrades, customization and source-less helpers | consumer_smoke |
 | Change bounds: constraints, non-goals and qualities in scope for a change's parts and journeys, ranges, later-stage items | bounds |
 | Merge gate: recorded review verdicts cover the merged head, per tier and rigor | check_review |
 | Immutable review packages and bounded round allocation | review_package |

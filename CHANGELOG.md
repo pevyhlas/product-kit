@@ -8,6 +8,14 @@ change by change.
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in `doctor.sh --inventory --json` explains installed ownership/hashes, available source
+  pins and model resolution/projection without invoking harnesses or fetching source. Runtime
+  capabilities and the active session remain unknown without separate evidence.
+- A reproducible consumer smoke and capability-specific support/evidence contract separate
+  installation integrity from native loading, execution, capture, events and review access.
+
 ### Fixed
 
 - JSON helpers escape every control character representable in a Bash string, preserving
