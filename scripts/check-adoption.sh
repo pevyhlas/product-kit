@@ -79,7 +79,7 @@ if [ -n "$PIN" ]; then
     if ! [[ "$PIN" =~ ^[0-9a-f]{40}$ ]]; then
         fail "adoption-pin must be a full 40-hex commit: $PIN"
     else
-        gitlink="$(git -C "$root" ls-files -s -- "$SOURCE" 2>/dev/null | awk '$1 == 160000 { print $2; exit }')"
+        gitlink="$(install_source_pin "$root" "$SOURCE" || true)"
         if [ -z "$gitlink" ]; then
             fail "adoption-pin is configured but $SOURCE is not a tracked submodule"
         elif [ "$gitlink" != "$PIN" ]; then
