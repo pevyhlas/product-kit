@@ -15,3 +15,9 @@ environment the environments topic lists, raw evidence under `specs/`, oversized
 files and agent projection drift. Malformed IDs and records and an unlogged close are errors; the rest are advisories that
 `--strict` fails. The kit's `scripts/init.sh --check` reports installation drift. Never repair
 during diagnosis or read a clean report as readiness.
+
+For configuration/provenance questions add `--inventory --json`. It reports installed hashes,
+project-owned customizations, source pins and resolved versus projected agent models with winning
+rules. Unobserved active harness/model and runtime capabilities remain unknown. This is opt-in:
+do not load the full inventory for ordinary status questions. See the findings as well as the
+inventory; a recorded pin or projected model does not prove the running session used it.

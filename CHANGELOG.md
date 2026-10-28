@@ -8,6 +8,14 @@ change by change.
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in `doctor.sh --inventory --json` explains installed ownership/hashes, available source
+  pins and model resolution/projection without invoking harnesses or fetching source. Runtime
+  capabilities and the active session remain unknown without separate evidence.
+- A reproducible consumer smoke and capability-specific support/evidence contract separate
+  installation integrity from native loading, execution, capture, events and review access.
+
 ## [1.2.1] — 2026-10-27 — inbox resolution and review readiness
 
 Follow-up improvements to 1.2: resolved owner answers leave the inbox, reviewers receive accessible
