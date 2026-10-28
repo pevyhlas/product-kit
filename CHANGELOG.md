@@ -8,6 +8,11 @@ change by change.
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-10-28 — assurance and recoverable upgrades
+
+Inspectable installation provenance, explicit capability evidence, accepted-change cost accounting,
+and interruption-tested upgrades. These additions preserve the Bash/Git consumer dependency contract.
+
 ### Added
 
 - Optional local accepted-change benchmark tooling validates frozen study provenance, revision-bound
@@ -33,6 +38,20 @@ change by change.
 - Installer write phases are exclusive. Abandoned locks require explicit inspection/recovery;
   fault-injected lifecycle, interruption and overlapping-writer tests verify coherent retries and
   preservation of custom content. Multi-file upgrades remain recoverable, not globally atomic.
+
+### Adoption
+
+- Pin the kit to `v1.3.0`, run `bash .product-kit/scripts/init.sh --check` to inspect changes,
+  then `bash .product-kit/scripts/init.sh --upgrade`. Existing customized templates and policy
+  retain their bytes and permissions. Use the normal adoption/doctor checks after installation.
+- Add `--inventory --json` to the installed `doctor.sh` when investigating provenance or model
+  resolution. Native command loading, active model identity, events and reviewer access require
+  their own runtime evidence; an inventory alone does not establish them.
+- An unfinished install leaves `.prdkit/.install-state`; retry the same source with `--upgrade`.
+  After an untrappable kill, inspect the lock owner and child writers before removing an abandoned
+  `.prdkit/.install-lock`. See `docs/customization.md` for recovery details.
+- Benchmark tooling stays under the kit's `tests/benchmarks/` and uses the test dependency jq.
+  Its example is synthetic; no paired comparative savings or complete real-run cost is claimed.
 
 ## [1.2.1] — 2026-10-27 — inbox resolution and review readiness
 
