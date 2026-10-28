@@ -56,6 +56,12 @@ install_manifest_value() {
     } END { if(count != 1 || value == "") exit 1; print value }' "$1"
 }
 
+# Exact stage-0 gitlink only: a directory pathspec also matches nested submodules.
+install_source_pin() {
+    git -C "$1" ls-files -s -- ":(literal)$2" 2>/dev/null |
+        awk -v path="$2" '$1 == 160000 && $3 == 0 && substr($0, index($0, "\t") + 1) == path { n++; pin=$2 } END { if(n == 1) print pin }'
+}
+
 # Print findings, rather than mutating any installation. Project-owned hashes may differ.
 install_findings() {
     local root="$1" manifest="$1/.prdkit/.manifest" harnesses mode line hash path actual section expected dir

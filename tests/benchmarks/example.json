@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "kind": "fixture",
+  "study_id": "example-not-a-measurement",
+  "phase": "steady-state",
+  "task_set_revision": "fixture-v1",
+  "acceptance_policy": "frozen-checks-v1",
+  "review_policy": "blind-review-v1",
+  "permissions": "isolated-workspace-no-publish",
+  "environment": "synthetic",
+  "currency": "USD",
+  "tasks": ["tiny-fix", "resumed-feature"],
+  "repetitions": 1,
+  "arms": [{"id":"kit", "kit_revision":"fixture-kit", "harness":"fixture", "harness_version":"1", "model":"synthetic", "instructions_digest":"fixture-digest"}],
+  "runs": [
+    {
+      "arm":"kit", "task":"tiny-fix", "replicate":1, "outcome":"accepted", "final_revision":"revision-a",
+      "acceptance":{"result":"pass", "revision":"revision-a", "reviewer":"reviewer-a", "checks_evidence":"fixture:checks-a", "review_evidence":"fixture:review-a"},
+      "attempts":[
+        {"id":"work", "agent":"worker-a", "session":"session-a", "role":"worker", "transcript":"fixture:work", "elapsed_s":20, "usage_status":"complete",
+         "messages":[{"meter_id":"call-a", "evidence":"fixture:usage-a", "tokens":{"uncached_input":100,"cache_read":40,"cache_write":10,"output":20,"reasoning":10}, "cost":{"amount":1,"basis":"estimated","reference":"fixture:prices"}}]},
+        {"id":"review", "agent":"reviewer-a", "session":"session-review", "role":"reviewer", "transcript":"fixture:review", "elapsed_s":10, "usage_status":"complete",
+         "messages":[{"meter_id":"call-review", "evidence":"fixture:usage-review", "tokens":{"uncached_input":20,"cache_read":0,"cache_write":0,"output":10,"reasoning":0}, "cost":{"amount":0.2,"basis":"estimated","reference":"fixture:prices"}}]}
+      ]
+    },
+    {
+      "arm":"kit", "task":"resumed-feature", "replicate":1, "outcome":"failed", "final_revision":"revision-b", "acceptance":null,
+      "attempts":[
+        {"id":"failed-work", "agent":"worker-b", "session":"session-b", "role":"worker", "transcript":"fixture:failure", "elapsed_s":40, "usage_status":"complete",
+         "messages":[{"meter_id":"call-b", "evidence":"fixture:usage-b", "tokens":{"uncached_input":200,"cache_read":100,"cache_write":0,"output":70,"reasoning":30}, "cost":{"amount":2,"basis":"estimated","reference":"fixture:prices"}}]}
+      ]
+    }
+  ]
+}

@@ -8,8 +8,23 @@ change by change.
 
 ## [Unreleased]
 
+### Added
+
+- Optional local accepted-change benchmark tooling validates frozen study provenance, revision-bound
+  independent acceptance and deduplicated message usage. Reports include failed/abandoned attempts,
+  reviewers, cache categories, coverage gaps and cost basis; incomplete telemetry never becomes
+  a complete cost/token-per-accepted-change claim. The included data are synthetic, not results.
+- Opt-in `doctor.sh --inventory --json` explains installed ownership/hashes, available source
+  pins and model resolution/projection without invoking harnesses or fetching source. Runtime
+  capabilities and the active session remain unknown without separate evidence.
+- A reproducible consumer smoke and capability-specific support/evidence contract separate
+  installation integrity from native loading, execution, capture, events and review access.
+
 ### Fixed
 
+- JSON helpers escape every control character representable in a Bash string, preserving
+  Unicode and literal escape sequences. Policy-section safety tests use a repository-relative
+  adapter path and separately verify the existing prohibition on paths containing spaces.
 - Failed installer copies/managed-section updates no longer mask errors or leave truncated
   project templates that retries misclassify as customizations. Replacements are staged before
   publication; interrupted installs retain a phase marker and fail integrity checks until retried.

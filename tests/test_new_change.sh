@@ -329,20 +329,29 @@ cp -r "$PK_ROOT/commands" "$PK_ROOT/workflows" "$PK_ROOT/scripts" "$PK_ROOT/temp
 git -C "$KITSRC" init -q
 git -C "$KITSRC" add -A
 git -C "$KITSRC" -c user.email=t@example.com -c user.name=test commit -qm kit
+sub_step() { # Stop at the original fixture failure instead of reporting missing installed files.
+    run "$@"
+    if [ "$STATUS" -ne 0 ]; then
+        _no "submodule fixture setup failed (exit $STATUS): $*" "$OUTPUT"
+        finish
+    fi
+}
 sub_project() { # [init.sh options] -> SUB: a project with a committed submodule install
-    SUB="$(mktemp -d)"; track_tmp "$SUB"; SUB="$(cd "$SUB" && pwd -P)"
-    git -C "$SUB" init -q
-    git -C "$SUB" config user.email t@example.com
-    git -C "$SUB" config user.name test
-    git -C "$SUB" commit -q --allow-empty -m init
-    git -C "$SUB" -c protocol.file.allow=always submodule add -q "$KITSRC" .product-kit >/dev/null 2>&1
-    ( cd "$SUB" && bash .product-kit/scripts/init.sh "$@" ) >/dev/null 2>&1
-    git -C "$SUB" add -A >/dev/null 2>&1
-    git -C "$SUB" commit -qm installed >/dev/null 2>&1
+    SUB="$(mktemp -d)" || exit 1
+    track_tmp "$SUB"; SUB="$(cd "$SUB" && pwd -P)" || exit 1
+    sub_step git -C "$SUB" init -q
+    sub_step git -C "$SUB" config user.email t@example.com
+    sub_step git -C "$SUB" config user.name test
+    sub_step git -C "$SUB" commit -q --allow-empty -m init
+    sub_step git -C "$SUB" -c protocol.file.allow=always submodule add -q "$KITSRC" .product-kit
+    # shellcheck disable=SC2016 # Positional arguments are expanded by the child shell.
+    sub_step bash -c 'cd "$1" && shift && bash .product-kit/scripts/init.sh "$@"' _ "$SUB" "$@"
+    sub_step git -C "$SUB" add -A
+    sub_step git -C "$SUB" commit -qm installed
 }
 sub_project
 run bash -c 'cd "$1" && bash .prdkit/scripts/bash/new-change.sh --short-name sub-default "Use the kit"' _ "$SUB"
-assert_eq 0 "$STATUS" "change opened"
+assert_eq 0 "$STATUS" "change opened: $OUTPUT"
 SWT="$SUB/.worktrees/001-sub-default"
 if [ -f "$SWT/.claude/commands/prdkit.md" ] && [ ! -L "$SWT/.claude/commands/prdkit.md" ]; then
     _ok "the worktree has command copies"
@@ -351,7 +360,7 @@ else
 fi
 assert_not_contains "$OUTPUT" "do not resolve" "no dangling-link warning"
 run bash -c 'cd "$1" && bash .prdkit/scripts/bash/doctor.sh' _ "$SWT"
-assert_eq 0 "$STATUS" "doctor passes inside the change worktree"
+assert_eq 0 "$STATUS" "doctor passes inside the change worktree: $OUTPUT"
 
 it "symlinked commands are opt-in, and a worktree that cannot resolve them says how to fix it"
 sub_project --symlink

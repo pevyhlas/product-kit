@@ -34,6 +34,9 @@ jobs:
           /bin/bash tests/test_cleanup_change.sh
           /bin/bash tests/test_status.sh
           /bin/bash tests/test_doctor.sh
+          /bin/bash tests/test_accepted_change_benchmark.sh
+          /bin/bash tests/test_diagnostics_inventory.sh
+          /bin/bash tests/test_consumer_smoke.sh
           /bin/bash tests/test_script_safety.sh
           /bin/bash tests/test_bounds.sh
           /bin/bash tests/test_retrospective.sh

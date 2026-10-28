@@ -29,6 +29,8 @@ reproduce the duplicate number; synchronization markers avoid a scheduler-depend
 | Shell escaping, path-escaping IDs, JSON safety | script_safety |
 | Generated status: markers, change State and Acceptance, records, inbox, longest pole | status |
 | Diagnostics: IDs, records, layout, ceilings, citations, inbox, evidence, example spec | doctor |
+| Effective provenance, ownership, winning model rules and explicit runtime unknowns | diagnostics_inventory |
+| Current-source consumer installation, repeated upgrades, customization and source-less helpers | consumer_smoke |
 | Change bounds: constraints, non-goals and qualities in scope for a change's parts and journeys, ranges, later-stage items | bounds |
 | Merge gate: recorded review verdicts cover the merged head, per tier and rigor | check_review |
 | Immutable review packages and bounded round allocation | review_package |
@@ -38,9 +40,13 @@ reproduce the duplicate number; synchronization markers avoid a scheduler-depend
 | Durable central-spool attribution and path boundaries | spool_adapter |
 | Retrospective input boundaries and optional enrichment | retrospective, retrospective_boundaries |
 | Evaluation runner comply/violate behavior | evals_runner |
+| Accepted-change economics, missing telemetry, independent acceptance and duplicate meters | accepted_change_benchmark |
 | Version and documentation links | version, doc_links |
 | Automatic release planning, CI gating and idempotent tag/release publication (maintainer tooling) | release |
 
 Prose contracts are tested structurally only where wiring/invariants matter. Actual behavior
 is exercised by [local agent evals](evals/README.md); a mock result validates runner plumbing,
 not whether a real model follows the protocol. Product usefulness needs consumer pilot evidence.
+
+[Accepted-change benchmarks](benchmarks/README.md) aggregate normalized real-run evidence locally.
+Their fixture tests prove accounting behavior, not comparative model/kit performance.
