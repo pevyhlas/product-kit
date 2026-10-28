@@ -10,6 +10,10 @@ change by change.
 
 ### Added
 
+- Optional local accepted-change benchmark tooling validates frozen study provenance, revision-bound
+  independent acceptance and deduplicated message usage. Reports include failed/abandoned attempts,
+  reviewers, cache categories, coverage gaps and cost basis; incomplete telemetry never becomes
+  a complete cost/token-per-accepted-change claim. The included data are synthetic, not results.
 - Opt-in `doctor.sh --inventory --json` explains installed ownership/hashes, available source
   pins and model resolution/projection without invoking harnesses or fetching source. Runtime
   capabilities and the active session remain unknown without separate evidence.
