@@ -8,6 +8,13 @@ change by change.
 
 ## [Unreleased]
 
+### Added
+
+- Optional local accepted-change benchmark tooling validates frozen study provenance, revision-bound
+  independent acceptance and deduplicated message usage. Reports include failed/abandoned attempts,
+  reviewers, cache categories, coverage gaps and cost basis; incomplete telemetry never becomes
+  a complete cost/token-per-accepted-change claim. The included data are synthetic, not results.
+
 ## [1.2.1] — 2026-10-27 — inbox resolution and review readiness
 
 Follow-up improvements to 1.2: resolved owner answers leave the inbox, reviewers receive accessible
