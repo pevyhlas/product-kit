@@ -32,16 +32,25 @@ is_change_id() {
     [[ "$1" =~ ^[0-9]{3,}-[a-z0-9]+(-[a-z0-9]+)*$ ]]
 }
 
-# Escape a value for embedding inside a double-quoted JSON string. Backslash
-# and double-quote in a path would otherwise emit invalid JSON and break every
-# command that parses the payload.
+# Escape a UTF-8 value for embedding inside a double-quoted JSON string. Bash
+# strings cannot contain NUL; every other U+0001–U+001F control must be escaped.
 json_escape() {
-    local s="$1"
+    local s="$1" code octal character escaped
     s="${s//\\/\\\\}"
     s="${s//\"/\\\"}"
     s="${s//$'\n'/\\n}"
     s="${s//$'\r'/\\r}"
     s="${s//$'\t'/\\t}"
+    # Keep the common path cheap; use Bash builtins (including on macOS 3.2),
+    # not locale-sensitive byte slicing or a required external JSON runtime.
+    if [[ "$s" == *[$'\001'-$'\037']* ]]; then
+        for ((code=1; code<32; code++)); do
+            printf -v octal '%03o' "$code"
+            printf -v character '%b' "\\$octal"
+            printf -v escaped '\\u%04x' "$code"
+            s="${s//"$character"/$escaped}"
+        done
+    fi
     printf '%s' "$s"
 }
 
