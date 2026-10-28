@@ -16,6 +16,12 @@ change by change.
 - A reproducible consumer smoke and capability-specific support/evidence contract separate
   installation integrity from native loading, execution, capture, events and review access.
 
+### Fixed
+
+- JSON helpers escape every control character representable in a Bash string, preserving
+  Unicode and literal escape sequences. Policy-section safety tests use a repository-relative
+  adapter path and separately verify the existing prohibition on paths containing spaces.
+
 ## [1.2.1] — 2026-10-27 — inbox resolution and review readiness
 
 Follow-up improvements to 1.2: resolved owner answers leave the inbox, reviewers receive accessible

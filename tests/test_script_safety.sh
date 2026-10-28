@@ -19,6 +19,24 @@ source "$PK_ROOT/scripts/common.sh"
 assert_eq 'a\"b\\c' "$(json_escape 'a"b\c')" "quote and backslash escaped"
 assert_eq 'plain' "$(json_escape 'plain')" "plain string unchanged"
 
+it "JSON arrays round-trip every Bash-representable control and Unicode through a strict parser"
+controls=""
+for ((code=1; code<32; code++)); do
+    printf -v octal '%03o' "$code"
+    printf -v character '%b' "\\$octal"
+    controls="$controls$character"
+done
+value=$'quote" slash\\ literal\\u0001 café → 🧪\177'"$controls"$'\n\n'
+JSON_TMP="$(mktemp -d)"; track_tmp "$JSON_TMP"
+for locale in C "${LC_ALL:-${LANG:-C}}"; do
+    LC_ALL="$locale" json_array "$value" '' "$value" > "$JSON_TMP/out" 2> "$JSON_TMP/err"
+    assert_eq 0 "$?" "emitter succeeds under $locale"
+    run jq -e --arg expected "$value" '. == [$expected, "", $expected]' "$JSON_TMP/out"
+    assert_eq 0 "$STATUS" "strict parser preserves controls, Unicode, empty strings and order: $OUTPUT"
+    assert_eq '' "$(cat "$JSON_TMP/err")" 'no diagnostics in a successful JSON channel'
+done
+assert_eq '[]' "$(json_array)" 'empty array remains valid'
+
 # ---------------------------------------------------------------------------
 PROJ="$(make_inited_project)"; track_tmp "$PROJ"
 PROJ="$(cd "$PROJ" && pwd -P)"
@@ -73,7 +91,7 @@ Documentation example (must NOT be parsed as config):
 ## Configuration
 
 - backend: command
-- command: $LPROJ/adapter.sh
+- command: ./adapter.sh
 - events: all
 - mode: best-effort
 
@@ -84,6 +102,20 @@ EOF
 run bash -c 'cd "$1" && echo '\''{"event":"test"}'\'' | bash .prdkit/scripts/bash/ledger-emit.sh test.event' _ "$LPROJ"
 assert_eq 0 "$STATUS" "emission succeeds: $OUTPUT"
 assert_file "$LPROJ/adapter-received.json" "adapter ran: Configuration section won over the decoy line above it"
+
+it "adapter paths containing spaces remain forbidden independently of policy section parsing"
+mkdir -p "$LPROJ/space dir"
+cp "$LPROJ/adapter.sh" "$LPROJ/space dir/adapter.sh"
+rm "$LPROJ/adapter-received.json"
+printf '# Task Ledger\n\n## Configuration\n\n- backend: command\n- command: ./space dir/adapter.sh\n- events: all\n- mode: best-effort\n' > "$LPROJ/.prdkit/memory/task-ledger.md"
+run bash -c 'cd "$1" && echo '\''{"event":"test"}'\'' | bash .prdkit/scripts/bash/ledger-emit.sh test.event' _ "$LPROJ"
+assert_eq 1 "$STATUS" 'invalid adapter configuration fails'
+assert_contains "$OUTPUT" 'single path' 'diagnostic explains the intentional path contract'
+if [ ! -e "$LPROJ/adapter-received.json" ]; then
+    _ok 'forbidden adapter never runs'
+else
+    _no 'forbidden adapter ran'
+fi
 
 # ---------------------------------------------------------------------------
 it "build-review-package.sh rejects path-escaping change ids"
