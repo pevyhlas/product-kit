@@ -8,6 +8,15 @@ change by change.
 
 ## [Unreleased]
 
+### Fixed
+
+- Failed installer copies/managed-section updates no longer mask errors or leave truncated
+  project templates that retries misclassify as customizations. Replacements are staged before
+  publication; interrupted installs retain a phase marker and fail integrity checks until retried.
+- Installer write phases are exclusive. Abandoned locks require explicit inspection/recovery;
+  fault-injected lifecycle, interruption and overlapping-writer tests verify coherent retries and
+  preservation of custom content. Multi-file upgrades remain recoverable, not globally atomic.
+
 ## [1.2.1] — 2026-10-27 — inbox resolution and review readiness
 
 Follow-up improvements to 1.2: resolved owner answers leave the inbox, reviewers receive accessible

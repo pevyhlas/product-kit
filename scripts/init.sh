@@ -103,6 +103,8 @@ TPL_DIR="$PRDKIT_DIR/templates"
 MEM_DIR="$PRDKIT_DIR/memory"
 SCRIPT_OUT="$PRDKIT_DIR/scripts/bash"
 MANIFEST="$PRDKIT_DIR/.manifest"
+INITIAL_MANIFEST=absent
+[ ! -f "$MANIFEST" ] || INITIAL_MANIFEST="$(install_hash_stream < "$MANIFEST")"
 
 # --- Resolve install harnesses -----------------------------------------------
 # Product-Kit's core is markdown + bash, so commands can be installed for more
@@ -455,6 +457,11 @@ list_retired_ci_calls() {
 
 # --- --check: read-only drift report ----------------------------------------
 if $CHECK; then
+    incomplete=false
+    if [ -e "$PRDKIT_DIR/.install-state" ] || [ -L "$PRDKIT_DIR/.install-state" ]; then
+        incomplete=true
+        echo 'Incomplete install: .prdkit/.install-state records an unfinished write phase; retry the same source with --upgrade.'
+    fi
     if [ ! -f "$MANIFEST" ]; then
         echo "No manifest at .prdkit/.manifest — reinstall or upgrade to generate one:"
         echo "  bash .product-kit/scripts/init.sh --upgrade"
@@ -523,6 +530,7 @@ if $CHECK; then
     fi
 
     drift=0
+    $incomplete && drift=1
     if [ ${#OUTDATED[@]} -gt 0 ]; then
         drift=1
         echo "OUTDATED — unmodified since install, kit ships a newer version (--upgrade refreshes these):"
@@ -612,7 +620,8 @@ containment_problems() {
     for rel in $dirs; do managed_dir_problem "$rel" || true; done
     while IFS=$'\t' read -r src rel; do
         if [ -d "$TARGET/$rel" ] && [ ! -L "$TARGET/$rel" ]; then printf '%s is a directory where the kit installs a file\n' "$rel"; fi
-    done < <(list_kit_files; printf 'manifest\t.prdkit/.manifest\nmanifest\t.prdkit/.manifest.tmp\n')
+    done < <(list_kit_files; printf 'manifest\t.prdkit/.manifest\nmanifest\t.prdkit/.manifest.tmp\nstate\t.prdkit/.install-state\nlock\t.prdkit/.install-lock\n')
+    [ ! -L "$PRDKIT_DIR/.install-state" ] || printf '.prdkit/.install-state is a symlink\n'
 }
 PROBLEMS="$(containment_problems)"
 if [ -n "$PROBLEMS" ]; then
@@ -621,6 +630,60 @@ if [ -n "$PROBLEMS" ]; then
     echo "The installer writes only into real directories inside the project. Replace each path above with a real directory (or move it aside), then re-run." >&2
     exit 1
 fi
+
+# Serialize writes, with a retained phase marker rather than pretending the whole install is
+# atomic. A lock left by SIGKILL is never guessed stale: inspect its owner before removing it.
+mkdir -p "$PRDKIT_DIR"
+INSTALL_LOCK="$PRDKIT_DIR/.install-lock"
+if ! (set -C; printf 'pid: %s\nhost: %s\n' "$$" "$(hostname)" > "$INSTALL_LOCK") 2>/dev/null; then
+    echo 'Error: installer write lock exists at .prdkit/.install-lock; another installer may be active. Inspect owner and process before removing an abandoned lock; then retry --upgrade.' >&2
+    exit 1
+fi
+INSTALL_DONE=false; INSTALL_PHASE=preflight; INSTALL_PATH=.prdkit/.manifest
+finish_install() {
+    local status=$?
+    if [ "$status" -ne 0 ] && ! $INSTALL_DONE; then
+        printf 'Incomplete install: phase=%s path=%s (exit %s). Earlier files may already be updated; no global rollback was performed.\n' "$INSTALL_PHASE" "$INSTALL_PATH" "$status" >&2
+        echo 'Retain the source revision and .prdkit/.install-state, run --check, then retry the same source with --upgrade. A completed manifest publication may already be current.' >&2
+    fi
+    rm -f "$INSTALL_LOCK"
+    return "$status"
+}
+trap finish_install EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+current_manifest=absent
+[ ! -f "$MANIFEST" ] || current_manifest="$(install_hash_stream < "$MANIFEST")"
+if [ "$INITIAL_MANIFEST" != "$current_manifest" ]; then
+    echo 'Error: manifest changed while preparing the install; retry to resolve current ownership/harness settings.' >&2
+    exit 1
+fi
+record_progress() {
+    INSTALL_PHASE="$1"; INSTALL_PATH="$2"
+    printf 'phase: %s\npath: %s\nsource-version: %s\n' "$1" "$2" "$PK_VERSION" > "$PRDKIT_DIR/.install-state"
+}
+record_progress prepare .prdkit
+
+# Stage next to the destination, so a failed copy cannot truncate a conffile and make the
+# retry mistake those partial bytes for a user customization. No package-manager dependency.
+atomic_copy() (
+    src="$1"; dest="$2"
+    stage="$(mktemp -d "$dest.prdkit-install.XXXXXX")" || exit 1
+    tmp="$stage/payload"
+    trap 'rm -rf "$stage"' EXIT
+    if [ "${3:-false}" = true ] && [ -f "$dest" ] && [ ! -L "$dest" ]; then
+        # cp into an existing conffile used to retain its permissions. Seed staging
+        # with that metadata, then replace the bytes without adopting source mode.
+        cp -p "$dest" "$tmp" || exit 1
+        cp "$src" "$tmp" || exit 1
+    else
+        # A new file must honor the invoking umask, just like the original cp.
+        # The private directory makes creating this previously absent path safe.
+        cp "$src" "$tmp" || exit 1
+    fi
+    [ ! -L "$dest" ] || rm -f "$dest" || exit 1
+    mv -f "$tmp" "$dest" || exit 1
+)
 
 echo "Product-Kit: $PK_ROOT (version $PK_VERSION)"
 echo "Target:     $TARGET"
@@ -646,12 +709,12 @@ install_conffile() {
         return 0
     fi
     if [ ! -e "$dest" ]; then
-        cp "$src" "$dest"
+        atomic_copy "$src" "$dest" true || return 1
         echo added
         return 0
     fi
     if $FORCE; then
-        cp "$src" "$dest"
+        atomic_copy "$src" "$dest" true || return 1
         echo refreshed
         return 0
     fi
@@ -663,7 +726,7 @@ install_conffile() {
     fi
     rec="$(recorded_hash "$rel")"
     if [ -n "$rec" ] && [ "$cur" = "$rec" ]; then
-        cp "$src" "$dest"
+        atomic_copy "$src" "$dest" true || return 1
         echo refreshed
     else
         echo kept
@@ -680,13 +743,13 @@ CF_SYMLINKED=()
 KIT_OVERWRITTEN=()
 while IFS=$'\t' read -r src rel; do
     dest="$TARGET/$rel"
+    record_progress file "$rel"
     case "$rel" in
         .claude/commands/*|.opencode/commands/*)
             # Commands are kit-owned: always re-copied (or re-linked under --symlink).
             if file_locally_edited "$rel" "$src"; then KIT_OVERWRITTEN+=("$rel"); fi
-            rm -f "$dest"
             if $MODE_COPY; then
-                cp "$src" "$dest"
+                atomic_copy "$src" "$dest"
             else
                 # Relative symlink (both command dirs sit two levels under the
                 # project root), so a committed link resolves in any checkout that
@@ -695,7 +758,8 @@ while IFS=$'\t' read -r src rel; do
                     "$TARGET"/*) link_target="../../${src#"$TARGET"/}" ;;
                     *)           link_target="$src" ;;
                 esac
-                ln -s "$link_target" "$dest" 2>/dev/null || cp "$src" "$dest"
+                rm -f "$dest"
+                ln -s "$link_target" "$dest" 2>/dev/null || atomic_copy "$src" "$dest"
             fi
             case "$rel" in
                 .claude/*) linked=$((linked + 1)) ;;
@@ -706,14 +770,12 @@ while IFS=$'\t' read -r src rel; do
             # Workflow scripts are kit-owned: always refreshed, replacing the file (or a
             # symlink in its place) rather than writing through it.
             if file_locally_edited "$rel" "$src"; then KIT_OVERWRITTEN+=("$rel"); fi
-            rm -f "$dest"
-            cp "$src" "$dest"
+            atomic_copy "$src" "$dest"
             chmod +x "$dest"
             ;;
         .prdkit/workflows/*)
             if file_locally_edited "$rel" "$src"; then KIT_OVERWRITTEN+=("$dest"); fi
-            rm -f "$dest"
-            cp "$src" "$dest"
+            atomic_copy "$src" "$dest"
             ;;
         .prdkit/templates/*)
             outcome="$(install_conffile "$src" "$rel")"
@@ -745,6 +807,7 @@ RETIRED_KEPT=()
 while IFS=$'\t' read -r rel action; do
     [ -n "$rel" ] || continue
     if [ "$action" = remove ]; then
+        record_progress retire "$rel"
         rm -f "$TARGET/$rel"
         RETIRED_REMOVED+=("$rel")
     else
@@ -756,6 +819,7 @@ RETIRED_FILES_KEPT=()
 while IFS=$'\t' read -r rel action; do
     [ -n "$rel" ] || continue
     if [ "$action" = remove ]; then
+        record_progress retire "$rel"
         rm -f "$TARGET/$rel"
         RETIRED_FILES_REMOVED+=("$rel")
     else
@@ -779,11 +843,11 @@ write_agents_section() {
         echo "skipped (symlink outside the project)"
         return 0
     fi
-    sec="$(mktemp)"
-    render_agents_section > "$sec"
+    sec="$(mktemp)" || return 1
+    render_agents_section > "$sec" || { rm -f "$sec"; return 1; }
 
     if [ ! -e "$agents_file" ]; then
-        cp "$sec" "$agents_file"
+        atomic_copy "$sec" "$agents_file" true || { rm -f "$sec"; return 1; }
         rm -f "$sec"
         echo created
         return 0
@@ -804,18 +868,18 @@ write_agents_section() {
             echo 'skipped (malformed managed markers)'
             return 0
         fi
-        tmp="$(mktemp)"
+        tmp="$(mktemp)" || { rm -f "$sec"; return 1; }
         awk -v b="$AGENTS_BEGIN" -v e="$AGENTS_END" -v f="$sec" '
             $0 == b { while ((getline l < f) > 0) print l; skip = 1; next }
             $0 == e { skip = 0; next }
             !skip   { print }
-        ' "$agents_file" > "$tmp"
+        ' "$agents_file" > "$tmp" || { rm -f "$tmp" "$sec"; return 1; }
         if [ "$(hash_file "$tmp")" = "$(hash_file "$agents_file")" ]; then
             rm -f "$tmp" "$sec"
             echo current
         else
-            mv "$tmp" "$agents_file"
-            rm -f "$sec"
+            atomic_copy "$tmp" "$agents_file" true || { rm -f "$tmp" "$sec"; return 1; }
+            rm -f "$tmp" "$sec"
             echo updated
         fi
         return 0
@@ -823,12 +887,15 @@ write_agents_section() {
     # Existing AGENTS.md without our markers: append the section, preserving
     # everything already there (and its final newline, if missing).
     trailing_byte="$(tail -c 1 "$agents_file")"
+    tmp="$(mktemp)" || { rm -f "$sec"; return 1; }
+    cp -p "$agents_file" "$tmp" || { rm -f "$tmp" "$sec"; return 1; }
     {
         [ -n "$trailing_byte" ] && echo
         echo
         cat "$sec"
-    } >> "$agents_file"
-    rm -f "$sec"
+    } >> "$tmp" || { rm -f "$tmp" "$sec"; return 1; }
+    atomic_copy "$tmp" "$agents_file" true || { rm -f "$tmp" "$sec"; return 1; }
+    rm -f "$tmp" "$sec"
     echo appended
     return 0
 }
@@ -848,6 +915,7 @@ if ! $MODE_COPY && { has_harness claude || has_harness opencode; }; then
     esac
 fi
 if has_harness agents; then
+    record_progress managed-section AGENTS.md
     agents_outcome="$(write_agents_section)"
     echo "✓ AGENTS.md managed section: $agents_outcome"
 fi
@@ -899,6 +967,7 @@ fi
 # .gitignore mid-run (which would dirty the tree it is about to check). A symlinked .gitignore is
 # edited at its target only while that stays inside the project.
 IGNORE_ENTRIES=".prdkit/ledger/ .prdkit/cache/ .prdkit/retrospective/ .worktrees/"
+record_progress ignore .gitignore
 if GITIGNORE="$(root_file_path .gitignore)"; then
     for ignore_entry in $IGNORE_ENTRIES; do
         if ! grep -qxF "$ignore_entry" "$GITIGNORE" 2>/dev/null; then
@@ -918,6 +987,7 @@ fi
 # line per installed file. For a preserved (consumer-edited) file the previously
 # recorded pristine hash is carried forward so future runs still detect the edit.
 manifest_tmp="$MANIFEST.tmp"
+record_progress manifest .prdkit/.manifest
 rm -f "$manifest_tmp"
 {
     echo "version: $PK_VERSION"
@@ -942,6 +1012,8 @@ rm -f "$manifest_tmp"
 # A symlinked manifest is replaced, never written through or moved into.
 [ ! -L "$MANIFEST" ] || rm -f "$MANIFEST"
 mv "$manifest_tmp" "$MANIFEST"
+rm -f "$PRDKIT_DIR/.install-state"
+INSTALL_DONE=true
 echo "✓ Manifest written to .prdkit/.manifest"
 
 # A 0.x spec layout keeps working as plain files, but 1.0 workflows need one current canon.
