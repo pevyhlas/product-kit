@@ -88,6 +88,27 @@ The AGENTS.md managed section has its own manifest hash; surrounding consumer te
 preserved. Doctor and the adoption gate check manifest-listed file presence and kit-owned
 content without a source checkout, while customized template/policy hashes remain allowed.
 
+### Interrupted upgrades
+
+Upgrades are not one global transaction: commands/helpers can already be new while the old
+manifest still describes the prior install. File copies are staged beside their destinations
+before replacement, so a failed copy cannot turn partial template bytes into a supposed user
+customization. The manifest publishes last. An unfinished write phase leaves
+`.prdkit/.install-state` naming its phase and path; `--check`, doctor and the adoption gate
+report it as incomplete. Keep the original source revision available and retry it with
+`init.sh --upgrade`, then check integrity. A marker can remain even after manifest publication;
+it still requires a coherent retry, not deletion to make the gate green.
+
+The write phase uses an exclusive `.prdkit/.install-lock` file with PID/host. Concurrent writers
+are refused rather than waiting on stale ownership data. Normal failure/TERM releases the lock;
+SIGKILL or machine loss cannot run cleanup. Before removing an abandoned lock, inspect its host,
+owner process **and child writers** and ensure none can still publish. Preserve the marker and
+original failure evidence, remove only the verified abandoned lock, and retry the same source.
+Inspect leftover `*.prdkit-install.*` staging directories after an untrappable kill; they are never
+treated as installed content or used as recovery inputs. Existing customization policy still
+applies; `--force` is not a recovery requirement. The installer does not render agent projections,
+so there is no projection rollback claim.
+
 ### Command install mode
 
 Commands install as copies by default, so they work in any checkout: a change worktree or a CI

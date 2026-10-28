@@ -66,6 +66,9 @@ install_source_pin() {
 install_findings() {
     local root="$1" manifest="$1/.prdkit/.manifest" harnesses mode line hash path actual section expected dir
     local owned=0
+    if [ -e "$root/.prdkit/.install-state" ] || [ -L "$root/.prdkit/.install-state" ]; then
+        printf 'Incomplete install: .prdkit/.install-state remains; inspect it and retry the same source with init.sh --upgrade\n'
+    fi
     if [ ! -f "$manifest" ]; then printf 'Missing installed file: .prdkit/.manifest\n'; return 0; fi
     install_manifest_value "$manifest" version >/dev/null || printf 'Manifest must record exactly one version\n'
     harnesses="$(install_manifest_value "$manifest" harnesses || true)"

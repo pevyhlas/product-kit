@@ -20,6 +20,7 @@ reproduce the duplicate number; synchronization markers avoid a scheduler-depend
 |------|--------|
 | Public catalog, neutral operations, installed references | catalog_sync, generalization, wiring, workflow_doc_coverage, workflow_contracts |
 | Installer ownership, harness targets, preservation, retired-file removal | init |
+| Partial copy/storage/managed-block/retirement/manifest failures, TERM/KILL, overlapping writes and coherent retry | upgrade_recovery |
 | 0.17 to 1.0 upgrade: retired files, untouched `specs/`, cutover message, gate warning, leftover features, a cutover that removes every 0.x folder, ignored leftovers, stale agent context | upgrade_1_0 |
 | Source-less adoption integrity, managed harness entries, kit pins | adoption_gate |
 | Agent tier resolution, shared baseline/overrides, projection rendering and drift | agent_tiers |
