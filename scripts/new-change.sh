@@ -4,8 +4,9 @@
 #
 # Usage: new-change.sh [--json] [--short-name <name>] [--number N] [--no-worktree] <intent>
 #
-# Never overwrites an existing change record and never switches a dirty main checkout
-# onto the new branch.
+# Never overwrites an existing change record. Automatic fallback refuses tracked or
+# non-ignored untracked work. --no-worktree (or an already linked worktree) branches
+# in place, carrying existing local edits onto the new branch.
 set -e
 
 # shellcheck source=/dev/null
@@ -33,8 +34,8 @@ while [ "$#" -gt 0 ]; do
             echo "  --json              Output in JSON format"
             echo "  --short-name <name> Short name (2-4 words) for the change id and branch"
             echo "  --number N          Change number (overrides auto-detection)"
-            echo "  --no-worktree       Create the branch in the current checkout instead of"
-            echo "                      an isolated worktree under .worktrees/"
+            echo "  --no-worktree       Create and switch to the branch in the current checkout"
+            echo "                      instead of an isolated worktree; existing edits carry over"
             exit 0 ;;
         *) ARGS+=("$1") ;;
     esac
@@ -334,8 +335,8 @@ if [ "$HAS_GIT" = true ]; then
             echo "[prdkit]   ${WT_ERR:-unknown git error}" >&2
             # Falling back switches the MAIN checkout onto the new branch; never do that
             # on top of uncommitted work.
-            if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
-                echo "[prdkit] ERROR: The current checkout has uncommitted changes; refusing to fall back to 'git checkout -b' (it would carry your work onto the new branch)." >&2
+            if [ -n "$(git status --porcelain --untracked-files=all 2>/dev/null)" ]; then
+                echo "[prdkit] ERROR: The current checkout has uncommitted changes (tracked or untracked); refusing to fall back to 'git checkout -b' (it would carry your work onto the new branch)." >&2
                 echo "[prdkit] Fix the worktree failure above, commit or stash first, or pass --no-worktree explicitly." >&2
                 exit 1
             fi

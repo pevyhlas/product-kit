@@ -13,6 +13,9 @@ change by change.
 - Manifest validation in doctor and the adoption gate works with older mawk versions without
   regex interval support, including Debian 12's default awk. Valid installed commands are no
   longer reported as unrecorded; malformed hashes and genuinely unrecorded commands still fail.
+- Failed worktree creation no longer automatically switches a checkout with only untracked work
+  onto a new change branch. The explicit `--no-worktree` override still branches in place and
+  carries existing edits; its help and workflow guidance now state that contract accurately.
 
 ### Changed
 
