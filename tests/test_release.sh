@@ -496,7 +496,8 @@ assert_eq "" "$(grep -nE '^[[:space:]]*(- )?if:' "$CIWF" "$MACWF" || true)" "no 
 # version the runner image ships.
 assert_eq 1 "$(grep -cxF '          v=v0.11.0' "$CIWF" || true)" "CI installs ShellCheck 0.11.0"
 assert_eq 1 "$(grep -cxF '          sum=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198' "$CIWF" || true)" "pinned to its sha256"
-assert_eq 1 "$(grep -cF 'sha256sum -c -' "$CIWF" || true)" "and verifies the download"
+# shellcheck disable=SC2016 # Assert the literal ShellCheck download check, not other downloads.
+assert_eq 1 "$(grep -cxF '          echo "$sum  $dir/sc.tar.xz" | sha256sum -c -' "$CIWF" || true)" "and verifies the ShellCheck download"
 assert_eq 1 "$(grep -cxF "          shellcheck --version | grep -qx 'version: 0.11.0'" "$CIWF" || true)" "and lints only with that version"
 
 it "every workflow pins its actions and holds no write scope outside the release job"
