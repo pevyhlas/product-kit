@@ -133,13 +133,14 @@ Without a trustworthy package, review is pending. Critical and high findings blo
 under `Rigor: full`, low is advisory. A failed tool run is not a product FAIL and an absent
 reviewer is not approval. Post each report on the PR once one exists: it is the durable review
 record, since the record is deleted on close and the cache is local. Append one State line per
-verdict, never editing an earlier one except to correct a range to the printed hashes; a later
+verdict, using an eligible identity registered in `.prdkit/memory/agents.md`, never editing an
+earlier one except to correct a range to the printed hashes; a later
 line supersedes the same reviewer's earlier one, whatever its round. The range uses the package's
 resolved hashes (`BASE_SHA..HEAD_SHA`, or `SINCE_SHA..HEAD_SHA` for a scoped verdict), never a name that
 moves (`HEAD`, a branch); the first round's base is where the change leaves the default branch:
 
 ```text
-**Review**: round 2 · <base sha>..<reviewed head sha> · <reviewer or concern> · PASS · 0 critical, 0 high, 1 medium, 0 low · <report link>
+**Review**: round 2 · <base sha>..<reviewed head sha> · <registered reviewer identity> · PASS · 0 critical, 0 high, 1 medium, 0 low · <report link>
 ```
 
 A scoped re-review adds `--since <previous-reviewed-head>` to keep a focused delta alongside the
@@ -151,6 +152,14 @@ change means no new review round. Required reviewers and final-head `check-revie
 A T3 change also records the owner's verdict, reviewer `owner`, with the head
 the owner approved and a link to their words in place of counts; a later L0 or L1 edit needs
 the owner again.
+
+Register identities on the integration baseline before using them; maker, unregistered and
+ambiguous identities cannot count as independent verdicts or coverage. Preserve standing FAILs
+while reconciling older records. Registry eligibility is not proof that a fresh context ran.
+The offline gate visibly leaves report links unverified. Optionally run `check-review.sh
+--verify-reports --pr <GitHub PR URL> <change-id>` to compare linked reports with the recorded
+metadata; this requires `gh`, `jq` and readable reports on that exact PR head. Unavailable or
+mismatching reports fail this opt-in check. The review-prompt template carries the receipt format.
 
 ## Delivery
 
@@ -222,7 +231,7 @@ keeping non-gating observations explicit. No separate cleanup PR. Edit it in pla
 When one PR also finalizes a parent or older change, its implementation record is the **review
 carrier**. Before final review, bring the other record's remaining required acceptance, unresolved
 findings, attempts, holds and disposition into that carrier, labelled with their origin. Preserve
-verdict/report history; unresolved FAILs need a clean later verdict from the same reviewer/concern,
+verdict/report history; unresolved FAILs need a clean later verdict from the same registered reviewer,
 not disappearance during transfer. The carrier takes the combined scope's highest applicable tier
 and all required reviewer concerns, including owner approval where required. Post the other record's
 useful context/evidence on this PR, add its log disposition and delete it **before** the carrier's

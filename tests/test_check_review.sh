@@ -9,6 +9,7 @@ PROJ="$(make_inited_project)"; track_tmp "$PROJ"
 PROJ="$(cd "$PROJ" && pwd -P)"
 CHECK="$PROJ/.prdkit/scripts/bash/check-review.sh"
 cd "$PROJ" || exit 1
+printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n| security | reviewer |\n| docs | reviewer |\n| design | reviewer |\n' >> .prdkit/memory/agents.md
 printf '\n## Configuration\n- review-integration-branches: origin/develop\n' > .prdkit/memory/config.md
 git add -A >/dev/null; git commit -qm installed >/dev/null
 DEFAULT="$(git symbolic-ref --short HEAD)"
@@ -243,7 +244,7 @@ assert_eq 1 "$STATUS" "the change's own branch as base fails"
 assert_contains "$OUTPUT" "is already in 001-greet" "says why"
 TRUNK="$(mktemp -d)"; track_tmp "$TRUNK"
 ( cd "$TRUNK" && git init -q && git config user.name test && git config user.email test@example.invalid &&
-  git checkout -q -b trunk && echo base > base.txt && git add base.txt && git commit -qm base &&
+  git checkout -q -b trunk && mkdir -p .prdkit/memory && printf '# Capabilities\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n' > .prdkit/memory/agents.md && echo base > base.txt && git add base.txt .prdkit && git commit -qm base &&
   git checkout -q -b 008-solo && mkdir -p src specs/changes && echo solo > src/solo.txt && git add src && git commit -qm code ) >/dev/null 2>&1
 SOLO_BASE="$(git -C "$TRUNK" rev-parse --short trunk)"; SOLO_HEAD="$(git -C "$TRUNK" rev-parse --short HEAD)"
 printf '# Change: Solo\n\n**Tier**: T1\n\n## State\n\n**Review**: round 1 · %s..%s · code · PASS · %s · https://example.invalid/pr/8#c1\n' \
@@ -253,7 +254,12 @@ run bash "$CHECK" --repo "$TRUNK" 008-solo
 assert_eq 1 "$STATUS" "no default branch and no --base fails"
 assert_contains "$OUTPUT" "no base to find the change's start" "asks for --base"
 run bash "$CHECK" --repo "$TRUNK" --base trunk 008-solo
-assert_eq 0 "$STATUS" "with --base it passes"
+assert_eq 1 "$STATUS" "a comparison base alone cannot establish registry authority"
+assert_contains "$OUTPUT" 'No trusted integration-baseline registry' 'names missing authority'
+git -C "$TRUNK" update-ref refs/remotes/origin/trunk trunk
+git -C "$TRUNK" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/trunk
+run bash "$CHECK" --repo "$TRUNK" --base trunk 008-solo
+assert_eq 0 "$STATUS" "full coverage passes with a trusted registry and a local comparison base"
 
 it "a --base inside the change's own history cannot hide its code"
 echo 'unreviewed' > src/evil.txt; git add src/evil.txt; git commit -qm "after review" >/dev/null

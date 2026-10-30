@@ -21,6 +21,18 @@ Return:
   record names. Missing/stale bounds output leaves that obligation unverified. A violated
   constraint or non-goal is high; a quality the change weakens without its check is medium.
 - Anything not verifiable from the package; never guess a pass.
+- Identify the eligible registered reviewer context `{REVIEWER_ID}`. Include the following receipt
+  with actual full hashes, verdict and counts when the project uses online report verification;
+  the coordinator preserves it with the verbatim report on the PR:
+
+```text
+<!-- prdkit-review
+{"schema":"prdkit.review.v1","reviewer":"{REVIEWER_ID}","base":"{BASE_SHA}","head":"{HEAD_SHA}","verdict":"{PASS_OR_FAIL}","critical":0,"high":0,"medium":0,"low":0}
+-->
+```
+
+Replace all counts with the actual findings; the receipt is metadata, not evidence of independence.
+
 - Check the upstream intent/design references, dependency outcomes and required PR gates. Reject
   requirements invented from implementation convenience, demoted failing checks, or unknown runtime
   observations presented as PASS. Non-gating observations do not require a cleanup PR. Verify the

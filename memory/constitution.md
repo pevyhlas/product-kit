@@ -1,6 +1,9 @@
 <!--
 SYNC IMPACT REPORT
-- Version change: 1.1.2 → 1.1.3 (2026-10-20)
+- Version change: 1.1.3 → 1.1.4 (2026-10-30)
+- Extend Principle III's optional-tool exception to explicit GitHub report consistency checks
+  using gh and jq. Core offline review checking retains Bash/Git-only operation.
+- Prior (1.1.2 → 1.1.3, 2026-10-20):
 - Clarification only: the kit's own `specs/` records are kept privately and are not part of
   this repository; Product Direction says so and the Product-Spec Structure section is removed.
   No principle changed.
@@ -13,9 +16,9 @@ SYNC IMPACT REPORT
 
 # Product-Kit Constitution
 
-**Version**: 1.1.3
+**Version**: 1.1.4
 **Ratified**: 2026-06-02
-**Last Amended**: 2026-10-20
+**Last Amended**: 2026-10-30
 
 > This is Product-Kit's *own* constitution — the principles governing the toolkit itself.
 > It is meta: Product-Kit ships a generic `templates/constitution-template.md` for projects
@@ -40,7 +43,7 @@ public product.
 <!-- PRDKIT-MANAGED:TECH-STACK:BEGIN -->
 - **Languages**: Bash (scripts), Markdown (commands, templates, docs)
 - **Frameworks/Runtimes**: none — POSIX/bash only, no npm/pip/build step
-- **Optional tool**: jq 1.6+ for retrospective enrichment JSON validation/rendering
+- **Optional tools**: jq 1.6+ for retrospective enrichment; gh and jq for opt-in GitHub review-report consistency
 - **Storage**: files on disk
 - **Platform/Deploy**: consumed as a git submodule (`.product-kit`) on macOS and Linux
 <!-- PRDKIT-MANAGED:TECH-STACK:END -->
@@ -75,10 +78,12 @@ Product-Kit. Examples MUST use neutral, generic subjects.
 
 ### Principle III — Minimal dependencies and portability
 
-Scripts MUST run with bash + coreutils + git, identically on macOS and Linux, with one
-explicit owner-approved exception (2026-09-12): optional retrospective enrichment uses
-jq 1.6+ as its standard JSON parser. Ledger-only reports and all other scripts require
-no jq. Missing jq when enrichment is present MUST fail clearly without replacing a report.
+Scripts MUST run with bash + coreutils + git, identically on macOS and Linux, with bounded
+optional-tool exceptions: retrospective enrichment uses jq 1.6+ as its standard JSON parser
+(2026-09-12), and explicitly requested GitHub review-report consistency uses gh and jq
+(2026-10-30). Ledger-only reports and offline review checks require no jq or network.
+Missing optional tools MUST fail clearly when their mode is requested; enrichment failures
+MUST NOT replace a report, and unavailable report checks MUST NOT claim verified links.
 No runtime package manager or compile step; the generator never installs dependencies.
 The full test suite requires jq and MUST cover the no-jq ledger-only path.
 

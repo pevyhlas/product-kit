@@ -10,6 +10,12 @@ change by change.
 
 ### Fixed
 
+- Review verdicts and coverage require eligible registered identities from the integration
+  baseline; makers, unknown names and ambiguous registrations no longer count as independent
+  review. Existing policy/records need reconciliation before the stricter gate is adopted.
+- Review output explicitly reports unverified links by default. Optional `--verify-reports --pr`
+  checks GitHub PR/comment membership and structured report metadata with `gh` and `jq`, failing
+  on unavailable or mismatching evidence without claiming session independence.
 - Review coverage exemptions share an explicit integration-base trust policy. Arbitrary pushed
   branches and local main/master no longer authorize base-import or record-only exemptions;
   additional integration branches are configured in the remote default's committed policy.

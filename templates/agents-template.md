@@ -9,6 +9,19 @@ where independence is not required; a reviewer never reviews its own implementat
 | Implementation | <session or worker> | bounded changes |
 | Independent review | <reviewer context> | review by tier |
 
+## Review registry
+
+<!-- Register stable lowercase identities before their reviews are used. Integrate this policy
+first: check-review reads the baseline shared with origin/HEAD, not identities added by the change.
+Role is exactly reviewer or maker. A maker is never eligible, even if listed as a reviewer too.
+Legacy capability rows above also register exact identities for Independent review/Review or
+Implementation/Maker; use one form per identity, since duplicate registrations are ambiguous.
+| Identity | Role |
+|----------|------|
+| code-review | reviewer |
+| implementation-worker | maker |
+-->
+
 ## Optional tier map
 
 Neutral definitions in `.prdkit/agents/<name>.md` name a tier, never a model;

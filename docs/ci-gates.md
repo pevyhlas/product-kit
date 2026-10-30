@@ -70,11 +70,55 @@ verdict, with the commit hashes the review package printed, to the change record
   `specs/log.md` changed. Each
   reviewer's head, a commit hash in the merged head's history, must be covered, and for T1–T3
   so must the change's start (its merge base with `--base`), so scoped re-reviews of fixes
-  chain while a gap fails. No range may be empty; without a default branch pass `--base`; a
+  chain while a gap fails. No range may be empty; `--base` selects the comparison branch; a
   head already inside `--base` fails;
 - the tier's minimum is recorded: one independent verdict for T1–T3, plus the owner's for T3,
   and no L0 or L1 spec edit since the head the owner approved. Which concerns a T2 change
   needed is the worker's call; the check sees only what is recorded.
+
+### Reviewer eligibility and report links
+
+Every non-owner Review line must name an eligible identity in `.prdkit/memory/agents.md` at the
+integration baseline (merge base with the remote default identified by `origin/HEAD`). Missing
+remote-default authority or shared history leaves identities unregistered; an arbitrary `--base`
+or local main/master cannot supply its own policy. A change cannot add its own maker to the
+registry and approve itself.
+Use a `## Review registry` section with `| Identity | Role |` columns and exact roles `reviewer`
+or `maker`. Lowercase identifiers may contain letters, digits, dots, underscores and hyphens.
+A maker is denied even if also listed as a reviewer; duplicate or invalid roles are ambiguous.
+Legacy `| Role | Available agent or human | Notes |` capability rows also work when they name an
+exact identity and the role is `Independent review`/`Review` or `Implementation`/`Maker`.
+Placeholders and free-form descriptions are not registrations. `owner` remains a reserved verdict.
+
+**Adoption:** establish the advertised remote default (`git remote set-head origin --auto` after
+fetching its history), and integrate the identities used by active Review lines before enabling
+the updated gate. Existing concern labels such as `code` must become registered review identities, or be
+reconciled with actual reviewer evidence. Preserve unresolved FAILs; deleting an ineligible
+identity is not a clean verdict. Registry checking tests declared eligibility, not session independence.
+
+The default check needs no network or extra dependencies. JSON exposes `registry_at` and
+`report_verification: "not-requested"`; text output states that report links are unverified.
+Opt in to GitHub report consistency with:
+
+```bash
+bash .prdkit/scripts/bash/check-review.sh --verify-reports --pr https://github.com/OWNER/REPO/pull/123 <change-id>
+```
+
+This mode needs `gh` and `jq`. It verifies the PR head, each `#issuecomment-N` link's actual PR
+membership, and one structured receipt per report with matching reviewer, full commit hashes,
+verdict and finding counts. Append this receipt to the report comment, filling actual values:
+
+```text
+<!-- prdkit-review
+{"schema":"prdkit.review.v1","reviewer":"code-review","base":"<full base SHA>","head":"<full reviewed SHA>","verdict":"PASS","critical":0,"high":0,"medium":0,"low":0}
+-->
+```
+
+Owner receipts use reviewer `owner`; counts are optional. Historical reports also need receipts
+when this mode is used. Missing tools, unavailable/offline API access, missing history or a
+mismatch returns a failing result rather than a verified PASS. Matching metadata does not
+authenticate the reviewer session: shared bot accounts can publish for several roles. The
+main session must still preserve dispatch/report provenance and enforce independent review.
 
 A closing commit that deletes the record is checked against the record's last committed
 version. Finalize new implementation changes in their own PR, retaining context and evidence on
@@ -117,6 +161,8 @@ version as a comment, as the kit's own workflows do.
     HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     BASE_REF: ${{ github.base_ref }}
   run: |
+    # actions/checkout may initialize origin without its remote-default symbolic ref.
+    git remote set-head origin --auto
     case "$HEAD_REF" in
       [0-9][0-9][0-9]-*) bash .prdkit/scripts/bash/check-review.sh --head "$HEAD_SHA" --base "origin/$BASE_REF" "$HEAD_REF" ;;
       *) echo "Not a change branch; no review record to check." ;;
