@@ -18,6 +18,9 @@ change by change.
 
 - Unknown new-change options are rejected instead of silently becoming intent text. Use `--`
   before intent text beginning with a dash.
+- Review coverage exemptions share an explicit integration-base trust policy. Arbitrary pushed
+  branches and local main/master no longer authorize base-import or record-only exemptions;
+  additional integration branches are configured in the remote default's committed policy.
 
 ## [1.3.2] — 2026-10-30 — review coverage and consumer diagnostics fixes
 
