@@ -55,6 +55,7 @@ assert_contains "$OUTPUT" "Could not create a worktree" "warns about the worktre
 assert_contains "$OUTPUT" "091-stale" "surfaces git's actual error (mentions the path)"
 assert_contains "$OUTPUT" "Falling back" "fallback is loud, not silent"
 git -C "$PROJ" checkout -q - >/dev/null 2>&1 || git -C "$PROJ" checkout -q master >/dev/null 2>&1
+rm -f "$PROJ/specs/changes/091-stale.md"
 
 it "worktree failure on a dirty tree refuses to mutate the main checkout"
 BEFORE_BRANCH="$(git -C "$PROJ" branch --show-current)"
@@ -67,6 +68,37 @@ assert_contains "$OUTPUT" "uncommitted changes" "explains the refusal"
 assert_eq "$BEFORE_BRANCH" "$(git -C "$PROJ" branch --show-current)" "main checkout branch unchanged"
 assert_contains "$(cat "$PROJ/.gitkeep")" "uncommitted tracked change" "WIP left untouched"
 git -C "$PROJ" checkout -q -- .gitkeep
+
+it "automatic fallback refuses untracked-only work without changing its checkout or content"
+mkdir -p "$PROJ/.worktrees/093-untracked" "$PROJ/specs"
+printf 'occupied\n' > "$PROJ/.worktrees/093-untracked/leftover.txt"
+printf 'untracked owner direction\n' > "$PROJ/specs/inbox.md"
+BEFORE_HEAD="$(git rev-parse HEAD)"
+BEFORE_INDEX="$(git ls-files --stage)"
+assert_eq '' "$(git status --porcelain --untracked-files=no)" "fixture has no tracked modifications"
+run bash "$CNF" --json --number 93 --short-name untracked "untracked-only fallback"
+assert_eq 1 "$STATUS" "refuses untracked-only fallback"
+assert_contains "$OUTPUT" 'tracked or untracked' "refusal explains that untracked work counts"
+assert_eq "$BEFORE_BRANCH" "$(git branch --show-current)" "current branch preserved"
+assert_eq "$BEFORE_HEAD" "$(git rev-parse HEAD)" "HEAD commit preserved"
+assert_eq "$BEFORE_INDEX" "$(git ls-files --stage)" "index preserved"
+assert_eq 'untracked owner direction' "$(cat specs/inbox.md)" "untracked content preserved"
+assert_eq absent "$([ -e specs/changes/093-untracked.md ] && echo present || echo absent)" "refusal creates no record"
+
+it "explicit --no-worktree carries staged, unstaged and untracked work without altering it"
+printf 'unstaged tracked edit\n' > .gitkeep
+printf 'staged edit\n' > staged.txt
+git add staged.txt
+BEFORE_INDEX="$(git ls-files --stage)"
+run bash "$CNF" --json --no-worktree --number 94 --short-name explicit "explicit in-place change"
+assert_eq 0 "$STATUS" "explicit override still succeeds"
+assert_eq 094-explicit "$(git branch --show-current)" "explicitly switches the current checkout"
+assert_eq "$BEFORE_HEAD" "$(git rev-parse HEAD)" "does not commit existing work"
+assert_eq "$BEFORE_INDEX" "$(git ls-files --stage)" "does not stage or unstage existing work"
+assert_eq 'unstaged tracked edit' "$(cat .gitkeep)" "unstaged content preserved"
+assert_eq 'staged edit' "$(cat staged.txt)" "staged content preserved"
+assert_eq 'untracked owner direction' "$(cat specs/inbox.md)" "untracked content preserved"
+assert_file specs/changes/094-explicit.md "new record created"
 
 # ---------------------------------------------------------------------------
 it "ledger-emit.sh reads config from ## Configuration, not the first match anywhere"

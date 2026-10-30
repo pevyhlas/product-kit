@@ -15,6 +15,11 @@ and slug (`--number 12 --short-name export` for `planned: 012-export`). The work
 committed HEAD: it lists uncommitted `specs/` paths left behind (`UNCARRIED_SPECS`); record the
 owner direction and spec context the change needs in the worktree.
 
+`--no-worktree` still creates and switches to a new branch in the current checkout; existing
+staged, unstaged and untracked work carries over. Running inside a linked worktree also branches
+in place, without nesting worktrees. If worktree creation fails, automatic fallback refuses a
+checkout with tracked or non-ignored untracked work rather than silently switching its branch.
+
 For a product/programme, use [planning.md](planning.md) to discover work across intent and design.
 For ready work, use [implementation.md](implementation.md); do not repeat upstream specification
 or design. One implementation change normally belongs to one PR; larger outcomes use bounded
