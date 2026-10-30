@@ -46,6 +46,7 @@ jobs:
           /bin/bash tests/test_context_budget.sh
           /bin/bash tests/test_adoption_gate.sh
           /bin/bash tests/test_check_review.sh
+          /bin/bash tests/test_review_base_merge.sh
           /bin/bash tests/test_review_package.sh
           /bin/bash tests/test_delivery_checkpoint.sh
           /bin/bash tests/test_spool_adapter.sh
