@@ -62,8 +62,13 @@ git rm -qr --cached -- .product-kit
 git update-index --add --cacheinfo "160000,$pin,.product-kit"
 printf '# Config\n\n## Configuration\n\n- adoption-pin: %040d\n' 0 > .prdkit/memory/config.md
 run bash .prdkit/scripts/bash/doctor.sh --json --inventory
-run jq -e --arg pin "$pin" '.configuration.source | .tracked_pin == $pin and .expected_pin != $pin and .checkout_head == null' <<< "$OUTPUT"
+run jq -e --arg pin "$pin" '.configuration.source | .state == "uninitialized" and .tracked_pin == $pin and .expected_pin != $pin and .checkout_head == null' <<< "$OUTPUT"
 assert_eq 0 "$STATUS" 'configured expectation does not replace observation'
+rmdir .product-kit
+run bash .prdkit/scripts/bash/doctor.sh --json --inventory
+run jq -e '.configuration.source | .state == "uninitialized" and .checkout_head == null' <<< "$OUTPUT"
+assert_eq 0 "$STATUS" 'absent submodule directory is uninitialized too'
+mkdir .product-kit
 
 it "nested gitlinks and external symlinks never impersonate the configured source"
 git update-index --force-remove .product-kit

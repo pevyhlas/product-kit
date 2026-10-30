@@ -6,6 +6,9 @@
 # shellcheck disable=SC2034 # used by the scripts that source this library
 SPEC_SEP="$(printf '\037')"
 
+# Text carried in row fields must never introduce a field or record boundary.
+spec_field() { printf '%s' "$1" | tr '\037\t\r\n' '    '; }
+
 # IDs: J-, R-, Q-, C-, N- (product), D- (decisions), P<n>.B- and P<n>.I- (parts), two or more digits.
 # A neighbouring character is tested with index(), never a regex: macOS awk counts bytes, and a
 # regex over the lone byte of a multibyte character (an em dash after an ID) aborts it in a UTF-8
@@ -122,7 +125,7 @@ spec_leftover_features() { # root
         counts="0${SPEC_SEP}0"
         [ ! -f "$dir/tasks.md" ] || counts="$(awk '/^[[:space:]]*[-*][[:space:]]+\[[ xXIRB]\]/ { n++; if ($0 ~ /^[[:space:]]*[-*][[:space:]]+\[[xX]\]/) d++ }
             END { print d + 0 "\037" n + 0 }' "$dir/tasks.md")"
-        printf '%s\037%s\n' "${dir##*/}" "$counts"
+        printf '%s\037%s\n' "$(spec_field "${dir##*/}")" "$counts"
     done
     return 0
 }
@@ -278,7 +281,8 @@ spec_links() { # root [file...]
 spec_items() { # root
     local root="$1" file
     while IFS= read -r file; do
-        awk -v file="$file" "$SPEC_SKIP_AWK"'
+        awk -v file="$(spec_field "$file")" "$SPEC_SKIP_AWK"'
+            BEGIN { gsub(/[\037\r\n]/, " ", file) }
             function flags(line,   m, p) {
                 m = ""
                 if (match(line, /\((hypothesis|validated)[,)]/)) m = substr(line, RSTART + 1, RLENGTH - 2)
@@ -288,7 +292,7 @@ spec_items() { # root
             }
             # A bullet item runs on to the next bullet, heading, table row or blank line.
             function flush() { if (pend != "") print pend_id "\037" pend_title "\037" flags(pend) "\037" file ":" pend_nr; pend = "" }
-            { if (spec_skip($0)) { flush(); next } }
+            { gsub(/\037/, " "); if (spec_skip($0)) { flush(); next } }
             pend != "" && $0 !~ /^[[:space:]]*$/ && $0 !~ /^[[:space:]]*([-*+]|[0-9]+\.)[[:space:]]/ && $0 !~ /^(#|\|)/ { pend = pend " " $0; next }
             { flush() }
             /^#/ { retired_list = ($0 ~ /^#+[[:space:]]+Retired[[:space:]]*$/) }
@@ -381,9 +385,10 @@ spec_stage_now() { # root
 spec_stages() { # root
     local root="$1" file
     while IFS= read -r file; do
-        awk -v file="$file" "$SPEC_SKIP_AWK $SPEC_STAGE_AWK"'
+        awk -v file="$(spec_field "$file")" "$SPEC_SKIP_AWK $SPEC_STAGE_AWK"'
+            BEGIN { gsub(/[\037\r\n]/, " ", file) }
             function emit(id, text,   s) { s = stage_from(text); if (s != "") print id "\037" s "\037" file ":" NR }
-            { if (spec_skip($0)) next }
+            { gsub(/\037/, " "); if (spec_skip($0)) next }
             /^\|[[:space:]]*[Pp]art[[:space:]]*\|/ {
                 matcol = 4; n = split($0, cell, "|")
                 for (i = 2; i <= n; i++) { h = cell[i]; gsub(/^[[:space:]]+|[[:space:]]+$/, "", h); if (tolower(h) == "maturity") matcol = i }
@@ -448,7 +453,7 @@ spec_inbox() { # root
     awk -v headed="$headed" "$SPEC_SKIP_AWK"'
         function nometa() { if (want) print head "\037\037\037unparsed\037" title; want = 0 }
         function isdate(s) { return s ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9](T[0-9][0-9]:[0-9][0-9](:[0-9][0-9])?Z?)?$/ }
-        { if (spec_skip($0)) next }
+        { gsub(/\037/, " "); if (spec_skip($0)) next }
         /^###[[:space:]]/ {
             nometa(); head = NR; title = $0; sub(/^###[[:space:]]+/, "", title); sub(/[[:space:]]+$/, "", title)
             gsub(/\t/, " ", title); want = 1; item = 1; next
@@ -510,7 +515,7 @@ spec_records() { # root
     awk "$SPEC_SKIP_AWK"'
         function isdate(s) { return s ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ }
         function bad(why) { print NR "\037INVALID\037\037\037\037\037\037\037\037\037" why; }
-        { if (spec_skip($0)) next }
+        { gsub(/\037/, " "); if (spec_skip($0)) next }
         /^[[:space:]]*$/ || /^#/ { next }
         {
             line = $0; reason = ""
@@ -555,12 +560,13 @@ spec_changes() { # root
     local root="$1" path
     for path in "$root"/specs/changes/*.md; do
         [ -f "$path" ] || continue
-        awk -v id="$(basename "$path" .md)" "$SPEC_SKIP_AWK"'
+        awk -v id="$(spec_field "$(basename "$path" .md)")" "$SPEC_SKIP_AWK"'
+            BEGIN { gsub(/[\037\r\n]/, " ", id) }
             function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
             function field(line, name,   v) {
                 v = line; sub("^.*\\*\\*" name "\\*\\*:[[:space:]]*", "", v); sub(/[[:space:]]+·.*/, "", v); return trim(v)
             }
-            { if (spec_skip($0)) next }
+            { gsub(/\037/, " "); if (spec_skip($0)) next }
             NR == 1 && /^# / { title = $0; sub(/^#[[:space:]]+(Change:[[:space:]]*)?/, "", title) }
             /\*\*Opened\*\*:/ { opened = field($0, "Opened") }
             /\*\*Parent\*\*:/ { parent = field($0, "Parent") }
@@ -586,27 +592,52 @@ spec_changes() { # root
     return 0
 }
 
-spec_change_progress() { # file -> outcome, milestone, critical path, allocation, progress,
+spec_change_progress() { # file [required=true] [advisories] -> outcome, milestone, critical path, allocation, progress,
     # selection, no-progress count (number|null), limit (number|null), count signal.
     # Project recorded State only; no inference from acceptance, PR totals or dates in prose.
     local file="$1"
     [ -f "$file" ] || file=/dev/null
-    awk "$SPEC_SKIP_AWK"'
+    awk -v required="${2:-false}" -v report="${3:-}" "$SPEC_SKIP_AWK"'
         function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
         function uint(s) { return s ~ /^(0|[1-9][0-9]*)$/ }
         # Compare decimal strings without machine-integer overflow or floating-point rounding.
         function reached(a, b) { return length(a) > length(b) || (length(a) == length(b) && "x" a >= "x" b) }
         { if (spec_skip($0)) next }
-        /^## / { sec = $0; next }
+        /^## / { sec = $0; block = 0; next }
+        sec == "## State" && /^### / {
+            block = ($0 == "### Outcome checkpoint")
+            if (block) blocks++
+            next
+        }
         sec == "## State" && /^\*\*[^*]+\*\*:/ {
             key = $0; sub(/^\*\*/, "", key); sub(/\*\*:.*/, "", key)
             if (key !~ /^(Outcome|Milestone|Critical path|Allocation|Progress|Selection|No-progress changes|Progress limit)$/) next
             value = $0; sub(/^\*\*[^*]+\*\*:[[:space:]]*/, "", value)
             gsub(/\037/, " ", value)
-            values[key] = trim(value)
-            if (++seen[key] > 1) invalid = 1
+            data[block, key] = trim(value)
+            counts[block, key]++
+            if (!block) outside = 1
         }
         END {
+            # Accept the distinctive 1.3.1 checkpoint shape, never a lone generic Outcome.
+            legacy = counts[0, "No-progress changes"] || counts[0, "Progress limit"] ||
+                (counts[0, "Outcome"] && counts[0, "Milestone"] &&
+                 (counts[0, "Critical path"] || counts[0, "Allocation"] || counts[0, "Progress"] || counts[0, "Selection"]))
+            if (report == "advisories") {
+                if (outside) print "Checkpoint keys outside ### Outcome checkpoint in State; " \
+                    (blocks ? "unscoped keys are ignored" : legacy ? "legacy checkpoint is read for compatibility; move its keys into the block" : "ordinary State text is not a programme checkpoint")
+                exit
+            }
+            if (!blocks && !legacy && required != "true") exit
+            use = blocks ? 1 : 0
+            n = split("Outcome|Milestone|Critical path|Allocation|Progress|Selection|No-progress changes|Progress limit", keys, "|")
+            for (i = 1; i <= n; i++) {
+                key = keys[i]; seen[key] = (blocks || legacy) ? counts[use, key] : 0
+                # A referenced parent without a checkpoint remains unknown, not generic prose.
+                if (blocks || legacy) values[key] = data[use, key]
+                if (seen[key] > 1) invalid = 1
+            }
+            if (blocks > 1) invalid = 1
             count = values["No-progress changes"]; limit = seen["Progress limit"] ? values["Progress limit"] : "3"
             if (seen["No-progress changes"] && count != "unknown" && !uint(count)) invalid = 1
             if (!uint(limit) || limit == "0") invalid = 1
@@ -624,6 +655,7 @@ spec_change_progress() { # file -> outcome, milestone, critical path, allocation
 # (new-change.sh creates the record in one). Local git metadata only.
 spec_checkouts() { # root
     local root="$1" top line path="" branch="" real
+    case "$root" in *"$SPEC_SEP"*|*$'\n'*) printf 'Cannot read status rows from a checkout path containing a record separator\n' >&2; return 0 ;; esac
     printf '%s\037%s\037.\n' "$root" "$(git -C "$root" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
     git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
     top="$(CDPATH="" cd "$root" && pwd -P)"
@@ -635,6 +667,7 @@ spec_checkouts() { # root
                 real=""
                 [ -z "$path" ] || [ ! -d "$path" ] || real="$(CDPATH="" cd "$path" && pwd -P)"
                 if [ -n "$real" ] && [ "$real" != "$top" ]; then
+                    case "$real" in *"$SPEC_SEP"*|*$'\n'*) printf 'Skipping checkout path containing a record separator\n' >&2; continue ;; esac
                     printf '%s\037%s\037%s\n' "$real" "$branch" "${real#"$top"/}"
                 fi
                 path="" ;;

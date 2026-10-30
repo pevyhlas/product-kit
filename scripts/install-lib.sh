@@ -66,6 +66,11 @@ install_source_pin() {
 install_findings() {
     local root="$1" manifest="$1/.prdkit/.manifest" harnesses mode line hash path actual section expected dir
     local owned=0
+    for path in .prdkit/.install-lock .prdkit/.install-state; do
+        if git -C "$root" ls-files --error-unmatch -- "$path" >/dev/null 2>&1; then
+            printf 'Tracked installer runtime artifact: %s; remove it from the index and keep it ignored\n' "$path"
+        fi
+    done
     if [ -e "$root/.prdkit/.install-state" ] || [ -L "$root/.prdkit/.install-state" ]; then
         printf 'Incomplete install: .prdkit/.install-state remains; inspect it and retry the same source with init.sh --upgrade\n'
     fi

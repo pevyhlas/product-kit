@@ -10,6 +10,13 @@ change by change.
 
 ### Fixed
 
+- Status sanitizes internal field separators and validates numeric JSON fields before emission.
+- Installer lock/state files are ignored on install and upgrade; diagnostics reject tracked copies.
+- Outcome status reads explicit checkpoint blocks, retains distinctive 1.3.1 checkpoints, and
+  distinguishes ordinary State results and child changes from programme accounting. Doctor explains
+  unscoped checkpoint keys; referenced parents with missing evidence remain unknown.
+- Source inventory identifies an uninitialized submodule from its tracked gitlink instead of
+  misreporting it as a copied source directory.
 - Review coverage survives verified base-only merges whose exact branch delta is unchanged.
   Actual source edits, overlapping changes, conflict resolutions and standing failed verdicts
   still require review; base imports no longer force redundant rounds for unrelated files.
