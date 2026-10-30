@@ -19,6 +19,8 @@ cat > specs/changes/001-programme.md <<'EOF'
 EOF
 git add -A; git commit -qm baseline
 BASE="$(git rev-parse HEAD)"
+git update-ref refs/remotes/origin/main HEAD
+git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
 git checkout -qb 002-final-child
 printf 'delivered\n' > src/app.txt
 cat > specs/changes/002-final-child.md <<'EOF'

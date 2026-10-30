@@ -4,6 +4,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 SEED="$(make_inited_project)"; track_tmp "$SEED"
 printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n| security | reviewer |\n' >> "$SEED/.prdkit/memory/agents.md"
+printf '\n## Configuration\n- review-integration-branches: origin/integration\n' > "$SEED/.prdkit/memory/config.md"
 mkdir -p "$SEED/src" "$SEED/docs" "$SEED/specs"
 printf 'base source\n' > "$SEED/src/owned.txt"
 printf 'base contract\n' > "$SEED/specs/product.md"
@@ -59,6 +60,9 @@ check
 assert_eq 0 "$STATUS" "base-only import passes: $OUTPUT"
 assert_contains "$OUTPUT" '"record_only":false' 'coverage is proven, not bypassed as metadata'
 assert_eq "$before" "$(git status --porcelain; git ls-files --stage; git show-ref; git count-objects -v)" 'review gate changes no files, index, refs or objects'
+git update-ref "refs/remotes/origin/$DEFAULT" origin/integration
+run bash "$CHECK" --json 001-reviewed
+assert_eq 0 "$STATUS" 'default integration merge retains coverage without an override'
 printf '\nFinalization context.\n' >> "$RECORD"
 printf -- '- 2026-10-30 001-reviewed: metadata only\n' > specs/log.md
 git add specs; git commit -qm 'metadata after base import'
@@ -165,6 +169,51 @@ run bash "$CHECK" --json --base untrusted-base 001-reviewed
 assert_eq 1 "$STATUS" 'local side branch is not a trusted import base'
 run bash "$CHECK" --json --base "origin/$DEFAULT" 001-reviewed
 assert_eq 1 "$STATUS" 'side branch is not in the actual declared base history'
+
+it "a pushed side branch and its own policy cannot authorize either exemption"
+start_case
+git checkout -qb unreviewed-side "$BASE"
+printf 'unreviewed side source\n' > src/side.txt
+printf '# Settings\n## Configuration\n- review-integration-branches: origin/side-work\n' > .prdkit/memory/config.md
+git add src/side.txt .prdkit/memory/config.md; git commit -qm 'side source and self-authorizing policy'
+SIDE="$(git rev-parse HEAD)"
+git -c protocol.file.allow=always push -q origin HEAD:refs/heads/side-work
+git checkout -q 001-reviewed
+git merge -q --no-edit origin/side-work
+run bash "$CHECK" --json --base origin/side-work 001-reviewed
+assert_eq 1 "$STATUS" 'remote side branch cannot import unreviewed source'
+assert_contains "$OUTPUT" '"base_trusted":false' 'remote existence is not integration authority'
+assert_contains "$OUTPUT" 'src/side.txt' 'unreviewed side source named'
+git checkout -qb 002-unreviewed "$SIDE"
+mkdir -p specs/changes
+printf '# Change: No reviews\n**Tier**: T1\n## State\n' > specs/changes/002-unreviewed.md
+git add specs; git commit -qm 'record-only tail'
+run bash "$CHECK" --json --base origin/side-work 002-unreviewed
+assert_eq 1 "$STATUS" 'record-only tail cannot hide unreviewed source on a pushed side branch'
+assert_contains "$OUTPUT" '"record_only":false' 'same trust policy for both exemptions'
+assert_contains "$OUTPUT" 'needs a recorded independent review' 'missing review still blocks'
+git remote remove origin
+git branch -f "$DEFAULT" "$SIDE"
+run bash "$CHECK" --json 002-unreviewed
+assert_eq 1 "$STATUS" 'local main/master alone does not authorize record-only closure'
+assert_contains "$OUTPUT" '"base_trusted":false' 'local fallback explicitly untrusted'
+git update-ref "refs/remotes/origin/$DEFAULT" "$SIDE"
+git symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$DEFAULT"
+run bash "$CHECK" --json 002-unreviewed
+assert_eq 0 "$STATUS" 'once integrated in the remote default, record-only compatibility applies'
+assert_contains "$OUTPUT" '"base_trusted":true' 'default integration trust is explicit'
+
+it "duplicate integration policy grants no extra trust"
+start_case
+git checkout -q "$DEFAULT"
+printf '\n- review-integration-branches: origin/integration\n' >> .prdkit/memory/config.md
+git commit -qam 'ambiguous integration policy'
+git update-ref "refs/remotes/origin/$DEFAULT" HEAD
+advance_base
+git merge -q --no-edit origin/integration
+check
+assert_eq 1 "$STATUS" 'duplicate setting fails closed for an additional integration ref'
+assert_contains "$OUTPUT" '"base_trusted":false' 'ambiguous policy does not grant an exemption'
 
 it "renames and gitlink updates imported from the base retain coverage"
 start_case

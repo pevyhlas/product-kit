@@ -12,7 +12,7 @@ where independence is not required; a reviewer never reviews its own implementat
 ## Review registry
 
 <!-- Register stable lowercase identities before their reviews are used. Integrate this policy
-first: check-review reads the integration-baseline copy, not identities added by the change.
+first: check-review reads the baseline shared with origin/HEAD, not identities added by the change.
 Role is exactly reviewer or maker. A maker is never eligible, even if listed as a reviewer too.
 Legacy capability rows above also register exact identities for Independent review/Review or
 Implementation/Maker; use one form per identity, since duplicate registrations are ambiguous.

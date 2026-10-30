@@ -30,6 +30,8 @@ EOF
 git add -A; git commit -qm 'baseline registry'
 BASE="$(git rev-parse HEAD)"
 DEFAULT="$(git branch --show-current)"
+git update-ref "refs/remotes/origin/$DEFAULT" HEAD
+git symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$DEFAULT"
 git checkout -qb 001-reviewed
 printf 'source\n' > source.txt
 git add source.txt; git commit -qm implementation
@@ -71,6 +73,20 @@ for identity in invented maker; do
     record "$identity" "$LINK" "$POLICY_HEAD"; check
     assert_eq 1 "$STATUS" 'change-local policy cannot authorize a verdict'
 done
+git symbolic-ref --delete refs/remotes/origin/HEAD
+git update-ref -d "refs/remotes/origin/$DEFAULT"
+git branch -f "$DEFAULT" "$POLICY_HEAD"
+record invented "$LINK" "$POLICY_HEAD"
+check
+assert_eq 1 "$STATUS" 'local default cannot authorize its own invented reviewer'
+assert_contains "$OUTPUT" 'No trusted integration-baseline registry' 'missing remote-default trust is explicit'
+git branch -D "$DEFAULT" >/dev/null
+run bash "$CHECK" --json --base "$POLICY_HEAD" 001-reviewed
+assert_eq 1 "$STATUS" 'arbitrary --base cannot authorize a registry when no default exists'
+assert_contains "$OUTPUT" "reviewer 'invented' is unregistered" 'self-registration still rejected'
+git branch "$DEFAULT" "$BASE"
+git update-ref "refs/remotes/origin/$DEFAULT" "$BASE"
+git symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$DEFAULT"
 git reset -q --hard "$REVIEWED"
 
 it "ineligible superseded lines cannot contribute coverage or erase standing failures"
@@ -104,6 +120,16 @@ assert_eq 0 "$STATUS" 'ordinary review gate passes offline'
 assert_eq no "$([ -f .git/requests ] && echo yes || echo no)" 'no GitHub invocation'
 run bash "$CHECK" 001-reviewed
 assert_contains "$OUTPUT" 'Report links unverified' 'human output has the same limitation'
+mkdir .git/no-network-tools
+for cmd in bash dirname git sed awk tr head grep cat; do
+    ln -s "$(command -v "$cmd")" ".git/no-network-tools/$cmd"
+done
+run env PATH="$PROJ/.git/no-network-tools" bash "$CHECK" --json 001-reviewed
+assert_eq 0 "$STATUS" 'offline gate works with neither gh nor jq installed'
+run env PATH="$PROJ/.git/no-network-tools" bash "$CHECK" --json --verify-reports --pr "$PR" 001-reviewed
+assert_eq 1 "$STATUS" 'requested online check fails clearly without optional tools'
+assert_contains "$OUTPUT" 'report verification needs gh and jq' 'missing tools explained'
+assert_contains "$OUTPUT" '"report_verification":"unavailable"' 'no verified claim without tools'
 
 make_receipt() {
     jq -n --arg base "$BASE" --arg head "$REVIEWED" '{schema:"prdkit.review.v1",reviewer:"code",base:$base,head:$head,verdict:"PASS",critical:0,high:0,medium:0,low:0}'
@@ -178,6 +204,7 @@ record code
 it "a missing registry is not a permissive legacy fallback"
 git checkout -q "$DEFAULT"
 git rm -q .prdkit/memory/agents.md; git commit -qm 'missing policy'
+git update-ref "refs/remotes/origin/$DEFAULT" HEAD
 git checkout -q 001-reviewed
 git merge -q --no-edit "$DEFAULT"
 check

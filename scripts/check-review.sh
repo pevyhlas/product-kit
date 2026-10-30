@@ -61,30 +61,49 @@ default_ref=""
 for candidate in origin/HEAD origin/main origin/master main master; do
     if git -C "$root" rev-parse --verify --quiet "$candidate^{commit}" >/dev/null; then default_ref="$candidate"; break; fi
 done
-# Record-only mode trusts a start on the default branch, or on a --base naming a remote-tracking
-# branch other than the change's own; never a commit or a local branch, which could sit inside
-# the change's history.
-base_branch=false
 if [ -n "$base_ref" ]; then
     git -C "$root" rev-parse --verify --quiet "$base_ref^{commit}" >/dev/null || { echo "Not a commit here: $base_ref" >&2; exit 2; }
-    case "$(git -C "$root" rev-parse --symbolic-full-name "$base_ref" 2>/dev/null)" in
-        refs/remotes/*/"$id") ;;
-        refs/remotes/*) base_branch=true ;;
-    esac
 else
     base_ref="$default_ref"
 fi
-# Capture a trusted base once. An arbitrary local branch/commit inside the change cannot
-# manufacture a base-import exemption, just as it cannot authorize a record-only close.
+# Only origin/HEAD establishes the default integration branch. Other bases may locate a
+# comparison, but do not grant exemptions. Additional integration refs must be configured in
+# the default branch's committed config, never in the change/worktree being checked.
+trusted_default="$(git -C "$root" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
+case "$trusted_default" in refs/remotes/*) ;; *) trusted_default="" ;; esac
+trusted_default_sha=""
+if [ -n "$trusted_default" ]; then
+    trusted_default_sha="$(git -C "$root" rev-parse --verify --quiet "$trusted_default^{commit}" || true)"
+fi
+approved_refs=""
+if [ -n "$trusted_default_sha" ]; then
+    approved_refs="$trusted_default"
+    policy="$(git -C "$root" show "$trusted_default_sha:.prdkit/memory/config.md" 2>/dev/null || true)"
+    configured="$(printf '%s\n' "$policy" | awk "$SPEC_SKIP_AWK"'
+        { if (spec_skip($0)) next }
+        /^## / { section = $0; next }
+        section == "## Configuration" && /^- review-integration-branches:/ {
+            n++; value = $0; sub(/^- review-integration-branches:[[:space:]]*/, "", value)
+        }
+        END { if (n == 1) { gsub(/,/, " ", value); print value } }')"
+    # Disable glob expansion: configuration is a list of literal refs, never patterns.
+    while IFS= read -r candidate; do
+        [ -n "$candidate" ] || continue
+        case "$candidate" in refs/remotes/*) ;; *) candidate="refs/remotes/$candidate" ;; esac
+        git check-ref-format "$candidate" >/dev/null 2>&1 || continue
+        approved_refs="$approved_refs"$'\n'"$candidate"
+    done < <(printf '%s\n' "$configured" | tr ' \t\r' '\n')
+fi
 import_base=""
-if [ -n "$base_ref" ] && { $base_branch || { [ -n "$default_ref" ] &&
-    [ "$(git -C "$root" rev-parse "$base_ref^{commit}")" = "$(git -C "$root" rev-parse "$default_ref^{commit}")" ]; }; }; then
-    import_base="$(git -C "$root" rev-parse "$base_ref^{commit}")"
+base_trusted=false
+base_canonical="$(git -C "$root" rev-parse --symbolic-full-name "$base_ref" 2>/dev/null || true)"
+if [ -n "$base_canonical" ] && printf '%s\n' "$approved_refs" | grep -qxF -- "$base_canonical"; then
+    import_base="$(git -C "$root" rev-parse "$base_ref^{commit}")"; base_trusted=true
 fi
 
 problems=(); rows=(); links=(); all_reviews=(); tier=""; rigor=""; record_at=""; record_only=false; start=""
 # Registration must precede use: a change cannot qualify its own maker or invented identity.
-registry_base="${default_ref:-$base_ref}"; registry_at=""; registry=""
+registry_base="$trusted_default_sha"; registry_at=""; registry=""
 if [ -n "$registry_base" ]; then
     registry_at="$(git -C "$root" merge-base "$registry_base" "$head" 2>/dev/null || true)"
     if [ -n "$registry_at" ]; then
@@ -184,8 +203,7 @@ else
     # skips coverage, but only from a trusted start: a base inside the change's own history would
     # hide its code.
     [ -z "$base_ref" ] || start="$(git -C "$root" merge-base "$base_ref" "$head" 2>/dev/null)" || start=""
-    if [ -n "$start" ] && [ "$start" != "$head" ] && [ -z "$(changed_since "$start")" ] &&
-        { $base_branch || { [ -n "$default_ref" ] && git -C "$root" merge-base --is-ancestor "$start" "$default_ref"; }; }; then
+    if $base_trusted && [ -n "$start" ] && [ "$start" != "$head" ] && [ -z "$(changed_since "$start")" ]; then
         record_only=true
     fi
     # Latest verdict per reviewer from State: reviewer, round, range base, range head, verdict,
@@ -224,6 +242,9 @@ else
     for review in ${all_reviews[@]+"${all_reviews[@]}"}; do
         IFS="$(printf '\037')" read -r line reviewer _ <<< "$review"
         [ "$reviewer" != owner ] || continue
+        if [ -z "$registry_at" ]; then
+            problems+=("$path:$line: No trusted integration-baseline registry: establish origin/HEAD and fetch its shared history before checking reviewer eligibility")
+        fi
         eligibility="$(review_eligibility "$registry" "$reviewer")"
         [ "$eligibility" = reviewer ] || problems+=("$path:$line: reviewer '$reviewer' is $eligibility in the integration-baseline registry; register an eligible identity in agents.md before using it")
     done
@@ -362,8 +383,8 @@ if $verify_reports; then
 fi
 result=pass; [ "${#problems[@]}" -eq 0 ] || result=fail
 if $json; then
-    printf '{"result":"%s","change":"%s","head":"%s","base":"%s","record_only":%s,"tier":"%s","rigor":"%s","record_at":"%s","reviews":[' \
-        "$result" "$id" "$head" "$(json_escape "$base_ref")" "$record_only" "$tier" "$rigor" "$(json_escape "$record_at")"
+    printf '{"result":"%s","change":"%s","head":"%s","base":"%s","base_trusted":%s,"record_only":%s,"tier":"%s","rigor":"%s","record_at":"%s","reviews":[' \
+        "$result" "$id" "$head" "$(json_escape "$base_ref")" "$base_trusted" "$record_only" "$tier" "$rigor" "$(json_escape "$record_at")"
     sep=""
     for row in ${rows[@]+"${rows[@]}"}; do
         IFS="$(printf '\037')" read -r reviewer round from to verdict critical high medium low <<< "$row"
@@ -385,6 +406,7 @@ elif [ "$result" = pass ]; then
     fi
 else
     printf 'FAIL %s at %s:\n' "$id" "$head"
+    $base_trusted || printf '  Base is not trusted for coverage exemptions: establish origin/HEAD or configure review-integration-branches in its committed config.\n'
     for problem in "${problems[@]}"; do printf '  %s\n' "$problem"; done
 fi
 if ! $json && [ "${#rows[@]}" -gt 0 ]; then

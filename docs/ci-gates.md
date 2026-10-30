@@ -79,8 +79,10 @@ verdict, with the commit hashes the review package printed, to the change record
 ### Reviewer eligibility and report links
 
 Every non-owner Review line must name an eligible identity in `.prdkit/memory/agents.md` at the
-integration baseline (merge base with the default branch, or the explicit comparison base when
-no default is available). A change cannot add its own maker to the registry and approve itself.
+integration baseline (merge base with the remote default identified by `origin/HEAD`). Missing
+remote-default authority or shared history leaves identities unregistered; an arbitrary `--base`
+or local main/master cannot supply its own policy. A change cannot add its own maker to the
+registry and approve itself.
 Use a `## Review registry` section with `| Identity | Role |` columns and exact roles `reviewer`
 or `maker`. Lowercase identifiers may contain letters, digits, dots, underscores and hyphens.
 A maker is denied even if also listed as a reviewer; duplicate or invalid roles are ambiguous.
@@ -129,14 +131,19 @@ unresolved findings and the combined tier/reviewer concerns. Log/delete the othe
 the combined final review, then finalize only the carrier after PASS. Check the carrier ID; the
 helper does not automatically transfer obligations or exempt sibling record deletions.
 
-For compatibility, a pull request that carries only the record and the log since `--base` (default:
-the first of `origin/HEAD`, `origin/main`, `origin/master`, `main`, `master`), including an old change's
-explicit disposition, skips the coverage rules. Its start must
-be on the default branch, or `--base` must name a remote-tracking branch other than the
-change's own (such as `origin/develop`), so a commit or local branch inside the change's own
-history cannot hide code. `--base` is otherwise taken as given: name the branch the pull request
-merges into. Each range is trusted as recorded; a range starting at a commit no round reviewed
-is not detected. The change id defaults to the current branch.
+For compatibility, a pull request that carries only the record and the log since a trusted base,
+including an old change's explicit disposition, skips coverage. Clean base imports can also retain
+coverage when the exact branch delta is preserved. Both exemptions trust only the remote default
+identified by `origin/HEAD`, plus `review-integration-branches` in `.prdkit/memory/config.md` read
+from that default's committed snapshot (for example `- review-integration-branches: origin/develop`).
+A change cannot whitelist itself through its own config. Missing/duplicate settings grant no
+additional trust. Establish `origin/HEAD` before relying on an exemption; no network lookup runs here.
+
+Comparison-base discovery still tries `origin/HEAD`, `origin/main`, `origin/master`, `main`, `master`.
+Other explicit bases remain usable for ordinary full coverage, but neither a remote-tracking name
+alone nor a local main/master grants an exemption. JSON exposes `base_trusted`. Name the actual PR
+target; each range is still trusted as recorded, not authenticated. The change id defaults to the
+current branch.
 
 It checks recorded verdicts; it does not review, and it never grants merge authority. Where the
 plan offers no branch protection, the merging agent's run is the gate. CI can run it as a
