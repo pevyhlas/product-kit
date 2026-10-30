@@ -67,4 +67,4 @@ Children link their parent's checkpoint. Do not initialize missing history to ze
 **Selection**: <next task, milestone contribution, why now; temporary-work disposition>
 -->
 <!-- One line per verdict (workflows/change.md, Review):
-**Review**: round <n> · <base sha>..<reviewed head sha> · <reviewer> · PASS|FAIL · <n> critical, <n> high, <n> medium, <n> low · <link> -->
+**Review**: round <n> · <base sha>..<reviewed head sha> · <registered reviewer identity> · PASS|FAIL · <n> critical, <n> high, <n> medium, <n> low · <link> -->

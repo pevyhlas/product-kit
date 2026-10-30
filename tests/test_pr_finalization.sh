@@ -4,6 +4,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 PROJ="$(make_inited_project)"; track_tmp "$PROJ"
 cd "$PROJ" || exit 1
+printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| integration | reviewer |\n' >> .prdkit/memory/agents.md
 CHECK="$PROJ/.prdkit/scripts/bash/check-review.sh"
 mkdir -p specs/changes src
 cat > specs/changes/001-programme.md <<'EOF'
@@ -18,6 +19,8 @@ cat > specs/changes/001-programme.md <<'EOF'
 EOF
 git add -A; git commit -qm baseline
 BASE="$(git rev-parse HEAD)"
+git update-ref refs/remotes/origin/main HEAD
+git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
 git checkout -qb 002-final-child
 printf 'delivered\n' > src/app.txt
 cat > specs/changes/002-final-child.md <<'EOF'
