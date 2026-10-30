@@ -17,6 +17,9 @@ change by change.
   unscoped checkpoint keys; referenced parents with missing evidence remain unknown.
 - Source inventory identifies an uninitialized submodule from its tracked gitlink instead of
   misreporting it as a copied source directory.
+- Review coverage survives verified base-only merges whose exact branch delta is unchanged.
+  Actual source edits, overlapping changes, conflict resolutions and standing failed verdicts
+  still require review; base imports no longer force redundant rounds for unrelated files.
 
 ## [1.3.1] — 2026-10-30 — outcome progress and compatibility fixes
 

@@ -19,7 +19,9 @@
 # from the history (rebased or squashed away) is ignored. Every non-blocking PASS range,
 # superseded rounds included, links. A point is covered when links chain from it (each starting
 # at or before a head already reached) to a head after which only the record and specs/log.md
-# changed. Each reviewer's head must be covered, and for
+# changed, or through verified imports from the trusted base that preserve the exact branch
+# delta (modes, blob IDs and paths). Overlapping source edits/resolutions remain uncovered.
+# Each reviewer's head must be covered, and for
 # T1-T3 so must the change's start (its merge base with --base). A merge carrying only the record
 # and the log from a trusted start (a change closed after its code merged) skips coverage. T1-T3
 # need one independent verdict, T3 the owner's too, and no L0/L1 spec edit since the owner's head.
@@ -67,6 +69,13 @@ if [ -n "$base_ref" ]; then
 else
     base_ref="$default_ref"
 fi
+# Capture a trusted base once. An arbitrary local branch/commit inside the change cannot
+# manufacture a base-import exemption, just as it cannot authorize a record-only close.
+import_base=""
+if [ -n "$base_ref" ] && { $base_branch || { [ -n "$default_ref" ] &&
+    [ "$(git -C "$root" rev-parse "$base_ref^{commit}")" = "$(git -C "$root" rev-parse "$default_ref^{commit}")" ]; }; }; then
+    import_base="$(git -C "$root" rev-parse "$base_ref^{commit}")"
+fi
 
 problems=(); rows=(); links=(); tier=""; rigor=""; record_at=""; record_only=false; start=""
 path="specs/changes/$id.md"
@@ -75,6 +84,44 @@ changed_since() { # sha [pathspec...] -> paths changed from sha to head, outside
     local sha="$1"; shift
     [ "$#" -gt 0 ] || set -- . ":(exclude)$path" ":(exclude)specs/log.md"
     git -C "$root" diff --name-only "$sha" "$head" -- "$@" | tr '\n' ' ' | sed 's/ $//'
+}
+# Exact tree-entry deltas, without rename heuristics, external diff drivers, textconv or
+# whitespace normalization. Git quotes control characters in paths; no NUL data enters Bash.
+delta_signature() { # from to pathspec...
+    local from="$1" to="$2"; shift 2
+    git -C "$root" -c core.quotepath=true diff --no-ext-diff --no-textconv --no-renames \
+        --raw --no-abbrev "$from" "$to" -- "$@"
+}
+unchanged_since() { # sha [pathspec...] -> covered without another review of this delta
+    local sha="$1" delta merges cursor parents first second extra common before after
+    shift
+    [ "$#" -gt 0 ] || set -- . ":(exclude)$path" ":(exclude)specs/log.md"
+    delta="$(delta_signature "$sha" "$head" "$@")" || return 1
+    merges="$(git -C "$root" rev-list --first-parent --min-parents=2 "$sha..$head")" || return 1
+    # Inspect merges even if the resulting tree equals the reviewed tree: resolving an
+    # upstream conflict by choosing the reviewed version is still a new integration decision.
+    [ -n "$delta" ] || [ -n "$merges" ] || return 0
+    [ -n "$import_base" ] || return 1
+    cursor="$head"
+    while [ "$cursor" != "$sha" ]; do
+        parents="$(git -C "$root" rev-list --parents -n 1 "$cursor")" || return 1
+        read -r _ first second extra <<< "$parents"
+        [ -n "$first" ] && [ -z "$extra" ] || return 1
+        git -C "$root" merge-base --is-ancestor "$sha" "$first" || return 1
+        if [ -z "$second" ]; then
+            delta="$(delta_signature "$first" "$cursor" "$@")" || return 1
+            [ -z "$delta" ] || return 1
+        else
+            git -C "$root" merge-base --is-ancestor "$second" "$import_base" || return 1
+            common="$(git -C "$root" merge-base --all "$first" "$second")" || return 1
+            case "$common" in ''|*$'\n'*) return 1 ;; esac
+            before="$(delta_signature "$common" "$first" "$@")" || return 1
+            after="$(delta_signature "$second" "$cursor" "$@")" || return 1
+            [ "$before" = "$after" ] || return 1
+        fi
+        cursor="$first"
+    done
+    return 0
 }
 is_sha() { case "$1" in ""|*[!0-9a-f]*) return 1 ;; esac; [ "${#1}" -ge 7 ] && [ "${#1}" -le 40 ]; }
 here() { # end -> its full hash when it is a commit hash in the head's history; no problem recorded
@@ -202,7 +249,7 @@ else
         while $grew; do
             grew=false
             while [ "$n" -lt "${#reached[@]}" ]; do
-                [ -n "$(changed_since "${reached[n]}")" ] || return 0
+                unchanged_since "${reached[n]}" && return 0
                 n=$((n + 1))
             done
             for k in ${link_from[@]+"${!link_from[@]}"}; do
@@ -226,8 +273,10 @@ else
         if [ "$reviewer" = owner ]; then
             owner=true; $record_only && continue
             resolve_end "$label" "$to" || continue
-            later="$(changed_since "$resolved" "${spec_l01[@]}")"
-            [ -z "$later" ] || problems+=("$label: the L0/L1 spec changed since the owner's head $to: $later")
+            if ! unchanged_since "$resolved" "${spec_l01[@]}"; then
+                later="$(changed_since "$resolved" "${spec_l01[@]}")"
+                problems+=("$label: the L0/L1 spec changed since the owner's head $to: ${later:-merge integration is not covered}")
+            fi
             continue
         fi
         independent=$((independent + 1))
@@ -246,7 +295,10 @@ else
         from_resolved="$resolved"
         resolve_end "$label" "$to" || continue
         if [ "$from_resolved" = "$resolved" ]; then problems+=("$label: the range $from..$to is empty"); continue; fi
-        covered "$resolved" || problems+=("$label: changed since the reviewed head $to: $(changed_since "$resolved")")
+        if ! covered "$resolved"; then
+            later="$(changed_since "$resolved")"
+            problems+=("$label: changed since the reviewed head $to: ${later:-merge integration is not covered}")
+        fi
     done
     if [ -n "$tier" ] && [ "$tier" != T0 ] && ! $record_only; then
         [ "$independent" -gt 0 ] || problems+=("$tier needs a recorded independent review; none found in State")
