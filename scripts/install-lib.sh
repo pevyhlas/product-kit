@@ -98,7 +98,7 @@ install_findings() {
         for path in "$root/$dir"/prdkit*.md; do
             { [ -e "$path" ] || [ -L "$path" ]; } || continue
             path="${path#"$root"/}"
-            awk -v p="$path" '$1 ~ /^[0-9a-f]{64}$/ && substr($0, 67) == p { found = 1 } END { exit !found }' "$manifest" ||
+            awk -v p="$path" 'length($1) == 64 && $1 ~ /^[0-9a-f]+$/ && substr($0, 67) == p { found = 1 } END { exit !found }' "$manifest" ||
                 printf 'Unexpected kit-named command not recorded in the manifest: %s (if a harness was dropped, re-run init.sh --upgrade --harness with the full list)\n' "$path"
         done
     done

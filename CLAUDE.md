@@ -17,6 +17,8 @@ CI runs exactly these three on a GitHub-hosted Ubuntu 24.04 runner, with a pinne
 checksum-verified ShellCheck 0.11.0. CI also checks jq availability. Only optional
 retrospective enrichment requires jq; ledger-only reports and other scripts retain their
 Bash/standard-utilities contract.
+Linux CI additionally runs the adoption-gate and doctor suites with checksum-pinned Debian 12
+mawk (1.3.4 20200120), whose regex engine lacks interval-expression support.
 Installer, upgrade, change, status, doctor, retrospective, adoption-gate and spool-adapter suites
 also run on macOS (system bash 3.2 + BSD userland — keep those scripts portable) in the
 separate `CI (macOS)` workflow, for every pull request and push to main. Both checks must pass

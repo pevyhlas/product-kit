@@ -40,6 +40,25 @@ jobs:
           echo "$dir/shellcheck-$v" >> "$GITHUB_PATH"
       - name: Run shell test suite
         run: bash tests/run.sh
+      - name: Check manifest validation with legacy mawk
+        # Debian 12's mawk lacks interval expressions; newer mawk releases support them.
+        # Extract the pinned binary locally, without replacing the runner's default awk.
+        run: |
+          dir="$RUNNER_TEMP/legacy-mawk"
+          mkdir -p "$dir/bin"
+          curl -sSfL -o "$dir/mawk.deb" \
+            https://deb.debian.org/debian/pool/main/m/mawk/mawk_1.3.4.20200120-3.1_amd64.deb
+          echo "bcbc83f391854ea9d50ce2a4101aacf330de3b8b71d81a798faadba14a157f78  $dir/mawk.deb" | sha256sum -c -
+          dpkg-deb -x "$dir/mawk.deb" "$dir/package"
+          ln -s "$dir/package/usr/bin/mawk" "$dir/bin/awk"
+          export PATH="$dir/bin:$PATH"
+          awk -W version 2>&1 | grep -F 'mawk 1.3.4 20200120'
+          if printf 'aaa\n' | awk '/^a{3}$/ { found = 1 } END { exit !found }'; then
+            echo 'Expected an awk without interval-expression support' >&2
+            exit 1
+          fi
+          bash tests/test_adoption_gate.sh
+          bash tests/test_doctor.sh
       - name: Shellcheck scripts and tests
         # SC1091 (not following sourced files) is excluded repo-wide: scripts
         # source common.sh / lib.sh via runtime-resolved paths shellcheck

@@ -10,6 +10,10 @@ projects. The separate `CI (macOS)` workflow additionally exercises installer, u
 status, doctor, adoption-gate and retrospective behavior on macOS for every pull request and
 push to main; it must pass before a merge but never gates a release.
 
+Linux CI also reruns the adoption-gate and doctor suites with Debian 12's mawk 1.3.4 20200120
+first on `PATH`. This older version lacks regex intervals; testing only a current mawk is not
+equivalent. The CI step verifies the downloaded package checksum and the missing capability.
+
 ## Coverage
 
 `test_new_change_linked.sh` forces overlapping automatic allocations from two linked worktrees.
