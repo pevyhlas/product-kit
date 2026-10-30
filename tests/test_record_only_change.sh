@@ -92,6 +92,44 @@ assert_eq "$(printf '0\n1')" "$(cat .git/explicit-*.status | sort)" 'exactly one
 assert_file specs/changes/070-same.md 'winner publishes one record'
 assert_eq no "$([ -e .git/prdkit-change-number.lock ] && echo yes || echo no)" 'number lock released'
 
+it "explicit IDs serialize across branch-creating and record-only modes"
+# Pause the branch creator after its collision check. The record-only creator must wait for
+# its reservation rather than publish a duplicate while git checkout is still in progress.
+mkdir .git/bin
+REAL_GIT="$(command -v git)"; export REAL_GIT
+RACE_ROOT="$PROJ/.git"; export RACE_ROOT
+cat > .git/bin/git <<'EOF'
+#!/usr/bin/env bash
+if [ "$*" = 'checkout -q -b 075-mixed' ]; then
+    touch "$RACE_ROOT/branch-ready"
+    while [ ! -f "$RACE_ROOT/branch-continue" ]; do sleep 0.1; done
+fi
+exec "$REAL_GIT" "$@"
+EOF
+chmod +x .git/bin/git
+(
+    cd "$WT" || exit 1
+    rc=0
+    PATH="$PROJ/.git/bin:$PATH" bash "$SCRIPT" --no-worktree --number 75 --short-name mixed 'branch creator' > "$PROJ/.git/mixed-branch.log" 2>&1 || rc=$?
+    printf '%s\n' "$rc" > "$PROJ/.git/mixed-branch.status"
+) &
+branch_pid=$!
+for ((attempt=0; attempt<100; attempt++)); do
+    [ ! -f .git/branch-ready ] || break
+    sleep 0.1
+done
+assert_file .git/branch-ready 'branch creator reaches collision-check barrier'
+run env PRDKIT_NUMBER_LOCK_WAIT=0 bash "$SCRIPT" --no-branch --number 75 --short-name mixed 'record-only creator'
+assert_eq 1 "$STATUS" 'record-only creator cannot race past an explicit branch reservation'
+assert_contains "$OUTPUT" 'another run has held the change-number lock' 'shared lock prevents the race'
+touch .git/branch-continue
+wait "$branch_pid"
+assert_eq 0 "$(cat .git/mixed-branch.status)" 'branch creator completes'
+run bash "$SCRIPT" --no-branch --number 75 --short-name mixed duplicate
+assert_eq 1 "$STATUS" 'finished branch-owned record also prevents the duplicate'
+assert_file "$WT/specs/changes/075-mixed.md" 'only the branch creator publishes the record'
+assert_eq no "$([ -e specs/changes/075-mixed.md ] && echo yes || echo no)" 'no duplicate record in caller checkout'
+
 it "dangling record symlinks are refused without writing through them"
 ln -s "$PROJ/missing-target" specs/changes/080-link.md
 run bash "$SCRIPT" --no-branch --number 80 --short-name link text

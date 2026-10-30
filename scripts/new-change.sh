@@ -270,8 +270,9 @@ if [ -z "$CHANGE_NUMBER" ]; then
     fi
     acquire_number_lock
     CHANGE_NUMBER="$(next_number)"; AUTO_NUMBER=true
-elif $NO_BRANCH; then
-    # No branch creation remains to arbitrate an explicit-ID race in record-only mode.
+else
+    # Every explicit-ID creator shares the lock too: branch creation cannot arbitrate a
+    # race against a record-only creator, especially across registered checkouts.
     acquire_number_lock
 fi
 NUM="$(printf '%03d' "$((10#$CHANGE_NUMBER))")"
