@@ -48,7 +48,7 @@ records="$(spec_records "$root")"
 # Use the same winning worktree record as the ordinary change view, without changing its schema.
 progress="$(while IFS="$SEP" read -r id title _ _ _ _ _ _ _ _ _ _ loc; do
     [ -n "$id" ] || continue
-    case "$loc" in /*) change_root="$loc" ;; *) change_root="$root/$loc" ;; esac
+    if [ "${loc#/}" != "$loc" ]; then change_root="$loc"; else change_root="$root/$loc"; fi
     printf '%s\037%s\037%s\037%s\n' "$id" "$title" "$loc" \
         "$(spec_change_progress "$change_root/specs/changes/$id.md")"
 done <<< "$changes")"
