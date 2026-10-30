@@ -8,6 +8,12 @@ change by change.
 
 ## [Unreleased]
 
+### Fixed
+
+- Failed worktree creation no longer automatically switches a checkout with only untracked work
+  onto a new change branch. The explicit `--no-worktree` override still branches in place and
+  carries existing edits; its help and workflow guidance now state that contract accurately.
+
 ### Changed
 
 - Programme work selection preserves the original outcome, intended architecture, critical path,
