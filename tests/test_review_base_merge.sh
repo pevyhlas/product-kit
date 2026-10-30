@@ -3,6 +3,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 SEED="$(make_inited_project)"; track_tmp "$SEED"
+printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n| security | reviewer |\n' >> "$SEED/.prdkit/memory/agents.md"
 mkdir -p "$SEED/src" "$SEED/docs" "$SEED/specs"
 printf 'base source\n' > "$SEED/src/owned.txt"
 printf 'base contract\n' > "$SEED/specs/product.md"

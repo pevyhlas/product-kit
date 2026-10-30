@@ -34,11 +34,15 @@ set -euo pipefail
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 source "$SCRIPT_DIR/spec-lib.sh"
+source "$SCRIPT_DIR/review-policy-lib.sh"
 json=false; head_ref=HEAD; base_ref=""; repo=.; id=""
-usage='Usage: check-review.sh [--json] [--head <rev>] [--base <rev>] [--repo <dir>] [<change-id>]'
+verify_reports=false; pr_url=""; report_verification=not-requested
+usage='Usage: check-review.sh [--json] [--head <rev>] [--base <rev>] [--repo <dir>] [--verify-reports --pr <url>] [<change-id>]'
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --json) json=true ;;
+        --verify-reports) verify_reports=true ;;
+        --pr) shift; [ "$#" -gt 0 ] || { echo "$usage" >&2; exit 2; }; pr_url="$1" ;;
         --head) shift; [ "$#" -gt 0 ] || { echo "$usage" >&2; exit 2; }; head_ref="$1" ;;
         --base) shift; [ "$#" -gt 0 ] || { echo "$usage" >&2; exit 2; }; base_ref="$1" ;;
         --repo) shift; [ "$#" -gt 0 ] || { echo "$usage" >&2; exit 2; }; repo="$1" ;;
@@ -48,6 +52,7 @@ while [ "$#" -gt 0 ]; do
     esac
     shift
 done
+if { $verify_reports && [ -z "$pr_url" ]; } || { ! $verify_reports && [ -n "$pr_url" ]; }; then echo "$usage" >&2; exit 2; fi
 root="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null)" || { echo "Not inside a Git checkout: $repo" >&2; exit 2; }
 [ -n "$id" ] || id="$(git -C "$root" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
 is_change_id "$id" || { echo "Expected a change id such as 004-export-csv (got: ${id:-none}); pass it explicitly" >&2; exit 2; }
@@ -77,7 +82,16 @@ if [ -n "$base_ref" ] && { $base_branch || { [ -n "$default_ref" ] &&
     import_base="$(git -C "$root" rev-parse "$base_ref^{commit}")"
 fi
 
-problems=(); rows=(); links=(); tier=""; rigor=""; record_at=""; record_only=false; start=""
+problems=(); rows=(); links=(); all_reviews=(); tier=""; rigor=""; record_at=""; record_only=false; start=""
+# Registration must precede use: a change cannot qualify its own maker or invented identity.
+registry_base="${default_ref:-$base_ref}"; registry_at=""; registry=""
+if [ -n "$registry_base" ]; then
+    registry_at="$(git -C "$root" merge-base "$registry_base" "$head" 2>/dev/null || true)"
+    if [ -n "$registry_at" ]; then
+        registry="$( { git -C "$root" show "$registry_at:.prdkit/memory/agents.md" 2>/dev/null || true; } | review_registry)"
+    fi
+fi
+eligible() { [ "$(review_eligibility "$registry" "$1")" = reviewer ]; }
 path="specs/changes/$id.md"
 spec_l01=(specs/product.md specs/product specs/architecture.md specs/architecture specs/SPEC.md specs/decisions)
 changed_since() { # sha [pathspec...] -> paths changed from sha to head, outside the record and the log
@@ -178,14 +192,16 @@ else
     # critical, high, medium, low. Every independent PASS or FAIL line, superseded ones included,
     # is also a link (marked \036): the range it reviewed, which coverage chains through.
     sep36="$(printf '\036')"
+    sep35="$(printf '\035')"
     while IFS= read -r row; do
         case "$row" in
             "") ;;
+            "$sep35"*) all_reviews+=("${row#"$sep35"}") ;;
             "$sep36"*) links+=("${row#"$sep36"}") ;;
             *) rows+=("$row") ;;
         esac
     done < <(printf '%s\n' "$record" | awk "$SPEC_SKIP_AWK"'
-        { if (spec_skip($0)) next }
+        { gsub(/[\035-\037]/, " "); if (spec_skip($0)) next }
         function trim(s) { gsub(/`/, "", s); gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
         function count(s, kind,   v) { v = s; if (!match(v, "[0-9]+ " kind)) return "?"; v = substr(v, RSTART, RLENGTH); sub(/ .*/, "", v); return v }
         /^## / { sec = $0; sub(/^##[[:space:]]+/, "", sec); next }
@@ -198,12 +214,19 @@ else
             if (!cut) { cut = index(range, ".."); width = 2 }
             from = cut ? substr(range, 1, cut - 1) : ""; to = cut ? substr(range, cut + width) : ""
             verdict = toupper(trim(f[4]))
+            print "\035" NR "\037" reviewer "\037" from "\037" to "\037" verdict "\037" count(f[5], "critical") "\037" count(f[5], "high") "\037" count(f[5], "medium") "\037" count(f[5], "low") "\037" trim(f[reviewer == "owner" ? 5 : 6])
             if (reviewer != "owner" && (verdict == "PASS" || verdict == "FAIL")) print "\036" reviewer "\037" trim(f[1]) "\037" verdict "\037" from "\037" to "\037" count(f[5], "critical") "\037" count(f[5], "high") "\037" count(f[5], "medium")
             if (!(reviewer in row)) order[++k] = reviewer
             row[reviewer] = reviewer "\037" trim(f[1]) "\037" from "\037" to "\037" verdict "\037" count(f[5], "critical") "\037" count(f[5], "high") "\037" count(f[5], "medium") "\037" count(f[5], "low")
         }
         END { for (i = 1; i <= k; i++) print row[order[i]] }')
     [ -n "$tier" ] || problems+=("The record names no review tier (**Tier**: T0–T3)")
+    for review in ${all_reviews[@]+"${all_reviews[@]}"}; do
+        IFS="$(printf '\037')" read -r line reviewer _ <<< "$review"
+        [ "$reviewer" != owner ] || continue
+        eligibility="$(review_eligibility "$registry" "$reviewer")"
+        [ "$eligibility" = reviewer ] || problems+=("$path:$line: reviewer '$reviewer' is $eligibility in the integration-baseline registry; register an eligible identity in agents.md before using it")
+    done
 
     # Every PASS or FAIL line, in record order, with its ends resolved where they are hashes in the
     # head's history. A blocking line (a FAIL, or counts that block for the Rigor or cannot be
@@ -229,7 +252,7 @@ else
             while [ "$m" -lt "${#l_rev[@]}" ]; do
                 if [ "${l_rev[m]}" = "${l_rev[k]}" ] && ! ${l_block[m]} && [ -n "${l_to[m]}" ] && [ -n "${l_from[m]}" ] &&
                     [ "${l_from[m]}" != "${l_to[m]}" ] && git -C "$root" merge-base --is-ancestor "${l_to[k]}" "${l_to[m]}"; then
-                    resolved_block=true; break
+                    if eligible "${l_rev[m]}"; then resolved_block=true; break; fi
                 fi
                 m=$((m + 1))
             done
@@ -239,6 +262,7 @@ else
             fi
         fi
         [ -n "${l_to[k]}" ] && [ -n "${l_from[k]}" ] && [ "${l_from[k]}" != "${l_to[k]}" ] || continue
+        eligible "${l_rev[k]}" || continue
         link_from+=("${l_from[k]}"); link_to+=("${l_to[k]}")
     done
     # A point is covered when recorded ranges chain from it to a head after which only the record
@@ -279,7 +303,7 @@ else
             fi
             continue
         fi
-        independent=$((independent + 1))
+        if eligible "$reviewer"; then independent=$((independent + 1)); fi
         for kind in critical high medium; do
             case "$kind" in critical) n="$critical" ;; high) n="$high" ;; medium) n="$medium" ;; esac
             [ "$kind" != medium ] || [ "$rigor" != light ] || continue
@@ -314,6 +338,28 @@ else
     fi
 fi
 
+if $verify_reports; then
+    report_verification=not-run
+    if [ "${#problems[@]}" -eq 0 ]; then
+        source "$SCRIPT_DIR/review-reports-lib.sh"
+        if review_reports_context "$pr_url" "$head"; then
+            report_verification=matched
+            for review in ${all_reviews[@]+"${all_reviews[@]}"}; do
+                IFS="$(printf '\037')" read -r line reviewer from to verdict critical high medium low link <<< "$review"
+                from="$(here "$from" || true)"; to="$(here "$to" || true)"
+                # Superseded verdicts whose history is unavailable still cannot be authenticated.
+                if [ -z "$from" ] || [ -z "$to" ]; then
+                    problems+=("$path:$line: report range is unavailable for verification"); report_verification=failed; continue
+                fi
+                if ! review_report_match "$link" "$reviewer" "$from" "$to" "$verdict" "$critical" "$high" "$medium" "$low"; then
+                    problems+=("$path:$line: $RR_ERROR"); report_verification="$RR_STATE"
+                fi
+            done
+        else
+            problems+=("$RR_ERROR"); report_verification="$RR_STATE"
+        fi
+    fi
+fi
 result=pass; [ "${#problems[@]}" -eq 0 ] || result=fail
 if $json; then
     printf '{"result":"%s","change":"%s","head":"%s","base":"%s","record_only":%s,"tier":"%s","rigor":"%s","record_at":"%s","reviews":[' \
@@ -326,7 +372,7 @@ if $json; then
             "$(json_escape "$critical")" "$(json_escape "$high")" "$(json_escape "$medium")" "$(json_escape "$low")"
         sep=,
     done
-    printf '],"problems":%s}\n' "$(json_array ${problems[@]+"${problems[@]}"})"
+    printf '],"registry_at":"%s","report_verification":"%s","problems":%s}\n' "$registry_at" "$report_verification" "$(json_array ${problems[@]+"${problems[@]}"})"
 elif [ "$result" = pass ]; then
     if $record_only; then
         note=""
@@ -340,5 +386,10 @@ elif [ "$result" = pass ]; then
 else
     printf 'FAIL %s at %s:\n' "$id" "$head"
     for problem in "${problems[@]}"; do printf '  %s\n' "$problem"; done
+fi
+if ! $json && [ "${#rows[@]}" -gt 0 ]; then
+    if [ "$report_verification" = not-requested ]; then
+        printf 'Report links unverified (offline default); use --verify-reports --pr <url> for report consistency checks.\n'
+    else printf 'Report verification: %s (matching metadata does not prove reviewer independence).\n' "$report_verification"; fi
 fi
 [ "$result" = pass ]

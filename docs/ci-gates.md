@@ -76,6 +76,47 @@ verdict, with the commit hashes the review package printed, to the change record
   and no L0 or L1 spec edit since the head the owner approved. Which concerns a T2 change
   needed is the worker's call; the check sees only what is recorded.
 
+### Reviewer eligibility and report links
+
+Every non-owner Review line must name an eligible identity in `.prdkit/memory/agents.md` at the
+integration baseline (merge base with the default branch, or the explicit comparison base when
+no default is available). A change cannot add its own maker to the registry and approve itself.
+Use a `## Review registry` section with `| Identity | Role |` columns and exact roles `reviewer`
+or `maker`. Lowercase identifiers may contain letters, digits, dots, underscores and hyphens.
+A maker is denied even if also listed as a reviewer; duplicate or invalid roles are ambiguous.
+Legacy `| Role | Available agent or human | Notes |` capability rows also work when they name an
+exact identity and the role is `Independent review`/`Review` or `Implementation`/`Maker`.
+Placeholders and free-form descriptions are not registrations. `owner` remains a reserved verdict.
+
+**Adoption:** integrate the identities used by active Review lines before enabling the updated
+gate. Existing concern labels such as `code` must become registered review identities, or be
+reconciled with actual reviewer evidence. Preserve unresolved FAILs; deleting an ineligible
+identity is not a clean verdict. Registry checking tests declared eligibility, not session independence.
+
+The default check needs no network or extra dependencies. JSON exposes `registry_at` and
+`report_verification: "not-requested"`; text output states that report links are unverified.
+Opt in to GitHub report consistency with:
+
+```bash
+bash .prdkit/scripts/bash/check-review.sh --verify-reports --pr https://github.com/OWNER/REPO/pull/123 <change-id>
+```
+
+This mode needs `gh` and `jq`. It verifies the PR head, each `#issuecomment-N` link's actual PR
+membership, and one structured receipt per report with matching reviewer, full commit hashes,
+verdict and finding counts. Append this receipt to the report comment, filling actual values:
+
+```text
+<!-- prdkit-review
+{"schema":"prdkit.review.v1","reviewer":"code-review","base":"<full base SHA>","head":"<full reviewed SHA>","verdict":"PASS","critical":0,"high":0,"medium":0,"low":0}
+-->
+```
+
+Owner receipts use reviewer `owner`; counts are optional. Historical reports also need receipts
+when this mode is used. Missing tools, unavailable/offline API access, missing history or a
+mismatch returns a failing result rather than a verified PASS. Matching metadata does not
+authenticate the reviewer session: shared bot accounts can publish for several roles. The
+main session must still preserve dispatch/report provenance and enforce independent review.
+
 A closing commit that deletes the record is checked against the record's last committed
 version. Finalize new implementation changes in their own PR, retaining context and evidence on
 that PR before deleting the record; no cleanup-only PR is required. Auxiliary tracked plans are

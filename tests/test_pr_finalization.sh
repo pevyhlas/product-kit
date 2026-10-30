@@ -4,6 +4,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 PROJ="$(make_inited_project)"; track_tmp "$PROJ"
 cd "$PROJ" || exit 1
+printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| integration | reviewer |\n' >> .prdkit/memory/agents.md
 CHECK="$PROJ/.prdkit/scripts/bash/check-review.sh"
 mkdir -p specs/changes src
 cat > specs/changes/001-programme.md <<'EOF'

@@ -8,6 +8,15 @@ change by change.
 
 ## [Unreleased]
 
+### Fixed
+
+- Review verdicts and coverage require eligible registered identities from the integration
+  baseline; makers, unknown names and ambiguous registrations no longer count as independent
+  review. Existing policy/records need reconciliation before the stricter gate is adopted.
+- Review output explicitly reports unverified links by default. Optional `--verify-reports --pr`
+  checks GitHub PR/comment membership and structured report metadata with `gh` and `jq`, failing
+  on unavailable or mismatching evidence without claiming session independence.
+
 ## [1.3.2] — 2026-10-30 — review coverage and consumer diagnostics fixes
 
 Correct review coverage after base updates, robust status JSON and clearer checkpoint/install
