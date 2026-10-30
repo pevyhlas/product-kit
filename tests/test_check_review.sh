@@ -9,8 +9,11 @@ PROJ="$(make_inited_project)"; track_tmp "$PROJ"
 PROJ="$(cd "$PROJ" && pwd -P)"
 CHECK="$PROJ/.prdkit/scripts/bash/check-review.sh"
 cd "$PROJ" || exit 1
+printf '\n## Configuration\n- review-integration-branches: origin/develop\n' > .prdkit/memory/config.md
 git add -A >/dev/null; git commit -qm installed >/dev/null
 DEFAULT="$(git symbolic-ref --short HEAD)"
+git update-ref "refs/remotes/origin/$DEFAULT" HEAD
+git symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$DEFAULT"
 git checkout -q -b 001-greet
 mkdir -p src specs/changes; echo 'greet' > src/app.txt
 git add -A >/dev/null; git commit -qm code >/dev/null
@@ -277,6 +280,7 @@ it "a change closed after its code merged carries only the record and the log"
 # Squash-merge the code with its open record, then close it from a new branch: the reviewed
 # heads are gone from this history, and nothing but the record and the log is merged.
 git checkout -q 001-greet~1 -- src specs/changes; git commit -qm "001-greet (#1)" >/dev/null
+git update-ref "refs/remotes/origin/$DEFAULT" HEAD
 git checkout -q -b 001-close
 git rm -q specs/changes/001-greet.md; mkdir -p specs; printf -- '- 2026-10-19 001-greet: warmer greeting — R-01 — #2\n' >> specs/log.md
 git add specs/log.md; git commit -qm close >/dev/null

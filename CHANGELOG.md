@@ -8,6 +8,12 @@ change by change.
 
 ## [Unreleased]
 
+### Fixed
+
+- Review coverage exemptions share an explicit integration-base trust policy. Arbitrary pushed
+  branches and local main/master no longer authorize base-import or record-only exemptions;
+  additional integration branches are configured in the remote default's committed policy.
+
 ## [1.3.2] — 2026-10-30 — review coverage and consumer diagnostics fixes
 
 Correct review coverage after base updates, robust status JSON and clearer checkpoint/install
