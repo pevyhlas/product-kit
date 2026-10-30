@@ -8,8 +8,16 @@ change by change.
 
 ## [Unreleased]
 
+### Added
+
+- `new-change.sh --no-branch` creates a numbered change record on the existing checkout without
+  branching, switching HEAD or creating a worktree. It preserves numbering/collision protection
+  and reports the actual branch; ordinary delivery authority and review still apply.
+
 ### Fixed
 
+- Unknown new-change options are rejected instead of silently becoming intent text. Use `--`
+  before intent text beginning with a dash.
 - Review verdicts and coverage require eligible registered identities from the integration
   baseline; makers, unknown names and ambiguous registrations no longer count as independent
   review. Existing policy/records need reconciliation before the stricter gate is adopted.

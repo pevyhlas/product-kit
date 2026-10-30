@@ -2,7 +2,7 @@
 # new-change.sh — Open a change: number it, create specs/changes/<id>.md from the change
 # template, and (by default) put its branch in an isolated worktree under .worktrees/.
 #
-# Usage: new-change.sh [--json] [--short-name <name>] [--number N] [--no-worktree] <intent>
+# Usage: new-change.sh [--json] [--short-name <name>] [--number N] [--no-worktree|--no-branch] <intent>
 #
 # Never overwrites an existing change record. Automatic fallback refuses tracked or
 # non-ignored untracked work. --no-worktree (or an already linked worktree) branches
@@ -14,10 +14,11 @@ source "$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 # shellcheck source=/dev/null
 source "$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/spec-lib.sh"
 
-usage() { echo "Usage: $0 [--json] [--short-name <name>] [--number N] [--no-worktree] <intent>"; }
+usage() { echo "Usage: $0 [--json] [--short-name <name>] [--number N] [--no-worktree|--no-branch] <intent>"; }
 
 JSON_MODE=false
 NO_WORKTREE=false
+NO_BRANCH=false
 SHORT_NAME=""
 CHANGE_NUMBER=""
 ARGS=()
@@ -25,6 +26,8 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --json) JSON_MODE=true ;;
         --no-worktree) NO_WORKTREE=true ;;
+        --no-branch) NO_BRANCH=true ;;
+        --) shift; ARGS+=("$@"); break ;;
         --short-name|--number)
             if [ "$#" -lt 2 ] || [[ "$2" == --* ]]; then echo "Error: $1 requires a value" >&2; exit 1; fi
             if [ "$1" = --short-name ]; then SHORT_NAME="$2"; else CHANGE_NUMBER="$2"; fi
@@ -36,11 +39,17 @@ while [ "$#" -gt 0 ]; do
             echo "  --number N          Change number (overrides auto-detection)"
             echo "  --no-worktree       Create and switch to the branch in the current checkout"
             echo "                      instead of an isolated worktree; existing edits carry over"
+            echo "  --no-branch         Create only the change record in the current checkout"
+            echo "                      without creating/switching branches or creating a worktree"
             exit 0 ;;
+        -*) echo "Error: unknown option: $1 (use -- before intent text starting with '-')" >&2; exit 2 ;;
         *) ARGS+=("$1") ;;
     esac
     shift
 done
+if $NO_BRANCH && $NO_WORKTREE; then
+    echo "Error: --no-branch and --no-worktree are mutually exclusive" >&2; exit 2
+fi
 
 INTENT="${ARGS[*]-}"
 if [ -z "$INTENT" ]; then usage >&2; exit 1; fi
@@ -261,6 +270,10 @@ if [ -z "$CHANGE_NUMBER" ]; then
     fi
     acquire_number_lock
     CHANGE_NUMBER="$(next_number)"; AUTO_NUMBER=true
+else
+    # Every explicit-ID creator shares the lock too: branch creation cannot arbitrate a
+    # race against a record-only creator, especially across registered checkouts.
+    acquire_number_lock
 fi
 NUM="$(printf '%03d' "$((10#$CHANGE_NUMBER))")"
 if [ "$AUTO_NUMBER" = true ]; then
@@ -290,16 +303,19 @@ CHANGE_ID="$NUM-$SLUG"
 is_change_id "$CHANGE_ID" || { echo "Error: '$CHANGE_ID' is not a valid change id" >&2; exit 1; }
 BRANCH_NAME="$CHANGE_ID"
 
-for checkout in "$REPO_ROOT" "$REPO_ROOT/.worktrees/$BRANCH_NAME"; do
-    if [ -e "$checkout/specs/changes/$CHANGE_ID.md" ]; then
+while IFS= read -r checkout; do
+    if [ -e "$checkout/specs/changes/$CHANGE_ID.md" ] || [ -L "$checkout/specs/changes/$CHANGE_ID.md" ]; then
         echo "[prdkit] Error: $checkout/specs/changes/$CHANGE_ID.md already exists; it is never overwritten." >&2
         exit 1
     fi
-done
+done < <(list_checkouts)
 
 WORKTREE_PATH="$REPO_ROOT"
 CREATED_WORKTREE=false
-if [ "$HAS_GIT" = true ]; then
+if $NO_BRANCH; then
+    BRANCH_NAME=""
+    if $HAS_GIT; then BRANCH_NAME="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"; fi
+elif [ "$HAS_GIT" = true ]; then
     if git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
         echo "[prdkit] Error: Branch '$BRANCH_NAME' already exists." >&2
         echo "[prdkit] To continue that change, run: git checkout $BRANCH_NAME" >&2
@@ -358,19 +374,26 @@ CHANGE_FILE="$CHANGES_DIR/$CHANGE_ID.md"
 mkdir -p "$CHANGES_DIR"
 TEMPLATE="$WORKTREE_PATH/.prdkit/templates/change-template.md"
 [ -f "$TEMPLATE" ] || TEMPLATE="$REPO_ROOT/.prdkit/templates/change-template.md"
-if [ -e "$CHANGE_FILE" ]; then
+if [ -e "$CHANGE_FILE" ] || [ -L "$CHANGE_FILE" ]; then
     echo "[prdkit] Error: $CHANGE_FILE already exists; it is never overwritten." >&2
     exit 1
 fi
 TODAY="${PRDKIT_TODAY:-$(date +%Y-%m-%d)}"
-if [ -f "$TEMPLATE" ]; then
-    PK_INTENT="$INTENT" PK_TODAY="$TODAY" awk '
-        NR == 1 && /^# Change:/ { print "# Change: " ENVIRON["PK_INTENT"]; next }
-        /^\*\*Opened\*\*: <date>/ { sub(/<date>/, ENVIRON["PK_TODAY"]) }
-        { print }
-    ' "$TEMPLATE" > "$CHANGE_FILE"
-else
-    printf '# Change: %s\n\n**Opened**: %s\n' "$INTENT" "$TODAY" > "$CHANGE_FILE"
+write_record() {
+    if [ -f "$TEMPLATE" ]; then
+        PK_INTENT="$INTENT" PK_TODAY="$TODAY" awk '
+            NR == 1 && /^# Change:/ { print "# Change: " ENVIRON["PK_INTENT"]; next }
+            /^\*\*Opened\*\*: <date>/ { sub(/<date>/, ENVIRON["PK_TODAY"]) }
+            { print }
+        ' "$TEMPLATE" > "$CHANGE_FILE"
+    else
+        printf '# Change: %s\n\n**Opened**: %s\n' "$INTENT" "$TODAY" > "$CHANGE_FILE"
+    fi
+}
+# Refuse a file/symlink created after the existence check, including by an external writer.
+if ! (set -C; write_record); then
+    echo "[prdkit] Error: could not create $CHANGE_FILE; existing records are never overwritten." >&2
+    exit 1
 fi
 # The branch and record now claim the number; the next run may compute its own.
 release_number_lock

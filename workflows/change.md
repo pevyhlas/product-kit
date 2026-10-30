@@ -20,6 +20,12 @@ staged, unstaged and untracked work carries over. Running inside a linked worktr
 in place, without nesting worktrees. If worktree creation fails, automatic fallback refuses a
 checkout with tracked or non-ignored untracked work rather than silently switching its branch.
 
+Use `--no-branch` for project-authorized existing-branch delivery: create only the numbered record
+in the current checkout, preserving HEAD, refs, index and existing edits. It is mutually exclusive
+with `--no-worktree`; JSON reports the actual branch (empty for detached HEAD or no Git). Pass the
+change ID explicitly to later helpers when it differs from the branch. Record creation grants no
+commit, push, merge or deployment authority; ordinary acceptance and independent review still apply.
+
 For a product/programme, use [planning.md](planning.md) to discover work across intent and design.
 For ready work, use [implementation.md](implementation.md); do not repeat upstream specification
 or design. One implementation change normally belongs to one PR; larger outcomes use bounded
@@ -219,6 +225,11 @@ acceptance or require a new cleanup-only PR. After merge run
 `.prdkit/scripts/bash/cleanup-change.sh <id>` from the main checkout: it copies the worktree's
 evidence, retrospectives and ledger events into this checkout, verifies them, and only then
 removes the worktree.
+
+For a record opened with `--no-branch`, finalize the record and log through the project's authorized
+delivery route, with the same acceptance/review obligations. Do not remove the shared checkout or
+run isolated-worktree cleanup merely because this record closed. Detached HEAD can hold a record,
+but publication still needs an authorized named branch; record creation does not create one.
 
 ## Bigger work
 
