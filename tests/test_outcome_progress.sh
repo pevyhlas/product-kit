@@ -145,6 +145,7 @@ cat > specs/changes/007-parent.md <<'MD'
 **Parent**: none
 ## State
 **Outcome**: Ordinary result, not a goal
+**Outcome**: Another historical result
 MD
 run status_json
 assert_eq 1 "$(printf '%s' "$OUTPUT" | jq '.outcome_progress | length')" 'only referenced parent has an outcome row'

@@ -632,7 +632,7 @@ spec_change_progress() { # file [required=true] [advisories] -> outcome, milesto
             use = blocks ? 1 : 0
             n = split("Outcome|Milestone|Critical path|Allocation|Progress|Selection|No-progress changes|Progress limit", keys, "|")
             for (i = 1; i <= n; i++) {
-                key = keys[i]; seen[key] = counts[use, key]
+                key = keys[i]; seen[key] = (blocks || legacy) ? counts[use, key] : 0
                 # A referenced parent without a checkpoint remains unknown, not generic prose.
                 if (blocks || legacy) values[key] = data[use, key]
                 if (seen[key] > 1) invalid = 1
