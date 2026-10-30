@@ -70,7 +70,7 @@ verdict, with the commit hashes the review package printed, to the change record
   `specs/log.md` changed. Each
   reviewer's head, a commit hash in the merged head's history, must be covered, and for T1–T3
   so must the change's start (its merge base with `--base`), so scoped re-reviews of fixes
-  chain while a gap fails. No range may be empty; without a default branch pass `--base`; a
+  chain while a gap fails. No range may be empty; `--base` selects the comparison branch; a
   head already inside `--base` fails;
 - the tier's minimum is recorded: one independent verdict for T1–T3, plus the owner's for T3,
   and no L0 or L1 spec edit since the head the owner approved. Which concerns a T2 change
@@ -90,8 +90,9 @@ Legacy `| Role | Available agent or human | Notes |` capability rows also work w
 exact identity and the role is `Independent review`/`Review` or `Implementation`/`Maker`.
 Placeholders and free-form descriptions are not registrations. `owner` remains a reserved verdict.
 
-**Adoption:** integrate the identities used by active Review lines before enabling the updated
-gate. Existing concern labels such as `code` must become registered review identities, or be
+**Adoption:** establish the advertised remote default (`git remote set-head origin --auto` after
+fetching its history), and integrate the identities used by active Review lines before enabling
+the updated gate. Existing concern labels such as `code` must become registered review identities, or be
 reconciled with actual reviewer evidence. Preserve unresolved FAILs; deleting an ineligible
 identity is not a clean verdict. Registry checking tests declared eligibility, not session independence.
 
@@ -160,6 +161,8 @@ version as a comment, as the kit's own workflows do.
     HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     BASE_REF: ${{ github.base_ref }}
   run: |
+    # actions/checkout may initialize origin without its remote-default symbolic ref.
+    git remote set-head origin --auto
     case "$HEAD_REF" in
       [0-9][0-9][0-9]-*) bash .prdkit/scripts/bash/check-review.sh --head "$HEAD_SHA" --base "origin/$BASE_REF" "$HEAD_REF" ;;
       *) echo "Not a change branch; no review record to check." ;;

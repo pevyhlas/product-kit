@@ -231,7 +231,7 @@ keeping non-gating observations explicit. No separate cleanup PR. Edit it in pla
 When one PR also finalizes a parent or older change, its implementation record is the **review
 carrier**. Before final review, bring the other record's remaining required acceptance, unresolved
 findings, attempts, holds and disposition into that carrier, labelled with their origin. Preserve
-verdict/report history; unresolved FAILs need a clean later verdict from the same reviewer/concern,
+verdict/report history; unresolved FAILs need a clean later verdict from the same registered reviewer,
 not disappearance during transfer. The carrier takes the combined scope's highest applicable tier
 and all required reviewer concerns, including owner approval where required. Post the other record's
 useful context/evidence on this PR, add its log disposition and delete it **before** the carrier's
