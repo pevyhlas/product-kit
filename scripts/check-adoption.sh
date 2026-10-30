@@ -119,7 +119,7 @@ mode="${mode:-symlink}"
 harnesses="$(sed -n 's/^harnesses:[[:space:]]*//p' "$MANIFEST" 2>/dev/null | head -1 || true)"
 manifest_commands() { # harness -> expected basenames recorded in the manifest
     awk -v prefix=".$1/commands/" '
-        $1 ~ /^[0-9a-f]{64}$/ && index($2, prefix) == 1 { print substr($2, length(prefix) + 1) }
+        length($1) == 64 && $1 ~ /^[0-9a-f]+$/ && index($2, prefix) == 1 { print substr($2, length(prefix) + 1) }
     ' "$MANIFEST" 2>/dev/null
 }
 for harness in $(printf '%s' "$harnesses" | tr ',' ' '); do

@@ -70,6 +70,8 @@ only establishes evaluation plumbing. See [test docs](tests/README.md).
 
 **CI and the merge rule.** `CI` ([`ci.yml`](.github/workflows/ci.yml)) runs these three
 commands on a GitHub-hosted Ubuntu 24.04 runner for every pull request and every push to main.
+It also runs adoption-gate and doctor coverage with checksum-pinned legacy mawk (1.3.4 20200120);
+newer mawk releases support intervals and would not exercise that compatibility boundary.
 `CI (macOS)` ([`ci-macos.yml`](.github/workflows/ci-macos.yml)) runs the portable suites with
 macOS's native Bash 3.2 and BSD userland, for every pull request and push to main and on demand.
 Both must pass before a merge. Only `CI` decides releases: `CI (macOS)` neither triggers nor

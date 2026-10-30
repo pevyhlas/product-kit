@@ -16,6 +16,21 @@ run bash "$SCRIPT" --json
 assert_contains "$OUTPUT" '"result":"pass"' "json pass"
 assert_contains "$OUTPUT" '"findings":[]' "no findings"
 
+it "malformed command hashes never count as recorded commands"
+cp .prdkit/.manifest .git/manifest.saved
+command_hash="$(awk '$2 == ".claude/commands/prdkit.md" { print $1 }' .git/manifest.saved)"
+for bad_hash in "${command_hash%?}" "${command_hash}a" "g${command_hash#?}"; do
+    awk -v bad="$bad_hash" '$2 == ".claude/commands/prdkit.md" { print bad "  " $2; next } { print }' \
+        .git/manifest.saved > .prdkit/.manifest
+    for checker in check-adoption doctor; do
+        run bash ".prdkit/scripts/bash/$checker.sh" --json
+        assert_eq 1 "$STATUS" "$checker rejects malformed hash: $bad_hash"
+        assert_contains "$OUTPUT" 'Invalid manifest hash entry:' "hash validation still enforced"
+        assert_contains "$OUTPUT" 'not recorded in the manifest: .claude/commands/prdkit.md' "invalid digest cannot record a command"
+    done
+done
+cp .git/manifest.saved .prdkit/.manifest
+
 it "version drift between manifest and kit source is a finding"
 echo '0.0.0-test' > "$PROJ/.product-kit/VERSION"
 run bash "$SCRIPT"

@@ -8,6 +8,12 @@ change by change.
 
 ## [Unreleased]
 
+### Fixed
+
+- Manifest validation in doctor and the adoption gate works with older mawk versions without
+  regex interval support, including Debian 12's default awk. Valid installed commands are no
+  longer reported as unrecorded; malformed hashes and genuinely unrecorded commands still fail.
+
 ### Changed
 
 - Programme work selection preserves the original outcome, intended architecture, critical path,
