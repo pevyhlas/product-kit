@@ -10,16 +10,24 @@ written as prose in the spec or docs. Its handwritten inputs are change State an
 
 Answer the owner's question first, in plain words, with the title next to every ID. Then:
 
-1. **True now**: requirements, qualities and parts with maturity, `planned` and unenforced items.
-2. **In flight**: open changes from every registered worktree, with where each lives, step,
+1. **Outcome progress**: original goal, intended architecture, next milestone, last evidenced
+   advance (or none/unknown), critical path, lane allocation and next-task rationale from the
+   parent's checkpoint. Name timebox/investment exhaustion, displaced lanes and repeated completed
+   changes without an advance before listing test or PR totals. Reconcile newer PR context when
+   available; the local helper only projects recorded State fields and the no-progress count/limit,
+   not evidence validity or prose deadlines. Missing fields stay unknown, malformed/duplicate ones
+   invalid; reaching the count limit says `reassess`, never grants authority or claims a failed test.
+2. **True now**: requirements, qualities and parts with maturity, `planned` and unenforced items.
+3. **In flight**: open changes from every registered worktree, with where each lives, step,
    age, attempts and what each waits on; 0.x feature folders still on main, a cutover to
    finish; unmerged branches.
-3. **Live**: the latest `DEPLOY` record per app and environment (`rev=none`: nothing deployed);
+4. **Live**: the latest `DEPLOY` record per app and environment (`rev=none`: nothing deployed);
    merged but not deployed.
-4. **Holds and waivers** with owner, scope and expiry; expired ones flagged.
-5. **Owner queue**: open inbox items with age and conflicting directions. Legacy resolved items
+5. **Holds and waivers** with owner, scope and expiry; expired ones flagged.
+6. **Owner queue**: open inbox items with age and conflicting directions. Legacy resolved items
    are reconciliation work (spec.md), not unanswered owner questions.
-6. **Longest pole**: the item that most delays the current goal, and what it waits on.
+7. **Longest pole**: the item that most delays the current goal, and what it waits on. The helper's
+   age/attempt heuristic is a candidate, not a computed critical path; reconcile it with the programme.
 
 Merged, live and validated stay distinct. Keep what the helper observed apart from your reading of
 it; unknown stays unknown. A closed/logged PR is not proof of runtime acceptance. Non-gating

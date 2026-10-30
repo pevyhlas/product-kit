@@ -7,6 +7,11 @@ attempts and fix-round limits separately; active holds; next action and owner. U
 when any of these changes, including after a review fix or owner answer. Link the latest durable
 evidence; older comments retain history but are not the current status.>
 
+<For programme work: link the parent's outcome checkpoint. Lead with the milestone/dependency
+advance and evidence, or explicitly no advance/unknown; retain the cumulative no-progress count,
+lane purpose and remaining allocation. Explain why the next task advances the critical path.
+Preserve this checkpoint here before a child record is deleted or the session is compacted.>
+
 ## Intent and design
 
 <Change ID/title; canonical IDs and design references; approved delta or Spec impact: none;

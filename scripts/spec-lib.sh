@@ -586,6 +586,39 @@ spec_changes() { # root
     return 0
 }
 
+spec_change_progress() { # file -> outcome, milestone, critical path, allocation, progress,
+    # selection, no-progress count (number|null), limit (number|null), count signal.
+    # Project recorded State only; no inference from acceptance, PR totals or dates in prose.
+    local file="$1"
+    [ -f "$file" ] || file=/dev/null
+    awk "$SPEC_SKIP_AWK"'
+        function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+        function uint(s) { return s ~ /^(0|[1-9][0-9]*)$/ }
+        # Compare decimal strings without machine-integer overflow or floating-point rounding.
+        function reached(a, b) { return length(a) > length(b) || (length(a) == length(b) && "x" a >= "x" b) }
+        { if (spec_skip($0)) next }
+        /^## / { sec = $0; next }
+        sec == "## State" && /^\*\*[^*]+\*\*:/ {
+            key = $0; sub(/^\*\*/, "", key); sub(/\*\*:.*/, "", key)
+            if (key !~ /^(Outcome|Milestone|Critical path|Allocation|Progress|Selection|No-progress changes|Progress limit)$/) next
+            value = $0; sub(/^\*\*[^*]+\*\*:[[:space:]]*/, "", value)
+            gsub(/\037/, " ", value)
+            values[key] = trim(value)
+            if (++seen[key] > 1) invalid = 1
+        }
+        END {
+            count = values["No-progress changes"]; limit = seen["Progress limit"] ? values["Progress limit"] : "3"
+            if (seen["No-progress changes"] && count != "unknown" && !uint(count)) invalid = 1
+            if (!uint(limit) || limit == "0") invalid = 1
+            signal = "unknown"
+            if (invalid) signal = "invalid"
+            else if (uint(count)) signal = reached(count, limit) ? "reassess" : "below-limit"
+            if (!uint(count) || seen["No-progress changes"] > 1) count = "null"
+            if (!uint(limit) || limit == "0" || seen["Progress limit"] > 1) limit = "null"
+            print values["Outcome"] "\037" values["Milestone"] "\037" values["Critical path"] "\037" values["Allocation"] "\037" values["Progress"] "\037" values["Selection"] "\037" count "\037" limit "\037" signal
+        }' "$file"
+}
+
 # Checkouts that can hold open change records, as path, branch and location (relative to root,
 # "." for root itself): root first, then every other registered worktree whose directory exists
 # (new-change.sh creates the record in one). Local git metadata only.

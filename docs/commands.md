@@ -11,7 +11,8 @@ own the operational behavior, starting with [protocol.md](../workflows/protocol.
   ready work consumes approved product/design intent. `continue` resumes from the
   change's State after checking actual repository state.
 - [`/prdkit-status`](../commands/prdkit-status.md) — runs `status.sh` (`--json` for the derived
-  form) and answers the question first, then the longest pole. Read-only.
+  form) and answers the question first, then outcome progress and the longest pole. Recorded
+  milestone evidence and no-progress counts stay distinct from PR/test totals. Read-only.
 - [`/prdkit-product`](../commands/prdkit-product.md) — edit L0 (`specs/product.md` and
   `specs/product/`, or the L0 sections of `specs/SPEC.md`) inside a change, with the owner's words
   quoted.

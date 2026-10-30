@@ -2,7 +2,8 @@
 
 **Opened**: <date> · **Parts**: <P-ids> · **Journeys**: <J-ids> · **Tier**: <T0–T3> · **Parent**: none
 
-<!-- Past its budget, a change splits into changes that each ship on their own (Parent: <id>). -->
+<!-- Split large scope into independently shippable children (Parent: <id>), preserving the
+parent's outcome, allocation and cumulative attempts/progress. Splitting never renews a budget. -->
 
 ## Intent
 
@@ -53,5 +54,16 @@ NOT_RUN/PASS/FAIL/BLOCKED/NOT_APPLICABLE; evidence/revision/environment go in Ch
 **Step**: intent
 **Waiting on**: nothing
 **Next**: <next action>
+<!-- For a programme/continuing follow-up queue, fill the outcome checkpoint here (change.md).
+Children link their parent's checkpoint. Do not initialize missing history to zero on resume.
+**Outcome**: <owner goal/source; intended architecture and stage>
+**Milestone**: <next observable result and check; enabling checks in Tasks>
+**Critical path**: <dependencies and actual blocker>
+**Allocation**: <lane purposes; original start/deadline/bounds/consumption; authority>
+**Progress**: <last evidenced advance, date/revision/link; or none/unknown>
+**No-progress changes**: <integer or unknown>
+**Progress limit**: 3
+**Selection**: <next task, milestone contribution, why now; temporary-work disposition>
+-->
 <!-- One line per verdict (workflows/change.md, Review):
 **Review**: round <n> · <base sha>..<reviewed head sha> · <reviewer> · PASS|FAIL · <n> critical, <n> high, <n> medium, <n> low · <link> -->

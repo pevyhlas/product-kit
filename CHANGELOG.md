@@ -8,6 +8,22 @@ change by change.
 
 ## [Unreleased]
 
+### Changed
+
+- Programme work selection preserves the original outcome, intended architecture, critical path,
+  lane purposes and investment limits in an existing State checkpoint. Successful child changes
+  without evidenced milestone/dependency progress trigger reassessment; temporary/retiring-code
+  repairs need a bounded rationale. Handoffs retain cumulative accounting across PRs and sessions.
+- Status leads with recorded outcome progress and flags its no-progress count limit separately
+  from failed acceptance. Missing tracking remains unknown; evidence, deadlines and lane purpose
+  still require agent assessment. Existing consumers and standalone small changes remain supported.
+
+### Adoption
+
+- Upgrade normally and compare customized change/PR-summary templates with the updated versions.
+  Reconstruct active programme checkpoints from actual owner direction and PR evidence; do not
+  reset consumed time, repair attempts or no-progress history when adopting the new fields.
+
 ## [1.3.0] — 2026-10-28 — assurance and recoverable upgrades
 
 Inspectable installation provenance, explicit capability evidence, accepted-change cost accounting,

@@ -261,7 +261,7 @@ it "a record in several checkouts is listed once, the change's own branch winnin
 mkdir -p specs/changes
 sed 's/^\*\*Step\*\*: .*/**Step**: stale copy/' .worktrees/001-greet/specs/changes/001-greet.md > specs/changes/001-greet.md
 run bash "$P2/.prdkit/scripts/bash/status.sh"
-assert_eq 1 "$(printf '%s\n' "$OUTPUT" | grep -c '001-greet — Warmer greeting')" "one row for the id"
+assert_eq 1 "$(printf '%s\n' "$OUTPUT" | sed -n '/^In flight$/,/^Live$/p' | grep -c '001-greet — Warmer greeting')" "one in-flight row for the id"
 assert_not_contains "$OUTPUT" "stale copy" "the worktree copy wins"
 rm -f specs/changes/001-greet.md
 
