@@ -8,6 +8,11 @@ change by change.
 
 ## [Unreleased]
 
+## [1.3.1] — 2026-10-30 — outcome progress and compatibility fixes
+
+Programme outcome safeguards, legacy awk compatibility and safer automatic worktree fallback.
+This patch release preserves existing consumer layouts and explicit in-place branching behavior.
+
 ### Fixed
 
 - Manifest validation in doctor and the adoption gate works with older mawk versions without
@@ -29,7 +34,10 @@ change by change.
 
 ### Adoption
 
-- Upgrade normally and compare customized change/PR-summary templates with the updated versions.
+- Pin the kit to `v1.3.1`, run `bash .product-kit/scripts/init.sh --check`, then
+  `bash .product-kit/scripts/init.sh --upgrade`. Run the normal doctor and adoption checks after
+  installation; update configured adoption pins and manifest hashes together with the kit pin.
+- Compare customized change/PR-summary templates with the updated versions.
   Reconstruct active programme checkpoints from actual owner direction and PR evidence; do not
   reset consumed time, repair attempts or no-progress history when adopting the new fields.
 
