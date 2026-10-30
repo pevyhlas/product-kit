@@ -164,6 +164,14 @@ a T2 change needed; the reviewer list is the worker's call. It needs no network 
 credentials, so CI can run it too. It checks recorded verdicts, never grants merge
 authority, and is the gate where the plan has no branch protection.
 
+A clean update from the default or a remote-tracking base can retain review coverage when the
+checker proves the exact branch delta is unchanged outside the record/log. It checks each
+first-parent merge against the imported base, including file modes and blob IDs. Overlapping
+source changes, conflict resolutions, extra edits and unverifiable ancestry still need coverage;
+choosing the old reviewed content during a conflict is not an automatic exemption. This does not
+waive integration tests or baseline/contract revalidation. An arbitrary local `--base` is not
+trusted for this exemption; use the actual default or remote-tracking integration branch.
+
 ## Closing
 
 A PR-scoped change closes in that same PR when its required acceptance and review pass, or by
