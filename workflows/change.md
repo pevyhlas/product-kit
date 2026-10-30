@@ -80,6 +80,13 @@ actual records and owner direction before selecting more work; do not invent a n
   another bound (cite its source in Allocation). Existing time/investment limits may be earlier.
 - **Selection**: next task, its milestone contribution, why now, and disposition of competing work.
 
+Put these keys under `### Outcome checkpoint` in State; ordinary State prose such as an
+`**Outcome**:` result is not a programme goal. Status also reads a legacy 1.3.1 checkpoint when
+it has a count/limit, or Outcome + Milestone + at least one of Critical path/Allocation/Progress/
+Selection. Doctor advises moving those keys into the block. Children reference their parent
+instead of getting separate unknown outcome rows; a referenced parent without a checkpoint
+remains unknown. Standalone changes without a checkpoint appear only in the ordinary change view.
+
 Count/reset/reassessment rules are in [implementation.md](implementation.md). These fields report
 recorded claims, not machine-verified progress or action permission. Missing, malformed or duplicate
 fields remain unknown/invalid in generated status, never an inferred pass. The helper's count

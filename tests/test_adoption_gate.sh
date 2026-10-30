@@ -16,6 +16,33 @@ run bash "$SCRIPT" --json
 assert_contains "$OUTPUT" '"result":"pass"' "json pass"
 assert_contains "$OUTPUT" '"findings":[]' "no findings"
 
+it "installer runtime files are ignored, but force-tracked artifacts fail both gates"
+for artifact in .install-lock .install-state; do
+    runtime=".prdkit/$artifact"
+    printf 'fixture runtime state\n' > "$runtime"
+    run git check-ignore --no-index -q "$runtime"
+    assert_eq 0 "$STATUS" "$artifact ignored on fresh install"
+    git add -A
+    run git ls-files --error-unmatch "$runtime"
+    assert_eq 1 "$STATUS" "$artifact not staged by add -A"
+    git add -f "$runtime"
+    for checker in check-adoption doctor; do
+        run bash ".prdkit/scripts/bash/$checker.sh" --json
+        assert_eq 1 "$STATUS" "$checker rejects tracked $artifact"
+        assert_contains "$OUTPUT" "Tracked installer runtime artifact: $runtime" 'tracked artifact named'
+    done
+    git rm -qf --cached "$runtime"
+    rm "$runtime"
+done
+# Simulate a pre-fix ignore file; upgrade must add both entries idempotently.
+sed '/^\.prdkit\/\.install-/d' .gitignore > .git/ignore.saved
+cp .git/ignore.saved .gitignore
+run bash .product-kit/scripts/init.sh --upgrade --copy
+assert_eq 0 "$STATUS" 'upgrade installs runtime ignore entries'
+for artifact in .install-lock .install-state; do
+    assert_eq 1 "$(grep -cxF ".prdkit/$artifact" .gitignore)" "$artifact added exactly once"
+done
+
 it "malformed command hashes never count as recorded commands"
 cp .prdkit/.manifest .git/manifest.saved
 command_hash="$(awk '$2 == ".claude/commands/prdkit.md" { print $1 }' .git/manifest.saved)"

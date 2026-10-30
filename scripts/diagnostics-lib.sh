@@ -51,6 +51,7 @@ diagnostic_configuration() ( # root -> JSON; environment changes stay in the sub
                    [ -z "$checkout" ] || source_state=checkout ;;
                esac
            elif [ -L "$root/$source_path" ]; then source_state=symlink-uninspected
+           elif [ -n "$pin" ]; then source_state=uninitialized
            elif [ -d "$root/$source_path" ]; then source_state=copy; fi ;;
     esac
     printf '{"schema_version":1,"version":%s,"manifest_sha256":%s,"mode":%s,' \

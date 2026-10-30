@@ -28,6 +28,8 @@ age() { # date -> days since, or blank
     if spec_is_date "$1"; then spec_days_between "$1" "$today"; fi
 }
 js() { printf '"%s"' "$(json_escape "$1")"; }
+ju() { if [[ "$1" =~ ^(0|[1-9][0-9]*)$ ]]; then printf '%s' "$1"; else printf null; fi; }
+ji() { if [[ "$1" =~ ^(0|-?[1-9][0-9]*)$ ]]; then printf '%s' "$1"; else printf null; fi; }
 
 items="$(spec_items "$root")"
 now_next="$(spec_stage_now "$root")"; stage_now="${now_next%%"$SEP"*}"; stage_next="${now_next#*"$SEP"}"
@@ -45,13 +47,24 @@ leftover="$(spec_leftover_features "$root")"
 inbox="$(spec_inbox "$root")"
 records="$(spec_records "$root")"
 
-# Use the same winning worktree record as the ordinary change view, without changing its schema.
-progress="$(while IFS="$SEP" read -r id title _ _ _ _ _ _ _ _ _ _ loc; do
+# Use the same winning worktree record. Children reference the parent; ordinary standalone
+# changes have no outcome row. A referenced but missing/incomplete parent stays visibly unknown.
+parents="$(printf '%s\n' "$changes" | awk -F '\037' '$7 != "" && $7 != "none" { print $7 }' | sort -u)"
+progress="$(while IFS="$SEP" read -r id title _ _ _ _ parent _ _ _ _ _ loc; do
     [ -n "$id" ] || continue
+    required=false
+    if printf '%s\n' "$parents" | grep -qxF "$id"; then required=true
+    else case "$parent" in ''|none) ;; *) continue ;; esac; fi
     if [ "${loc#/}" != "$loc" ]; then change_root="$loc"; else change_root="$root/$loc"; fi
-    printf '%s\037%s\037%s\037%s\n' "$id" "$title" "$loc" \
-        "$(spec_change_progress "$change_root/specs/changes/$id.md")"
-done <<< "$changes")"
+    checkpoint="$(spec_change_progress "$change_root/specs/changes/$id.md" "$required")"
+    [ -z "$checkpoint" ] || printf '%s\037%s\037%s\037%s\n' "$id" "$title" "$loc" "$checkpoint"
+done <<< "$changes"
+while IFS= read -r parent; do
+    is_change_id "$parent" || continue
+    if ! printf '%s\n' "$changes" | cut -d "$SEP" -f1 | grep -qxF "$parent"; then
+        printf '%s\037\037\037%s\n' "$parent" "$(spec_change_progress /dev/null true)"
+    fi
+done <<< "$parents")"
 
 # --- Git: default branch, unmerged branches, deployments behind it ------------------------
 # Reading a missing object in a partial clone would fetch it from the promisor remote. Git 2.45+
@@ -178,14 +191,14 @@ if $json; then
     while IFS="$SEP" read -r id title opened step waits nxt parent total passed failed maxatt stalled_items loc; do
         [ -n "$id" ] || continue
         printf '%s{"id":%s,"title":%s,"opened":%s,"age_days":%s,"step":%s,"waiting_on":%s,"next":%s,"parent":%s,"location":%s,"acceptance":{"total":%s,"passed":%s,"failed_or_blocked":%s,"max_attempts":%s,"stalled":%s}}' "$sep" \
-            "$(js "$id")" "$(js "$title")" "$(js "$opened")" "$(a="$(age "$opened")"; echo "${a:-null}")" "$(js "$step")" "$(js "$waits")" \
-            "$(js "$nxt")" "$(js "$parent")" "$(js "$loc")" "$total" "$passed" "$failed" "$maxatt" "$(js "$stalled_items")"
+            "$(js "$id")" "$(js "$title")" "$(js "$opened")" "$(ji "$(age "$opened")")" "$(js "$step")" "$(js "$waits")" \
+            "$(js "$nxt")" "$(js "$parent")" "$(js "$loc")" "$(ju "$total")" "$(ju "$passed")" "$(ju "$failed")" "$(ju "$maxatt")" "$(js "$stalled_items")"
         sep=,
     done <<< "$changes"
     printf '],"leftover_features":['; sep=""
     while IFS="$SEP" read -r id done_n total_n; do
         [ -n "$id" ] || continue
-        printf '%s{"id":%s,"tasks_done":%s,"tasks_total":%s}' "$sep" "$(js "$id")" "$done_n" "$total_n"
+        printf '%s{"id":%s,"tasks_done":%s,"tasks_total":%s}' "$sep" "$(js "$id")" "$(ju "$done_n")" "$(ju "$total_n")"
         sep=,
     done <<< "$leftover"
     printf '],"deployments":['; sep=""
@@ -209,7 +222,7 @@ if $json; then
         [ -n "$line" ] || continue
         [ "$state" = open ] || [ "$state" = unknown ] || continue
         printf '%s{"line":%s,"date":%s,"age_days":%s,"from":%s,"state":%s,"words":%s}' "$sep" \
-            "$line" "$(js "$date")" "$(age "$date")" "$(js "$who")" "$(js "$state")" "$(js "$words")"
+            "$(ju "$line")" "$(js "$date")" "$(ji "$(age "$date")")" "$(js "$who")" "$(js "$state")" "$(js "$words")"
         sep=,
     done <<< "$inbox"
     printf '],"unmerged_branches":['; sep=""
@@ -224,7 +237,7 @@ if $json; then
         [ -n "$id" ] || continue
         printf '%s{"id":%s,"title":%s,"location":%s,"outcome":%s,"milestone":%s,"critical_path":%s,"allocation":%s,"progress":%s,"selection":%s,"no_progress_changes":%s,"progress_limit":%s,"count_signal":%s}' "$sep" \
             "$(js "$id")" "$(js "$title")" "$(js "$loc")" "$(js "$outcome")" "$(js "$milestone")" \
-            "$(js "$critical")" "$(js "$allocation")" "$(js "$advance")" "$(js "$selection")" "$count" "$limit" "$(js "$signal")"
+            "$(js "$critical")" "$(js "$allocation")" "$(js "$advance")" "$(js "$selection")" "$(ju "$count")" "$(ju "$limit")" "$(js "$signal")"
         sep=,
     done <<< "$progress"
     printf '],"longest_pole":{"item":%s,"waits_on":%s},"readiness":"requires-evidence-review"}\n' "$(js "$pole")" "$(js "$pole_waits")"

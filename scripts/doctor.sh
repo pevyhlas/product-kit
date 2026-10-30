@@ -32,6 +32,12 @@ git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 && in_git=true
 while IFS= read -r finding; do
     [ -z "$finding" ] || findings+=("$finding")
 done < <(install_findings "$root")
+for file in "$root"/specs/changes/*.md; do
+    [ -f "$file" ] || continue
+    while IFS= read -r advisory; do
+        [ -z "$advisory" ] || advisories+=("${file#"$root"/}: $advisory")
+    done < <(spec_change_progress "$file" false advisories)
+done
 for file in .prdkit/workflows/protocol.md .prdkit/workflows/change.md .prdkit/memory/constitution.md .prdkit/templates/change-template.md; do
     [ -f "$root/$file" ] || findings+=("Missing installed file: $file")
 done

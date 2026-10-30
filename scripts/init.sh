@@ -966,7 +966,7 @@ fi
 # new-change.sh puts isolated change checkouts. Seeding them here means no later command has to mutate a tracked
 # .gitignore mid-run (which would dirty the tree it is about to check). A symlinked .gitignore is
 # edited at its target only while that stays inside the project.
-IGNORE_ENTRIES=".prdkit/ledger/ .prdkit/cache/ .prdkit/retrospective/ .worktrees/"
+IGNORE_ENTRIES=".prdkit/ledger/ .prdkit/cache/ .prdkit/retrospective/ .worktrees/ .prdkit/.install-lock .prdkit/.install-state"
 record_progress ignore .gitignore
 if GITIGNORE="$(root_file_path .gitignore)"; then
     for ignore_entry in $IGNORE_ENTRIES; do

@@ -127,4 +127,89 @@ rm "$record"
 run status_json
 assert_eq 0 "$(printf '%s' "$OUTPUT" | jq '.outcome_progress | length')" "closed stale worktree is not resurrected"
 
+it "ordinary results and children do not become separate unknown programmes"
+cat > specs/changes/005-standalone.md <<'MD'
+# Change: Ordinary fix
+**Parent**: none
+## State
+**Outcome**: Completed local verification
+MD
+cat > specs/changes/006-child.md <<'MD'
+# Change: Child fix
+**Parent**: 007-parent
+## State
+**Outcome**: Child result
+MD
+cat > specs/changes/007-parent.md <<'MD'
+# Change: Parent programme
+**Parent**: none
+## State
+**Outcome**: Ordinary result, not a goal
+MD
+run status_json
+assert_eq 1 "$(printf '%s' "$OUTPUT" | jq '.outcome_progress | length')" 'only referenced parent has an outcome row'
+assert_eq '007-parent' "$(printf '%s' "$OUTPUT" | jq -r '.outcome_progress[0].id')" 'child points to parent'
+assert_eq '' "$(printf '%s' "$OUTPUT" | jq -r '.outcome_progress[0].outcome')" 'generic result not mistaken for a goal'
+assert_eq unknown "$(printf '%s' "$OUTPUT" | jq -r '.outcome_progress[0].count_signal')" 'parent without checkpoint is unknown'
+run bash .prdkit/scripts/bash/doctor.sh --json
+assert_contains "$OUTPUT" 'ordinary State text is not a programme checkpoint' 'doctor explains reserved unscoped keys'
+rm specs/changes/007-parent.md
+run status_json
+assert_eq '007-parent' "$(printf '%s' "$OUTPUT" | jq -r '.outcome_progress[0].id')" 'missing parent is still visible'
+assert_eq unknown "$(printf '%s' "$OUTPUT" | jq -r '.outcome_progress[0].count_signal')" 'missing record is not a pass'
+
+it "explicit checkpoint blocks scope keys and preserve empty or ambiguous checkpoints"
+cat > specs/changes/007-parent.md <<'MD'
+# Change: Parent programme
+**Parent**: none
+## State
+**Outcome**: Ordinary result
+### Outcome checkpoint
+**Outcome**: Actual goal
+**No-progress changes**: 3
+### Other context
+**Outcome**: Another result
+**No-progress changes**: 0
+MD
+run status_json
+assert_eq 'Actual goal' "$(printf '%s' "$OUTPUT" | jq -r '.outcome_progress[0].outcome')" 'only block goal is projected'
+assert_eq reassess "$(printf '%s' "$OUTPUT" | jq -r '.outcome_progress[0].count_signal')" 'later unrelated keys do not reset count'
+run bash .prdkit/scripts/bash/doctor.sh --json
+assert_contains "$OUTPUT" 'unscoped keys are ignored' 'scope advisory is explicit'
+printf '\n### Outcome checkpoint\n**No-progress changes**: 0\n' >> specs/changes/007-parent.md
+run status_json
+assert_eq invalid "$(printf '%s' "$OUTPUT" | jq -r '.outcome_progress[0].count_signal')" 'multiple blocks are ambiguous'
+printf '# Change: Empty checkpoint\n## State\n### Outcome checkpoint\n' > specs/changes/008-empty.md
+run status_json
+assert_eq unknown "$(printf '%s' "$OUTPUT" | jq -r '.outcome_progress[] | select(.id == "008-empty") | .count_signal')" 'empty explicit checkpoint remains unknown'
+
+it "field separators in every change text field cannot shift numeric JSON slots"
+printf '# Change: Odd\037title\n**Opened**: 2026-10-01\037suffix · **Parent**: none\n## State\n**Step**: build\037step\n**Waiting on**: nothing\037wait\n**Next**: next\037action\n### Outcome checkpoint\n**Outcome**: goal\037text\n**No-progress changes**: 3\n## Acceptance\n| Item | Proves | Check | Attempts | Result |\n|---|---|---|---|---|\n| A1\037odd | R-01 | fixture | 1 | PASS |\n' > specs/changes/009-odd.md
+run status_json
+assert_eq 0 "$STATUS" 'status handles delimiter bytes'
+json="$OUTPUT"
+run jq -e '.changes[] | select(.id == "009-odd") | .title == "Odd title" and .step == "build step" and .waiting_on == "nothing wait" and .next == "next action" and .age_days == null and .acceptance == {total:1,passed:1,failed_or_blocked:0,max_attempts:1,stalled:""}' <<< "$json"
+assert_eq 0 "$STATUS" 'field values and acceptance positions preserved'
+run jq -e '.outcome_progress[] | select(.id == "009-odd") | .outcome == "goal text" and .no_progress_changes == 3 and .count_signal == "reassess"' <<< "$json"
+assert_eq 0 "$STATUS" 'checkpoint numeric fields stay numeric'
+# A numeric parser result outside the canonical JSON integer grammar must become null.
+sed 's/| 1 | PASS |/| 1e999 | PASS |/' specs/changes/009-odd.md > record-next
+mv record-next specs/changes/009-odd.md
+run status_json
+run jq -e '.changes[] | select(.id == "009-odd") | .acceptance.max_attempts == null' <<< "$OUTPUT"
+assert_eq 0 "$STATUS" 'nonfinite numeric result is never emitted as a raw JSON token'
+
+it "other status text sources cannot introduce transport columns"
+printf '# Product\n- **R-01 Title\037text** (hypothesis)\n' > specs/product.md
+printf '# Inbox\n### Question\037text\n*2026-10-01 · owner · open*\n' > specs/inbox.md
+printf 'HOLD sample owner=owner scope=code\037scope since=2026-10-01 until=decision — reason\037text\n' > specs/records.md
+run status_json
+json="$OUTPUT"
+run jq -e '.items[] | select(.id == "R-01") | .title == "Title text" and .maturity == "hypothesis"' <<< "$json"
+assert_eq 0 "$STATUS" 'spec item framing preserved'
+run jq -e '.inbox[0] | .words == "Question text" and .state == "open" and (.age_days | type) == "number"' <<< "$json"
+assert_eq 0 "$STATUS" 'inbox framing preserved'
+run jq -e '.holds[0] | .scope == "code scope" and .reason == "reason text" and .state == "active"' <<< "$json"
+assert_eq 0 "$STATUS" 'record framing preserved'
+
 finish
