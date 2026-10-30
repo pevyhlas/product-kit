@@ -54,7 +54,7 @@ progress="$(while IFS="$SEP" read -r id title _ _ _ _ parent _ _ _ _ _ loc; do
     [ -n "$id" ] || continue
     required=false
     if printf '%s\n' "$parents" | grep -qxF "$id"; then required=true
-    else case "$parent" in ''|none) ;; *) continue ;; esac; fi
+    elif [ -n "$parent" ] && [ "$parent" != none ]; then continue; fi
     if [ "${loc#/}" != "$loc" ]; then change_root="$loc"; else change_root="$root/$loc"; fi
     checkpoint="$(spec_change_progress "$change_root/specs/changes/$id.md" "$required")"
     [ -z "$checkpoint" ] || printf '%s\037%s\037%s\037%s\n' "$id" "$title" "$loc" "$checkpoint"
