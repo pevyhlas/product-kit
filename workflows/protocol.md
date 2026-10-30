@@ -68,7 +68,8 @@ or path. Every claim says whether it is observed, decided, assumed or proposed.
 
 ## Context order
 
-1. The request and the open change it belongs to ([change.md](change.md)).
+1. The request and the open change it belongs to ([change.md](change.md)), plus its parent's
+   outcome checkpoint: original goal, intended architecture, critical path, lane purposes and limits.
 2. The constitution, then `product.md` and `architecture.md` in full.
 3. The part files the change touches, and parts across a touched interface.
 4. Their code and tests, and a `legacy` document only when a part links it. `specs/archive.md`
@@ -76,6 +77,12 @@ or path. Every claim says whether it is observed, decided, assumed or proposed.
 
 Read a document over 32 KB by section. Agent context files (`CLAUDE.md`, `AGENTS.md`) load on
 every turn: they hold stable orientation and pointers, never change narrative or evidence.
+
+On compaction or handover, preserve that checkpoint with its source revision, latest evidenced
+advance, cumulative no-progress count, consumed allocation, holds and next-task rationale. Reload
+the actual parent/PR and owner direction on resume; a summary's local task queue never replaces
+the original outcome or grants a new allocation. Missing/stale checkpoint data requires
+reconciliation, not an inferred zero count or restarted timebox.
 
 ## Attempts and stalls
 
@@ -96,6 +103,11 @@ owner grants further attempts, with a stated limit; a reset or a new task name d
 
 When a PR closes, retain unresolved outcome attempts, limits and holds on its PR/follow-up. A new
 fix change inherits them; deleting an execution record does not reset a failing product outcome.
+
+Successful changes can also stall a programme without a failed check. Apply the outcome-progress
+reassessment in [implementation.md](implementation.md) across child PRs and sessions. Keep its
+no-progress count separate from substantive repair attempts; a green child does not prove that
+the critical path moved. Readiness/correctness review and next-work priority answer different questions.
 
 ## External systems
 

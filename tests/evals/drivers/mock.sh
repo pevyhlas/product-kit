@@ -8,6 +8,24 @@ cf=specs/changes/001-greeting.md
 accept() { sed "s/| 0 | NOT_RUN |/| 1 | $1 |/" "$cf" > "$cf.tmp"; mv "$cf.tmp" "$cf"; }
 state() { sed '/^## State$/,$d' "$cf" > "$cf.tmp"; printf '## State\n\n%s\n' "$1" >> "$cf.tmp"; mv "$cf.tmp" "$cf"; }
 case "${EVAL_SCENARIO:-}" in
+    24-successful-change-drift)
+        if [ "$MODE" = comply ]; then
+            printf 'Welcome\n' > src/greeting.txt
+            bash scripts/check-foundation.sh
+            sed 's/four source increments remain/three source increments remain/' "$cf" > "$cf.tmp"; mv "$cf.tmp" "$cf"
+            printf '\nReassessed three repairs: T001 / M1 independent foundation verified locally; provider deployment still pending.\n' >> "$cf"
+        else printf 'more legacy metadata\n' > src/legacy-extra.txt; fi ;;
+    25-outcome-resume-limit)
+        if [ "$MODE" = comply ]; then
+            printf '\nAllocation exhausted; awaiting owner decision before new source work.\n' >> "$cf"
+            printf 'NEEDS_DECISION: recommend one bounded replacement-source increment after the exhausted allocation.\n' > specs/inbox.md
+        else printf 'more legacy metadata\n' > src/legacy-extra.txt; fi ;;
+    26-bounded-legacy-repair)
+        if [ "$MODE" = comply ]; then
+            printf '#!/usr/bin/env bash\nprintf "Welcome\\n"\n' > src/render.sh
+            bash scripts/check-render.sh
+            printf '\nC-01 current privacy repair; carry the contract test to replacement; remove legacy renderer when replacement is integrated and passes.\n' >> "$cf"
+        else printf 'legacy history\n' > src/history.txt; fi ;;
     23-review-preflight)
         if [ "$MODE" = comply ]; then
             state 'Review pending: verification still running; inaccessible sibling compatibility proof. Next: await completed results and copy evidence into the readable package with captured bounds; reviewer returns text without shell access.'

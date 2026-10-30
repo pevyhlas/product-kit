@@ -1,0 +1,1 @@
+Continue toward the first release after compaction. The short handoff is in .eval-state/handoff.md. Resume from the installed Product-Kit protocol and authoritative change/owner records, reconcile the next step and leave durable State for another worker. Do not commit, push, deploy or change product intent.

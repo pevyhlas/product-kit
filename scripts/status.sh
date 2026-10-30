@@ -45,6 +45,14 @@ leftover="$(spec_leftover_features "$root")"
 inbox="$(spec_inbox "$root")"
 records="$(spec_records "$root")"
 
+# Use the same winning worktree record as the ordinary change view, without changing its schema.
+progress="$(while IFS="$SEP" read -r id title _ _ _ _ _ _ _ _ _ _ loc; do
+    [ -n "$id" ] || continue
+    case "$loc" in /*) change_root="$loc" ;; *) change_root="$root/$loc" ;; esac
+    printf '%s\037%s\037%s\037%s\n' "$id" "$title" "$loc" \
+        "$(spec_change_progress "$change_root/specs/changes/$id.md")"
+done <<< "$changes")"
+
 # --- Git: default branch, unmerged branches, deployments behind it ------------------------
 # Reading a missing object in a partial clone would fetch it from the promisor remote. Git 2.45+
 # (and some maintenance releases) refuse under GIT_NO_LAZY_FETCH; in a partial clone any older
@@ -211,6 +219,14 @@ if $json; then
             "$([ "$squash" = yes ] && echo true || echo false)"
         sep=,
     done <<< "$branches"
+    printf '],"outcome_progress":['; sep=""
+    while IFS="$SEP" read -r id title loc outcome milestone critical allocation advance selection count limit signal; do
+        [ -n "$id" ] || continue
+        printf '%s{"id":%s,"title":%s,"location":%s,"outcome":%s,"milestone":%s,"critical_path":%s,"allocation":%s,"progress":%s,"selection":%s,"no_progress_changes":%s,"progress_limit":%s,"count_signal":%s}' "$sep" \
+            "$(js "$id")" "$(js "$title")" "$(js "$loc")" "$(js "$outcome")" "$(js "$milestone")" \
+            "$(js "$critical")" "$(js "$allocation")" "$(js "$advance")" "$(js "$selection")" "$count" "$limit" "$(js "$signal")"
+        sep=,
+    done <<< "$progress"
     printf '],"longest_pole":{"item":%s,"waits_on":%s},"readiness":"requires-evidence-review"}\n' "$(js "$pole")" "$(js "$pole_waits")"
     exit 0
 fi
@@ -222,6 +238,25 @@ case "$layout" in
     none) printf '\nNo spec yet — start specs/product.md or specs/SPEC.md (.prdkit/workflows/init.md).\n' ;;
 esac
 [ -z "$mixed" ] || printf '\nTwo spec forms: specs/SPEC.md beside %s — keep one; the views below combine both.\n' "$mixed"
+
+printf '\nOutcome progress (recorded claims; evidence and allocation need review)\n'
+[ -n "$progress" ] || printf '  No open outcome checkpoints.\n'
+while IFS="$SEP" read -r id title loc outcome milestone critical allocation advance selection count limit signal; do
+    [ -n "$id" ] || continue
+    printf '  %s — %s\n' "$id" "$title"
+    case "$signal" in
+        reassess) printf '    REASSESS: %s integrated changes without recorded milestone/dependency progress (limit %s).\n' "$count" "$limit" ;;
+        below-limit) printf '    No-progress changes: %s/%s; below count limit, not an outcome pass.\n' "$count" "$limit" ;;
+        invalid) printf '    Invalid outcome checkpoint fields; reconcile before selecting more work.\n' ;;
+        *) printf '    Outcome progress accounting unknown; do not infer zero from passing changes.\n' ;;
+    esac
+    [ -z "$outcome" ] || printf '    outcome: %s\n' "$outcome"
+    [ -z "$milestone" ] || printf '    milestone: %s\n' "$milestone"
+    printf '    progress: %s\n' "${advance:-unknown}"
+    [ -z "$critical" ] || printf '    critical path: %s\n' "$critical"
+    [ -z "$allocation" ] || printf '    allocation: %s\n' "$allocation"
+    [ -z "$selection" ] || printf '    selection: %s\n' "$selection"
+done <<< "$progress"
 
 printf '\nTrue now\n'
 [ -z "$stage_now" ] || printf '  Stage: %s%s\n' "$stage_now" "${stage_next:+; next: $stage_next}"

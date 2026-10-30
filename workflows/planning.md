@@ -37,6 +37,29 @@ Use stable local keys while discovering work; link child change IDs when opened.
 now, later, optional and unresolved work. Detail only near-ready work; do not open ten worktrees
 just to describe ten candidates. No separate feature-spec hierarchy or global task-ID scheme.
 
+## Protect the outcome
+
+For a programme or a sequence of follow-ups, keep an **outcome checkpoint** in its existing State
+([change.md](change.md)). Name the original owner outcome and source, intended architecture and
+stage, next observable milestone, and the critical path of dependencies needed to reach it. Define
+the check for each enabling step before starting it: a reviewed interface, working source path or
+deployed service can be a real intermediate advance without claiming the final user outcome.
+
+Preserve each lane's purpose as well as the concurrency cap. Record the original start/deadline,
+time or cost allocation and consumed effort when known; unknown effort stays unknown. A spare
+slot does not authorize diverting the value or foundation lane to an adjacent cleanup queue.
+Work-selection reassessment is due at the existing timebox/investment boundary or after three
+integrated changes without an evidenced milestone/dependency advance, whichever comes first;
+an explicit owner/project bound takes precedence. This is separate from failed-attempt accounting.
+
+Before investing in an implementation scheduled for replacement, identify the affected supported
+path, present defect and minimal safe remedy; compare repair with permitted containment, disabling
+the affected path, or advancing the replacement. Say what code/contracts/tests carry forward and
+what will be discarded, with a removal trigger for temporary work. Existing hard bounds and
+supported behavior still bind: containment or disabling needs the same applicable authority as any
+behavior change. Completeness of a retiring implementation is not automatically a prerequisite for
+its replacement. A new omission is a candidate to assess, not an automatic extension of the queue.
+
 ## Resolve upstream gaps
 
 A missing product promise needs user/outcome evidence, an external obligation or explicit owner

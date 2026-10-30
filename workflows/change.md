@@ -54,6 +54,34 @@ Sections of one file; skip a section that has nothing real.
    status source an agent maintains; the PR's Current status is a concise projection, refreshed
    after a material gate, hold, limit or next-action change and before handover.
 
+### Outcome checkpoint in State
+
+For programmes and continuing follow-up queues, use these single-line fields in the existing
+parent's State. Children link it rather than copying a second tracker. Standalone small changes
+can keep their outcome/selection in prose. On adoption/resume, reconstruct missing fields from
+actual records and owner direction before selecting more work; do not invent a new baseline.
+
+- **Outcome**: original owner goal/source, intended architecture and stage.
+- **Milestone**: next observable result and its acceptance/check reference; predeclared enabling
+  steps and their checks stay in Tasks.
+- **Critical path**: ordered dependencies, their required outcomes, and the actual blocker.
+- **Allocation**: lane purposes, start/deadline, time/cost bounds and known consumption, with their
+  authority source; explicitly unknown where not measured.
+- **Progress**: latest evidenced milestone/dependency advance, date/revision and evidence link;
+  `none` or `unknown` when appropriate. Scope the claim: source, deployed or user-validated.
+- **No-progress changes**: nonnegative integer counting integrated children since that advance,
+  or `unknown` when history cannot be reconciled. Keep child references in the accompanying prose/PR.
+- **Progress limit**: positive integer for reassessment; default `3` unless the owner/project sets
+  another bound (cite its source in Allocation). Existing time/investment limits may be earlier.
+- **Selection**: next task, its milestone contribution, why now, and disposition of competing work.
+
+Count/reset/reassessment rules are in [implementation.md](implementation.md). These fields report
+recorded claims, not machine-verified progress or action permission. Missing, malformed or duplicate
+fields remain unknown/invalid in generated status, never an inferred pass. The helper's count
+comparison cannot evaluate prose deadlines, effort, lane drift, evidence validity or criticality;
+the operational lead checks those too. Keep scope, limits and original failures through splitting
+or closing child changes; a new record is not a fresh investment allowance.
+
 ## While building
 
 - Spec edits land in the PR whose code and tests realize them. Only approved meaning changes;

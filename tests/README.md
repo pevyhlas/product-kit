@@ -28,6 +28,7 @@ reproduce the duplicate number; synchronization markers avoid a scheduler-depend
 | Worktree teardown and stale registrations | cleanup_change |
 | Shell escaping, path-escaping IDs, JSON safety | script_safety |
 | Generated status: markers, change State and Acceptance, records, inbox, longest pole | status |
+| Outcome checkpoint projection: successful-change stalls, unknown/malformed accounting, worktree provenance and read-only reporting | outcome_progress |
 | Diagnostics: IDs, records, layout, ceilings, citations, inbox, evidence, example spec | doctor |
 | Effective provenance, ownership, winning model rules and explicit runtime unknowns | diagnostics_inventory |
 | Current-source consumer installation, repeated upgrades, customization and source-less helpers | consumer_smoke |

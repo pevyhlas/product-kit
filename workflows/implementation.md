@@ -42,14 +42,44 @@ needs investigation, collect only what resolves it and route the finding below.
 
 ## Implement, verify, converge
 
-Take the next authorized task whose dependency outcome is evidenced. Implement and run its checks;
+Before selecting the next task or child change, reload the programme's outcome checkpoint and
+check dependencies against current evidence. In State's **Selection**, name the milestone or
+predeclared enabling step this task advances, why it comes before the next critical-path candidate,
+and how it fits the lane and remaining allocation. For temporary/retiring code, include its
+carry-forward or removal rationale from [planning.md](planning.md). A tiny standalone fix needs
+only a sentence; no extra document or routine owner approval is required.
+
+A blocked deployment, review or owner decision blocks only its actual dependants. Check whether
+source/design prerequisites or another approved lane can advance independently. If none can, name
+the blocker and the decision that unlocks the outcome; do not substitute an unlimited inventory of
+adjacent improvements. Broad instructions to continue preserve the outcome, lane purposes, timebox
+and explicit holds unless the owner changes them.
+
+Take the selected authorized task whose dependency outcome is evidenced. Implement and run its checks;
 review and publish coherent increments per [change.md](change.md). Converge the actual diff against
 approved intent and design, not just the task list. Check failure behavior and cross-part interactions
 where relevant; tests that merely repeat the implementation do not establish the intended outcome.
 Independent review still receives the full diff and canonical context.
 
-At interruption, record remaining work, attempts, blockers, authority and next action in State. On
-resume/rebase, compare the actual spec/code/dependency baseline with the recorded one. Revalidate
+After integration, compare evidence with the programme milestone and its predeclared dependency
+checks. Record the actual advance, or increment **No-progress changes** once for that integrated
+child, including successful repairs and evidence-only work that advance neither. Test/review/PR
+counts alone are not an advance. Reset the count only with linked evidence of an advance; naming
+a new child, changing sessions or retrofitting a milestone to completed work does not reset it.
+Keep the parent checkpoint current in the relevant child PR/its final status; reconcile concurrent
+children before choosing more work. Preserve the latest checkpoint on the PR if record changes
+would invalidate final review; reconcile it into the parent at the next authorized edit.
+
+At the progress limit, timebox boundary or displaced lane, reassess **before starting another
+adjacent change**, even if every PR passed. Compare the remaining critical path, effort spent,
+replacement/containment options and the proposed next step. Within unchanged authority, record
+the decision and take a bounded step that directly advances that path. Keep the count until its
+evidence establishes progress. If continuation needs more investment, different scope or a lifted
+hold, report NEEDS_DECISION with a recommendation in the inbox; only the owner changes those bounds.
+This selection checkpoint neither waives a safety defect nor creates a new review/approval gate.
+
+At interruption, record remaining work, attempts, blockers, authority, outcome checkpoint and next
+action in State. On resume/rebase, compare the actual spec/code/dependency baseline with the recorded one. Revalidate
 affected tasks and evidence when a shared contract or bound changed; preserve unaffected work and
 valid review coverage. Missing scratch is reconstructed from the record/PR and actual state, never
 treated as a reason to restart product discovery. Local tasks and tracker assignment grant no authority.

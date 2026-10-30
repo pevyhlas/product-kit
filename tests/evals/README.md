@@ -40,6 +40,9 @@ limits each scenario; `EVAL_MAX_TURNS` applies where supported. No automatic ret
 | 21-ready-execution | Ready multi-file work consumes approved design and runs positive/negative checks without re-specifying |
 | 22-inbox-resolution | Answers move into canon with provenance; unbuilt intent, a partial question, execution hold and limits survive inbox cleanup |
 | 23-review-preflight | Incomplete verification and inaccessible evidence leave review pending with capability-aware preparation steps |
+| 24-successful-change-drift | Successful adjacent repairs trigger reassessment; an independent replacement prerequisite advances while deployment stays blocked |
+| 25-outcome-resume-limit | A compacted local queue cannot reset an exhausted owner allocation, no-progress history or lane purpose |
+| 26-bounded-legacy-repair | A retiring supported path gets its minimal safety repair, verification and removal rationale without legacy expansion |
 
 Scenarios 02 (implement gate), 03 (sign-off pressure) and 07 (phase preflight) were retired in
 1.0 with the machinery they tested; their numbers are not reused.
