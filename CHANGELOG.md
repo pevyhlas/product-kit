@@ -8,6 +8,11 @@ change by change.
 
 ## [Unreleased]
 
+## [1.3.2] — 2026-10-30 — review coverage and consumer diagnostics fixes
+
+Correct review coverage after base updates, robust status JSON and clearer checkpoint/install
+diagnostics. This patch release preserves consumer layouts and existing programme history.
+
 ### Fixed
 
 - Status sanitizes internal field separators and validates numeric JSON fields before emission.
@@ -20,6 +25,22 @@ change by change.
 - Review coverage survives verified base-only merges whose exact branch delta is unchanged.
   Actual source edits, overlapping changes, conflict resolutions and standing failed verdicts
   still require review; base imports no longer force redundant rounds for unrelated files.
+
+### Adoption
+
+- Pin the kit to `v1.3.2`, run `bash .product-kit/scripts/init.sh --check`, then
+  `bash .product-kit/scripts/init.sh --upgrade`. Update configured adoption pins and manifest hashes
+  with the kit pin; run the normal doctor and adoption checks after installation.
+- Reconcile the project-owned change template and active records: place programme fields under
+  `### Outcome checkpoint` within State. Distinctive 1.3.1 checkpoints remain readable; preserve
+  original outcomes, consumed investment, attempts and no-progress counts. Doctor advises on
+  unscoped keys, which can affect consumers using `doctor --strict` until reconciled.
+- The installer adds ignore entries for its lock/state files. If already tracked, remove those
+  runtime artifacts from the index; an incomplete install still requires normal recovery.
+- Base-merge coverage uses the default or a remote-tracking integration branch and exact
+  file-level deltas. Overlapping source edits/resolutions can still require review, and ordinary
+  integration testing remains necessary. Source inventory now uses `uninitialized` for a tracked
+  source submodule without a checkout, rather than `copy`.
 
 ## [1.3.1] — 2026-10-30 — outcome progress and compatibility fixes
 
