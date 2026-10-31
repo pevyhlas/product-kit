@@ -14,6 +14,8 @@ assert_file "$PROJ/.prdkit/workflows/change.md"
 assert_file "$PROJ/.prdkit/workflows/protocol.md"
 assert_file "$PROJ/.prdkit/workflows/planning.md"
 assert_file "$PROJ/.prdkit/workflows/implementation.md"
+assert_file "$PROJ/.prdkit/workflows/inbox.md"
+assert_file "$PROJ/.claude/commands/prdkit-inbox.md"
 assert_file "$PROJ/.prdkit/templates/implementation-plan-template.md"
 assert_file "$PROJ/.prdkit/templates/pr-summary-template.md"
 assert_file "$PROJ/.prdkit/scripts/bash/new-change.sh"
@@ -27,7 +29,7 @@ fi
 assert_contains "$(cat "$PROJ/.prdkit/.manifest")" 'mode: copy' "copy mode recorded by default"
 assert_not_contains "$OUTPUT" "Symlinked commands resolve only" "no symlink note for copies"
 files=("$PROJ"/.claude/commands/*.md)
-assert_eq 8 "${#files[@]}" "exactly eight public commands"
+assert_eq 9 "${#files[@]}" "exactly nine public commands"
 if [ -e "$PROJ/.claude/commands/prdkit-implement.md" ]; then _no 'internal operation leaked'; else _ok 'internal operation outside menu'; fi
 if [ -e "$PROJ/.prdkit/scripts/bash/init.sh" ]; then _no 'bootstrap leaked'; else _ok 'bootstrap not installed'; fi
 # Kit maintainer tooling (scripts/maintainer/, e.g. the release scripts) never reaches consumers.
@@ -117,6 +119,7 @@ run bash .product-kit/scripts/init.sh --copy --harness opencode
 it "copy mode and explicit harness selection are respected"
 assert_eq 0 "$STATUS" "copy install"
 assert_file "$PROJ2/.opencode/commands/prdkit.md"
+assert_file "$PROJ2/.opencode/commands/prdkit-inbox.md"
 if [ -L "$PROJ2/.opencode/commands/prdkit.md" ]; then _no 'copy mode linked'; else _ok 'real command copy'; fi
 if [ -d "$PROJ2/.claude/commands" ]; then _no 'unselected harness installed'; else _ok 'harness selection respected'; fi
 mkdir -p "$PROJ2/.codex" "$PROJ2/.claude"
@@ -160,6 +163,7 @@ it "AGENTS.md preserves consumer content and supports non-native harnesses"
 assert_eq 0 "$STATUS" "codex install"
 assert_contains "$(cat AGENTS.md)" 'Consumer notes.' "notes retained"
 assert_contains "$(cat AGENTS.md)" '.prdkit/workflows/protocol.md' "neutral path"
+assert_contains "$(cat AGENTS.md)" '.prdkit/workflows/inbox.md' "inbox review reachable without native slash commands"
 printf '\nTrailing notes.\n' >> AGENTS.md
 run bash .product-kit/scripts/init.sh --upgrade
 assert_contains "$(cat AGENTS.md)" 'Trailing notes.' "trailing notes retained"

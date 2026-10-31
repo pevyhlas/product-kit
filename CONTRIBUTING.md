@@ -31,7 +31,7 @@ points small, operational contracts explicit, and examples generic.
 
 ## Sources of truth
 
-- `commands/`: eight public entry points, indexed in README and docs/commands.md.
+- `commands/`: nine public entry points, indexed in README and docs/commands.md.
 - `workflows/`: agent protocol, spec and change contracts, and operational behavior.
 - `templates/`: project-owned spec, change and policy scaffolds installed into consumers.
 - `scripts/`: deterministic helpers and the installer mapping. `scripts/maintainer/` holds

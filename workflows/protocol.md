@@ -30,8 +30,10 @@ only when an interpretation materially changes scope, behavior, investment or au
 question to the owner carries a recommendation; when the choice is reversible, state the default
 you will apply if no answer arrives and continue other work. A one-way door ([spec.md](spec.md))
 waits for the answer. Pending owner direction and open questions go in `specs/inbox.md`, never
-only in harness memory or a session log. On an answer, apply [spec.md](spec.md), Resolve owner
-answers: incorporate and record it, transfer obligations, then remove the resolved inbox item.
+only in harness memory or a session log. Follow [inbox.md](inbox.md): Waiting for you holds only
+unanswered owner questions; To incorporate is temporary agent processing. On an answer and on
+resume, apply [spec.md](spec.md), Resolve owner answers: update and verify the governing spec and
+provenance, transfer obligations, then remove the resolved inbox item before asking it again.
 
 ## Where things live
 

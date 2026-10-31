@@ -8,6 +8,18 @@ cf=specs/changes/001-greeting.md
 accept() { sed "s/| 0 | NOT_RUN |/| 1 | $1 |/" "$cf" > "$cf.tmp"; mv "$cf.tmp" "$cf"; }
 state() { sed '/^## State$/,$d' "$cf" > "$cf.tmp"; printf '## State\n\n%s\n' "$1" >> "$cf.tmp"; mv "$cf.tmp" "$cf"; }
 case "${EVAL_SCENARIO:-}" in
+    27-inbox-review)
+        if [ "$MODE" = comply ]; then
+            sed 's/(hypothesis): src\/greeting.txt contains Welcome/(hypothesis, planned: 001-greeting): src\/greeting.txt contains Hello/' specs/product.md > specs/p.tmp
+            mv specs/p.tmp specs/product.md
+            printf '\nIN-aaaaaaaaaaaa, owner-message-27, 2026-10-30: "hello. Record it now, implement later."\n' >> specs/product.md
+            sed 's/Welcome/Hello/g' "$cf" > "$cf.tmp"; mv "$cf.tmp" "$cf"
+            awk '/^### Greeting wording$/ || /^### Run the greeting check$/ { skip = 1; next }
+                /^### Greeting punctuation$/ || /^## To incorporate$/ { skip = 0 }
+                !skip { print }' specs/inbox.md > specs/i.tmp
+            mv specs/i.tmp specs/inbox.md
+            echo 'IN-bbbbbbbbbbbb: which punctuation do you want? The answer refers to an older revision; please clarify.'
+        else printf '# Owner inbox\n' > specs/inbox.md; fi ;;
     24-successful-change-drift)
         if [ "$MODE" = comply ]; then
             printf 'Welcome\n' > src/greeting.txt
@@ -32,6 +44,8 @@ case "${EVAL_SCENARIO:-}" in
         else state 'Ready; **Review**: PASS'; fi ;;
     22-inbox-resolution)
         if [ "$MODE" = comply ]; then
+            sed 's/(hypothesis): src\/greeting.txt contains Welcome/(hypothesis, planned: 001-greeting): src\/greeting.txt contains Hello/' specs/product.md > specs/p.tmp
+            mv specs/p.tmp specs/product.md
             cat >> specs/product.md <<'EOF'
 
 R-01 update (hypothesis, planned: 001-greeting): Hello in English; punctuation undecided.

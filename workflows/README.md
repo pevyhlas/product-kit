@@ -9,6 +9,7 @@ Read [protocol.md](protocol.md) first, then only the operation you need.
 | [implementation](implementation.md) | Execution-focused plans/tasks, consistency, findings and convergence |
 | [change](change.md) | Open, build, review, deliver and close a change |
 | [status](status.md) | Generated status and answering from it |
+| [inbox](inbox.md) | Owner-input review, stable questions, answer processing and incorporation |
 | [compact](compact.md) | Cutover from 0.x, and compaction |
 | [init](init.md) | Adopt the kit |
 | [configure](configure.md) | Constitution, capabilities, settings |

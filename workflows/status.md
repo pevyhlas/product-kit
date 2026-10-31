@@ -27,8 +27,9 @@ Answer the owner's question first, in plain words, with the title next to every 
 4. **Live**: the latest `DEPLOY` record per app and environment (`rev=none`: nothing deployed);
    merged but not deployed.
 5. **Holds and waivers** with owner, scope and expiry; expired ones flagged.
-6. **Owner queue**: open inbox items with age and conflicting directions. Legacy resolved items
-   are reconciliation work (spec.md), not unanswered owner questions.
+6. **Owner queue**: unanswered owner questions with age. Report recorded answers and direction
+   awaiting agent processing separately; a filled answer is not proof of incorporation. Legacy
+   resolved or unknown-state items require reconciliation (spec.md), not automatic re-questioning.
 7. **Longest pole**: the item that most delays the current goal, and what it waits on. The helper's
    age/attempt heuristic is a candidate, not a computed critical path; reconcile it with the programme.
 

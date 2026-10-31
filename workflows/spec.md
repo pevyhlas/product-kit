@@ -201,27 +201,49 @@ A line that only describes how the code currently does something is deleted: the
 
 ## Resolve owner answers
 
-`specs/inbox.md` is an open-items queue. Process an answer in the same change that incorporates
-it; implementation or merge need not be complete before the answered item leaves the inbox.
+`specs/inbox.md` is an owner-input queue with a temporary processing handoff, as defined in
+[inbox.md](inbox.md). Process an answer when received and on resume before asking it again;
+implementation or merge need not be complete before the answered item leaves the inbox.
 
-1. Read the question and answer together. A number selects that item's option; preserve its
-   meaning and any qualifications. An ambiguous, conflicting or partial answer leaves only the
-   unresolved question open, linked to the resolved portion.
+1. Read the question and answer together, checking identity, revision and option meaning against
+   what the owner actually saw. A number selects that revision's option, never a newly reordered
+   list. Preserve the meaning and qualifications. An ambiguous, conflicting or partial answer
+   leaves only the unresolved question open, linked to the resolved portion. Record a received
+   answer durably before moving on if incorporation cannot finish immediately.
 2. Apply the decision to its canonical home: product intent in L0, design in L1/L2, authority in
    the constitution's Action policy, holds/waivers in `specs/records.md`. Record the disposition,
    operative owner words verbatim, date and source (conversation reference, PR/comment URL or
-   recorded git path). Relayed words keep their original source. A bare option number also needs
-   the selected option's meaning. The canonical entry is the record; do not duplicate a transcript
-   or create a second decision journal. Agent defaults must be labeled as agent decisions.
+   recorded git revision/path). Relayed words keep their original source. A bare option number
+   also needs the selected option's meaning. The canonical entry is the record; do not duplicate a transcript
+   or create a second decision journal. Retain the inbox ID as plain provenance text or an
+   immutable source link, not a live link back to an entry that will be removed. Update the actual
+   governing requirement, design or policy, reconcile superseded contradictory text and affected
+   references, and retain concise rationale where it explains the choice. An appended quote or
+   `folded` label alone is not incorporation. Agent defaults must be labeled as agent decisions.
+   Missing historical provenance stays explicitly unknown with the available evidence; ask the
+   owner only when that uncertainty affects meaning or authority, not merely to fill a field.
 3. Transfer remaining work to a change's Tasks/State and link it with `planned: <change>` for
    unbuilt intent. Preserve acceptance, attempt/fix-round limits and explicit holds; an answered
    question does not grant implementation, promotion or delivery authority. An owner decline or
    deferral lives at the relevant non-goal, decision or Left open item, with its reason and revisit
    trigger; a proposal to decline is still open until decided under the applicable authority.
-4. Verify the destination contains the full decision and provenance and the remaining obligations
-   have a durable home, then remove the answered item and stale links to it in the same edit.
-   If folding is blocked, keep the item open with that blocker. Never delete solely because an
-   old item says `folded`, `declined` or `deferred`; reconcile those legacy items the same way.
+4. Re-read the destination and diff: verify they contain the full decision and provenance and the
+   remaining obligations have a durable home, then remove the answered item and stale links to it
+   in the same edit.
+   If folding is blocked, keep the answer under To incorporate as `processing`, with the blocker,
+   next actor and destination; only an actual unanswered clarification belongs in Waiting for you.
+   Never delete solely because an old item says `folded`, `declined` or `deferred`; reconcile those
+   legacy items the same way. Acknowledge the decision, canonical path/ID, remaining work/holds and
+   whether the inbox item was removed, narrowed or awaits processing. Never claim incorporated
+   without that verification.
+
+Keep the operative owner words, meaning, qualifications, date/source and question ID with the
+canonical decision, not the full question/options transcript. Git history retains removed inbox
+content after it is committed; it does not preserve uncommitted conversations. Preserve the
+necessary answer provenance in the same durable edit even when the question was never committed.
+Do not create `specs/inbox-archive.md` or a parallel answers database by default. If the owner
+requires a separate audit record, agree its purpose and retention explicitly; it must not become
+a competing source of current intent.
 
 ## One-way doors
 

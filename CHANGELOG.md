@@ -10,11 +10,22 @@ change by change.
 
 ### Added
 
+- `/prdkit-inbox` reviews owner questions one at a time using native agent questions or plain
+  conversation, with stable IDs/options, revisions, topic tags and answer handoff fields.
+- Inbox diagnostics detect duplicate identities/options, stale answer revisions and missing
+  metadata/provenance. Status separates answers awaiting agent processing from owner questions.
+
 - `new-change.sh --no-branch` creates a numbered change record on the existing checkout without
   branching, switching HEAD or creating a worktree. It preserves numbering/collision protection
   and reports the actual branch; ordinary delivery authority and review still apply.
 
 ### Fixed
+
+- Answer incorporation now requires updating and verifying the actual governing spec/policy,
+  reconciling superseded text, and preserving provenance and remaining obligations before
+  removing an item. Canonical decisions plus Git history replace a duplicate answer archive.
+  Existing consumer inboxes require agent-led reconciliation; upgrades never rewrite `specs/`.
+  Legacy formats remain readable, with migration advisories that affect `doctor --strict`.
 
 - Unknown new-change options are rejected instead of silently becoming intent text. Use `--`
   before intent text beginning with a dash.

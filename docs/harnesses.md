@@ -15,6 +15,12 @@ on upgrade. `--harness` takes names separated by commas and/or spaces; an unknow
 (including a list glued together without separators) exits 2 instead of installing less.
 AGENTS.md-reading tools without a first-class target use `agents`.
 
+`/prdkit-inbox` uses the current client's native question interface when available, otherwise
+ordinary conversation, one question at a time. An AGENTS.md reader can follow
+`.prdkit/workflows/inbox.md` directly. Installation does not prove native question UI behavior;
+record that separately from conversational fallback and file-incorporation evaluations. The
+shared Markdown queue and resolution contract apply on every harness.
+
 ### Removing a harness
 
 On an existing install, an explicit `--harness` list must keep every harness the manifest

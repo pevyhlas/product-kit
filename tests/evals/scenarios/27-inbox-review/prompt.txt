@@ -1,0 +1,7 @@
+Follow the installed /prdkit-inbox command and workflows/inbox.md. Review only tag copy,
+incorporate the existing valid answer into the governing spec, and then ask me the next needed
+question, one at a time. The native question UI is unavailable in this test: use ordinary
+conversation for the next question and stop to wait for my reply. The older punctuation answer
+does not identify a current choice. Preserve it and ask for clarification rather than guessing.
+This request permits spec, inbox and change-record edits but no implementation, retries, commits,
+pushes, merges or releases. Existing holds and repair history still apply. Do not edit other topics.

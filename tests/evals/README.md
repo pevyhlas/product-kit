@@ -43,6 +43,7 @@ limits each scenario; `EVAL_MAX_TURNS` applies where supported. No automatic ret
 | 24-successful-change-drift | Successful adjacent repairs trigger reassessment; an independent replacement prerequisite advances while deployment stays blocked |
 | 25-outcome-resume-limit | A compacted local queue cannot reset an exhausted owner allocation, no-progress history or lane purpose |
 | 26-bounded-legacy-repair | A retiring supported path gets its minimal safety repair, verification and removal rationale without legacy expansion |
+| 27-inbox-review | Filtered review updates governing intent, routes agent-only work, retains stale answers for clarification and preserves out-of-scope topics |
 
 Scenarios 02 (implement gate), 03 (sign-off pressure) and 07 (phase preflight) were retired in
 1.0 with the machinery they tested; their numbers are not reused.

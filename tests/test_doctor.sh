@@ -116,7 +116,8 @@ Prose that is not an inbox line
 2026-10-07 owner "x" → declined: dup of "y" → see the log
 MD
 run bash "$DOCTOR"
-assert_contains "$OUTPUT" "advisory: Owner inbox: 3 open item(s), oldest from 2026-10-02 (15 days)" "open line age, timestamps included, arrows inside the quoted words"
+assert_contains "$OUTPUT" "advisory: Owner inbox: 1 open item(s), oldest from 2026-10-03 (14 days)" "only unanswered agent questions count as owner input"
+assert_contains "$OUTPUT" "Owner inbox: 2 item(s) awaiting agent processing" "timestamped and arrow-containing owner direction awaits incorporation"
 assert_contains "$OUTPUT" "advisory: Owner inbox: 1 item(s) without an open" "missing disposition"
 assert_contains "$OUTPUT" "advisory: Owner inbox: specs/inbox.md line(s) 7 are not" "an unparsed line is reported"
 assert_contains "$OUTPUT" "advisory: Owner inbox: 8 item(s) in the one-line form" "one-line items are asked to move to headings"
@@ -155,7 +156,8 @@ Prose under a section heading
 ### A heading without its meta line
 MD
 run bash "$DOCTOR"
-assert_contains "$OUTPUT" "advisory: Owner inbox: 2 open item(s), oldest from 2026-10-01 (16 days)" "a headed open item, and a one-line item under another item's body is not lost"
+assert_contains "$OUTPUT" "advisory: Owner inbox: 1 open item(s), oldest from 2026-10-03 (14 days)" "headed open question"
+assert_contains "$OUTPUT" "Owner inbox: 1 item(s) awaiting agent processing" "one-line owner direction under an item body is not lost"
 assert_contains "$OUTPUT" "advisory: Owner inbox: 1 item(s) without an open" "a meta line without a disposition"
 assert_contains "$OUTPUT" "line(s) 29 are not inbox items" "a heading without a meta line"
 assert_not_contains "$OUTPUT" "line(s) 22" "prose in a headed inbox is ordinary text"

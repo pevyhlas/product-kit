@@ -208,7 +208,7 @@ run status_json
 json="$OUTPUT"
 run jq -e '.items[] | select(.id == "R-01") | .title == "Title text" and .maturity == "hypothesis"' <<< "$json"
 assert_eq 0 "$STATUS" 'spec item framing preserved'
-run jq -e '.inbox[0] | .words == "Question text" and .state == "open" and (.age_days | type) == "number"' <<< "$json"
+run jq -e '.inbox[0] | .words == "Question text" and .state == "processing" and (.age_days | type) == "number"' <<< "$json"
 assert_eq 0 "$STATUS" 'inbox framing preserved'
 run jq -e '.holds[0] | .scope == "code scope" and .reason == "reason text" and .state == "active"' <<< "$json"
 assert_eq 0 "$STATUS" 'record framing preserved'

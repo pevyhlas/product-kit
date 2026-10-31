@@ -15,7 +15,7 @@ the spec or policy with provenance, clearing resolved items from `specs/inbox.md
 pending direction stays in the inbox; bounded work opens or continues a change
 (`.prdkit/workflows/change.md`); product-to-feature decomposition uses
 `.prdkit/workflows/planning.md`, ready work uses `.prdkit/workflows/implementation.md`;
-questions are answered from the spec and code; overflow, drift
+inbox review follows `.prdkit/workflows/inbox.md`; questions are answered from the spec and code; overflow, drift
 or a 0.x layout goes to `.prdkit/workflows/compact.md`. Every spec edit follows
 `.prdkit/workflows/spec.md`. `--explore` means no edits, `--plan` a change record and proportional
 execution plan without code,
