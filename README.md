@@ -93,7 +93,7 @@ Agent:  Change 012 adds requirement R-04 with the code. Acceptance A1 passes on 
 | **Large products**         | ⚠️ Designed for it (layered spec, agents read only what a change touches), but proven on only a handful of projects |
 | **Agents**                 | ⚠️ Installs for Claude Code, OpenCode, Codex and other `AGENTS.md` readers; [real-agent testing](docs/harnesses.md) is still limited |
 | **Many repos**             | ⚠️ One spec per repo; a shared interface belongs to the repo that provides it                         |
-| **Maturity**               | ⚠️ Experimental: 1.3.0, one maintainer                                                                |
+| **Maturity**               | ⚠️ Experimental: 1.3.3, one maintainer                                                                |
 | **Roadmap**                | ⚠️ Lifecycle stages (Idea → MVP → GA) and which journeys belong to each; no dates or timelines        |
 | **Ticketing**              | ❌ Not a ticket tracker; the work itself lives in git, pull requests and CI                           |
 | **One-off scripts**        | ❌ A spec costs more than it saves                                                                    |
@@ -118,7 +118,7 @@ Agent:  Change 012 adds requirement R-04 with the code. Acceptance A1 passes on 
 
 ```text
 Add Product-Kit (https://github.com/pevyhlas/product-kit) to this repository as a git
-submodule at .product-kit, pinned to tag v1.3.0, and run .product-kit/scripts/init.sh.
+submodule at .product-kit, pinned to tag v1.3.3, and run .product-kit/scripts/init.sh.
 Then adopt it by following .prdkit/workflows/init.md.
 ```
 
@@ -151,7 +151,7 @@ The agent installs the kit, reads your repository, fills in the project constitu
 
 ```bash
 git submodule add https://github.com/pevyhlas/product-kit .product-kit
-git -C .product-kit checkout v1.3.0
+git -C .product-kit checkout v1.3.3
 bash .product-kit/scripts/init.sh
 ```
 

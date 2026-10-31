@@ -1,6 +1,9 @@
 <!--
 SYNC IMPACT REPORT
-- Version change: 1.1.3 → 1.1.4 (2026-10-30)
+- Version change: 1.1.4 → 1.1.5 (2026-10-31)
+- Owner-directed release versioning: small backward-compatible additions can use a patch;
+  reserve minor bumps for larger compatible changes (issue #63).
+- Prior (1.1.3 → 1.1.4, 2026-10-30):
 - Extend Principle III's optional-tool exception to explicit GitHub report consistency checks
   using gh and jq. Core offline review checking retains Bash/Git-only operation.
 - Prior (1.1.2 → 1.1.3, 2026-10-20):
@@ -16,9 +19,9 @@ SYNC IMPACT REPORT
 
 # Product-Kit Constitution
 
-**Version**: 1.1.4
+**Version**: 1.1.5
 **Ratified**: 2026-06-02
-**Last Amended**: 2026-10-30
+**Last Amended**: 2026-10-31
 
 > This is Product-Kit's *own* constitution — the principles governing the toolkit itself.
 > It is meta: Product-Kit ships a generic `templates/constitution-template.md` for projects
@@ -107,6 +110,9 @@ constitution's principles serve as the acceptance criteria.
 ## Governance
 
 - **Amendment procedure**: edit this file directly (Product-Kit develops itself); version per below.
-- **Versioning policy** (semantic): MAJOR = incompatible workflow/command changes; MINOR = new
-  command/template/capability; PATCH = wording/clarification/fixes.
+- **Versioning policy**: MAJOR = incompatible workflow/command changes; MINOR = larger compatible
+  workflow or capability changes; PATCH = fixes, clarifications and small backward-compatible
+  additions. A new optional command alone does not require a minor bump. Owner direction,
+  2026-10-31 ([source](https://github.com/pevyhlas/product-kit/issues/63)):
+  "make it still 1.3.+ - I don't think we should be increasing the second number unless we do bigger changes".
 - **Compliance review**: changes are reviewed against these principles before merge.
