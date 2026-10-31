@@ -173,6 +173,26 @@ run bash "$STATUS_SH"
 owner_queue="$(printf '%s\n' "$OUTPUT" | sed -n '/^Owner queue$/,/^Inbox awaiting agent processing$/p')"
 assert_contains "$owner_queue" "Clarify the changed choice" "owner view names the unresolved clarification"
 
+it "stale question classification follows its kind, not the metadata actor"
+sed 's/· agent · processing/· owner · processing/' specs/inbox.md > specs/next.md
+mv specs/next.md specs/inbox.md
+run bash "$STATUS_SH" --json
+json="$OUTPUT"
+run jq -e '.inbox[0] | .from == "owner" and .kind == "decision" and .state == "open"' <<< "$json"
+assert_eq 0 "$STATUS" "owner-authored processing metadata cannot hide a stale decision"
+run jq -e '.longest_pole.waits_on == "the owner"' <<< "$json"
+assert_eq 0 "$STATUS" "owner-authored stale question still waits on owner clarification"
+sed 's/\*\*Kind\*\*: decision/**Kind**: direction/' specs/inbox.md > specs/next.md
+mv specs/next.md specs/inbox.md
+run bash "$STATUS_SH" --json
+run jq -e '.inbox[0] | .kind == "direction" and .state == "processing"' <<< "$OUTPUT"
+assert_eq 0 "$STATUS" "incoming owner direction remains agent processing"
+sed 's/· owner · processing/· agent · processing/' specs/inbox.md > specs/next.md
+mv specs/next.md specs/inbox.md
+run bash "$STATUS_SH" --json
+run jq -e '.inbox[0] | .from == "agent" and .kind == "direction" and .state == "processing"' <<< "$OUTPUT"
+assert_eq 0 "$STATUS" "relayed incoming direction also remains agent processing"
+
 it "an answer without a source stays processing and does not acquire invented provenance"
 cat > specs/inbox.md <<'MD'
 # Owner inbox

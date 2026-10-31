@@ -462,7 +462,8 @@ spec_inbox() { # root
             if (state == "open" && (who == "owner" || answer != "")) state = "processing"
             # A known stale answer needs a fresh owner clarification, rather than another pass
             # at incorporating the old selection. Preserve the original answer as evidence.
-            if ((state == "open" || state == "processing") && who == "agent" && answer != "" &&
+            if ((state == "open" || state == "processing") && kind != "direction" &&
+                (who == "agent" || kind ~ /^(decision|clarification|feedback)$/) && answer != "" &&
                 revision ~ /^[1-9][0-9]*$/ && answer_revision ~ /^[1-9][0-9]*$/ && revision != answer_revision) state = "open"
             if (id != "" && seen[id]++) problem("duplicate ID " id)
             if (state == "open" || state == "processing" || state == "unknown") {
