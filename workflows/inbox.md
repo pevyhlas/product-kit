@@ -88,5 +88,7 @@ for imported answers. Preserve known provenance and name any uncertainty.
    a product choice was answered; use the existing action policy and any explicit request.
 
 `status.sh --json` exposes recorded queue state and metadata; `doctor.sh` flags structural
-problems and pending processing. These helpers cannot verify the meaning of a decision, its
+problems and pending processing. A known answer/question revision mismatch remains an owner
+clarification in status, with its old answer preserved; it is not ready for incorporation.
+These helpers cannot verify the meaning of a decision, its
 truth, or complete incorporation. Review the actual spec diff and linked obligations.

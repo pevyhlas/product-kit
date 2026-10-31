@@ -145,6 +145,34 @@ assert_contains "$OUTPUT" "duplicate ID IN-222222222222" "identity collision fou
 assert_contains "$OUTPUT" "duplicate option key same" "option collision found"
 assert_contains "$OUTPUT" "answer revision mismatch; clarify before incorporation" "stale positional answer is not silently accepted"
 
+it "a known stale selection remains an owner clarification, not an incorporation task"
+cat > specs/inbox.md <<'MD'
+# Owner inbox
+
+### Clarify the changed choice
+*2026-10-31 · agent · processing*
+
+**ID**: IN-555555555555
+**Revision**: 2
+**Kind**: decision
+**Tags**: copy
+1. **keep — Keep it (Recommended)**: retain the revised behavior.
+2. **omit — Omit it**: remove it.
+**Answer**: 1
+**Answer date**: 2026-10-30
+**Answer source**: original-selection
+**Answer revision**: 1
+MD
+run bash "$STATUS_SH" --json
+json="$OUTPUT"
+run jq -e '.inbox[0] | .state == "open" and .answer == "1"' <<< "$json"
+assert_eq 0 "$STATUS" "stale answer preserved while owner clarification stays visible"
+run jq -e '.longest_pole.waits_on == "the owner"' <<< "$json"
+assert_eq 0 "$STATUS" "stale choice waits on the owner even with old processing metadata"
+run bash "$STATUS_SH"
+owner_queue="$(printf '%s\n' "$OUTPUT" | sed -n '/^Owner queue$/,/^Inbox awaiting agent processing$/p')"
+assert_contains "$owner_queue" "Clarify the changed choice" "owner view names the unresolved clarification"
+
 it "an answer without a source stays processing and does not acquire invented provenance"
 cat > specs/inbox.md <<'MD'
 # Owner inbox

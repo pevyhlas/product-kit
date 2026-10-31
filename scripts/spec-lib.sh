@@ -460,6 +460,10 @@ spec_inbox() { # root
             state = meta_state
             if (want) state = "unparsed"
             if (state == "open" && (who == "owner" || answer != "")) state = "processing"
+            # A known stale answer needs a fresh owner clarification, rather than another pass
+            # at incorporating the old selection. Preserve the original answer as evidence.
+            if ((state == "open" || state == "processing") && who == "agent" && answer != "" &&
+                revision ~ /^[1-9][0-9]*$/ && answer_revision ~ /^[1-9][0-9]*$/ && revision != answer_revision) state = "open"
             if (id != "" && seen[id]++) problem("duplicate ID " id)
             if (state == "open" || state == "processing" || state == "unknown") {
                 if (id == "") problem("missing ID")

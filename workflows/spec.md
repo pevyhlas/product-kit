@@ -215,7 +215,8 @@ implementation or merge need not be complete before the answered item leaves the
    operative owner words verbatim, date and source (conversation reference, PR/comment URL or
    recorded git revision/path). Relayed words keep their original source. A bare option number
    also needs the selected option's meaning. The canonical entry is the record; do not duplicate a transcript
-   or create a second decision journal. Retain the inbox ID when present. Update the actual
+   or create a second decision journal. Retain the inbox ID as plain provenance text or an
+   immutable source link, not a live link back to an entry that will be removed. Update the actual
    governing requirement, design or policy, reconcile superseded contradictory text and affected
    references, and retain concise rationale where it explains the choice. An appended quote or
    `folded` label alone is not incorporation. Agent defaults must be labeled as agent decisions.
