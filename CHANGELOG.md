@@ -8,6 +8,12 @@ change by change.
 
 ## [Unreleased]
 
+## [1.3.3] — 2026-10-31 — inbox review and workflow safeguards
+
+Review owner questions with `/prdkit-inbox`, incorporate answers into the governing spec, and
+keep follow-up work out of the owner-input queue. This small release also adds record-only change
+creation and hardens review trust, reviewer eligibility and optional report verification.
+
 ### Added
 
 - `/prdkit-inbox` reviews owner questions one at a time using native agent questions or plain
@@ -38,6 +44,33 @@ change by change.
 - Review coverage exemptions share an explicit integration-base trust policy. Arbitrary pushed
   branches and local main/master no longer authorize base-import or record-only exemptions;
   additional integration branches are configured in the remote default's committed policy.
+
+### Adoption
+
+- Pin the kit to `v1.3.3`, run `bash .product-kit/scripts/init.sh --check`, then
+  `bash .product-kit/scripts/init.sh --upgrade`. Update configured adoption pins and manifest
+  hashes with the kit pin; run normal doctor and adoption checks afterwards.
+- Run `/prdkit-inbox preview` to inspect an existing queue, then `/prdkit-inbox` to reconcile
+  answers and review remaining questions. Tags or IDs can narrow the review. The installer never
+  rewrites `specs/`; reconcile customized inbox templates and legacy entries through the agent.
+  Missing metadata/provenance produces advisories that affect `doctor --strict`; duplicate IDs,
+  option keys/fields and stale answer revisions need reconciliation. Known stale answers remain
+  visible as owner clarifications instead of disappearing into the processing queue.
+- Keep the operative answer, qualifications and provenance with the canonical decision, with
+  remaining work and holds in their existing records. Git retains committed question history;
+  a separate answer archive is not required.
+- Before adopting the stricter review checker, reconcile reviewer identities and eligibility
+  with the registry on the shared trusted integration baseline. `origin/HEAD` anchors the trusted
+  default; additional integration branches require policy on that remote default. Change-local
+  registry or policy edits cannot authorize their own review exemptions.
+- `new-change.sh --no-branch` creates only the record on the current checkout; it does not
+  replace `--no-worktree`, which still creates a branch. Report verification remains opt-in and
+  needs `gh` and `jq`; consistent report links do not establish session independence.
+
+### Versioning
+
+- Small backward-compatible additions may ship in the patch series; reserve minor version bumps
+  for larger compatible changes, following the owner's direction recorded in issue #63.
 
 ## [1.3.2] — 2026-10-30 — review coverage and consumer diagnostics fixes
 
