@@ -21,18 +21,35 @@ answer. You do not write the spec yourself unless you want to.
   serves, the core loop's path, the key decisions, key areas such as security and observability,
   and the risks. Then `specs/architecture/`: decisions and one file per topic, including why the
   design works, with the alternatives it rejected and when to revisit them.
-- `specs/inbox.md`: questions waiting for you, each with numbered options and a recommendation
-  (answer with a number or your own words), and direction awaiting incorporation. The agent folds
-  your answer into the spec or policy with its words, date and source, tracks remaining work and
-  holds, then removes the answered item without waiting for implementation or merge. Partial
-  answers keep only the unresolved question open. Declines and deferrals live with the relevant
-  spec decision and revisit trigger. Words relayed verbatim by another session count as yours;
-  an agent's summary of them does not.
+- `specs/inbox.md`: questions waiting for your answer, clarification or observation. Each has a
+  stable ID, topic tags and an answer field; choices have stable keys as well as numbers. Use
+  `/prdkit-inbox` to review them one at a time, optionally naming tags or IDs. Select an option,
+  answer in your own words, ask for context or skip. You can also edit **Answer** directly.
+  The agent records known date/source/revision, updates the actual governing spec or policy,
+  reconciles contradictory wording, preserves remaining work/holds and verifies the result
+  before removing the item. It gives you the canonical destination, not just "recorded."
+  **To incorporate** temporarily holds answers awaiting agent processing; these are not questions
+  for you to answer again. Partial answers leave only the remaining question. Declines and
+  deferrals live with the relevant decision and revisit trigger. Verbatim relays count as your
+  words; an agent's summary does not.
 - `/prdkit-status`: what is true now, what is in flight, what is live, holds and waivers, what
   waits on you, and the longest pole. It is generated, never written as prose.
 
 The summary and architecture read in minutes; journeys are where your attention pays most. Files
 past their reading budgets are tightened or split, never trimmed of items.
+
+### Where answers are kept
+
+Keep the operative answer, qualifications, concise rationale, date/source and inbox ID beside
+the canonical decision. The full question and old options can leave the working tree once that
+decision and its remaining obligations are verified. Git retains committed inbox history; the
+agent must preserve answers from chat in the canonical edit even if no inbox version was committed.
+A separate answer archive is normally redundant and can become stale. Use one only for an explicit
+audit/retention need, with the spec remaining authoritative.
+
+Existing inboxes are reconciled by `/prdkit-inbox`, not by deleting everything labelled folded.
+Upgrading the kit leaves `specs/` untouched, so ask the command to review legacy entries after
+adoption. A preview shows the proposed routing without editing files.
 
 ## During a change
 

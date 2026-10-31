@@ -781,7 +781,7 @@ assert_eq 0 "$STATUS" "status exits 0"
 assert_eq 1 "$(printf '%s\n' "$OUTPUT" | grep -cFx '  2026-10-02 owner, 15 days: "Pick the colour"')" "a one-line inbox item with an arrow, its words exactly"
 run bash .prdkit/scripts/bash/doctor.sh
 assert_eq 0 "$STATUS" "doctor exits 0"
-assert_contains "$OUTPUT" "Owner inbox: 1 open item(s), oldest from 2026-10-02" "doctor reads the same inbox item"
+assert_contains "$OUTPUT" "Owner inbox: 1 item(s) awaiting agent processing" "doctor reads the same owner direction"
 assert_contains "$OUTPUT" "ID R-09 is cited at tests/test_greeting.py:1" "an ID between em dashes is cited"
 assert_contains "$OUTPUT" "ID J-02 is cited at specs/product/qualities.md:3" "an ID after an en dash is cited"
 assert_contains "$OUTPUT" "ID R-08 is cited at tests/test_greeting.py:3" "an ID at the start of a line is cited"

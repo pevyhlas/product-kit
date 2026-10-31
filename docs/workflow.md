@@ -15,7 +15,8 @@ bounded request ──► change opened ──► build + check ──► review
 outcomes ──► /prdkit-learn ──► inbox proposals ◄──────────────────┘
 ```
 
-Use `/prdkit` to enter the loop and `/prdkit-status` for the generated view. `/prdkit-product`
+Use `/prdkit` to enter the loop, `/prdkit-inbox` to answer pending questions and incorporate
+recorded direction, and `/prdkit-status` for the generated view. `/prdkit-product`
 edits product intent, `/prdkit-target` plans a programme of changes and `/prdkit-learn` reviews
 outcomes. `/prdkit-init`, `/prdkit-configure` and `/prdkit-doctor` handle setup, policy and
 diagnostics.

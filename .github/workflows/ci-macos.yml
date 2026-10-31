@@ -36,6 +36,7 @@ jobs:
           /bin/bash tests/test_status.sh
           /bin/bash tests/test_outcome_progress.sh
           /bin/bash tests/test_doctor.sh
+          /bin/bash tests/test_inbox.sh
           /bin/bash tests/test_accepted_change_benchmark.sh
           /bin/bash tests/test_diagnostics_inventory.sh
           /bin/bash tests/test_consumer_smoke.sh

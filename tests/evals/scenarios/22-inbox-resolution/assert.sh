@@ -7,6 +7,8 @@ test "$(git log -1 --format=%s)" = 'fixture: answered inbox with partial decisio
 grep -qi punctuation specs/inbox.md || fail 'partial question lost'
 if grep -Eq '^### (Greeting wording|Execution hold)$' specs/inbox.md; then fail 'resolved items retained'; fi
 grep -q 'Hello' specs/product.md || fail 'selected wording not folded'
+if grep -q 'contains Welcome followed by a newline' specs/product.md; then fail 'governing requirement still contradicts the appended answer'; fi
+test "$(grep -c '\*\*R-01 ' specs/product.md)" = 1 || fail 'governing requirement duplicated'
 grep -qi English specs/product.md || fail 'partial answer not folded'
 grep -q 'planned: 001-greeting' specs/product.md || fail 'unbuilt intent appears built'
 grep -q 'owner-message-22' specs/product.md || fail 'source lost'

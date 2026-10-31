@@ -13,6 +13,10 @@ own the operational behavior, starting with [protocol.md](../workflows/protocol.
 - [`/prdkit-status`](../commands/prdkit-status.md) — runs `status.sh` (`--json` for the derived
   form) and answers the question first, then outcome progress and the longest pole. Recorded
   milestone evidence and no-progress counts stay distinct from PR/test totals. Read-only.
+- [`/prdkit-inbox`](../commands/prdkit-inbox.md) — reconcile recorded answers, then review owner
+  questions one at a time through the agent. Select IDs or tags in ordinary words (for example,
+  `tags ux, export`); `preview` requests a read-only review. Answers update the governing spec
+  and provenance before the item is removed. Pending processing is distinct from waiting on you.
 - [`/prdkit-product`](../commands/prdkit-product.md) — edit L0 (`specs/product.md` and
   `specs/product/`, or the L0 sections of `specs/SPEC.md`) inside a change, with the owner's words
   quoted.

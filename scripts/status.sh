@@ -175,6 +175,11 @@ if [ -z "$pole" ]; then
     if [ -n "$oldest" ]; then pole="${oldest#*"$SEP"}"; pole_waits="nothing recorded"; fi
 fi
 
+if [ -z "$pole" ]; then
+    pending="$(printf '%s\n' "$inbox" | awk -F '\037' '$4 == "processing" || $4 == "unknown" { print $5; exit }')"
+    if [ -n "$pending" ]; then pole="inbox reconciliation: $pending"; pole_waits="the agent processing recorded direction"; fi
+fi
+
 # --- Output -----------------------------------------------------------------------------------
 if $json; then
     printf '{"date":%s,"layout":%s,"mixed_spec_forms":%s,"stage":{"now":%s,"next":%s,"later":%s},"items":[' "$(js "$today")" "$(js "$layout")" \
@@ -218,11 +223,12 @@ if $json; then
         sep=,
     done <<< "$holds"
     printf '],"inbox":['; sep=""
-    while IFS="$SEP" read -r line date who state words; do
+    while IFS="$SEP" read -r line date who state words id kind tags revision answer _; do
         [ -n "$line" ] || continue
-        [ "$state" = open ] || [ "$state" = unknown ] || continue
-        printf '%s{"line":%s,"date":%s,"age_days":%s,"from":%s,"state":%s,"words":%s}' "$sep" \
-            "$(ju "$line")" "$(js "$date")" "$(ji "$(age "$date")")" "$(js "$who")" "$(js "$state")" "$(js "$words")"
+        [ "$state" = open ] || [ "$state" = processing ] || [ "$state" = unknown ] || continue
+        printf '%s{"line":%s,"date":%s,"age_days":%s,"from":%s,"state":%s,"words":%s,"id":%s,"kind":%s,"tags":%s,"revision":%s,"answer":%s}' "$sep" \
+            "$(ju "$line")" "$(js "$date")" "$(ji "$(age "$date")")" "$(js "$who")" "$(js "$state")" "$(js "$words")" \
+            "$(js "$id")" "$(js "$kind")" "$(js "$tags")" "$(js "$revision")" "$(js "$answer")"
         sep=,
     done <<< "$inbox"
     printf '],"unmerged_branches":['; sep=""
@@ -348,13 +354,22 @@ done <<< "$holds"
 
 printf '\nOwner queue\n'
 queued=0
-while IFS="$SEP" read -r line date who state words; do
+while IFS="$SEP" read -r line date who state words _; do
     [ -n "$line" ] || continue
-    [ "$state" = open ] || [ "$state" = unknown ] || continue
+    [ "$state" = open ] || continue
+    queued=$((queued + 1))
+    printf '  %s %s, %s days: %s\n' "$date" "$who" "$(age "$date")" "$words"
+done <<< "$inbox"
+[ "$queued" -gt 0 ] || printf '  Nothing open.\n'
+
+printf '\nInbox awaiting agent processing\n'
+queued=0
+while IFS="$SEP" read -r line date who state words _; do
+    [ "$state" = processing ] || [ "$state" = unknown ] || continue
     queued=$((queued + 1))
     printf '  %s %s, %s days: %s%s\n' "$date" "$who" "$(age "$date")" "$words" "$([ "$state" = unknown ] && echo ' (no disposition)')"
 done <<< "$inbox"
-[ "$queued" -gt 0 ] || printf '  Nothing open.\n'
+[ "$queued" -gt 0 ] || printf '  Nothing awaiting incorporation.\n'
 
 printf '\nLongest pole\n'
 if [ -n "$pole" ]; then printf '  %s — waits on %s\n' "$pole" "$pole_waits"; else printf '  None: no open changes, holds or owner questions.\n'; fi

@@ -440,7 +440,9 @@ spec_test_files() { # root
         }'
 }
 
-# Owner inbox items: line number, date, who, state (open|folded|declined|deferred|unknown), words.
+# Owner inbox items: line, date, who, state, words, id, kind, tags, revision, answer, problems.
+# State: open|processing|folded|declined|deferred|unknown|unparsed. Processing is inferred from
+# owner direction or an answer field, never completion. Extra fields are empty for legacy rows.
 # An item is a `### <title>` heading followed by its meta line `*<date> · <owner|agent> ·
 # <disposition>*` (words: the title; line: the heading), or a one-line
 # `<date> <owner|agent> "<words>" → <disposition>` outside any item. A heading without a meta
@@ -451,24 +453,54 @@ spec_inbox() { # root
     [ -f "$file" ] || return 0
     grep -q '^###[[:space:]]' "$file" && headed=1
     awk -v headed="$headed" "$SPEC_SKIP_AWK"'
-        function nometa() { if (want) print head "\037\037\037unparsed\037" title; want = 0 }
+        function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+        function problem(s) { problems = problems (problems == "" ? "" : "; ") s }
+        function flush(   state) {
+            if (!item) return
+            state = meta_state
+            if (want) state = "unparsed"
+            if (state == "open" && (who == "owner" || answer != "")) state = "processing"
+            if (id != "" && seen[id]++) problem("duplicate ID " id)
+            if (state == "open" || state == "processing" || state == "unknown") {
+                if (id == "") problem("missing ID")
+                else if (id !~ /^[A-Za-z][A-Za-z0-9._-]*$/) problem("invalid ID; use a stable single token")
+                if (revision !~ /^[1-9][0-9]*$/) problem("missing or invalid Revision")
+                if (kind !~ /^(decision|clarification|feedback|direction)$/) problem("missing or invalid Kind")
+                if (tags == "") problem("missing Tags")
+                else if (tags !~ /^[a-z][a-z0-9-]*(, [a-z][a-z0-9-]*)*$/) problem("invalid Tags; use comma-separated lowercase topics")
+                if (kind == "decision" && (options < 2 || keyed != options)) problem("decision needs at least two options with stable keys")
+                if (answer != "") {
+                    if (!isdate(answer_date)) problem("missing or invalid Answer date")
+                    if (answer_source == "") problem("missing Answer source")
+                    if (answer_revision !~ /^[1-9][0-9]*$/) problem("missing or invalid Answer revision")
+                    else if (revision != "" && answer_revision != revision) problem("answer revision mismatch; clarify before incorporation")
+                }
+            }
+            print head "\037" date "\037" who "\037" state "\037" title "\037" id "\037" kind "\037" tags "\037" revision "\037" answer "\037" problems
+            item = 0; want = 0
+        }
+        function start() {
+            date = ""; who = ""; meta_state = "unparsed"; id = ""; kind = ""; tags = ""; revision = ""
+            answer = ""; answer_date = ""; answer_source = ""; answer_revision = ""; problems = ""
+            options = 0; keyed = 0; answering = 0; split("", keys); split("", fields)
+        }
+        function add_answer(s) { s = trim(s); sub(/^>[[:space:]]?/, "", s); if (s != "") answer = answer (answer == "" ? "" : " ") s }
         function isdate(s) { return s ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9](T[0-9][0-9]:[0-9][0-9](:[0-9][0-9])?Z?)?$/ }
-        { gsub(/\037/, " "); if (spec_skip($0)) next }
+        { gsub(/[\037\t\r]/, " "); if (spec_skip($0)) next }
         /^###[[:space:]]/ {
-            nometa(); head = NR; title = $0; sub(/^###[[:space:]]+/, "", title); sub(/[[:space:]]+$/, "", title)
+            flush(); start(); head = NR; title = $0; sub(/^###[[:space:]]+/, "", title); sub(/[[:space:]]+$/, "", title)
             gsub(/\t/, " ", title); want = 1; item = 1; next
         }
-        /^#[[:space:]]/ || /^##[[:space:]]/ { nometa(); item = 0; next }
+        /^#[[:space:]]/ || /^##[[:space:]]/ { flush(); next }
         /^[[:space:]]*$/ { next }
         want {
             want = 0; meta = $0
             sub(/^[[:space:]]*[*_]+/, "", meta); sub(/[*_]+[[:space:]]*$/, "", meta)
             n = split(meta, f, /[[:space:]]*(·|\|)[[:space:]]*/)
             if (n >= 2 && isdate(f[1]) && (f[2] == "owner" || f[2] == "agent")) {
-                state = "unknown"
-                if (n >= 3) { st = f[3]; sub(/[:[:space:]].*/, "", st); if (st ~ /^(open|folded|declined|deferred)$/) state = st }
-                print head "\037" substr(f[1], 1, 10) "\037" f[2] "\037" state "\037" title
-            } else print head "\037\037\037unparsed\037" title
+                meta_state = "unknown"; date = substr(f[1], 1, 10); who = f[2]
+                if (n >= 3) { st = f[3]; sub(/[:[:space:]].*/, "", st); if (st ~ /^(open|processing|folded|declined|deferred)$/) meta_state = st }
+            }
             next
         }
         /^#/ { next }
@@ -476,18 +508,41 @@ spec_inbox() { # root
             line = $0; sub(/^[[:space:]]*[-*][[:space:]]+/, "", line)
             # Inside an item, only a line in the one-line form counts, and it ends the item: owner
             # direction appended under a headed item must not vanish into its body.
-            if (item && line !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9](T[0-9][0-9]:[0-9][0-9](:[0-9][0-9])?Z?)?[[:space:]]+(owner|agent)[[:space:]]+"/) next
-            item = 0
+            if (item && line !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9](T[0-9][0-9]:[0-9][0-9](:[0-9][0-9])?Z?)?[[:space:]]+(owner|agent)[[:space:]]+"/) {
+                if (match($0, /^\*\*[^*]+\*\*:/)) {
+                    label = substr($0, 3, RLENGTH - 5); value = trim(substr($0, RLENGTH + 1)); answering = 0
+                    if (label == "Owner answer") label = "Answer"
+                    if (label ~ /^(ID|Revision|Kind|Tags|Answer|Owner answer|Answer date|Answer source|Answer revision)$/ && fields[label]++) problem("duplicate field " label)
+                    if (label == "ID") id = value
+                    else if (label == "Revision") revision = value
+                    else if (label == "Kind") kind = value
+                    else if (label == "Tags") { tags = value; gsub(/[[:space:]]*,[[:space:]]*/, ", ", tags) }
+                    else if (label == "Answer" || label == "Owner answer") { add_answer(value); answering = 1 }
+                    else if (label == "Answer date") answer_date = value
+                    else if (label == "Answer source") answer_source = value
+                    else if (label == "Answer revision") answer_revision = value
+                } else if ($0 ~ /^Owner answer[,:]/) { add_answer($0); answering = 1 }
+                else if (answering) add_answer($0)
+                if ($0 ~ /^[0-9]+\.[[:space:]]+\*\*/) {
+                    options++; key = $0; sub(/^[0-9]+\.[[:space:]]+\*\*/, "", key)
+                    if (key ~ /^[a-z][a-z0-9-]* — /) {
+                        sub(/ .*/, "", key); keyed++
+                        if (keys[key]++) problem("duplicate option key " key)
+                    }
+                }
+                next
+            }
+            flush()
             if (line !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9](T[0-9][0-9]:[0-9][0-9](:[0-9][0-9])?Z?)?[[:space:]]+(owner|agent)[[:space:]]/) {
                 if (headed && line !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/) next
-                gsub(/\t/, " ", line); print NR "\037\037\037unparsed\037" line; next
+                gsub(/\t/, " ", line); print NR "\037\037\037unparsed\037" line "\037\037\037\037\037\037"; next
             }
             split(line, w, /[[:space:]]+/); w[1] = substr(w[1], 1, 10)
             state = "unknown"; words = line; sub(/^[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+/, "", words)
             # The disposition arrow follows a closing quote and names a disposition; quoted words
             # and disposition notes may hold arrows too. Otherwise the first arrow.
             arrow = 0
-            if (match(words, /"[[:space:]]*(→|->)[[:space:]]*(open|folded|declined|deferred)([:[:space:]]|$)/)) {
+            if (match(words, /"[[:space:]]*(→|->)[[:space:]]*(open|processing|folded|declined|deferred)([:[:space:]]|$)/)) {
                 # Skip the spaces by trimming the whole tail, not by testing one character at a
                 # time (see SPEC_ID_AWK): macOS awk aborts on the first byte of "→" alone.
                 arrow = RSTART + 1; gap = substr(words, arrow); glen = length(gap)
@@ -498,13 +553,14 @@ spec_inbox() { # root
             if (!arrow) { arrow = index(words, "->"); alen = 2 }
             if (arrow) {
                 rest = substr(words, arrow + alen); sub(/^[[:space:]]+/, "", rest); sub(/[:[:space:]].*/, "", rest)
-                if (rest ~ /^(open|folded|declined|deferred)$/) state = rest
+                if (rest ~ /^(open|processing|folded|declined|deferred)$/) state = rest
                 words = substr(words, 1, arrow - 1); sub(/[[:space:]]+$/, "", words)
             }
             gsub(/\t/, " ", words)
-            print NR "\037" w[1] "\037" w[2] "\037" state "\037" words
+            if (state == "open" && w[2] == "owner") state = "processing"
+            print NR "\037" w[1] "\037" w[2] "\037" state "\037" words "\037\037\037\037\037\037"
         }
-        END { nometa() }' "$file"
+        END { flush() }' "$file"
 }
 
 # Records: line, type, name, owner, scope, env, rev, date, until, check, reason. A line that

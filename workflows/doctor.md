@@ -8,11 +8,14 @@ Run `.prdkit/scripts/bash/doctor.sh` (`--json`, `--strict`): 0.x layout or two c
 `specs/archive/` folder on main, a `specs/archive.md` whose base commit or last 0.x feature
 cannot be read, agent context naming removed 0.x paths, files over their reading budgets, cited
 IDs that are undefined or retired, malformed records, a closed change without its `specs/log.md`
-line, expired holds and waivers, open inbox items by age, retained resolved and one-line inbox items, local machine
+line, expired holds and waivers, open inbox items by age, pending answers, retained resolved and
+one-line inbox items, missing inbox metadata/provenance, duplicate IDs/option keys and stale answer
+revisions, local machine
 paths, links to missing files in the spec and `specs/archive.md`, spec files no summary links
 (1.1 layout), `observed/` pieces `observed.md` does not link, a lifecycle stage naming no
 environment the environments topic lists, raw evidence under `specs/`, oversized agent context
-files and agent projection drift. Malformed IDs and records and an unlogged close are errors; the rest are advisories that
+files and agent projection drift. Malformed spec IDs/records, an unlogged close, duplicate inbox
+identities/fields/option keys and mismatched answer revisions are errors; the rest are advisories that
 `--strict` fails. The kit's `scripts/init.sh --check` reports installation drift. Never repair
 during diagnosis or read a clean report as readiness.
 
