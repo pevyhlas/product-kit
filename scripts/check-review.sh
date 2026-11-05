@@ -25,6 +25,10 @@
 # T1-T3 so must the change's start (its merge base with --base). A merge carrying only the record
 # and the log from a trusted start (a change closed after its code merged) skips coverage. T1-T3
 # need one independent verdict, T3 the owner's too, and no L0/L1 spec edit since the owner's head.
+# Unchanged independent non-blocking PASS lines inherited from the trusted integration baseline,
+# whose heads are no longer in this history, are historical only. They supply no coverage or
+# reviewer count and their earlier-PR reports are not verified as current-PR evidence. Other
+# off-history lines retain the ordinary checks; no history exemption is made in shallow clones.
 #
 # Usage: check-review.sh [--json] [--head <rev>] [--base <rev>] [--repo <dir>] [<change-id>]
 #   <change-id> defaults to the current branch name; --base to the first of origin/HEAD,
@@ -102,6 +106,7 @@ if [ -n "$base_canonical" ] && printf '%s\n' "$approved_refs" | grep -qxF -- "$b
 fi
 
 problems=(); rows=(); links=(); all_reviews=(); tier=""; rigor=""; record_at=""; record_only=false; start=""
+historical_reviews=0; historical_lines=""
 # Registration must precede use: a change cannot qualify its own maker or invented identity.
 registry_base="$trusted_default_sha"; registry_at=""; registry=""
 if [ -n "$registry_base" ]; then
@@ -211,19 +216,23 @@ else
     # is also a link (marked \036): the range it reviewed, which coverage chains through.
     sep36="$(printf '\036')"
     sep35="$(printf '\035')"
-    while IFS= read -r row; do
-        case "$row" in
-            "") ;;
-            "$sep35"*) all_reviews+=("${row#"$sep35"}") ;;
-            "$sep36"*) links+=("${row#"$sep36"}") ;;
-            *) rows+=("$row") ;;
-        esac
-    done < <(printf '%s\n' "$record" | awk "$SPEC_SKIP_AWK"'
+    collect_reviews() {
+        rows=(); links=(); all_reviews=()
+        while IFS= read -r row; do
+            case "$row" in
+                "") ;;
+                "$sep35"*) all_reviews+=("${row#"$sep35"}") ;;
+                "$sep36"*) links+=("${row#"$sep36"}") ;;
+                *) rows+=("$row") ;;
+            esac
+        done < <(printf '%s\n' "$record" | awk -v historical="$historical_lines" "$SPEC_SKIP_AWK"'
+        BEGIN { n = split(historical, ignored, " "); for (i = 1; i <= n; i++) skip[ignored[i]] = 1 }
         { gsub(/[\035-\037]/, " "); if (spec_skip($0)) next }
         function trim(s) { gsub(/`/, "", s); gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
         function count(s, kind,   v) { v = s; if (!match(v, "[0-9]+ " kind)) return "?"; v = substr(v, RSTART, RLENGTH); sub(/ .*/, "", v); return v }
         /^## / { sec = $0; sub(/^##[[:space:]]+/, "", sec); next }
         sec == "State" && /^\*\*Review\*\*:/ {
+            if (NR in skip) next
             line = $0; sub(/^\*\*Review\*\*:[[:space:]]*/, "", line)
             n = split(line, f, " · ")
             reviewer = n >= 3 ? tolower(trim(f[3])) : ""
@@ -238,6 +247,30 @@ else
             row[reviewer] = reviewer "\037" trim(f[1]) "\037" from "\037" to "\037" verdict "\037" count(f[5], "critical") "\037" count(f[5], "high") "\037" count(f[5], "medium") "\037" count(f[5], "low")
         }
         END { for (i = 1; i <= k; i++) print row[order[i]] }')
+    }
+    collect_reviews
+    # Trust the shared remote-default baseline, not --base or a change-local record. Match the
+    # complete original State line so editing its identity, counts, range or report cancels the
+    # exemption. Keep historical lines in the committed record, but exclude them before choosing
+    # the latest current verdict per reviewer and before authenticating current-PR reports.
+    if [ -n "$registry_at" ] && [ "$(git -C "$root" rev-parse --is-shallow-repository)" = false ]; then
+        baseline_reviews="$( { git -C "$root" show "$registry_at:$path" 2>/dev/null || true; } | awk "$SPEC_SKIP_AWK"'
+            { if (spec_skip($0)) next }
+            /^## / { sec = $0; next }
+            sec == "## State" && /^\*\*Review\*\*:/ { print }')"
+        for review in ${all_reviews[@]+"${all_reviews[@]}"}; do
+            IFS="$(printf '\037')" read -r line reviewer from to verdict critical high medium _ <<< "$review"
+            [ "$reviewer" != owner ] && eligible "$reviewer" && [ "$verdict" = PASS ] || continue
+            if [ "$critical" != 0 ] || [ "$high" != 0 ] || { [ "$rigor" != light ] && [ "$medium" != 0 ]; }; then continue; fi
+            if ! is_sha "$from" || ! is_sha "$to"; then continue; fi
+            here "$to" >/dev/null && continue
+            original_line="$(sed -n "${line}p" <<< "$record")"
+            grep -Fx -- "$original_line" <<< "$baseline_reviews" >/dev/null || continue
+            historical_lines="$historical_lines $line"
+            historical_reviews=$((historical_reviews + 1))
+        done
+        [ "$historical_reviews" -eq 0 ] || collect_reviews
+    fi
     [ -n "$tier" ] || problems+=("The record names no review tier (**Tier**: T0–T3)")
     for review in ${all_reviews[@]+"${all_reviews[@]}"}; do
         IFS="$(printf '\037')" read -r line reviewer _ <<< "$review"
@@ -393,11 +426,11 @@ if $json; then
             "$(json_escape "$critical")" "$(json_escape "$high")" "$(json_escape "$medium")" "$(json_escape "$low")"
         sep=,
     done
-    printf '],"registry_at":"%s","report_verification":"%s","problems":%s}\n' "$registry_at" "$report_verification" "$(json_array ${problems[@]+"${problems[@]}"})"
+    printf '],"historical_reviews":%s,"registry_at":"%s","report_verification":"%s","problems":%s}\n' "$historical_reviews" "$registry_at" "$report_verification" "$(json_array ${problems[@]+"${problems[@]}"})"
 elif [ "$result" = pass ]; then
     if $record_only; then
         note=""
-        [ "${#rows[@]}" -gt 0 ] || [ "$tier" = T0 ] || note=" Note: a $tier record with no verdict, so its code merged unreviewed."
+        [ "${#rows[@]}" -gt 0 ] || [ "$historical_reviews" -gt 0 ] || [ "$tier" = T0 ] || note=" Note: a $tier record with no verdict, so its code merged unreviewed."
         printf 'PASS %s at %s: since %s it carries only the record and the log; %s recorded verdict(s), none blocking.%s\n' "$id" "$head" "$base_ref" "${#rows[@]}" "$note"
     elif [ "${#rows[@]}" -eq 0 ]; then
         printf 'PASS %s at %s: tier T0 needs no independent review (the tier is the record'"'"'s claim).\n' "$id" "$head"
@@ -408,6 +441,9 @@ else
     printf 'FAIL %s at %s:\n' "$id" "$head"
     $base_trusted || printf '  Base is not trusted for coverage exemptions: establish origin/HEAD or configure review-integration-branches in its committed config.\n'
     for problem in "${problems[@]}"; do printf '  %s\n' "$problem"; done
+fi
+if ! $json && [ "$historical_reviews" -gt 0 ]; then
+    printf 'Historical only: %s inherited non-blocking PASS verdict(s) from %s; no current coverage or report verification.\n' "$historical_reviews" "$registry_at"
 fi
 if ! $json && [ "${#rows[@]}" -gt 0 ]; then
     if [ "$report_verification" = not-requested ]; then

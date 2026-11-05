@@ -78,6 +78,18 @@ verdict, with the commit hashes the review package printed, to the change record
 
 ### Reviewer eligibility and report links
 
+When a change spans several PRs, keep earlier Review lines in its record. An unchanged,
+non-blocking independent PASS already present in the trusted integration baseline is treated
+as **historical only** if its reviewed head is no longer in the current history (for example,
+after a squash merge). Both range ends must be commit hashes and the reviewer must still be
+eligible. The baseline is the shared merge base with the remote default identified by
+`origin/HEAD`, never an arbitrary `--base`. This exemption requires a non-shallow checkout.
+Historical lines provide no coverage, independent-review count or current-PR report verification;
+the new PR still needs reviews covering its own source. JSON reports their count as
+`historical_reviews` and the baseline as `registry_at`; text output identifies the exclusion.
+Edited or newly introduced off-history lines, blocking findings, malformed verdicts and owner
+approvals retain their existing checks. The helper never rewrites or archives the original lines.
+
 Every non-owner Review line must name an eligible identity in `.prdkit/memory/agents.md` at the
 integration baseline (merge base with the remote default identified by `origin/HEAD`). Missing
 remote-default authority or shared history leaves identities unregistered; an arbitrary `--base`
@@ -114,8 +126,10 @@ verdict and finding counts. Append this receipt to the report comment, filling a
 -->
 ```
 
-Owner receipts use reviewer `owner`; counts are optional. Historical reports also need receipts
-when this mode is used. Missing tools, unavailable/offline API access, missing history or a
+Owner receipts use reviewer `owner`; counts are optional. Superseded current-history reports also
+need receipts when this mode is used. Historical-only PASS lines described above are excluded:
+their earlier-PR links are preserved, not authenticated as reports on the current PR.
+Missing tools, unavailable/offline API access, missing history for active reviews or a
 mismatch returns a failing result rather than a verified PASS. Matching metadata does not
 authenticate the reviewer session: shared bot accounts can publish for several roles. The
 main session must still preserve dispatch/report provenance and enforce independent review.

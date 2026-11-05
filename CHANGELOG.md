@@ -8,6 +8,14 @@ change by change.
 
 ## [Unreleased]
 
+### Fixed
+
+- Review checks allow unchanged, non-blocking independent PASS records from a prior squash-merged
+  PR to remain in a continuing change. Only lines inherited from the trusted integration baseline
+  qualify; they grant no current coverage and their earlier-PR reports are not checked as current
+  evidence. Output explicitly counts these historical verdicts; current reviews, blocking findings
+  and owner approvals retain their checks. Fixes #65.
+
 ## [1.3.3] — 2026-10-31 — inbox review and workflow safeguards
 
 Review owner questions with `/prdkit-inbox`, incorporate answers into the governing spec, and
