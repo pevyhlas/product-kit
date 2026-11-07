@@ -39,6 +39,7 @@ jobs:
           /bin/bash tests/test_inbox.sh
           /bin/bash tests/test_accepted_change_benchmark.sh
           /bin/bash tests/test_diagnostics_inventory.sh
+          /bin/bash tests/test_adoption_state.sh
           /bin/bash tests/test_consumer_smoke.sh
           /bin/bash tests/test_script_safety.sh
           /bin/bash tests/test_bounds.sh

@@ -481,10 +481,12 @@ result=pass; [ "${#findings[@]}" -eq 0 ] || result=fail
 if $json; then
     printf '{"result":"%s","findings":%s,"advisories":%s,"strict":%s,"readiness":"not-evaluated"' \
         "$result" "$(json_array ${findings[@]+"${findings[@]}"})" "$(json_array ${advisories[@]+"${advisories[@]}"})" "$strict"
+    printf ',"adoption":%s' "$(diagnostic_adoption "$root")"
     if $inventory; then printf ',"configuration":%s' "$(diagnostic_configuration "$root")"; fi
     printf '}\n'
 else
     printf 'Product-Kit doctor: %s\n' "$result"
+    diagnostic_adoption "$root" --text
     for reason in ${findings[@]+"${findings[@]}"}; do printf '  %s\n' "$reason"; done
     for reason in ${advisories[@]+"${advisories[@]}"}; do printf '  advisory: %s\n' "$reason"; done
     [ "${#advisories[@]}" -eq 0 ] || printf 'Advisories do not fail doctor; --strict makes them failing findings.\n'

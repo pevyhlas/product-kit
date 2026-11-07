@@ -33,3 +33,32 @@ own the operational behavior, starting with [protocol.md](../workflows/protocol.
 
 On a harness without native slash commands, ask it to read `.prdkit/workflows/protocol.md` and
 follow the matching installed operation. A command name does not grant extra action authority.
+
+## Installed version, spec layout and migration
+
+Ordinary `status.sh` and `doctor.sh` output includes these three observations separately.
+Their `--json` output adds an `adoption` object, for example a current kit with legacy specs:
+
+```json
+{"installed_version":"1.3.3","spec_layout":"0.x","mixed_spec_forms":false,"migration_state":"required"}
+```
+
+`installed_version` comes only from `.prdkit/.manifest`; missing, empty or duplicate version
+metadata yields `null` (text: `unknown`), even if a source checkout is present. This is the
+recorded installation version, not an integrity verdict; doctor findings report drift separately.
+
+| Observed layout | `spec_layout` | `migration_state` |
+|---|---|---|
+| Legacy 0.x canon only | `0.x` | `required` |
+| Legacy and current canons | `both` | `incomplete` |
+| Current spec with single-file and split forms together | `1.0` | `incomplete` |
+| Current spec, one form | `1.0` | `not-indicated` |
+| No recognized spec | `none` | `unknown` |
+
+`1.0` is the existing layout-family marker for current 1.x specs, not the installed kit version.
+`mixed_spec_forms` identifies competing `specs/SPEC.md` and split files. Layout detection keeps
+the existing rules for ignored legacy leftovers and empty `.gitkeep` directories.
+Migration state is derived from layout only: `not-indicated` never certifies migration completion
+or owner acceptance. Updating the installed kit does not rewrite `specs/`.
+Existing status `layout`/`mixed_spec_forms` and opt-in doctor `configuration.version` stay available;
+the summary adds no findings and does not change exit codes or require `--inventory`.

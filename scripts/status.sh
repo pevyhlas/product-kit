@@ -8,6 +8,8 @@ set -euo pipefail
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 source "$SCRIPT_DIR/spec-lib.sh"
+source "$SCRIPT_DIR/install-lib.sh"
+source "$SCRIPT_DIR/diagnostics-lib.sh"
 json=false
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -246,11 +248,13 @@ if $json; then
             "$(js "$critical")" "$(js "$allocation")" "$(js "$advance")" "$(js "$selection")" "$(ju "$count")" "$(ju "$limit")" "$(js "$signal")"
         sep=,
     done <<< "$progress"
-    printf '],"longest_pole":{"item":%s,"waits_on":%s},"readiness":"requires-evidence-review"}\n' "$(js "$pole")" "$(js "$pole_waits")"
+    printf '],"longest_pole":{"item":%s,"waits_on":%s},"readiness":"requires-evidence-review","adoption":%s}\n' \
+        "$(js "$pole")" "$(js "$pole_waits")" "$(diagnostic_adoption "$root")"
     exit 0
 fi
 
 printf 'Product-Kit status — %s (derived from local files and git; read-only)\n' "$today"
+diagnostic_adoption "$root" --text
 case "$layout" in
     0.x) printf '\n0.x layout — run the cutover (.prdkit/workflows/compact.md); 1.0 views below are partial.\n' ;;
     both) printf '\nTwo canons: 1.0 spec files and 0.x folders (specs/product-spec, specs/targets or specs/features) — finish the cutover (.prdkit/workflows/compact.md).\n' ;;

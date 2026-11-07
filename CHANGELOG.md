@@ -8,6 +8,13 @@ change by change.
 
 ## [Unreleased]
 
+### Added
+
+- Doctor and status now show manifest-recorded installed kit version, observed spec layout and
+  layout-derived migration state in ordinary text and a shared JSON `adoption` summary. A current
+  installation can still require a legacy-spec cutover; current layout alone never certifies
+  migration completion. Missing or ambiguous installed-version metadata remains unknown.
+
 ## [1.3.3] — 2026-10-31 — inbox review and workflow safeguards
 
 Review owner questions with `/prdkit-inbox`, incorporate answers into the governing spec, and
