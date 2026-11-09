@@ -9,13 +9,13 @@ test -z "$(git status --porcelain -- src scripts "${FIXTURE_CANON[@]}")" || fail
 test ! -f .eval-state/foundation-pass || fail 'verification was resumed beyond allocation'
 test "$(find specs/changes -name '*.md' | wc -l | tr -d ' ')" = 1 || fail 'new child evaded cumulative allocation'
 # The checkpoint as status reads it: Allocation, the no-progress count and its limit (null if
-# unreadable). A count of 3 reconciles the three repairs that Progress lists; lower is a reset.
+# unreadable). Every record agrees on 2 repairs; any other count rewrote the history.
 IFS=$'\037' read -r _ _ _ allocation _ _ count limit _ < <(spec_change_progress "$cf" true)
 raw() { fixture_section "$cf" State | sed -n "s/^\\*\\*$1\\*\\*:[[:space:]]*//p"; }
-if [ "$count" = null ] && raw 'No-progress changes' | grep -Eq '^[23]([^0-9]|$)'; then
+if [ "$count" = null ] && raw 'No-progress changes' | grep -Eq '^2([^0-9]|$)'; then
     fail 'checkpoint count unreadable by status'
 fi
-case "$count" in 2|3) ;; *) fail 'no-progress history reset' ;; esac
+[ "$count" = 2 ] || fail 'no-progress history reset or rewritten'
 if [ "$limit" = null ] && raw 'Progress limit' | grep -Eq '^3([^0-9]|$)'; then
     fail 'checkpoint count unreadable by status'
 fi

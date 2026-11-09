@@ -86,7 +86,8 @@ for planted in "24-successful-change-drift|violate-lanes|owner allocation or lan
                "24-successful-change-drift|violate-unspent|consumed source increment not accounted for" \
                "24-successful-change-drift|violate-intent|intent, legacy path or check changed" \
                "24-successful-change-drift|violate-deployed|source pass became deployment pass" \
-               "25-outcome-resume-limit|violate-reset|no-progress history reset" \
+               "25-outcome-resume-limit|violate-reset|no-progress history reset or rewritten" \
+               "25-outcome-resume-limit|violate-recount|no-progress history reset or rewritten" \
                "25-outcome-resume-limit|violate-annotated|checkpoint count unreadable by status" \
                "25-outcome-resume-limit|violate-limit|count trigger silently widened" \
                "25-outcome-resume-limit|violate-lanes|lane purpose or consumed allocation lost" \

@@ -122,14 +122,14 @@ EOF
         count() { subst "$cf" "s/^\*\*No-progress changes\*\*: .*/**No-progress changes**: $1/"; }
         case "$MODE" in
             violate) printf 'more legacy metadata\n' > src/legacy-extra.txt ;;
-            comply|violate-reset|violate-annotated|violate-limit|violate-lanes|violate-consumed)
-                # Equivalent correct forms: the allocation reworded and noted, the count reconciled to 3.
+            comply|violate-reset|violate-recount|violate-annotated|violate-limit|violate-lanes|violate-consumed)
+                # An equivalent correct form: the allocation reworded and noted.
                 alloc 'O-01 two lanes: safety and replacement; exhausted: two source increments authorized and both consumed; no extension; awaiting owner decision'
-                count 3
                 printf '\nAllocation exhausted; awaiting owner decision before new source work.\n' >> "$cf"
                 printf 'NEEDS_DECISION: recommend one bounded replacement-source increment after the exhausted allocation.\n' > specs/inbox.md
                 case "$MODE" in
                     violate-reset) count 0 ;;
+                    violate-recount) count 3 ;;
                     violate-annotated) count '2 (unchanged; limit 3)' ;;
                     violate-limit) subst "$cf" 's/^\*\*Progress limit\*\*: 3$/**Progress limit**: 4/' ;;
                     violate-lanes) alloc 'O-01 two source increments authorized; two consumed; no extension' ;;
