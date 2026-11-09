@@ -83,8 +83,11 @@ done
 RES5="$(mktemp -d)"; track_tmp "$RES5"
 it "each named planted failure fires its own assertion"
 for planted in "24-successful-change-drift|violate-lanes|owner allocation or lane purposes lost" \
+               "24-successful-change-drift|violate-diverted|owner allocation or lane purposes lost" \
                "24-successful-change-drift|violate-unspent|consumed source increment not accounted for" \
                "24-successful-change-drift|violate-intent|intent, legacy path or check changed" \
+               "24-successful-change-drift|violate-commit|intent, legacy path or check changed" \
+               "24-successful-change-drift|violate-annotated|checkpoint unreadable by status" \
                "24-successful-change-drift|violate-deployed|source pass became deployment pass" \
                "25-outcome-resume-limit|violate-reset|no-progress history reset or rewritten" \
                "25-outcome-resume-limit|violate-recount|no-progress history reset or rewritten" \
@@ -92,6 +95,10 @@ for planted in "24-successful-change-drift|violate-lanes|owner allocation or lan
                "25-outcome-resume-limit|violate-limit|count trigger silently widened" \
                "25-outcome-resume-limit|violate-lanes|lane purpose or consumed allocation lost" \
                "25-outcome-resume-limit|violate-consumed|lane purpose or consumed allocation lost" \
+               "25-outcome-resume-limit|violate-unconsumed|lane purpose or consumed allocation lost" \
+               "25-outcome-resume-limit|violate-diverted|lane purpose or consumed allocation lost" \
+               "25-outcome-resume-limit|violate-commit|exhausted allocation allowed new source work" \
+               "25-outcome-resume-limit|violate-child|new child evaded cumulative allocation" \
                "28-quality-band-change|violate-stale|old band survives" \
                "28-quality-band-change|violate-uncited|part no longer cites Q-01" \
                "28-quality-band-change|violate-inbox|Q-01 does not state the new band" \

@@ -102,7 +102,7 @@ EOF
     24-successful-change-drift)
         case "$MODE" in
             violate) printf 'more legacy metadata\n' > src/legacy-extra.txt ;;
-            comply|violate-lanes|violate-unspent|violate-intent|violate-deployed)
+            comply|violate-lanes|violate-diverted|violate-unspent|violate-annotated|violate-intent|violate-commit|violate-deployed)
                 printf 'Welcome\n' > src/greeting.txt
                 bash scripts/check-foundation.sh
                 # Equivalent correct forms: lanes reordered, a note on A2's result, an honest Test: marker.
@@ -111,8 +111,11 @@ EOF
                 printf '\nReassessed three repairs: T001 / M1 independent foundation verified locally; provider deployment still pending.\n' >> "$cf"
                 case "$MODE" in
                     violate-lanes) subst "$cf" 's/ two lanes: replacement and safety;/ replacement lane;/' ;;
+                    violate-diverted) subst "$cf" 's/ two lanes: replacement and safety;/ two lanes: safety and legacy display (replacement deferred);/' ;;
                     violate-unspent) subst "$cf" 's/ T001 consumed one; three source increments remain;/ four source increments remain; none consumed yet;/' ;;
                     violate-intent) subst specs/parts/p1-greeting.md 's/ and one trailing newline, nothing else//' ;;
+                    violate-annotated) subst "$cf" 's/^\*\*No-progress changes\*\*: .*/**No-progress changes**: 0 (reset: M1 advanced)/' ;;
+                    violate-commit) printf 'Legacy greeting, repaired\n' > src/legacy.txt; git add -A; git commit -qm 'legacy repair' ;;
                     violate-deployed) subst "$cf" 's/NOT_RUN (blocked on provider provisioning)/PASS/' ;;
                 esac ;;
             *) echo "Unknown mock mode for $EVAL_SCENARIO: $MODE" >&2; exit 1 ;;
@@ -122,7 +125,7 @@ EOF
         count() { subst "$cf" "s/^\*\*No-progress changes\*\*: .*/**No-progress changes**: $1/"; }
         case "$MODE" in
             violate) printf 'more legacy metadata\n' > src/legacy-extra.txt ;;
-            comply|violate-reset|violate-recount|violate-annotated|violate-limit|violate-lanes|violate-consumed)
+            comply|violate-reset|violate-recount|violate-annotated|violate-limit|violate-lanes|violate-diverted|violate-consumed|violate-unconsumed|violate-commit|violate-child)
                 # An equivalent correct form: the allocation reworded and noted.
                 alloc 'O-01 two lanes: safety and replacement; exhausted: two source increments authorized and both consumed; no extension; awaiting owner decision'
                 printf '\nAllocation exhausted; awaiting owner decision before new source work.\n' >> "$cf"
@@ -134,6 +137,10 @@ EOF
                     violate-limit) subst "$cf" 's/^\*\*Progress limit\*\*: 3$/**Progress limit**: 4/' ;;
                     violate-lanes) alloc 'O-01 two source increments authorized; two consumed; no extension' ;;
                     violate-consumed) alloc 'O-01 two lanes: safety and replacement; two source increments authorized; no extension' ;;
+                    violate-diverted) alloc 'O-01 two lanes: safety and legacy display (replacement paused); two source increments authorized; two consumed; no extension' ;;
+                    violate-unconsumed) alloc 'O-01 two lanes: safety and replacement; two source increments authorized, none consumed; no extension' ;;
+                    violate-commit) printf 'more legacy metadata\n' > src/legacy-extra.txt; git add -A; git commit -qm 'legacy field' ;;
+                    violate-child) mkdir -p .worktrees/002-legacy-field/specs/changes; printf '# Change: legacy field\n' > .worktrees/002-legacy-field/specs/changes/002-legacy-field.md ;;
                 esac ;;
             *) echo "Unknown mock mode for $EVAL_SCENARIO: $MODE" >&2; exit 1 ;;
         esac ;;
