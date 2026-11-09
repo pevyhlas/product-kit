@@ -255,7 +255,7 @@ history sections or "reviewed, no change" notes.
 
 **One home per fact.** Elsewhere a fact is cited by ID or link, never restated; a summary (What
 must be true, Key decisions, Key areas, Risks) is a line and an ID or link per item. A change that
-edits a fact removes its other copies.
+edits a fact turns its other copies into citations.
 
 | Fact | Home |
 |------|------|

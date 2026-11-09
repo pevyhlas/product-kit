@@ -29,7 +29,7 @@ change by change.
   explains the diff stays in the PR. When `specs/` is readable, reviewers search it for the touched
   IDs and terms: a copy the diff adds is medium, a contradiction it creates high, and older
   untouched duplication low.
-- Existing specs are not rewritten; a change that edits a fact removes that fact's other copies.
+- Existing specs are not rewritten; a change that edits a fact turns that fact's other copies into citations.
 
 ## [1.3.3] — 2026-10-31 — inbox review and workflow safeguards
 
