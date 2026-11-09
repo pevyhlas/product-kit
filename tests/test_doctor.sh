@@ -466,6 +466,8 @@ cat >> specs/product.md <<'MD'
 - **R-08 Theme** (hypothesis, planned: 12): too short for a change number.
 - **R-09 Archive** (hypothesis, planned: 2026-Q4): a date, not a change.
 - **R-10 Sync** (hypothesis, planned: acme/platform#12): another repository's change.
+- **R-11 Old badge** (validated): retired: dropped (was planned: M2).
+- **R-12 Icon** (hypothesis): users pick one, **planned: M3**.
 
 | Area | Note |
 |------|------|
@@ -473,7 +475,8 @@ cat >> specs/product.md <<'MD'
 MD
 run bash "$DOCTOR"
 assert_contains "$OUTPUT" "advisory: Planned for a closed change (1): 010-import at specs/product.md:7; specs/log.md closed it: remove the marker if it was built, or re-plan it to an open change" "a marker naming a closed change"
-assert_contains "$OUTPUT" "advisory: Planned for no open change (4): 013 at specs/product.md:8, 2026-Q4 at specs/product.md:13, M1 at specs/product.md:11, 12 at specs/product.md:12; point it at an open change record (new-change.sh opens one) or remove the marker" "a wrapped marker naming no change, and item markers naming no change number"
+assert_contains "$OUTPUT" "advisory: Planned for no open change (5): 013 at specs/product.md:8, 2026-Q4 at specs/product.md:13, M1 at specs/product.md:11, 12 at specs/product.md:12, M3 at specs/product.md:16; point it at an open change record (new-change.sh opens one) or remove the marker" "a wrapped marker naming no change, and item markers naming no change number, emphasis stripped"
+assert_not_contains "$OUTPUT" "M2" "a retired item's old marker is not judged"
 assert_not_contains "$OUTPUT" "012" "an open change, with or without its slug"
 assert_not_contains "$OUTPUT" "acme/platform" "another repository's change is not judged"
 assert_not_contains "$OUTPUT" "both zones" "a table cell is not an item marker"

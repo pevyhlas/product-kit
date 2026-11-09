@@ -301,8 +301,9 @@ spec_links() { # root [file...]
 # file:line. Parts come from the architecture (or SPEC.md) parts table, its Maturity column found
 # by the header; everything else from bold bullets (`- **R-01 Title** ...`), a journey file
 # heading (`# J-01 Title (hypothesis)`) or a decision heading (`# D-01 Title`, or `## D-01 Title`
-# as a section of architecture/decisions.md). A live Q or I is unenforced unless its block, sub-bullets
-# included, names `Enforced by` something other than `unenforced`.
+# as a section of architecture/decisions.md). An `Enforced by:` label anywhere in an item's block,
+# sub-bullets included, decides by its own value, which runs to the end of its bullet; without
+# one, a live Q or I is unenforced, and any item that says `unenforced` is.
 spec_items() { # root [file...]: the spec files when none are given
     local root="$1" files=() file; shift
     if [ "$#" -gt 0 ]; then files=("$@")
@@ -311,20 +312,25 @@ spec_items() { # root [file...]: the spec files when none are given
         awk -v file="$(spec_field "$file")" "$SPEC_SKIP_AWK"'
             BEGIN { gsub(/[\037\r\n]/, " ", file) }
             function indent(s) { sub(/[^[:space:]].*/, "", s); return length(s) }
-            function flags(line, id, block,   m, p, t, b) {
+            function flags(line, id, block,   m, p, t, b, v, i, u) {
                 m = ""
                 if (match(line, /\((hypothesis|validated)[,)]/)) m = substr(line, RSTART + 1, RLENGTH - 2)
                 p = ""
                 if (match(line, /planned:[[:space:]]*[^ .;,)|]+/)) { p = substr(line, RSTART, RLENGTH); sub(/planned:[[:space:]]*/, "", p) }
                 t = tolower(line); b = tolower(block)
-                return m "\037" p "\037" (t ~ /retired:/ ? "yes" : "no") "\037" (t ~ /unenforced/ || (id ~ /^(Q|P[0-9]+\.I)-/ && t !~ /retired:/ && (b ~ /unenforced/ || b !~ /enforced[[:space:]]+by/)) ? "yes" : "no")
+                if (match(b, /enforced[[:space:]]+by[[:space:]]*:?/)) {
+                    v = substr(b, RSTART + RLENGTH); sub(/^[[:space:]]+/, "", v)
+                    if ((i = index(v, "\n")) > 0) v = substr(v, 1, i - 1)
+                    u = (v ~ /unenforced/)
+                } else u = (t ~ /unenforced/ || (id ~ /^(Q|P[0-9]+\.I)-/ && t !~ /retired:/))
+                return m "\037" p "\037" (t ~ /retired:/ ? "yes" : "no") "\037" (u ? "yes" : "no")
             }
             # A bullet item runs on to the next bullet, heading, table row or blank line; its deeper
-            # sub-bullets (not items themselves) count only for its enforcement.
+            # sub-bullets (not items themselves; each starts a line of subs) count only for enforcement.
             function flush() { if (pend != "") print pend_id "\037" pend_title "\037" flags(pend, pend_id, pend " " subs) "\037" file ":" pend_nr; pend = ""; subs = ""; insub = 0 }
             { gsub(/\037/, " "); if (spec_skip($0)) { flush(); next } }
             pend != "" && $0 !~ /^[[:space:]]*$/ && $0 !~ /^[[:space:]]*([-*+]|[0-9]+\.)[[:space:]]/ && $0 !~ /^(#|\|)/ { if (insub) subs = subs " " $0; else pend = pend " " $0; next }
-            pend != "" && /^[[:space:]]*([-*+]|[0-9]+\.)[[:space:]]/ && !/^[[:space:]]*[-*][[:space:]]+\*\*(P[0-9]+\.[BI]|[JRQCDN])-[0-9]/ && indent($0) > pend_ind { insub = 1; subs = subs " " $0; next }
+            pend != "" && /^[[:space:]]*([-*+]|[0-9]+\.)[[:space:]]/ && !/^[[:space:]]*[-*][[:space:]]+\*\*(P[0-9]+\.[BI]|[JRQCDN])-[0-9]/ && indent($0) > pend_ind { insub = 1; subs = subs "\n" $0; next }
             { flush() }
             /^#/ { retired_list = ($0 ~ /^#+[[:space:]]+Retired[[:space:]]*$/) }
             /^\|[[:space:]]*[Pp]art[[:space:]]*\|/ {

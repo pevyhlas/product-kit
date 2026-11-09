@@ -59,8 +59,8 @@ change by change.
 
 ### Fixed
 
-- Status counts a Q or I that names no `Enforced by` as unenforced, not only one saying
-  `unenforced`.
+- Status counts a Q or I that names no `Enforced by:` as unenforced, not only one saying
+  `unenforced`; a present label decides by its own value.
 
 ## [1.3.3] — 2026-10-31 — inbox review and workflow safeguards
 

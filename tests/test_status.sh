@@ -44,6 +44,10 @@ cat > specs/product.md <<'MD'
 - **Q-07 Fast search** (hypothesis): p95 under 1 s.
   - Enforced by: test_search.
 - **Q-08 Small icons** (hypothesis): under 2 KB. ENFORCED BY: test_icons.
+- **Q-09 Steady pages** (hypothesis): no layout shift. Enforced by: test_layout.
+  - Was unenforced until the layout test landed.
+- **Q-10 Light fonts** (hypothesis): under 100 KB of fonts. Enforced by:
+  - unenforced.
 MD
 mkdir -p specs/decisions
 printf '# D-01 Use server rendering\n\nWhy: pages work without scripts.\n' > specs/decisions/D-01.md
@@ -166,6 +170,8 @@ assert_contains "$OUTPUT" "P1.I-02 Escaped output" "so is such an invariant"
 assert_not_contains "$OUTPUT" "Q-06 Short pages" "Enforced by wrapped across lines names its check"
 assert_not_contains "$OUTPUT" "Q-07 Fast search" "so does Enforced by in a sub-bullet"
 assert_not_contains "$OUTPUT" "Q-08 Small icons" "in any case"
+assert_not_contains "$OUTPUT" "Q-09 Steady pages" "the label's own value decides, not unenforced elsewhere in the item"
+assert_contains "$OUTPUT" "Q-10 Light fonts" "even when that value opens the next sub-bullet"
 assert_contains "$OUTPUT" "P1.I-03 Short links" "an invariant names its check after Enforced by, not Test"
 
 it "in flight: step, age, acceptance, attempts, stalls and what each waits on"

@@ -381,8 +381,8 @@ code_paths_missing() {
 trace code-path "Code path not in the repository" "name repo-relative paths that exist (spec.md, Writing)" "$(code_paths_missing)"
 
 # planned: <change> names an open change record (here, or in a worktree unless the log closed
-# it), else a closed or unknown one. An item marker naming no change number (M1, 12) is unknown
-# too; org/repo#n names another repository's change.
+# it), else a closed or unknown one. A live item's marker naming no change number (M1, 12) is
+# unknown too; org/repo#n names another repository's change.
 closed_ids=" $( [ ! -f "$root/specs/log.md" ] || sed -n 's/^- [0-9-]* \([^ :]*\):.*/\1/p' "$root/specs/log.md" | tr '\n' ' ')"
 open_ids=" "
 while IFS="$SEP" read -r path _ loc; do
@@ -403,8 +403,11 @@ while IFS="$SEP" read -r id where; do
     esac
 done < <(spec_planned_at "$root")
 xrepo_re='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(#[0-9]+)?$'
-while IFS="$SEP" read -r _ _ _ target _ _ where; do
-    target="${target//\`/}"
+while IFS="$SEP" read -r _ _ _ target retired _ where; do
+    [ "$retired" = no ] || continue
+    target="${target//[\`*]/}"
+    while [ "${target#_}" != "$target" ]; do target="${target#_}"; done
+    while [ "${target%_}" != "$target" ]; do target="${target%_}"; done
     case "$target" in ''|[0-9][0-9][0-9]*) continue ;; esac
     [[ "$target" =~ $xrepo_re ]] || planned_unknown+="$target at $where"$'\n'
 done <<< "$items"
