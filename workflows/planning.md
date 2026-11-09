@@ -37,20 +37,51 @@ Use stable local keys while discovering work; link child change IDs when opened.
 now, later, optional and unresolved work. Detail only near-ready work; do not open ten worktrees
 just to describe ten candidates. No separate feature-spec hierarchy or global task-ID scheme.
 
+## Programmes
+
+A programme is a parent change: Intent names outcomes; Tasks map coverage, dependency outcomes and
+owner gates with one row per child (id, outcome, status, PR, carry-forward of at most three lines);
+State tracks them. A child names its parent in its **Parent** header; status and the
+merged-without-closing check read that field. Child plans and execution live in the child record
+and its PR. A closed child does not prove the parent's integrated outcome. Edit the parent in
+place; no amendment journals. Children and the parent close per [review.md](review.md).
+
 ## Protect the outcome
 
-For a programme or a sequence of follow-ups, keep an **outcome checkpoint** in its existing State
-([change.md](change.md)). Name the original owner outcome and source, intended architecture and
-stage, next observable milestone, and the critical path of dependencies needed to reach it. Define
-the check for each enabling step before starting it: a reviewed interface, working source path or
-deployed service can be a real intermediate advance without claiming the final user outcome.
+For a programme or a sequence of follow-ups, keep an **outcome checkpoint** in the existing
+parent's State: these keys, one line each, under `### Outcome checkpoint`. Children link it
+rather than copying a second tracker; a standalone small change can keep its outcome/selection in
+prose. Define the check for each enabling step before starting it: a reviewed interface, working
+source path or deployed service can be a real intermediate advance without claiming the final
+user outcome.
 
-Preserve each lane's purpose as well as the concurrency cap. Record the original start/deadline,
-time or cost allocation and consumed effort when known; unknown effort stays unknown. A spare
-slot does not authorize diverting the value or foundation lane to an adjacent cleanup queue.
-Work-selection reassessment is due at the existing timebox/investment boundary or after three
-integrated changes without an evidenced milestone/dependency advance, whichever comes first;
-an explicit owner/project bound takes precedence. This is separate from failed-attempt accounting.
+- **Outcome**: original owner goal/source, intended architecture and stage.
+- **Milestone**: next observable result and its acceptance/check reference; predeclared enabling
+  steps and their checks stay in Tasks.
+- **Critical path**: ordered dependencies, their required outcomes, and the actual blocker.
+- **Allocation**: lane purposes, original start/deadline, time/cost bounds and known consumption,
+  with their authority source; explicitly unknown where not measured.
+- **Progress**: latest evidenced milestone/dependency advance, date/revision and evidence link;
+  `none` or `unknown` when appropriate. Scope the claim: source, deployed or user-validated.
+- **No-progress changes**: nonnegative integer counting integrated children since that advance,
+  or `unknown` when history cannot be reconciled. Keep child references in the accompanying prose/PR.
+- **Progress limit**: positive integer; default `3` unless the owner/project sets another bound
+  (cite its source in Allocation). Reassessment is due at this count or an existing
+  timebox/investment boundary, whichever comes first.
+- **Selection**: next task, its milestone contribution, why now, and disposition of competing work.
+
+On adoption/resume, reconstruct missing fields from actual records and owner direction before
+selecting more work; do not invent a new baseline. Ordinary State prose such as an `**Outcome**:`
+result is not a programme goal; status still reads a legacy 1.3.1 checkpoint outside the block,
+and doctor advises moving its keys in. Count/reset/reassessment rules are in
+[implementation.md](implementation.md). These fields report recorded claims, not machine-verified
+progress or action permission: the helper's count comparison cannot evaluate prose deadlines,
+effort, lane drift, evidence validity or criticality, so the operational lead checks those too.
+Keep scope, limits and original failures through splitting or closing child changes; a new
+record is not a fresh investment allowance.
+
+Preserve each lane's purpose as well as the concurrency cap. A spare slot does not authorize
+diverting the value or foundation lane to an adjacent cleanup queue.
 
 Before investing in an implementation scheduled for replacement, identify the affected supported
 path, present defect and minimal safe remedy; compare repair with permitted containment, disabling
@@ -92,7 +123,3 @@ cycle blocks that dependency, not independent ready work. Resolve it before impl
 For several PRs, give each a bounded outcome and its own change; use a programme only when useful
 for integrated outcomes or coordination, not as a cleanup vehicle. Changes can ship intermediate
 behavior only when it preserves all applicable hard bounds and states remaining intent honestly.
-
-Use the change template's five-column Acceptance table even for programmes: Item, Proves, Check,
-Attempts, Result. Put coverage/dependency detail in Tasks; status helpers read the Acceptance columns.
-Keep Result a bare status token as in [change.md](change.md), with evidence outside that cell.

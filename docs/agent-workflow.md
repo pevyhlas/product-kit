@@ -33,13 +33,14 @@ per acceptance item and per blocker across tasks, PRs and sessions; after three,
 without new information, the agent writes an alternatives note and reports NEEDS_DECISION
 through the inbox.
 
-Programmes also keep an [outcome checkpoint](../workflows/change.md#outcome-checkpoint-in-state)
+Programmes also keep an [outcome checkpoint](../workflows/planning.md#protect-the-outcome)
 in the existing State: goal, critical path, lane allocation, evidenced progress and next selection.
 Repeated successful changes without a milestone/dependency advance prompt reassessment too.
 Handoffs preserve cumulative accounting; temporary repairs explain their contribution and removal.
 
-Review is proportional to the tier in the protocol; the reviewer is a fresh context that
-did not implement the change and receives the full diff, never only a summary.
+Review is proportional to the tier in the protocol and runs per
+[review.md](../workflows/review.md), which also covers merge and closing; the reviewer is a fresh
+context that did not implement the change and receives the full diff, never only a summary.
 `build-review-package.sh` captures committed work into `.prdkit/cache/evidence/`.
 
 ## Delivery and closing

@@ -27,6 +27,8 @@
 # need one independent verdict, T3 the owner's too, and no L0/L1 spec edit since the owner's head.
 # A pass whose record is still at the head, with no child or outcome checkpoint, adds a note:
 # if the PR completes the change, close it before merge (close-change.sh). It never fails.
+# --verify-reports --pr <url> compares each linked report with its line; an unavailable or
+# mismatching report fails the check.
 #
 # Usage: check-review.sh [--json] [--head <rev>] [--base <rev>] [--repo <dir>] [<change-id>]
 #   <change-id> defaults to the current branch name; --base to the first of origin/HEAD,
@@ -384,7 +386,7 @@ if $verify_reports; then
     fi
 fi
 result=pass; [ "${#problems[@]}" -eq 0 ] || result=fail
-# Advisory: a reviewed PR-scoped record still at this head would merge open (change.md, Closing).
+# Advisory: a reviewed PR-scoped record still at this head would merge open (review.md, Closing).
 record_open=false
 if [ "$result" = pass ] && [ "$record_at" = "$head" ]; then
     case $'\n'"$(spec_unclosed_changes "$root" "$head")"$'\n' in *$'\n'"$id"$'\n'*) record_open=true ;; esac
@@ -411,7 +413,7 @@ elif [ "$result" = pass ]; then
     else
         printf 'PASS %s at %s: %s, Rigor %s; %s recorded verdict(s) cover this head.\n' "$id" "$head" "$tier" "$rigor" "${#rows[@]}"
     fi
-    ! $record_open || printf 'Note: %s is still at this head; if this PR completes the change, close it before merge: .prdkit/scripts/bash/close-change.sh %s "<log line>" (change.md, Closing).\n' "$path" "$id"
+    ! $record_open || printf 'Note: %s is still at this head; if this PR completes the change, close it before merge: .prdkit/scripts/bash/close-change.sh %s "<log line>" (review.md, Closing).\n' "$path" "$id"
 else
     printf 'FAIL %s at %s:\n' "$id" "$head"
     $base_trusted || printf '  Base is not trusted for coverage exemptions: establish origin/HEAD or configure review-integration-branches in its committed config.\n'

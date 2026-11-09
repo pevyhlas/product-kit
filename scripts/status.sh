@@ -334,7 +334,7 @@ while IFS="$SEP" read -r id title opened step waits nxt parent total passed fail
     [ -z "$waits" ] || printf '    waiting on: %s\n' "$waits"
     [ -z "$nxt" ] || printf '    next: %s\n' "$nxt"
     case "$parent" in ''|none) ;; *) printf '    parent: %s\n' "$parent" ;; esac
-    case "$unclosed" in *" $id "*) printf '    merged without closing: reviewed and on %s, with no child or outcome checkpoint keeping it open; close it in the next relevant PR, or give a change spanning PRs a checkpoint (change.md)\n' "$base" ;; esac
+    case "$unclosed" in *" $id "*) printf '    merged without closing: reviewed and on %s, with no child or outcome checkpoint keeping it open; close it in the next relevant PR, or give a change spanning PRs a checkpoint (review.md, Closing)\n' "$base" ;; esac
 done <<< "$changes"
 while IFS="$SEP" read -r id done_n total_n; do
     [ -n "$id" ] || continue

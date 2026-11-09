@@ -38,7 +38,7 @@ for file in "$root"/specs/changes/*.md; do
         [ -z "$advisory" ] || advisories+=("${file#"$root"/}: $advisory")
     done < <(spec_change_progress "$file" false advisories)
 done
-for file in .prdkit/workflows/protocol.md .prdkit/workflows/change.md .prdkit/memory/constitution.md .prdkit/templates/change-template.md; do
+for file in .prdkit/workflows/protocol.md .prdkit/workflows/change.md .prdkit/workflows/review.md .prdkit/memory/constitution.md .prdkit/templates/change-template.md; do
     [ -f "$root/$file" ] || findings+=("Missing installed file: $file")
 done
 
@@ -614,7 +614,7 @@ if git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
             n=$((n + 1)); [ "$n" -gt 8 ] || unclosed="${unclosed:+$unclosed, }$cid"
         done < <(spec_unclosed_changes "$root" "$base")
         [ "$n" -le 8 ] || unclosed="$unclosed and $((n - 8)) more"
-        [ "$n" -eq 0 ] || advisories+=("Merged without closing: $unclosed passed review and are still on $base, with no child or outcome checkpoint keeping them open; close each in the next relevant PR, or give one that spans PRs an outcome checkpoint (.prdkit/workflows/change.md, Closing)")
+        [ "$n" -eq 0 ] || advisories+=("Merged without closing: $unclosed passed review and are still on $base, with no child or outcome checkpoint keeping them open; close each in the next relevant PR, or give one that spans PRs an outcome checkpoint (.prdkit/workflows/review.md, Closing)")
     fi
 fi
 

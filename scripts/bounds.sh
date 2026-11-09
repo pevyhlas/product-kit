@@ -9,8 +9,8 @@
 # non-goal; a live constraint whose Scope field names a part or journey in scope, makes an
 # exception, says all or every of something unnamed, or names none; a live quality that cites one in scope, or cites none. A
 # record naming no parts or journeys gets everything, as does --all. Items marked for a stage
-# after the current one (`from: ga`; lifecycle.md, Now) are listed apart: not built yet unless
-# the change targets them. Over-inclusion is the safe side: the agent marks each item in the
+# after the current one (`from: ga`; lifecycle.md, Now) are listed apart: built only on the
+# owner's direction (spec.md, Lifecycle). Over-inclusion is the safe side: the agent marks each item in the
 # record's Bounds section and the reviewer checks the diff against this list.
 set -euo pipefail
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -158,7 +158,7 @@ while IFS= read -r file; do files+=("$file"); done < <(spec_files "$root")
         printf "Constraints:\n%s", (out["C"] != "" ? out["C"] : "- none\n")
         printf "Non-goals:\n%s", (out["N"] != "" ? out["N"] : "- none\n")
         printf "Qualities:\n%s", (out["Q"] != "" ? out["Q"] : "- none\n")
-        if (later != "") printf "Later stages (not built yet unless this change targets them):\n%s", later
+        if (later != "") printf "Later stages (built only on owner direction; spec.md, Lifecycle):\n%s", later
     }
 ' "${files[@]}")
 echo "Mark each in the record's Bounds: holds (how), or conflict (to the owner inbox; never resolved by the agent)."

@@ -10,8 +10,8 @@ Humans own product intent and consequential choices. Read project instructions a
 `.prdkit/memory/constitution.md` first; harness and user instructions keep their authority. A
 generated plan never grants permission to commit, push, merge, publish, spend or deploy: use
 explicit user authorization or the constitution's action policy, resolved per action, with the
-source and scope of each hold. Missing authority is not approval; standing authorization need
-not be repeated.
+source and scope of each hold; a hold wins until its issuer lifts it. Missing authority is not
+approval; standing authorization need not be repeated.
 
 While work is held, put read-only observations and attempt classification in State. Leave held
 Tasks, Acceptance and original evidence unchanged until authorized; reporting a hold is not a rerun
@@ -29,42 +29,23 @@ A clear request needs no re-approval; an uncertain suggestion is not an executio
 only when an interpretation materially changes scope, behavior, investment or authority. Every
 question to the owner carries a recommendation; when the choice is reversible, state the default
 you will apply if no answer arrives and continue other work. A one-way door ([spec.md](spec.md))
-waits for the answer. Pending owner direction and open questions go in `specs/inbox.md`, never
-only in harness memory or a session log. Follow [inbox.md](inbox.md): Waiting for you holds only
-unanswered owner questions; To incorporate is temporary agent processing. On an answer and on
-resume, apply [spec.md](spec.md), Resolve owner answers: update and verify the governing spec and
-provenance, transfer obligations, then remove the resolved inbox item before asking it again.
+waits for the answer. Pending owner direction and open questions go in `specs/inbox.md`
+([inbox.md](inbox.md)), never only in harness memory or a session log. On an answer and on
+resume, apply [spec.md](spec.md), Resolve owner answers, before asking it again.
 
 ## Where things live
 
 | What | File |
 |------|------|
-| Product summary (L0): pains, personas, core loop, journey index, the bet | `specs/product.md`; all pains and personas in `specs/product/users.md` once they outgrow it |
-| Journeys (L0): who, intent, situation, scenario, variations, success | `specs/product/journeys/j-NN-<slug>.md` |
-| Requirements, qualities, constraints, non-goals (L0) | `specs/product/<kind>.md`, or `specs/product/<kind>/<area>.md` once split |
-| Lifecycle (L0): the stage now and next, each stage's goal, audience and exit criteria | `specs/product/lifecycle.md`, stages in `specs/product/lifecycle/<stage>.md` once split |
-| Architecture overview (L1): diagram, parts and why, core loop path, key decisions, key areas, risks | `specs/architecture.md` |
-| Architecture topics (L1): security, observability, data, interfaces, why it works, environments, operations | `specs/architecture/<topic>.md`, areas in `specs/architecture/<topic>/` once split |
-| Retired parts and moved IDs (L1) | `specs/architecture/retired.md`, linked from `architecture.md` |
-| Decisions (L1) | `specs/architecture/decisions.md`, or `specs/architecture/decisions/<area>.md` once split; a long one in `specs/decisions/D-NN.md` |
-| Parts (L2): why each exists, components, behaviors, invariants | `specs/parts/<part>.md`, components in `specs/parts/<part>/` once split |
-| Facts observed about the outside world | `specs/observed.md`, or `specs/observed/<area>.md` once split |
-| Pending owner direction and open questions only | `specs/inbox.md` |
-| Holds, waivers, attestations, deployments | `specs/records.md` |
+| The spec: product (L0), architecture (L1), parts (L2), archive | `specs/`, per [spec.md](spec.md), Layout |
+| Facts observed about the outside world | `specs/observed.md` (`observed-template.md`), or `specs/observed/<area>.md` once split |
+| Pending owner direction and open questions only | `specs/inbox.md` (`inbox-template.md`) |
+| Holds, waivers, attestations, deployments | `specs/records.md` (`records-template.md`) |
 | Open change (deleted when it closes) | `specs/changes/<id>.md` |
 | Optional execution scratch (never the sole handover) | gitignored `.prdkit/cache/implementation/<id>.md`; useful context on the same PR |
 | Closed changes, one line each | `specs/log.md` |
-| Archive: directions tried and why they stopped, lessons (read on demand, never by default) | `specs/archive.md` |
 
-Create each file from its template in `.prdkit/templates/` (`product-template.md`,
-`journey-template.md`, `requirements-template.md`, `qualities-template.md`,
-`constraints-template.md`, `non-goals-template.md`, `lifecycle-template.md`, `architecture-template.md`,
-`architecture-topics-template.md`,
-`part-template.md`, `observed-template.md`, `inbox-template.md`, `records-template.md`,
-`decision-template.md`, `archive-template.md`); `users.md` and `retired.md` follow the comments in the product and
-architecture templates. A change that deletes its record adds its `specs/log.md` line in the
-same PR. A small product may keep L0, L1 and parts in one
-`specs/SPEC.md` (`spec-template.md`). Raw evidence never lives in `specs/`: diffs, results,
+Templates are in `.prdkit/templates/`. Raw evidence never lives in `specs/`: diffs, results,
 logs and captures stay in CI, the PR or the gitignored `.prdkit/cache/evidence/`, linked by URL
 or path. Every claim says whether it is observed, decided, assumed or proposed.
 
@@ -128,11 +109,7 @@ class, upstream message. Never discard an external tool's stderr.
 | T2 | several parts, an interface, security or data | 1 per applicable concern |
 | T3 | L0 edit or L1 one-way door | design review plus the owner |
 
-The constitution may require more. Re-review only changed source, scoped to the fix, with a
-range that starts at or before the head the earlier verdicts covered; never dispatch a round
-when no source changed since the last verdict. Reviews are run by the worker, not CI;
-`check-review.sh` checks the recorded verdicts before merge, not which concerns a tier needed
-([change.md](change.md)).
+The constitution may require more. Review, merge and closing follow [review.md](review.md).
 
 ## Results
 

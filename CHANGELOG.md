@@ -57,6 +57,11 @@ change by change.
 - Spec budgets count reading length: a line counts once per 100 characters, so long table rows
   and paragraph lines no longer dodge a budget. Budget numbers are unchanged; files with long
   lines may newly show a budget advisory.
+- A lighter per-change read: review, merge, closing and review carriers move from `change.md` to a
+  new `workflows/review.md`, read before review; programme rows and the outcome checkpoint move to
+  `planning.md`. Each kit rule has one home across the protocol, change, spec and implementation
+  playbooks, and the change template drops comments that restated them. No rule is dropped or
+  weakened; the read needed to open and build a change falls from about 62 KB to 44 KB.
 
 ### Fixed
 

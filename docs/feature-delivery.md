@@ -3,7 +3,8 @@
 Product-Kit owns product intent, architecture and design. Its implementation flow executes that
 definition; it does not produce another feature specification or rewrite promises to fit the code.
 The operational sources are [planning](../workflows/planning.md),
-[implementation](../workflows/implementation.md) and [change](../workflows/change.md).
+[implementation](../workflows/implementation.md), [change](../workflows/change.md) and
+[review](../workflows/review.md).
 
 ## Discover work, then execute it
 
