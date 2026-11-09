@@ -243,9 +243,12 @@ decision that binds later work in its L1/L2 home now, one that only explains thi
 ## Budgets
 
 Budgets are reading budgets, never targets: never pad toward one, and never drop an item that
-passes the line test to fit. Past a budget, tighten the wording, move detail to code or tests,
-or split (Layout). `observed.md` 150 lines, split into `observed/<area>.md`; an open change
-150, split into changes that each ship on their own.
+passes the line test to fit. A line counts once per 100 characters, so a long row counts as the
+lines it takes to read. Past a budget, tighten the wording, move detail to code or tests, or
+split (Layout). `observed.md` 150 lines, split into `observed/<area>.md`; an open change 150,
+split into changes that each ship on their own; `log.md` 150, older entries condensed into
+`archive.md` (compact.md); `inbox.md` 150, answers incorporated and the rest reviewed with the
+owner; `records.md` 150, lifted, expired and superseded lines removed (git keeps them).
 
 ## Organizing
 

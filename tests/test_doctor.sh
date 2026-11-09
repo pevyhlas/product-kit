@@ -173,6 +173,30 @@ assert_eq 0 "$STATUS" "an overflow does not fail doctor"
 assert_contains "$OUTPUT" "advisory: Budget: specs/product.md has 163 lines, over its 150-line reading budget" "overflow reported"
 git checkout -q -- specs/product.md
 
+it "a line counts once per 100 characters, so long rows cannot dodge a budget"
+long="$(printf '%0400d' 0)"; dashes="$(i=0; while [ "$i" -lt 100 ]; do printf '—'; i=$((i + 1)); done)"
+{ printf '# Demo — product\n\n'; i=0; while [ "$i" -lt 40 ]; do echo "| R-x | $long |"; i=$((i + 1)); done; } > specs/product.md
+run bash "$DOCTOR"
+assert_eq 0 "$STATUS" "still an advisory"
+assert_contains "$OUTPUT" "advisory: Budget: specs/product.md has 42 lines that read as 202 at 100 characters a line, over its 150-line reading budget" "40 rows of 400 characters read as 200 lines"
+{ printf '# Demo — product\n'; i=0; while [ "$i" -lt 149 ]; do echo "$dashes"; i=$((i + 1)); done; } > specs/product.md
+run bash "$DOCTOR"
+assert_not_contains "$OUTPUT" "Budget: specs/product.md" "a character is counted once, however many bytes it takes"
+git checkout -q -- specs/product.md
+
+it "the log, inbox and records have budgets, each with its way out"
+{ i=0; while [ "$i" -lt 151 ]; do printf -- '- 2026-10-17 %03d-c: done — R-01 — #%d\n' "$((i + 100))" "$i"; i=$((i + 1)); done; } > specs/log.md
+run bash "$DOCTOR"
+assert_contains "$OUTPUT" "advisory: Budget: specs/log.md has 151 lines, over its 150-line reading budget; condense its older entries into specs/archive.md" "the log condenses into the archive"
+rm specs/log.md
+{ printf '# Owner inbox\n\n<!--\n'; i=0; while [ "$i" -lt 150 ]; do echo "note $i"; i=$((i + 1)); done; printf -- '-->\n\n## Waiting for you\n'; } > specs/inbox.md
+printf 'DEPLOY web env=test rev=abc1234 date=2026-10-17 by=https://example.invalid/run/1 — %s\n' "$(printf '%016000d' 0)" > specs/records.md
+run bash "$DOCTOR"
+assert_eq 0 "$STATUS" "budgets stay advisories"
+assert_contains "$OUTPUT" "advisory: Budget: specs/inbox.md has 156 lines, over its 150-line reading budget; incorporate answered items" "the inbox drains"
+assert_contains "$OUTPUT" "advisory: Budget: specs/records.md has 1 line that reads as 161 at 100 characters a line, over its 150-line reading budget; remove lifted or expired" "superseded records leave"
+rm specs/inbox.md specs/records.md
+
 it "a 1.0 product.md with one-digit journey bullets still passes, with an advisory"
 printf -- '\n## Users and journeys\n\n- **J-1 Greet**: a visitor is greeted.\n' >> specs/product.md
 run bash "$DOCTOR"
@@ -299,7 +323,18 @@ assert_contains "$OUTPUT" "Closed without a specs/log.md line: 003-x" "the unlog
 printf -- '- 2026-10-17 003-x: done\n' > specs/log.md
 run bash "$DOCTOR"
 assert_not_contains "$OUTPUT" "Closed without" "its log line clears it"
-rm specs/log.md; git reset -q --hard HEAD~2
+rm specs/log.md
+# shellcheck disable=SC2016 # backticks are Markdown code spans, not command substitution
+printf '# Demo — archive\n\n**Last 0.x feature**: none\n\n**Log condensed through**: 003; those entries: `git show abc1234:specs/log.md`.\n' > specs/archive.md
+run bash "$DOCTOR"
+assert_not_contains "$OUTPUT" "Closed without" "a log condensed into the archive keeps it closed"
+# shellcheck disable=SC2016 # backticks are Markdown code spans, not command substitution
+for value in '002 — entries at `git show 9f81234:specs/log.md`' '002 as of 2026-10-30' 'through 9'; do
+    printf '# Demo — archive\n\n**Last 0.x feature**: none\n\n**Log condensed through**: %s\n' "$value" > specs/archive.md
+    run bash "$DOCTOR"
+    assert_contains "$OUTPUT" "Closed without a specs/log.md line: 003-x" "only a leading number counts: $value"
+done
+rm specs/archive.md; git reset -q --hard HEAD~2
 
 it "a renamed change record is not a closed one"
 mkdir -p specs/changes; printf '# 004-y\n\nIntent: export the weekly report as a file.\n' > specs/changes/004-y.md
@@ -426,7 +461,7 @@ run bash "$DOCTOR"
 assert_contains "$OUTPUT" "Link at specs/archive.md:5 points to specs/features/003-x/spec.md, which does not exist" "a link into a removed folder"
 assert_not_contains "$OUTPUT" "points to specs/product.md" "a link to the live spec resolves"
 assert_not_contains "$OUTPUT" "gone-in-code" "a git path or a link in code is no link"
-assert_contains "$OUTPUT" "Budget: specs/archive.md has 155 lines, over its 150-line reading budget" "condensed past its budget"
+assert_contains "$OUTPUT" "Budget: specs/archive.md has 155 lines that read as 156 at 100 characters a line, over its 150-line reading budget" "condensed past its budget"
 assert_not_contains "$OUTPUT" "Archive on main" "the condensed file is no raw archive"
 rm specs/archive.md
 

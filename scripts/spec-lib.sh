@@ -132,7 +132,8 @@ spec_leftover_features() { # root
     return 0
 }
 
-# --- specs/archive.md (archive-template.md): the cutover's base commit, its last 0.x feature --
+# --- specs/archive.md (archive-template.md): the cutover's base commit, its last 0.x feature, ---
+# and the change number specs/log.md is condensed through.
 # A label is read loosely: bold or plain, in a heading, list item, quote or table row, its value
 # after a colon or a dash, or alone on the next line. Bash string matching only, no awk: the
 # file may hold any character.
@@ -147,7 +148,7 @@ _spec_trim() { # text -> $_spec_t without leading blanks, colons, equals signs a
         esac
     done
 }
-_spec_archive_value() { # file base|last -> the value of the first line with that label
+_spec_archive_value() { # file base|last|log -> the value of the first line with that label
     local line v pending=false
     [ -f "$1" ] || return 0
     while IFS= read -r line || [ -n "$line" ]; do
@@ -163,6 +164,8 @@ _spec_archive_value() { # file base|last -> the value of the first line with tha
             last:[Ll][Aa][Ss][Tt]' '0.[Xx]' '[Ff][Ee][Aa][Tt][Uu][Rr][Ee]*)
                 v="${_spec_t#????????????????}"; _spec_trim "${v#[Ss]}"
                 case "$_spec_t" in [Nn][Uu][Mm][Bb][Ee][Rr]*) v="${_spec_t#??????}"; _spec_trim "${v#[Ss]}" ;; esac ;;
+            log:[Ll][Oo][Gg]' '[Cc][Oo][Nn][Dd][Ee][Nn][Ss][Ee][Dd]' '[Tt][Hh][Rr][Oo][Uu][Gg][Hh]*)
+                _spec_trim "${_spec_t#?????????????????????}" ;;
             *) continue ;;
         esac
         [ -z "$_spec_t" ] || { printf '%s\n' "$_spec_t"; return 0; }
@@ -190,6 +193,17 @@ spec_archive_last() { # root
     [ -z "$max" ] || echo "$max"
     return 0
 }
+# The change number specs/log.md is condensed through: the number its value starts with (a sha
+# or date after it never counts), 0 for none, nothing otherwise.
+spec_archive_log_through() { # root
+    local v d
+    v="$(_spec_archive_value "$1/specs/archive.md" log)"
+    case "$v" in
+        [Nn][Oo][Nn][Ee]*) echo 0 ;;
+        [0-9]*) d="${v%%[!0-9]*}"; [ "${#d}" -gt 9 ] || echo "$((10#$d))" ;;
+    esac
+    return 0
+}
 
 # 0.x feature folder names (NNN-slug) in a commit's tree, or deleted in the last 20 commits that
 # deleted anything under specs/features or specs/archive: git keeps what the cutover removed.
@@ -204,6 +218,14 @@ spec_removed_features() { # root
     { GIT_NO_LAZY_FETCH=1 git -C "$1" log -n 20 --no-renames --diff-filter=D --name-only --format= \
           -- specs/features specs/archive 2>/dev/null || true; } |
         sed -n "$SPEC_FEATURE_SED" | sort -u
+}
+
+# Reading length: a line counts once per 100 characters, rounded up, and at least once, so a
+# long table row or paragraph cannot dodge a line budget. Dropping UTF-8 continuation bytes
+# leaves one byte per character for every awk under LC_ALL=C.
+spec_reading_lines() { # file -> "<reading lines> <lines>"
+    LC_ALL=C tr -d '\200-\277' < "$1" |
+        LC_ALL=C awk '{ l = length($0); n += l > 100 ? int((l + 99) / 100) : 1 } END { print n + 0, NR }'
 }
 
 # Spec files that define IDs, relative to root.
