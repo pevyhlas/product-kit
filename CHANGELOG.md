@@ -67,6 +67,9 @@ change by change.
 
 - Status counts a Q or I that names no `Enforced by:` as unenforced, not only one saying
   `unenforced`; a present label decides by its own value.
+- Agents updating an outcome checkpoint often appended reasons to its count or limit line, which
+  status then reports as invalid. `protocol.md`, read on every resume, now says those lines hold
+  bare integers and where the reasons go.
 
 ## [1.3.3] — 2026-10-31 — inbox review and workflow safeguards
 
