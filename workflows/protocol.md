@@ -62,7 +62,10 @@ Read a document over 32 KB by section. Agent context files (`CLAUDE.md`, `AGENTS
 every turn: they hold stable orientation and pointers, never change narrative or evidence.
 
 On compaction or handover, preserve that checkpoint with its source revision, latest evidenced
-advance, cumulative no-progress count, consumed allocation, holds and next-task rationale. Reload
+advance, cumulative no-progress count, consumed allocation, holds and next-task rationale. Its
+count and limit lines each hold a bare integer (the count may be `unknown`) that status parses; a
+note there invalidates the checkpoint, so reasons and child references go in Progress, Selection
+or the PR. Reload
 the actual parent/PR and owner direction on resume; a summary's local task queue never replaces
 the original outcome or grants a new allocation. Missing/stale checkpoint data requires
 reconciliation, not an inferred zero count or restarted timebox.

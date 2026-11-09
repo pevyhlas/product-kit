@@ -64,7 +64,7 @@ user outcome.
 - **Progress**: latest evidenced milestone/dependency advance, date/revision and evidence link;
   `none` or `unknown` when appropriate. Scope the claim: source, deployed or user-validated.
 - **No-progress changes**: nonnegative integer counting integrated children since that advance,
-  or `unknown` when history cannot be reconciled. Keep child references in the accompanying prose/PR.
+  or `unknown` when history cannot be reconciled.
 - **Progress limit**: positive integer; default `3` unless the owner/project sets another bound
   (cite its source in Allocation). Reassessment is due at this count or an existing
   timebox/investment boundary, whichever comes first.

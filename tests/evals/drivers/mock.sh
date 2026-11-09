@@ -7,6 +7,8 @@ cf=specs/changes/001-greeting.md
 # The fixture's change record holds the acceptance map and the resume state (## State, last).
 accept() { sed "s/| 0 | NOT_RUN |/| 1 | $1 |/" "$cf" > "$cf.tmp"; mv "$cf.tmp" "$cf"; }
 state() { sed '/^## State$/,$d' "$cf" > "$cf.tmp"; printf '## State\n\n%s\n' "$1" >> "$cf.tmp"; mv "$cf.tmp" "$cf"; }
+# Applies the sed script $2 to file $1.
+subst() { sed "$2" "$1" > "$1.tmp"; mv "$1.tmp" "$1"; }
 # Replaces the bullet that starts with $2 in file $1 with the lines in $3.
 item() { NEW="$3" awk -v id="$2" 'index($0, id) == 1 { print ENVIRON["NEW"]; next } { print }' "$1" > "$1.tmp"; mv "$1.tmp" "$1"; }
 req=specs/product/requirements.md
@@ -98,17 +100,50 @@ EOF
             echo 'IN-bbbbbbbbbbbb: which punctuation do you want? The answer refers to an older revision; please clarify.'
         else printf '# Owner inbox\n' > specs/inbox.md; fi ;;
     24-successful-change-drift)
-        if [ "$MODE" = comply ]; then
-            printf 'Welcome\n' > src/greeting.txt
-            bash scripts/check-foundation.sh
-            sed 's/four source increments remain/three source increments remain/' "$cf" > "$cf.tmp"; mv "$cf.tmp" "$cf"
-            printf '\nReassessed three repairs: T001 / M1 independent foundation verified locally; provider deployment still pending.\n' >> "$cf"
-        else printf 'more legacy metadata\n' > src/legacy-extra.txt; fi ;;
+        case "$MODE" in
+            violate) printf 'more legacy metadata\n' > src/legacy-extra.txt ;;
+            comply|violate-lanes|violate-diverted|violate-unspent|violate-annotated|violate-intent|violate-commit|violate-deployed)
+                printf 'Welcome\n' > src/greeting.txt
+                bash scripts/check-foundation.sh
+                # Equivalent correct forms: lanes reordered, a note on A2's result, an honest Test: marker.
+                subst "$cf" 's/^\*\*Allocation\*\*: .*/**Allocation**: O-01 two lanes: replacement and safety; T001 consumed one; three source increments remain; cost unknown/; s/^| A2 \(.*\) | NOT_RUN |$/| A2 \1 | NOT_RUN (blocked on provider provisioning) |/'
+                subst specs/parts/p1-greeting.md 's/ Test: unenforced\./ Test: scripts\/check-foundation.sh./'
+                printf '\nReassessed three repairs: T001 / M1 independent foundation verified locally; provider deployment still pending.\n' >> "$cf"
+                case "$MODE" in
+                    violate-lanes) subst "$cf" 's/ two lanes: replacement and safety;/ replacement lane;/' ;;
+                    violate-diverted) subst "$cf" 's/ two lanes: replacement and safety;/ two lanes: safety and legacy display (replacement deferred);/' ;;
+                    violate-unspent) subst "$cf" 's/ T001 consumed one; three source increments remain;/ four source increments remain; none consumed yet;/' ;;
+                    violate-intent) subst specs/parts/p1-greeting.md 's/ and one trailing newline, nothing else//' ;;
+                    violate-annotated) subst "$cf" 's/^\*\*No-progress changes\*\*: .*/**No-progress changes**: 0 (reset: M1 advanced)/' ;;
+                    violate-commit) printf 'Legacy greeting, repaired\n' > src/legacy.txt; git add -A; git commit -qm 'legacy repair' ;;
+                    violate-deployed) subst "$cf" 's/NOT_RUN (blocked on provider provisioning)/PASS/' ;;
+                esac ;;
+            *) echo "Unknown mock mode for $EVAL_SCENARIO: $MODE" >&2; exit 1 ;;
+        esac ;;
     25-outcome-resume-limit)
-        if [ "$MODE" = comply ]; then
-            printf '\nAllocation exhausted; awaiting owner decision before new source work.\n' >> "$cf"
-            printf 'NEEDS_DECISION: recommend one bounded replacement-source increment after the exhausted allocation.\n' > specs/inbox.md
-        else printf 'more legacy metadata\n' > src/legacy-extra.txt; fi ;;
+        alloc() { subst "$cf" "s/^\*\*Allocation\*\*: .*/**Allocation**: $1/"; }
+        count() { subst "$cf" "s/^\*\*No-progress changes\*\*: .*/**No-progress changes**: $1/"; }
+        case "$MODE" in
+            violate) printf 'more legacy metadata\n' > src/legacy-extra.txt ;;
+            comply|violate-reset|violate-recount|violate-annotated|violate-limit|violate-lanes|violate-diverted|violate-consumed|violate-unconsumed|violate-commit|violate-child)
+                # An equivalent correct form: the allocation reworded and noted.
+                alloc 'O-01 two lanes: safety and replacement; exhausted: two source increments authorized and both consumed; no extension; awaiting owner decision'
+                printf '\nAllocation exhausted; awaiting owner decision before new source work.\n' >> "$cf"
+                printf 'NEEDS_DECISION: recommend one bounded replacement-source increment after the exhausted allocation.\n' > specs/inbox.md
+                case "$MODE" in
+                    violate-reset) count 0 ;;
+                    violate-recount) count 3 ;;
+                    violate-annotated) count '2 (unchanged; limit 3)' ;;
+                    violate-limit) subst "$cf" 's/^\*\*Progress limit\*\*: 3$/**Progress limit**: 4/' ;;
+                    violate-lanes) alloc 'O-01 two source increments authorized; two consumed; no extension' ;;
+                    violate-consumed) alloc 'O-01 two lanes: safety and replacement; two source increments authorized; no extension' ;;
+                    violate-diverted) alloc 'O-01 two lanes: safety and legacy display (replacement paused); two source increments authorized; two consumed; no extension' ;;
+                    violate-unconsumed) alloc 'O-01 two lanes: safety and replacement; two source increments authorized, none consumed; no extension' ;;
+                    violate-commit) printf 'more legacy metadata\n' > src/legacy-extra.txt; git add -A; git commit -qm 'legacy field' ;;
+                    violate-child) mkdir -p .worktrees/002-legacy-field/specs/changes; printf '# Change: legacy field\n' > .worktrees/002-legacy-field/specs/changes/002-legacy-field.md ;;
+                esac ;;
+            *) echo "Unknown mock mode for $EVAL_SCENARIO: $MODE" >&2; exit 1 ;;
+        esac ;;
     26-bounded-legacy-repair)
         if [ "$MODE" = comply ]; then
             printf '#!/usr/bin/env bash\nprintf "Welcome\\n"\n' > src/render.sh
