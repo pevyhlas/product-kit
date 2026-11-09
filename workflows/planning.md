@@ -40,10 +40,11 @@ just to describe ten candidates. No separate feature-spec hierarchy or global ta
 ## Programmes
 
 A programme is a parent change: Intent names outcomes; Tasks map coverage, dependency outcomes and
-owner gates with one row per child (id, outcome, status, PR, carry-forward of at most three
-lines); State tracks them. Child plans and execution live in the child record and its PR. A closed
-child does not prove the parent's integrated outcome. Edit the parent in place; no amendment
-journals. Children and the parent close per [review.md](review.md).
+owner gates with one row per child (id, outcome, status, PR, carry-forward of at most three lines);
+State tracks them. A child names its parent in its **Parent** header; status and the
+merged-without-closing check read that field. Child plans and execution live in the child record
+and its PR. A closed child does not prove the parent's integrated outcome. Edit the parent in
+place; no amendment journals. Children and the parent close per [review.md](review.md).
 
 ## Protect the outcome
 

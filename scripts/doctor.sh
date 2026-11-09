@@ -38,7 +38,7 @@ for file in "$root"/specs/changes/*.md; do
         [ -z "$advisory" ] || advisories+=("${file#"$root"/}: $advisory")
     done < <(spec_change_progress "$file" false advisories)
 done
-for file in .prdkit/workflows/protocol.md .prdkit/workflows/change.md .prdkit/memory/constitution.md .prdkit/templates/change-template.md; do
+for file in .prdkit/workflows/protocol.md .prdkit/workflows/change.md .prdkit/workflows/review.md .prdkit/memory/constitution.md .prdkit/templates/change-template.md; do
     [ -f "$root/$file" ] || findings+=("Missing installed file: $file")
 done
 

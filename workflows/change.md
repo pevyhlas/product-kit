@@ -33,7 +33,8 @@ edited in the same PR. Sections of one file; skip a section that has nothing rea
    the owner with both quotes, never resolved by you.
 3. **Bounds**: before the approach, run `.prdkit/scripts/bash/bounds.sh <id>`. Name each bound
    this change could break with how it holds, then `Others in scope: hold`. A conflict goes to the
-   owner inbox with both sides; never resolve it, and never build past it.
+   owner inbox with both sides; never resolve it, and never build past it. An item it lists for a
+   later stage is built only on the owner's direction.
 4. **Approach**: approved design references and spec/code baseline, then only real execution choices:
    options, the pick, why; one that binds later work goes to its L1/L2 home.
 5. **Tasks**: a short checklist for resuming, or stable local tasks with contribution, dependencies

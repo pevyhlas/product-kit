@@ -27,6 +27,8 @@
 # need one independent verdict, T3 the owner's too, and no L0/L1 spec edit since the owner's head.
 # A pass whose record is still at the head, with no child or outcome checkpoint, adds a note:
 # if the PR completes the change, close it before merge (close-change.sh). It never fails.
+# --verify-reports --pr <url> compares each linked report with its line; an unavailable or
+# mismatching report fails the check.
 #
 # Usage: check-review.sh [--json] [--head <rev>] [--base <rev>] [--repo <dir>] [<change-id>]
 #   <change-id> defaults to the current branch name; --base to the first of origin/HEAD,

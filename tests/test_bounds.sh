@@ -115,6 +115,7 @@ assert_contains "$OUTPUT" "- Q-09 Uptime band" "a paragraph no deeper than a nes
 it "items for a later stage are listed apart"
 assert_contains "$OUTPUT" "Stage now: MVP" "the current stage"
 assert_not_contains "$(printf '%s\n' "$OUTPUT" | sed -n '/^Qualities:/,/^Later/p')" "Q-06" "a GA quality is not a bound yet"
+assert_contains "$OUTPUT" "Later stages (built only on owner direction; spec.md, Lifecycle):" "the later list names the rule"
 assert_contains "$OUTPUT" "- Q-06 Plan limits (from: ga; specs/product/qualities.md)" "listed as later"
 assert_contains "$OUTPUT" "- C-08 EU hosting (from: public preview;" "a constraint for a later stage"
 mv specs/product/lifecycle.md lifecycle.md.off

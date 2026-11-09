@@ -1,4 +1,4 @@
-# Review, delivery and closing
+# Review, merge and closing
 
 **Inputs**: a built change with its acceptance results, its record, PR and diff, the spec it
 touches, the reviewers registered in `.prdkit/memory/agents.md`, and project policy.
@@ -83,7 +83,8 @@ edit. Without `origin/HEAD`, full review coverage applies; establish the remote 
 ## Closing
 
 A PR-scoped change closes in that same PR when its required acceptance and review pass, or by
-explicit owner disposition. Required live gates still block. Non-gating runtime observations
+explicit owner disposition. Whatever deletes a record, an owner-disposed cancellation included,
+adds its `specs/log.md` line in the same PR. Required live gates still block. Non-gating runtime observations
 need no cleanup PR, and no permanent task archive is required.
 
 Before final review: reconcile the approved spec delta with actual behavior. Remove only built

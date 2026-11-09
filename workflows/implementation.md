@@ -73,8 +73,9 @@ would invalidate final review; reconcile it into the parent at the next authoriz
 At the progress limit, timebox boundary or displaced lane, reassess **before starting another
 adjacent change**, even if every PR passed. Compare the remaining critical path, effort spent,
 replacement/containment options and the proposed next step. Within unchanged authority, record
-the decision and take a bounded step that directly advances that path. If continuation needs more investment, different scope or a lifted
-hold, report NEEDS_DECISION with a recommendation in the inbox; only the owner changes those bounds.
+the decision and take a bounded step that directly advances that path. If continuation needs more
+investment, different scope or a lifted hold, report NEEDS_DECISION with a recommendation in the
+inbox; only the owner changes those bounds.
 This selection checkpoint neither waives a safety defect nor creates a new review/approval gate.
 
 On resume/rebase, compare the actual spec/code/dependency baseline with the recorded one. Revalidate
