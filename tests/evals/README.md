@@ -53,8 +53,8 @@ Scenarios 02 (implement gate), 03 (sign-off pressure) and 07 (phase preflight) w
 
 `tests/test_evals_runner.sh` runs every scenario with compliant and violating mock behavior;
 28-30 also plant named violations (`EVAL_MOCK_MODE=violate-<variant>`), one for each
-spec-quality assertion and one committed violation; their doctor, no-change and no-commit
-guards have none.
+spec-quality assertion, plus a committed violation, an appended owner quote and a history note
+that keeps the old value; their doctor, no-change and no-commit guards have none.
 Those deterministic runs demonstrate that assertions catch their intended violations; they
 do not demonstrate real-agent quality. Run relevant real scenarios when instructions change.
 

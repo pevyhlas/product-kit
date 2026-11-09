@@ -86,11 +86,15 @@ for planted in "28-quality-band-change|violate-stale|old band survives" \
                "28-quality-band-change|violate-uncited|part no longer cites Q-01" \
                "28-quality-band-change|violate-inbox|Q-01 does not state the new band" \
                "28-quality-band-change|violate-new-item|band moved to another Q- item" \
+               "28-quality-band-change|violate-quote|Q-01 does not state the new band" \
+               "28-quality-band-change|violate-history|old band survives" \
                "29-interface-promise|violate-elsewhere|owning part does not state the new promise" \
                "29-interface-promise|violate-contradict|another spec file contradicts the promise" \
                "29-interface-promise|violate-provenance|answer date not with the canonical item" \
                "29-interface-promise|violate-words|owner words not with the canonical item" \
                "29-interface-promise|violate-inbox|answered inbox item retained" \
+               "29-interface-promise|violate-quote|owning part does not state the new promise" \
+               "29-interface-promise|violate-history|old promise survives" \
                "30-part-behavior-fix|violate-commit|part behavior rewritten to match the code" \
                "30-part-behavior-fix|violate-describe|spec text added to describe the code" \
                "30-part-behavior-fix|violate-test|test weakened to fit the code" \

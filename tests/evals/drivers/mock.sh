@@ -24,6 +24,15 @@ case "${EVAL_SCENARIO:-}" in
                 else sed '/^## Budgets$/,$d' "$part" > "$part.tmp"; mv "$part.tmp" "$part"; fi ;;
             violate) for f in "$q" "$part" specs/architecture.md; do band '400 ms' '250 ms' "$f"; done ;;
             violate-stale) band '400 ms' '250 ms' "$q" ;;
+            violate-quote|violate-history)
+                if [ "$MODE" = violate-quote ]; then
+                    band 'Enforced by: unenforced.' 'Enforced by: unenforced. Source: owner, 2026-11-02, from the owner: "within 250 ms, p95."' "$q"
+                else
+                    band 'within 400 ms of start' 'within 250 ms of start' "$q"
+                    band 'Enforced by: unenforced.' 'Enforced by: unenforced. Tightened 2026-11-02 from the owner; 400 ms until then.' "$q"
+                fi
+                band "against Q-01's 400 ms band" 'against Q-01' specs/architecture.md
+                band 'within 400 ms p95 (Q-01)' 'meets Q-01' "$part" ;;
             violate-new-item)
                 item "$q" '- **Q-01 ' "$(printf '%s\n%s' '- **Q-01 Greeting latency** (hypothesis): retired: replaced by Q-02.' \
                     '- **Q-02 Greeting latency** (hypothesis): the greeting appears within 250 ms of start, p95. Enforced by: unenforced.')"
@@ -41,7 +50,11 @@ case "${EVAL_SCENARIO:-}" in
             comply|violate-inbox) item "$part" '- Greeting file format:' "$cited"; topic_promise 'stated by P1' ;;
             violate) item "$part" '- Greeting file format:' "$cited" ;;
             violate-elsewhere) topic_promise 'previous format readable for 180 days' ;;
-            violate-contradict) item "$part" '- Greeting file format:' "$cited"; topic_promise 'previous format readable for six months' ;;
+            violate-contradict) item "$part" '- Greeting file format:' "$cited"; topic_promise 'previous format readable for eighteen months' ;;
+            violate-quote)
+                item "$part" '- Greeting file format:' '- Greeting file format: after a new format ships, readers of the previous format keep working for 90 days. Schema: src/greeting.txt. Source: owner, 2026-11-03, the answer was extend, "Readers need two release cycles; give them 180 days."'
+                topic_promise 'stated by P1' ;;
+            violate-history) item "$part" '- Greeting file format:' "$cited"; topic_promise 'previous format readable for 90 days; from 2026-11-03 180 days' ;;
             violate-provenance)
                 item "$part" '- Greeting file format:' "$promise"; topic_promise 'stated by P1'
                 printf '\n## D-01 Compatibility window\n\nSource: owner, 2026-11-03: "give them 180 days."\n' >> specs/architecture.md ;;
