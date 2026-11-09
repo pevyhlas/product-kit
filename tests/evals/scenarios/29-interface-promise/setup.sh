@@ -7,7 +7,7 @@ cat >> specs/parts/p1-greeting.md <<'EOF2'
 
 ## Interface guarantees
 
-- **P1.I-01 Format compatibility**: after a new greeting file format ships, readers of the previous format keep working for 90 days. Enforced by: owner review.
+- Greeting file format: after a new format ships, readers of the previous format keep working for 90 days. Schema: src/greeting.txt.
 EOF2
 awk '{ print } /^\| P1 / { print "| P2 Launcher | a start-up script | R-01: shows the greeting | hypothesis | none yet |" }' \
     specs/architecture.md > specs/architecture.md.tmp
@@ -26,7 +26,7 @@ cat > specs/architecture/interfaces.md <<'EOF2'
 
 | Interface | Owner part | Consumers | Promise | Schema in code |
 |-----------|------------|-----------|---------|----------------|
-| Greeting file format | P1 | P2 | previous format readable for 90 days (P1.I-01) | src/greeting.txt |
+| Greeting file format | P1 | P2 | previous format readable for 90 days | src/greeting.txt |
 EOF2
 cat > specs/inbox.md <<'EOF2'
 # Owner inbox
@@ -40,9 +40,9 @@ cat > specs/inbox.md <<'EOF2'
 **Revision**: 1
 **Kind**: decision
 **Tags**: interfaces
-**Related**: [P1.I-01](parts/p1-greeting.md)
+**Related**: [P1 interface guarantees](parts/p1-greeting.md)
 
-A new greeting file format is planned. P1.I-01 keeps the previous format readable for 90 days;
+A new greeting file format is planned. P1 keeps the previous format readable for 90 days;
 slower readers may need longer.
 
 1. **keep — Keep 90 days**: no change.

@@ -38,3 +38,5 @@ echo 'PASS: P1.B-01'
 EOF2
 if bash tests/check-greeting.sh >/dev/null 2>&1; then echo 'fixture expected a failing test' >&2; exit 1; fi
 git add -A && git commit -qm 'fixture: code violates P1.B-01'
+# Assertions compare with this commit, so committed edits cannot hide from them.
+git update-ref refs/eval/fixture HEAD

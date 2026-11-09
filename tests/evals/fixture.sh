@@ -139,20 +139,30 @@ FIXTURE_CANON=(specs/product.md specs/product specs/architecture.md specs/archit
 # Clears the greeting spec for a scenario that writes another product's spec in the same layout.
 fixture_clear_spec() { rm -rf "${FIXTURE_CANON[@]}"; mkdir -p specs/product specs/parts; }
 
-# Prints one spec item for assertions: its `- **ID` bullet and everything up to the next top-level
-# bullet or heading, so wrapped lines, sub-bullets and a following Source paragraph belong to it.
-# Trailing blank lines are left out.
-fixture_item() { # id file...
-    local id="$1"; shift
-    awk -v id="$id" '
+# Prints one spec item for assertions: the top-level bullet that opens with its key (`- **R-01 `,
+# `- Greeting file format:`) and everything up to the next top-level bullet or heading, so wrapped
+# lines, sub-bullets and a following Source paragraph belong to it. Trailing blank lines are left out.
+fixture_item() { # key file...
+    local key="$1"; shift
+    awk -v key="$key" '
         /^#/ || /^[-*+][[:space:]]/ { s = 0; gap = "" }
-        /^[-*+][[:space:]]+[*][*]/ {
-            l = $0; sub(/^[-*+][[:space:]]+[*][*]/, "", l); c = substr(l, length(id) + 1, 1)
-            if (index(l, id) == 1 && (c == " " || c == "*")) s = 1
+        /^[-*+][[:space:]]/ {
+            l = $0; sub(/^[-*+][[:space:]]+/, "", l); sub(/^[*][*]/, "", l); c = substr(l, length(key) + 1, 1)
+            if (index(l, key) == 1 && (c == " " || c == "*" || c == ":")) s = 1
         }
         !s { next }
         /^[[:space:]]*$/ { gap = gap $0 "\n"; next }
         { printf "%s", gap; gap = ""; print }' "$@"
+}
+
+# Prints the files with a line that still states an old value (grep -E, any case). A line may
+# name it only as the history of the new value it also states: "from", "was" or "previously".
+fixture_stale() { # old-regex new-regex file...
+    local old="$1" new="$2"; shift 2
+    { grep -HiE "$old" "$@" || true; } | NEW="$new" awk '
+        !(tolower($0) ~ /(^|[^a-z])(from|was|previously)([^a-z]|$)/ && $0 ~ ENVIRON["NEW"]) {
+            sub(/:.*/, ""); if (!seen[$0]++) print
+        }'
 }
 
 # Programme with successful adjacent repairs but no progress along its declared critical path.

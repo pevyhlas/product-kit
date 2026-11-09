@@ -11,7 +11,7 @@ old='(^|[^0-9.])(400|0?\.4)([^0-9]|$)'
 q=specs/product/qualities.md
 test "$(awk '/^[-*][[:space:]]+[*][*]Q-[0-9]/ { n++ } END { print n + 0 }' "${files[@]}")" = 1 || fail 'band moved to another Q- item'
 fixture_item Q-01 "$q" | grep -Eq "$new" || fail 'Q-01 does not state the new band'
-at="$(grep -lE "$old" "${files[@]}" || true)"
+at="$(fixture_stale "$old" "$new" "${files[@]}")"
 test -z "$at" || fail "old band survives in: ${at//$'\n'/ }"
 at="$(grep -lE "$new" "${files[@]}" || true)"
 test "$at" = "$q" || fail "new band restated outside its Q- item: ${at//$'\n'/ }"

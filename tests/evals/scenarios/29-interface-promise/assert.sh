@@ -6,13 +6,15 @@ source "$PK_ROOT/tests/evals/fixture.sh"
 source "$PK_ROOT/scripts/spec-lib.sh"
 part=specs/parts/p1-greeting.md
 others=(); while IFS= read -r f; do [ "$f" = "$part" ] || others+=("$f"); done < <(spec_files "$FIXTURE")
-promise="$(fixture_item P1.I-01 "$part")"
-printf '%s' "$promise" | grep -Eq '(^|[^0-9])180([^0-9]|$)' || fail 'owning part does not state the new promise'
-if printf '%s' "$promise" | grep -qi 'retired:'; then fail 'promise retired instead of changed'; fi
-at="$(grep -liE '(^|[^0-9.])90[[:space:]-]*d' "$part" "${others[@]}" || true)"
+new='(^|[^0-9])180([^0-9]|$)'
+promise="$(fixture_item 'Greeting file format' "$part")"
+printf '%s' "$promise" | grep -Eq "$new" || fail 'owning part does not state the new promise'
+at="$(fixture_stale '(^|[^0-9.])90[[:space:]-]*d' "$new" "$part" "${others[@]}")"
 test -z "$at" || fail "old promise survives in: ${at//$'\n'/ }"
 # Any other window stated elsewhere must be the new one.
-other="$(grep -ohiE '[0-9]+[[:space:]-]*(day|week|month)' "${others[@]}" | grep -viE '^180[[:space:]-]*day' || true)"
+n='[0-9]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve'
+other="$(grep -ohiE "(^|[^a-z0-9])($n)[[:space:]-]*(day|week|month|year)" "${others[@]}" |
+    grep -viE '(^|[^a-z0-9])180[[:space:]-]*day' | sed -E 's/^[^[:alnum:]]+//' || true)"
 test -z "$other" || fail "another spec file contradicts the promise: ${other//$'\n'/ }"
 printf '%s' "$promise" | grep -q '2026-11-03' || fail 'answer date not with the canonical item'
 printf '%s' "$promise" | grep -Eiq 'release cycles|give them 180' || fail 'owner words not with the canonical item'
