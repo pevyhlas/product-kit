@@ -19,8 +19,8 @@ answer. You do not write the spec yourself unless you want to.
   validated.
 - `specs/architecture.md` (L1): one page: the system diagram, its parts and the journeys each
   serves, the core loop's path, the key decisions, key areas such as security and observability,
-  and the risks. Then `specs/architecture/`: decisions and one file per topic, including why the
-  design works, with the alternatives it rejected and when to revisit them.
+  and the risks. Then `specs/architecture/`: decisions, with the alternatives they rejected and
+  when to revisit them, and one file per topic, including why the design works.
 - `specs/inbox.md`: questions waiting for your answer, clarification or observation. Each has a
   stable ID, topic tags and an answer field; choices have stable keys as well as numbers. Use
   `/prdkit-inbox` to review them one at a time, optionally naming tags or IDs. Select an option,
@@ -30,8 +30,8 @@ answer. You do not write the spec yourself unless you want to.
   before removing the item. It gives you the canonical destination, not just "recorded."
   **To incorporate** temporarily holds answers awaiting agent processing; these are not questions
   for you to answer again. Partial answers leave only the remaining question. Declines and
-  deferrals live with the relevant decision and revisit trigger. Verbatim relays count as your
-  words; an agent's summary does not.
+  deferrals go to their one home ([spec.md](../workflows/spec.md#organizing)) with a revisit
+  trigger. Verbatim relays count as your words; an agent's summary does not.
 - `/prdkit-status`: what is true now, what is in flight, what is live, holds and waivers, what
   waits on you, and the longest pole. It is generated, never written as prose.
 

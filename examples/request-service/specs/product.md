@@ -3,7 +3,7 @@
 Requesters in one organization see their request's status and resolution without chasing an
 operator.
 
-**Stage**: Idea · next: MVP ([lifecycle](product/lifecycle.md))
+**Stage**: Idea · next: MVP ([lifecycle](product/lifecycle.md)) · [waiting on the owner](inbox.md)
 
 ## Problem
 
@@ -53,7 +53,3 @@ change; `bounds.sh` lists those in its scope.
 
 Requesters who can see status stop asking operators for updates. Wrong if update requests do
 not fall after release.
-
-## Waiting on the owner
-
-- Nothing open; operator prioritization is deferred ([inbox](inbox.md)).

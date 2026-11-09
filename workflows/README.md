@@ -4,7 +4,7 @@ Read [protocol.md](protocol.md) first, then only the operation you need.
 
 | Operation | Purpose |
 |-----------|---------|
-| [spec](spec.md) | Layout, levels, journeys, parts, writing, the line test, IDs, markers, budgets |
+| [spec](spec.md) | Layout, levels, journeys, parts, writing, the line test, IDs, markers, budgets, one home per fact |
 | [planning](planning.md) | Cross-layer feature discovery, coverage, dependencies and ready-work handoff |
 | [implementation](implementation.md) | Execution-focused plans/tasks, consistency, findings and convergence |
 | [change](change.md) | Open, build, review, deliver and close a change |

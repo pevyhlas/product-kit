@@ -21,7 +21,8 @@ it. Keep the body harness-neutral. -->
 ## Method
 
 <What it reads, in what order, and what it must not do. A reviewer reads the package, the change
-record and the spec sections it is given by name, never a glob over `specs/`.>
+record and the spec sections it is given by name, and only searches a readable `specs/` for the
+touched IDs and terms.>
 
 ## Output
 

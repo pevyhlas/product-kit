@@ -18,6 +18,19 @@ change by change.
   for a fee, and it may still change. `**Now**:`, `from: paid preview` markers and `product.md`
   stage columns accept it, and doctor, status and bounds order it before GA.
 
+### Changed
+
+- One home per fact: `spec.md` (Organizing) names the single home for each kind of fact; summaries
+  and other files cite it by ID or link. Templates drop the second homes: the interfaces topic is
+  an index without a promise column, a part's Budgets and Failure cite the Q- and journey,
+  why-it-works cites the D- that holds alternatives and revisit triggers, architecture Risks and
+  the product page's owner queue are a line and a link, and a decision records its source.
+- A two-way-door decision that binds later work goes to its L1/L2 home when decided; one that only
+  explains the diff stays in the PR. When `specs/` is readable, reviewers search it for the touched
+  IDs and terms: a copy the diff adds is medium, a contradiction it creates high, and older
+  untouched duplication low.
+- Existing specs are not rewritten; a change that edits a fact turns that fact's other copies into citations.
+
 ## [1.3.3] — 2026-10-31 — inbox review and workflow safeguards
 
 Review owner questions with `/prdkit-inbox`, incorporate answers into the governing spec, and

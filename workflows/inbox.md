@@ -19,7 +19,7 @@ Use `## Waiting for you` for unresolved questions (`agent · open`). Use `## To 
 as a temporary handoff for answers or new owner direction (`owner|agent · processing`). An
 answer in an otherwise open item also needs processing first. Processing is agent work, not a
 request to repeat an answer. Preserve an unprocessed answer if interrupted; do not leave it only
-in chat. No separate answer archive is required: spec.md defines what must survive in canon.
+in chat.
 
 ## Item contract
 
@@ -75,12 +75,10 @@ for imported answers. Preserve known provenance and name any uncertainty.
    an actual deferral is incorporated with its reason and revisit trigger. A recommendation
    batch applies only to the exact displayed IDs, revisions and option meanings.
 4. **Process each answer before the next question.** Re-read the item to detect concurrent edits.
-   Persist the answer fields if incorporation cannot finish immediately, then follow the resolver.
-   An answer is not incorporated merely because its field is filled, its metadata changed, or
-   a quote was appended somewhere. Verify the governing requirement/design/policy now expresses
-   the decision and that superseded contradictory wording and dependent references are reconciled.
-   A readonly session can collect an answer in conversation but must say it is not persisted;
-   never claim a file update or bypass the session's write limits.
+   Persist the answer fields if incorporation cannot finish immediately, then follow the resolver
+   ([spec.md](spec.md)); a filled field or changed metadata is not incorporation. A readonly
+   session can collect an answer in conversation but must say it is not persisted; never claim a
+   file update or bypass the session's write limits.
 5. **Acknowledge and continue.** State the selected meaning and qualifications, canonical path/ID,
    remaining work/holds and inbox disposition. If blocked, name the processing blocker and next
    actor instead of claiming resolution. Finish with counts of owner questions and processing

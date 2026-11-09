@@ -4,7 +4,7 @@
 
 ## Why it exists
 
-<The journeys, R and Q that need this part, and what it does for each.>
+<What it does for the journeys, R and Q its architecture parts-table row cites.>
 
 ## Components
 
@@ -19,17 +19,17 @@ numbering. Past the budget, move a component to parts/p<n>-<slug>/<component>.md
 - **P<n>.B-01 <title>**: <observable behavior>. Test: <name or unenforced>.
 - **P<n>.I-01 <title>**: <always true>. Enforced by: <test, analyzer, metric or unenforced>.
 
-## Interface guarantees
+## Interfaces
 
 - <Interface>: <compatibility promise, failure meaning>. Schema: <link to code>.
 
-## Failure semantics
+## Failure
 
-- <What happens when a dependency fails; what the user sees.>
+- <When a dependency fails, what this part does>. Users see: J-01, Variations.
 
 ## Budgets
 
-- <Latency, size or cost bands for this part.>
+- Q-01: <this part's share of its band>.
 
 ## Left open
 

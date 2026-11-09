@@ -21,6 +21,7 @@ At their desk, signed in with the organization's account, between other work.
 
 - **Signed out**: signs in with the organization's account and lands back on the request.
 - **Another requester's request**: sees nothing of it.
+- **Sign-in unavailable**: cannot sign in until it returns; submitted requests are kept.
 
 ## Success
 

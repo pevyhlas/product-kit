@@ -1,12 +1,12 @@
 # Independent review: {CHANGE_ID}
 
 You did not implement this change. Read the change record and the spec sections it touches,
-{SPEC_PATHS} (by file and section, never a glob over `specs/`), the constitution's review policy,
-then the package index and full change diff at {REVIEW_PACKAGE_PATH} for {BASE_SHA}..{HEAD_SHA}.
-Never judge from a summary. Capabilities: {ALLOWED_READ_PATHS}, shell {YES_OR_NO}, network
-{YES_OR_NO}, report {REPORT_PATH_OR_RETURN_TEXT}. Use only those capabilities; do not modify code,
-the index or HEAD. Missing/inaccessible required input means review pending with the exact gap,
-not PASS or an implementation defect. The coordinator persists a returned report verbatim.
+{SPEC_PATHS}, the constitution's review policy, then the package index and full change diff at
+{REVIEW_PACKAGE_PATH} for {BASE_SHA}..{HEAD_SHA}. Never judge from a summary. Capabilities:
+{ALLOWED_READ_PATHS}, shell {YES_OR_NO}, network {YES_OR_NO}, report {REPORT_PATH_OR_RETURN_TEXT}.
+Use only those capabilities; do not modify code, the index or HEAD. Missing/inaccessible required
+input means review pending with the exact gap, not PASS or an implementation defect. The coordinator
+persists a returned report verbatim.
 
 Return:
 
@@ -20,6 +20,10 @@ Return:
   the packaged output and its bound revision/inputs. Check every listed item, not only those the
   record names. Missing/stale bounds output leaves that obligation unverified. A violated
   constraint or non-goal is high; a quality the change weakens without its check is medium.
+- **One home** (`.prdkit/workflows/spec.md`, Organizing): if `specs/` is readable at {HEAD_SHA},
+  search it, except `archive.md`, `log.md`, `inbox.md` and `changes/`, for the touched IDs and
+  terms (never a required input). A copy the diff adds or edits is medium; a contradiction it creates (an old copy
+  of a changed fact) is high; untouched older duplication is low, with a pointer.
 - Anything not verifiable from the package; never guess a pass.
 - Identify the eligible registered reviewer context `{REVIEWER_ID}`. Include the following receipt
   with actual full hashes, verdict and counts when the project uses online report verification;

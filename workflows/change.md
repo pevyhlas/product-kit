@@ -36,7 +36,7 @@ children when useful. The PR is the delivery transaction, not proof of every lat
 Sections of one file; skip a section that has nothing real.
 
 1. **Intent**: why now, for whom (the journeys it serves), and one sentence of disposition for each inbox item it
-   addresses (folded here, left open and why, or proposed for decline).
+   addresses (folded to its home, still open and why, or proposed for decline).
 2. **Spec edits**: IDs added, changed or retired per level ([spec.md](spec.md)), with the owner's
    quote for L0. List conflicts with existing lines or tests; conflicting owner directions go to
    the owner with both quotes, never resolved by you.
@@ -46,8 +46,9 @@ Sections of one file; skip a section that has nothing real.
    to the owner inbox with both sides; never resolve it, and never build past it. Build for the
    current stage: an item it lists for a later stage is built only on the owner's direction.
 4. **Approach**: approved design references and spec/code baseline, then only real execution choices:
-   options, the pick, why. Material design decisions use Product-Kit's existing authority. For a new
-   external dependency, record a sample in `specs/observed.md` first.
+   options, the pick, why; one that binds later work goes to its L1/L2 home. Material design
+   decisions use Product-Kit's existing authority. For a new external dependency, record a sample
+   in `specs/observed.md` first.
 5. **Tasks**: a short checklist for resuming, or stable local tasks with contribution, dependencies
    and checks per [implementation.md](implementation.md). No extra plan for a tiny fix.
 6. **Checks**: before building, a few lines: every edit passes the line test, touched IDs agree
@@ -120,7 +121,8 @@ or closing child changes; a new record is not a fresh investment allowance.
 
 Pick the tier ([protocol.md](protocol.md)). The reviewer is a fresh context that did not implement
 the change. Send `.prdkit/templates/review-prompt-template.md`, the change record, the spec
-sections it touches, the PR's context and the full diff, never only the implementer's summary.
+sections it touches (plus a readable `specs/` at the head, to search), the PR's context and the
+full diff, never only the implementer's summary.
 Before dispatch, confirm the reviewer's allowed read paths, shell/network access and report channel.
 The reviewer runs `bounds.sh` when permitted; otherwise supply its captured output with input
 revision/hashes. It checks every bound, not only those the implementer selected. For committed work
