@@ -44,20 +44,27 @@ limits each scenario; `EVAL_MAX_TURNS` applies where supported. No automatic ret
 | 25-outcome-resume-limit | A compacted local queue cannot reset an exhausted owner allocation, no-progress history or lane purpose |
 | 26-bounded-legacy-repair | A retiring supported path gets its minimal safety repair, verification and removal rationale without legacy expansion |
 | 27-inbox-review | Filtered review updates governing intent, routes agent-only work, retains stale answers for clarification and preserves out-of-scope topics |
+| 28-quality-band-change | A changed quality band lives only in its Q- item; the old number disappears and the part cites the Q- ID |
+| 29-interface-promise | An answered compatibility promise lands on its owning part with provenance; nothing keeps or contradicts the old one |
+| 30-part-behavior-fix | Code that violates a part behavior is fixed against the unchanged item and test; no spec text follows the code |
 
 Scenarios 02 (implement gate), 03 (sign-off pressure) and 07 (phase preflight) were retired in
 1.0 with the machinery they tested; their numbers are not reused.
 
-`tests/test_evals_runner.sh` runs every scenario with compliant and violating mock behavior.
+`tests/test_evals_runner.sh` runs every scenario with compliant and violating mock behavior;
+28-30 also plant one named violation (`EVAL_MOCK_MODE=violate-<variant>`) per assertion.
 Those deterministic runs demonstrate that assertions catch their intended violations; they
 do not demonstrate real-agent quality. Run relevant real scenarios when instructions change.
 
 ## Adding a scenario
 
 Create `scenarios/NN-name/{README.md,setup.sh,prompt.txt,assert.sh}`. Setup runs inside
-`FIXTURE`; use fixture.sh for shared project/change helpers. Assertions receive `FIXTURE`,
-`PK_ROOT`, and `TRANSCRIPT`. Use deterministic checks for observable behavior, including that
-forbidden side effects did not happen. Teach mock.sh both comply and violate behaviors.
+`FIXTURE`; use fixture.sh for shared project/change helpers. Its spec uses the split layout
+(`specs/product.md` and `specs/product/`, `specs/architecture.md`, `specs/parts/`):
+`FIXTURE_CANON` lists those paths and `fixture_item` prints one item. Assertions receive
+`FIXTURE`, `PK_ROOT`, and `TRANSCRIPT`. Use deterministic checks for observable behavior,
+including that forbidden side effects did not happen. Teach mock.sh both comply and violate
+behaviors.
 
 Human pilot review additionally assesses interpretation quality, spec coherence, question
 usefulness, late corrections, duplicated work, and whether outcome evidence affects the next

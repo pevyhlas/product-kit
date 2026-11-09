@@ -23,6 +23,7 @@ assert_eq 0 "$STATUS" "--list exits 0"
 assert_contains "$OUTPUT" "01-open-change" "lists 01-open-change"
 assert_contains "$OUTPUT" "13-explicit-recovery-hold" "lists 13-explicit-recovery-hold"
 assert_contains "$OUTPUT" "16-stall-budget" "lists 16-stall-budget"
+assert_contains "$OUTPUT" "30-part-behavior-fix" "lists 30-part-behavior-fix"
 assert_not_contains "$OUTPUT" "02-implement-gate" "retired 0.x gate scenarios stay retired"
 
 # --- unknown / missing drivers degrade gracefully ---
@@ -66,6 +67,37 @@ it "violate run records fail verdicts in JSONL"
 jsonl2="$(find "$RES2" -mindepth 2 -maxdepth 2 -name 'results.jsonl' 2>/dev/null | head -n 1)"
 assert_file "$jsonl2" "results.jsonl written"
 assert_eq "$SCENARIO_COUNT" "$(grep -c '"verdict":"fail"' "$jsonl2")" "every line records verdict fail"
+
+# The spec-quality scenarios fail on the assertion their planted violation targets.
+it "violate run fails each spec-quality scenario on its intended assertion"
+for planted in "28-quality-band-change|new band restated outside its Q- item" \
+               "29-interface-promise|old promise survives" \
+               "30-part-behavior-fix|part behavior rewritten to match the code"; do
+    s="${planted%%|*}"
+    log="$(find "$RES2" -mindepth 2 -maxdepth 2 -name "$s.assert.log" | head -n 1)"
+    assert_contains "$(cat "$log" 2>/dev/null)" "ASSERT FAIL: ${planted#*|}" "$s: ${planted#*|}"
+done
+
+# --- named planted failures: every spec-quality assertion fires on its own ---
+RES5="$(mktemp -d)"; track_tmp "$RES5"
+it "each named planted failure fires its own spec-quality assertion"
+for planted in "28-quality-band-change|violate-stale|old band survives" \
+               "28-quality-band-change|violate-uncited|part no longer cites Q-01" \
+               "28-quality-band-change|violate-inbox|Q-01 does not state the new band" \
+               "29-interface-promise|violate-elsewhere|owning part does not state the new promise" \
+               "29-interface-promise|violate-contradict|another spec file contradicts the promise" \
+               "29-interface-promise|violate-provenance|answer date not with the canonical item" \
+               "29-interface-promise|violate-words|owner words not with the canonical item" \
+               "29-interface-promise|violate-inbox|answered inbox item retained" \
+               "30-part-behavior-fix|violate-describe|spec text added to describe the code" \
+               "30-part-behavior-fix|violate-test|test weakened to fit the code" \
+               "30-part-behavior-fix|violate-unfixed|code still violates P1.B-01"; do
+    s="${planted%%|*}"; rest="${planted#*|}"; mode="${rest%%|*}"; msg="${rest#*|}"
+    run env EVAL_RESULTS_DIR="$RES5/$mode-$s" EVAL_MOCK_MODE="$mode" bash "$RUNNER" --driver mock --scenario "$s"
+    assert_eq 1 "$STATUS" "$s $mode fails"
+    log="$(find "$RES5/$mode-$s" -mindepth 2 -maxdepth 2 -name "$s.assert.log" | head -n 1)"
+    assert_contains "$(cat "$log" 2>/dev/null)" "ASSERT FAIL: $msg" "$s $mode: $msg"
+done
 
 # --- single-scenario selection ---
 RES3="$(mktemp -d)"; track_tmp "$RES3"

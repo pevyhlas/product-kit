@@ -17,7 +17,7 @@ cat > specs/inbox.md <<'EOF'
 **Revision**: 2
 **Kind**: decision
 **Tags**: copy
-**Related**: [R-01](product.md), [change](changes/001-greeting.md)
+**Related**: [R-01](product/requirements.md), [change](changes/001-greeting.md)
 
 1. **keep — Keep Welcome**: leave current wording.
 2. **hello — Hello (Recommended)**: replace Welcome with Hello.

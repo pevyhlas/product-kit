@@ -23,7 +23,8 @@
 #   EVAL_TIMEOUT      Per-scenario wall-clock cap in seconds, when the coreutils
 #                     `timeout` command is available (default: 900)
 #   EVAL_DRIVER_ARGS  Extra arguments appended to the driver invocation
-#   EVAL_MOCK_MODE    mock driver only: comply (default) | violate
+#   EVAL_MOCK_MODE    mock driver only: comply (default) | violate, or a scenario's
+#                     named violate-<variant> (tests/test_evals_runner.sh)
 
 set -u
 
@@ -34,7 +35,7 @@ RESULTS_ROOT="${EVAL_RESULTS_DIR:-$EVALS_DIR/results}"
 MAX_TURNS="${EVAL_MAX_TURNS:-30}"
 TIMEOUT_S="${EVAL_TIMEOUT:-900}"
 
-usage() { sed -n '2,27p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 DRIVER=""
 ONLY=""

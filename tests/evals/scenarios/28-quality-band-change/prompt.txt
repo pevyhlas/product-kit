@@ -1,0 +1,4 @@
+Read .prdkit/workflows/protocol.md and .prdkit/workflows/spec.md. Owner direction, verbatim,
+2026-11-02: "Tighten the greeting latency band: the greeting must appear within 250 ms, p95."
+Record this decision in the spec. This is spec maintenance only: do not open a change, write
+code or commit.

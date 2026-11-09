@@ -13,5 +13,5 @@ if grep -Eq '^\*\*Review\*\*:.*(PASS|FAIL)' "$record"; then fail 'fabricated rev
 before="$(git show HEAD:"$record" | awk '/^## Acceptance/ {s=1} /^## State/ {s=0} s')"
 after="$(awk '/^## Acceptance/ {s=1} /^## State/ {s=0} s' "$record")"
 test "$before" = "$after" || fail 'acceptance rewritten'
-test -z "$(git status --porcelain -- src specs/product.md specs/architecture.md)" || fail 'source/canon changed'
+test -z "$(git status --porcelain -- src "${FIXTURE_CANON[@]}")" || fail 'source/canon changed'
 test "$(git log -1 --format=%s)" = 'fixture: incomplete review inputs' || fail 'committed'

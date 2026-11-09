@@ -5,14 +5,41 @@ fixture_project
 fixture_change
 printf '.prdkit/cache/\n.eval-state/\n' >> .gitignore
 mkdir -p src scripts .eval-state
+fixture_clear_spec
 cat > specs/product.md <<'EOF'
 # Request status
+
+People see each request's status as a plain label.
+
+## What must be true
+
+- Known states show their label; unsupported states report an error (R-01, R-02).
+
+Detail:
+
+- [Requirements](product/requirements.md)
+EOF
+cat > specs/product/requirements.md <<'EOF'
+# Request status — requirements
+
 - **R-01 Labels** (validated): pending displays Waiting; resolved displays Complete.
 - **R-02 Invalid state** (validated): unsupported states produce no success output and report an error.
 EOF
 cat > specs/architecture.md <<'EOF'
 # Status design
-## D-01 One formatter
+
+**Inherits**: none
+
+## Parts
+
+| Part | What it is | Why it exists | Maturity | Spec |
+|------|------------|---------------|----------|------|
+| P1 Status | shell formatter and wrapper | R-01, R-02 | hypothesis | none yet |
+
+## Key decisions
+
+### D-01 One formatter
+
 src/status.sh owns status_label, sourced by src/show-status.sh. The latter invokes the formatter
 with its first argument. status_label prints one newline-terminated label; unsupported inputs exit
 nonzero with an error on stderr and empty stdout. This is approved design; no new dependency needed.

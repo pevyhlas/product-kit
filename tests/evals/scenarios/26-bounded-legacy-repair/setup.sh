@@ -17,11 +17,14 @@ test "$out" = Welcome
 mkdir -p .eval-state
 printf 'legacy greeting safe\n' > .eval-state/render-pass
 EOF
-cat >> specs/product.md <<'EOF'
-## Constraints
+printf -- '- [Constraints](product/constraints.md)\n' >> specs/product.md
+cat > specs/product/constraints.md <<'EOF'
+# Fixture — constraints
+
 - **C-01 Private notes**: the supported renderer never exposes PRIVATE_NOTE on stdout or stderr.
 EOF
 cat >> specs/architecture.md <<'EOF'
+
 ## D-02 Replacement
 src/render.sh is the supported legacy renderer until the replacement greeting path is integrated.
 Only its current privacy defect needs repair; replacement requires no historical data migration.
