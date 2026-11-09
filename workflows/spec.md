@@ -177,8 +177,8 @@ A line that only describes how the code currently does something is deleted: the
   maturity: `**R-04 Title** (validated, planned: 012-export)`, or in a part's Maturity cell
   `hypothesis, planned: 012-export`. Undecided intent stays in the change record. Remove the
   marker in the PR that builds it.
-- **Enforcement**: each Q and I names what keeps it true (a test, an analyzer, a metric,
-  `owner review`) or says `unenforced`.
+- **Enforcement**: each Q and I names, after `Enforced by:`, what keeps it true (a test, an
+  analyzer, a metric, `owner review`) or `unenforced`.
 - **Qualities are bands** with a method (`p95 sync under 5 s on a slow network`), never a tuning
   number.
 - **Constraints**: Scope names the parts and journeys a C- binds, or `all`. A C- says what must

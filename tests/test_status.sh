@@ -38,6 +38,16 @@ cat > specs/product.md <<'MD'
   unenforced.
 - **Q-03 Readable pages** (hypothesis): body text at 16 px or more. Enforced by: test_pages.
 - **Q-04 Quiet errors** (hypothesis): no stack traces shown to users. Enforced by: Unenforced.
+- **Q-05 Calm pages** (hypothesis): no pop-ups.
+- **Q-06 Short pages** (hypothesis): under 50 KB a page. Enforced
+  by: test_pages.
+- **Q-07 Fast search** (hypothesis): p95 under 1 s.
+  - Enforced by: test_search.
+- **Q-08 Small icons** (hypothesis): under 2 KB. ENFORCED BY: test_icons.
+- **Q-09 Steady pages** (hypothesis): no layout shift. Enforced by: test_layout.
+  - Was unenforced until the layout test landed.
+- **Q-10 Light fonts** (hypothesis): under 100 KB of fonts. Enforced by:
+  - unenforced.
 MD
 mkdir -p specs/decisions
 printf '# D-01 Use server rendering\n\nWhy: pages work without scripts.\n' > specs/decisions/D-01.md
@@ -66,6 +76,8 @@ cat > specs/parts/p1-web.md <<'MD'
 ## Invariants
 
 - **P1.I-01 No names in logs**: never logs user names. Enforced by: unenforced.
+- **P1.I-02 Escaped output**: every page escapes user text.
+- **P1.I-03 Short links**: under 80 characters. Test: test_links.
 MD
 cat > specs/changes/004-export.md <<'MD'
 # Change: Export CSV for users
@@ -153,6 +165,14 @@ assert_not_contains "$OUTPUT" "P1 Web (planned" "planned: in another cell does n
 assert_contains "$OUTPUT" "Q-01 Fast greeting" "unenforced quality listed"
 assert_contains "$OUTPUT" "Q-04 Quiet errors" "a capitalized Unenforced counts"
 assert_contains "$OUTPUT" "P1.I-01 No names in logs" "unenforced invariant listed"
+assert_contains "$OUTPUT" "Q-05 Calm pages" "a quality naming nothing that keeps it true is unenforced"
+assert_contains "$OUTPUT" "P1.I-02 Escaped output" "so is such an invariant"
+assert_not_contains "$OUTPUT" "Q-06 Short pages" "Enforced by wrapped across lines names its check"
+assert_not_contains "$OUTPUT" "Q-07 Fast search" "so does Enforced by in a sub-bullet"
+assert_not_contains "$OUTPUT" "Q-08 Small icons" "in any case"
+assert_not_contains "$OUTPUT" "Q-09 Steady pages" "the label's own value decides, not unenforced elsewhere in the item"
+assert_contains "$OUTPUT" "Q-10 Light fonts" "even when that value opens the next sub-bullet"
+assert_contains "$OUTPUT" "P1.I-03 Short links" "an invariant names its check after Enforced by, not Test"
 
 it "in flight: step, age, acceptance, attempts, stalls and what each waits on"
 assert_contains "$OUTPUT" "004-export — Export CSV for users" "change with its title"

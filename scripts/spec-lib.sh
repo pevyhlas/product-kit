@@ -301,23 +301,36 @@ spec_links() { # root [file...]
 # file:line. Parts come from the architecture (or SPEC.md) parts table, its Maturity column found
 # by the header; everything else from bold bullets (`- **R-01 Title** ...`), a journey file
 # heading (`# J-01 Title (hypothesis)`) or a decision heading (`# D-01 Title`, or `## D-01 Title`
-# as a section of architecture/decisions.md).
-spec_items() { # root
-    local root="$1" file
-    while IFS= read -r file; do
+# as a section of architecture/decisions.md). An `Enforced by:` label anywhere in an item's block,
+# sub-bullets included, decides by its own value, which runs to the end of its bullet; without
+# one, a live Q or I is unenforced, and any item that says `unenforced` is.
+spec_items() { # root [file...]: the spec files when none are given
+    local root="$1" files=() file; shift
+    if [ "$#" -gt 0 ]; then files=("$@")
+    else while IFS= read -r file; do files+=("$file"); done < <(spec_files "$root"); fi
+    for file in ${files[@]+"${files[@]}"}; do
         awk -v file="$(spec_field "$file")" "$SPEC_SKIP_AWK"'
             BEGIN { gsub(/[\037\r\n]/, " ", file) }
-            function flags(line,   m, p) {
+            function indent(s) { sub(/[^[:space:]].*/, "", s); return length(s) }
+            function flags(line, id, block,   m, p, t, b, v, i, u) {
                 m = ""
                 if (match(line, /\((hypothesis|validated)[,)]/)) m = substr(line, RSTART + 1, RLENGTH - 2)
                 p = ""
                 if (match(line, /planned:[[:space:]]*[^ .;,)|]+/)) { p = substr(line, RSTART, RLENGTH); sub(/planned:[[:space:]]*/, "", p) }
-                return m "\037" p "\037" (tolower(line) ~ /retired:/ ? "yes" : "no") "\037" (tolower(line) ~ /unenforced/ ? "yes" : "no")
+                t = tolower(line); b = tolower(block)
+                if (match(b, /enforced[[:space:]]+by[[:space:]]*:?/)) {
+                    v = substr(b, RSTART + RLENGTH); sub(/^[[:space:]]+/, "", v)
+                    if ((i = index(v, "\n")) > 0) v = substr(v, 1, i - 1)
+                    u = (v ~ /unenforced/)
+                } else u = (t ~ /unenforced/ || (id ~ /^(Q|P[0-9]+\.I)-/ && t !~ /retired:/))
+                return m "\037" p "\037" (t ~ /retired:/ ? "yes" : "no") "\037" (u ? "yes" : "no")
             }
-            # A bullet item runs on to the next bullet, heading, table row or blank line.
-            function flush() { if (pend != "") print pend_id "\037" pend_title "\037" flags(pend) "\037" file ":" pend_nr; pend = "" }
+            # A bullet item runs on to the next bullet, heading, table row or blank line; its deeper
+            # sub-bullets (not items themselves; each starts a line of subs) count only for enforcement.
+            function flush() { if (pend != "") print pend_id "\037" pend_title "\037" flags(pend, pend_id, pend " " subs) "\037" file ":" pend_nr; pend = ""; subs = ""; insub = 0 }
             { gsub(/\037/, " "); if (spec_skip($0)) { flush(); next } }
-            pend != "" && $0 !~ /^[[:space:]]*$/ && $0 !~ /^[[:space:]]*([-*+]|[0-9]+\.)[[:space:]]/ && $0 !~ /^(#|\|)/ { pend = pend " " $0; next }
+            pend != "" && $0 !~ /^[[:space:]]*$/ && $0 !~ /^[[:space:]]*([-*+]|[0-9]+\.)[[:space:]]/ && $0 !~ /^(#|\|)/ { if (insub) subs = subs " " $0; else pend = pend " " $0; next }
+            pend != "" && /^[[:space:]]*([-*+]|[0-9]+\.)[[:space:]]/ && !/^[[:space:]]*[-*][[:space:]]+\*\*(P[0-9]+\.[BI]|[JRQCDN])-[0-9]/ && indent($0) > pend_ind { insub = 1; subs = subs "\n" $0; next }
             { flush() }
             /^#/ { retired_list = ($0 ~ /^#+[[:space:]]+Retired[[:space:]]*$/) }
             /^\|[[:space:]]*[Pp]art[[:space:]]*\|/ {
@@ -355,34 +368,64 @@ spec_items() { # root
                 body = $0; sub(/^[[:space:]]*[-*][[:space:]]+\*\*/, "", body)
                 id = body; sub(/[[:space:]*].*/, "", id)
                 title = body; sub(/^[^[:space:]*]+[[:space:]]*/, "", title); sub(/\*\*.*/, "", title)
-                pend = $0; pend_id = id; pend_title = title; pend_nr = NR
+                pend = $0; pend_id = id; pend_title = title; pend_nr = NR; pend_ind = indent($0)
             }
             END { flush() }
         ' "$root/$file"
-    done < <(spec_files "$root")
+    done
+}
+
+# The items of spec files, read as spec_items does: an item runs on to the next bullet, heading,
+# table row or blank line (a paragraph too), so a marker that wraps is read whole. Prints
+# file:line where the item starts, then its lines joined by \036. Comments and fences are skipped.
+_spec_paragraphs() { # root
+    local root="$1" files=() file
+    while IFS= read -r file; do files+=("$file"); done < <(spec_files "$root")
+    [ "${#files[@]}" -gt 0 ] || return 0
+    (cd "$root" && awk "$SPEC_SKIP_AWK"'
+        function flush() { if (item != "") print where "\037" item; item = "" }
+        FNR == 1 { flush(); fence = 0; comment = 0; file = FILENAME; gsub(/[\037\r\n]/, " ", file) }
+        { gsub(/[\036\037]/, " "); if (spec_skip($0)) { flush(); next } }
+        /^[[:space:]]*$/ { flush(); next }
+        /^[[:space:]]*([-*+]|[0-9]+\.)[[:space:]]/ || /^(#|\|)/ { flush() }
+        { line = $0; sub(/^[[:space:]]+/, "", line); if (item == "") where = file ":" FNR; item = (item == "" ? line : item "\036" line) }
+        END { flush() }
+    ' "${files[@]}")
 }
 
 # Change IDs that `planned: <change>` markers name (spec.md, Planned) in spec files, outside
-# comments and fenced blocks; an ID without a slug ends in "-". new-change.sh reserves them.
-# As in spec_items, an item runs on to the next bullet, heading, table row or blank line (a
-# paragraph too), so a marker that wraps, even inside `planned:` or its code span, is read whole.
+# comments and fenced blocks, even a marker that wraps inside `planned:` or its code span; an
+# ID without a slug ends in "-". spec_planned_at adds the file:line of the item that holds it;
+# new-change.sh reserves them.
+spec_planned_at() { # root
+    _spec_paragraphs "$1" | awk -F '\037' '{
+        t = $2; gsub(/\036/, " ", t)
+        while (match(t, /planned[[:space:]]*:[[:space:]]*`?[[:space:]]*[0-9][0-9][0-9]+(-[A-Za-z0-9-]*)?/)) {
+            m = substr(t, RSTART, RLENGTH); t = substr(t, RSTART + RLENGTH)
+            sub(/^planned[^0-9]*/, "", m); num = m; sub(/-.*/, "", num)
+            if (length(num) <= 9) print (index(m, "-") ? m : m "-") "\037" $1
+        }
+    }'
+}
 spec_planned_changes() { # root
-    local root="$1" file id num
-    while IFS= read -r file; do
-        awk "$SPEC_SKIP_AWK"'
-            function flush() { if (item != "") print item; item = "" }
-            { if (spec_skip($0)) { flush(); next } }
-            /^[[:space:]]*$/ { flush(); next }
-            /^[[:space:]]*([-*+]|[0-9]+\.)[[:space:]]/ || /^(#|\|)/ { flush() }
-            { line = $0; sub(/^[[:space:]]+/, "", line); item = (item == "" ? line : item " " line) }
-            END { flush() }
-        ' "$root/$file"
-    done < <(spec_files "$root") |
-        { grep -oE 'planned[[:space:]]*:[[:space:]]*`?[[:space:]]*[0-9]{3,}(-[A-Za-z0-9-]*)?' || true; } | sed 's/^planned[^0-9]*//' |
-        while IFS= read -r id; do
-            num="${id%%-*}"; [ "${#num}" -le 9 ] || continue
-            case "$id" in *-*) printf '%s\n' "$id" ;; *) printf '%s-\n' "$id" ;; esac
-        done | sort -u
+    spec_planned_at "$1" | cut -d "$SPEC_SEP" -f1 | sort -u
+}
+
+# Paths named after a `Code:` label (`**Code**: <paths>` in a part file, `Code: <path>` in a
+# topic), up to the end of its item or the next ` · **` label: kind, path, file:line. The label
+# opens a line or bullet, a ` · ` field or a sentence, never mid-phrase ("Status Code:"). Kind
+# "span" is a code span; "word" is a bare word holding a "/". The caller decides what is a path.
+spec_code_paths() { # root
+    _spec_paragraphs "$1" | awk -F '\037' '{
+        t = $2
+        if (!match(t, /(^|\036|[.;] |· )([-*+] )?(\*\*|`)?Code(\*\*|`)?:/)) next
+        t = substr(t, RSTART + RLENGTH); gsub(/\036/, " ", t)
+        if ((i = index(t, " · **")) > 0) t = substr(t, 1, i - 1)
+        bare = t; gsub(/`[^`]*`/, " ", bare)
+        while (match(t, /`[^`]*`/)) { print "span\037" substr(t, RSTART + 1, RLENGTH - 2) "\037" $1; t = substr(t, RSTART + RLENGTH) }
+        n = split(bare, w, /[[:space:],;()]+/)
+        for (i = 1; i <= n; i++) if (index(w[i], "/")) print "word\037" w[i] "\037" $1
+    }'
 }
 
 # The current lifecycle stage: `**Now**: <stage>` in specs/product/lifecycle.md (blank if none),

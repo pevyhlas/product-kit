@@ -23,7 +23,7 @@ cat > specs/architecture.md <<'MD'
 
 | Part | Purpose | Maturity | Owns data | Serves | Spec |
 |------|---------|----------|-----------|--------|------|
-| P1 Web | serves pages | validated | none | R-01 | parts/p1-web.md |
+| P1 Web | serves pages | validated | none | R-01, Q-01 | parts/p1-web.md |
 MD
 cat > specs/parts/p1-web.md <<'MD'
 # P1 Web
@@ -37,7 +37,7 @@ git add -A >/dev/null; git commit -qm spec >/dev/null
 it "a consistent 1.0 spec passes with no advisories"
 run bash "$DOCTOR" --json
 assert_eq 0 "$STATUS" "doctor passes"
-assert_contains "$OUTPUT" '"findings":[],"advisories":[]' "nothing to report"
+assert_contains "$OUTPUT" '"findings":[],"advisories":[],"trace":{"code-path":0,"planned-closed":0,"planned-unknown":0,"retired-cited":0,"unallocated":0,"part-need":0,"change-restates":0,"change-undefined":0}' "nothing to report; each trace check counted by its code"
 assert_contains "$OUTPUT" '"readiness":"not-evaluated"' "never a readiness claim"
 
 it "malformed, duplicate and misplaced IDs are failing findings"
@@ -432,6 +432,124 @@ assert_not_contains "$OUTPUT" "Duplicate ID D-01" "a decision piece heading cite
 rm "$RF/specs/observed.md"
 run bash -c "cd '$RF' && bash .prdkit/scripts/bash/doctor.sh"
 assert_contains "$OUTPUT" "specs/observed/payments.md is not linked from specs/observed.md" "observed pieces without observed.md"
+
+it "trace: a Code path that is not in the repository (advisory)"
+mkdir -p src/web/pages; printf 'x\n' > src/web/app.py; printf 'x\n' > src/web/pages/home.py; printf 'x\n' > src/web/pages/helper.py
+# shellcheck disable=SC2016 # backticks are Markdown code spans
+{ printf '# P1 Web\n\n**What it is**: pages · **Maturity**: validated · **Code**: `src/web`, `src/web/app.py:3-9`,\n'
+  printf '`src/web/gone.py` (views in `pages/home.py`), src/web/old.py, and/or `<paths>`, `src/*.py`,\n'
+  printf '`org/repo:src/x.py`, `https://example.com/x.py`, `dotnet test` · **Owner**: `src/elsewhere.py`\n\n'
+  printf -- '- **P1.B-01 Greeting page**: shows the greeting for R-01. Test: test_greeting.\n'
+  printf -- '- Deploy job: ships the pages. Code: `scripts/deploy.sh#L2`; none yet for `src/later.py`.\n'
+  printf -- '- Mail job: sends receipts. Code: `myapp.web`, `Company.Product.Api`, `api.example.com`.\n'
+  printf -- '- Errors map to a Status Code: `4xx/5xx`.\n'; } > specs/parts/p1-web.md
+run bash "$DOCTOR" --json
+assert_eq 0 "$STATUS" "an advisory"
+assert_contains "$OUTPUT" "Code path not in the repository (4): src/web/gone.py at specs/parts/p1-web.md:3, src/web/old.py at specs/parts/p1-web.md:3, scripts/deploy.sh at specs/parts/p1-web.md:8, src/later.py at specs/parts/p1-web.md:8; name repo-relative paths that exist" "missing spans and bare paths, at their item; a path under one named before it, a :line suffix, placeholders, globs, other repositories, URLs, commands, later labels, a name with no path before it and a label inside a phrase are not judged"
+assert_contains "$OUTPUT" '"code-path":4' "counted in JSON"
+# shellcheck disable=SC2016 # backticks are Markdown code spans
+printf -- '- Helpers. Code: `src/web/pages/home.py`, `helper.py`, `missing.py`.\n\nBuild scripts run in CI.\nCode: `ci/run.sh`.\n' > specs/parts/p1-web.md
+run bash "$DOCTOR"
+assert_contains "$OUTPUT" "Code path not in the repository (2): missing.py at specs/parts/p1-web.md:1, ci/run.sh at specs/parts/p1-web.md:3;" "a file name resolves in the directory of a file before it; a label opening a line counts"
+git checkout -q -- specs; rm -rf src
+
+it "trace: planned: names an open change, else a closed or an unknown one"
+mkdir -p specs/changes; printf '# Change: export\n' > specs/changes/012-export.md
+printf -- '- 2026-10-10 010-import: imported.\n' > specs/log.md
+cat >> specs/product.md <<'MD'
+- **R-03 Export** (hypothesis, planned: 012-export): users export.
+- **R-04 Import** (hypothesis, planned: 010-import): users import.
+- **R-05 Share** (hypothesis): users share,
+  planned: `013`.
+- **R-06 Print** (hypothesis, planned: 012): users print.
+- **R-07 Badge** (hypothesis, planned: M1): a milestone, not a change.
+- **R-08 Theme** (hypothesis, planned: 12): too short for a change number.
+- **R-09 Archive** (hypothesis, planned: 2026-Q4): a date, not a change.
+- **R-10 Sync** (hypothesis, planned: acme/platform#12): another repository's change.
+- **R-11 Old badge** (validated): retired: dropped (was planned: M2).
+- **R-12 Icon** (hypothesis): users pick one, **planned: M3**.
+
+| Area | Note |
+|------|------|
+| Zones | planned: both zones |
+MD
+run bash "$DOCTOR"
+assert_contains "$OUTPUT" "advisory: Planned for a closed change (1): 010-import at specs/product.md:7; specs/log.md closed it: remove the marker if it was built, or re-plan it to an open change" "a marker naming a closed change"
+assert_contains "$OUTPUT" "advisory: Planned for no open change (5): 013 at specs/product.md:8, 2026-Q4 at specs/product.md:13, M1 at specs/product.md:11, 12 at specs/product.md:12, M3 at specs/product.md:16; point it at an open change record (new-change.sh opens one) or remove the marker" "a wrapped marker naming no change, and item markers naming no change number, emphasis stripped"
+assert_not_contains "$OUTPUT" "M2" "a retired item's old marker is not judged"
+assert_not_contains "$OUTPUT" "012" "an open change, with or without its slug"
+assert_not_contains "$OUTPUT" "acme/platform" "another repository's change is not judged"
+assert_not_contains "$OUTPUT" "both zones" "a table cell is not an item marker"
+git checkout -q -- specs; rm -rf specs/changes specs/log.md
+
+it "trace: a retired ID cited in spec text (advisory)"
+mkdir -p specs/architecture
+cat >> specs/architecture.md <<'MD'
+
+## Notes
+
+- The greeting keeps R-02's wording.
+- The footer keeps R-02's wording too.
+- R-02 was retired for R-01.
+- R-01 replaced R-02.
+MD
+printf '# Demo — retired\n\n## Retired\n\n- **P1.B-09 Old page**: now P1.B-01, as R-02 asked.\n' > specs/architecture/retired.md
+printf '# Demo — old notes (retired: folded into architecture.md)\n\nR-02 lived here.\n' > specs/architecture/old-notes.md
+printf '# D-02 Cache pages\n\nIt amended R-02.\n' > specs/decisions/D-02.md
+run bash "$DOCTOR" --json
+assert_contains "$OUTPUT" "Retired ID cited in the spec (1): R-02 at specs/architecture.md:9; cite what replaced it, or drop the reference" "a live line citing a retired ID, once per file; not its retiring line, a line saying retired or replaced, architecture/retired, a retired file or a decision record"
+assert_contains "$OUTPUT" '"retired-cited":1' "counted in JSON"
+git checkout -q -- specs; rm -rf specs/architecture specs/decisions/D-02.md
+
+it "trace: an R or Q no part or architecture file cites; a part needed by nothing (advisory)"
+mkdir -p specs/product
+printf '# Demo — lifecycle\n\n**Now**: MVP · **Next**: GA\n' > specs/product/lifecycle.md
+cat >> specs/product.md <<'MD'
+- **R-10 Search** (hypothesis): users search.
+- **R-11 Filter** (hypothesis): users filter.
+- **R-12 Sort** (hypothesis): users sort by R-13 tags.
+- **R-13 Tag** (hypothesis): users tag.
+- **Q-05 Plan limits** (hypothesis, from: ga): per plan. Enforced by: owner review.
+- **R-14 Old search** (hypothesis): retired: now R-10.
+MD
+cat >> specs/architecture.md <<'MD'
+| P2 Jobs | runs jobs | hypothesis | none | nightly | parts/p2-jobs.md |
+| P3 Feed | lists pages | hypothesis | none | R-01 | none yet |
+MD
+printf '# P1 Web\n\n## Why it exists\n\nServes R-10 to\nR-12.\n' > specs/parts/p1-web.md
+printf '# P2 Jobs\n\n## Why it exists\n\nRuns the nightly work.\n\n## Behaviors\n\n- **P2.B-01 Reindex**: keeps R-01 pages fresh. Test: unenforced.\n' > specs/parts/p2-jobs.md
+printf '# P4 Mail\n\n## Why it exists\n\nSends R-01 receipts.\n' > specs/parts/p4-mail.md
+run bash "$DOCTOR" --json
+assert_contains "$OUTPUT" "R or Q no part or architecture file cites (1): R-13 at specs/product.md:9;" "only an item no part or architecture file cites: a range across lines covers its middle, a later-stage item waits, a retired one is gone, another product item does not allocate"
+assert_contains "$OUTPUT" "Part citing no journey, R or Q (1): P2 at specs/architecture.md:6; say in Why it exists" "a part whose row and Why it exists cite none, though a behavior does"
+assert_contains "$OUTPUT" '"unallocated":1,"part-need":1' "counted in JSON"
+rm -rf specs/product specs/parts/p2-jobs.md specs/parts/p4-mail.md; git checkout -q -- specs
+
+it "trace: a change record restating a spec item or citing an ID defined nowhere (advisory)"
+mkdir -p specs/changes
+cat > specs/changes/014-search.md <<'MD'
+# Change: search
+
+## Spec edits
+
+| Level | ID | Edit | Note |
+|-------|----|------|------|
+| L0 | R-20 | add | search |
+
+## Intent
+
+- **R-01 Greet users** (validated): restated here.
+- **R-21 Filter** (hypothesis): proposed in this record.
+
+Builds R-20 and R-21 for R-01; touches R-99.
+
+- Then R-99 again.
+MD
+run bash "$DOCTOR" --json
+assert_contains "$OUTPUT" "Change record restates a spec item (1): R-01 at specs/changes/014-search.md:11 (spec: specs/product.md:3); cite its ID and edit the spec instead" "a redefinition"
+assert_contains "$OUTPUT" "Change record cites an ID defined nowhere (1): R-99 at specs/changes/014-search.md:14;" "an ID the spec, a record's items and its Spec edits all lack, once per record"
+assert_contains "$OUTPUT" '"change-restates":1,"change-undefined":1' "counted in JSON"
+rm -rf specs/changes
 
 it "raw evidence tracked under specs/ is an advisory"
 mkdir -p specs/changes/results; printf 'output\n' > specs/changes/results/run.log

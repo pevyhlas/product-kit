@@ -333,6 +333,201 @@ if [ "${#env_files[@]}" -gt 0 ] && [ "${#stage_files[@]}" -gt 0 ]; then
         ' "${env_files[@]}" "${stage_files[@]}")
 fi
 
+# --- Trace: spec to code, plans, retired IDs, allocation, change records -----------------------
+# One advisory per check: its count and first locations. --json counts each check by its code.
+trace_json=""
+trace() { # code message fix rows (one location each)
+    local out n
+    out="$(printf '%s\n' "$4" | awk 'NF { if (++n <= 5) at = at (n > 1 ? ", " : "") $0 }
+        END { print n + 0 "\037" at (n > 5 ? " and " n - 5 " more" : "") }')"
+    n="${out%%"$SEP"*}"; trace_json="${trace_json:+$trace_json,}\"$1\":$n"
+    [ "$n" -eq 0 ] || advisories+=("$2 ($n): ${out#*"$SEP"}; $3")
+}
+pick() { printf '%s\n' "$1" | awk -F "$SEP" -v k="$2" '$1 == k { print $2 }'; } # rows kind -> rest
+# A path after a Code: label that is not in the repository. Judged: a code span holding a "/",
+# a bare word whose first directory exists, and a file name (`b.py`) once a path named before it
+# in the same item gives it a directory; a path also resolves in the directory of one before it.
+# Placeholders, globs, commands, URLs, absolute paths and org/repo:path are not judged; a
+# #anchor or :line suffix is dropped.
+code_paths_missing() {
+    local kind path where prev="" bases="" base found
+    local line_re='^(.*):[0-9]+(-[0-9]+)?$' ext_re='\.[A-Za-z][A-Za-z0-9]*$' odd_re="[][:space:]<>*?{}\$|=:'\"[]"
+    while IFS="$SEP" read -r kind path where; do
+        [ "$where" = "$prev" ] || { prev="$where"; bases=""; }
+        path="${path#./}"; path="${path%%#*}"
+        while :; do case "$path" in *[.,:\;!?/]) path="${path%?}" ;; *) break ;; esac; done
+        if [[ "$path" =~ $line_re ]]; then path="${BASH_REMATCH[1]}"; fi
+        case "$path" in ''|/*|~*|-*) continue ;; esac
+        if [[ "$path" =~ $odd_re ]]; then continue; fi
+        case "$kind" in
+            span) case "$path" in */*) ;; *) [[ "$path" =~ $ext_re ]] || continue ;; esac ;;
+            *) [ -e "$root/${path%%/*}" ] || continue ;;
+        esac
+        found=""
+        if [ -e "$root/$path" ]; then found="$path"
+        else
+            while IFS= read -r base; do
+                [ -n "$base" ] && [ -e "$root/$base/$path" ] && { found="$base/$path"; break; }
+            done <<< "$bases"
+        fi
+        if [ -n "$found" ]; then
+            [ -d "$root/$found" ] || case "$found" in */*) found="${found%/*}" ;; *) found=. ;; esac
+            bases="$bases$found"$'\n'
+        elif [ -n "$bases" ] || [ "${path#*/}" != "$path" ]; then
+            printf '%s at %s\n' "$path" "$where"
+        fi
+    done < <(spec_code_paths "$root")
+}
+trace code-path "Code path not in the repository" "name repo-relative paths that exist (spec.md, Writing)" "$(code_paths_missing)"
+
+# planned: <change> names an open change record (here, or in a worktree unless the log closed
+# it), else a closed or unknown one. A live item's marker naming no change number (M1, 12) is
+# unknown too; org/repo#n names another repository's change.
+closed_ids=" $( [ ! -f "$root/specs/log.md" ] || sed -n 's/^- [0-9-]* \([^ :]*\):.*/\1/p' "$root/specs/log.md" | tr '\n' ' ')"
+open_ids=" "
+while IFS="$SEP" read -r path _ loc; do
+    for file in "$path"/specs/changes/*.md; do
+        [ -f "$file" ] || continue
+        id="${file##*/}"; id="${id%.md}"
+        [ "$loc" = . ] || case "$closed_ids" in *" $id "*) continue ;; esac
+        open_ids="$open_ids$id "
+    done
+done < <(spec_checkouts "$root")
+planned_closed=""; planned_unknown=""
+while IFS="$SEP" read -r id where; do
+    [ -n "$id" ] || continue
+    case "$open_ids" in *" ${id%%-*}-"*) continue ;; esac
+    case "$closed_ids" in
+        *" ${id%%-*}-"*) planned_closed+="${id%-} at $where"$'\n' ;;
+        *) planned_unknown+="${id%-} at $where"$'\n' ;;
+    esac
+done < <(spec_planned_at "$root")
+xrepo_re='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(#[0-9]+)?$'
+while IFS="$SEP" read -r _ _ _ target retired _ where; do
+    [ "$retired" = no ] || continue
+    target="${target//[\`*]/}"
+    while [ "${target#_}" != "$target" ]; do target="${target#_}"; done
+    while [ "${target%_}" != "$target" ]; do target="${target%_}"; done
+    case "$target" in ''|[0-9][0-9][0-9]*) continue ;; esac
+    [[ "$target" =~ $xrepo_re ]] || planned_unknown+="$target at $where"$'\n'
+done <<< "$items"
+trace planned-closed "Planned for a closed change" "specs/log.md closed it: remove the marker if it was built, or re-plan it to an open change" "$planned_closed"
+trace planned-unknown "Planned for no open change" "point it at an open change record (new-change.sh opens one) or remove the marker" "$planned_unknown"
+
+# Spec text by item, as spec_items reads it. The program defines flush(), which sees the item's
+# line[1..lines], at[1..lines] and text, and newfile(); its own rules run after these.
+# shellcheck disable=SC2016
+ITEM_AWK='
+    function add() { line[++lines] = $0; at[lines] = FILENAME ":" FNR; text = text " " $0 }
+    FNR == 1 { flush(); lines = 0; text = ""; fence = 0; comment = 0; newfile() }
+    { if (spec_skip($0)) { flush(); lines = 0; text = ""; next } }
+    /^[[:space:]]*$/ { flush(); lines = 0; text = ""; next }
+    /^[[:space:]]*([-*+]|[0-9]+\.)[[:space:]]/ || /^(#|\|)/ { flush(); lines = 0; text = "" }
+    { add() }
+    END { flush() }'
+
+# A retired ID cited in the spec, once per file. Not judged: architecture/retired and decision
+# records (history), a file whose heading retires it, and an item that says retired, superseded
+# or replaced (a retiring line, or history).
+cited_in=(); retired_in=(); for file in ${spec_list[@]+"${spec_list[@]}"}; do
+    case "$file" in specs/architecture/retired.md|specs/architecture/retired/*) continue ;; esac
+    cited_in+=("$file")
+    case "$file" in specs/decisions/*|specs/architecture/decisions.md|specs/architecture/decisions/*) ;; *) retired_in+=("$file") ;; esac
+done
+retired_cited=""
+if [ "${#retired_in[@]}" -gt 0 ]; then
+    retired_cited="$({ printf '%s\n' "$items" | awk -F "$SEP" 'NF && $5 == "yes" { print "R" FS $1 }'
+        (cd "$root" && awk "$SPEC_SKIP_AWK $SPEC_ID_AWK $ITEM_AWK"'
+            function flush(   i) {
+                if (gone || tolower(text) ~ /retired|supersed|replac/) return
+                for (i = 1; i <= lines; i++) spec_ids(line[i], "C\037" at[i])
+            }
+            function newfile() { gone = 0; head = 1 }
+            head && /^#/ { head = 0; gone = (tolower($0) ~ /retired:/) }' "${retired_in[@]}"); } |
+        awk -F "$SEP" '$1 == "R" { r[$2] = 1; next }
+            $2 == "C" && ($1 in r) { f = $3; sub(/:[0-9]+$/, "", f); if (!seen[$1, f]++) print $1 " at " $3 }')"
+fi
+trace retired-cited "Retired ID cited in the spec" "cite what replaced it, or drop the reference" "$retired_cited"
+
+# Allocation: a live R or Q needed now (no later from: stage) that no part or architecture file
+# cites; a part whose parts-table row and Why it exists cite no J, R or Q. A range (R-03 to R-07)
+# cites every ID in it. An item's own text never allocates it (SPEC.md holds both).
+alloc=(); for file in ${cited_in[@]+"${cited_in[@]}"}; do
+    case "$file" in specs/SPEC.md|specs/architecture*|specs/parts/*|specs/decisions/*) alloc+=("$file") ;; esac
+done
+allocation="$({ printf '%s\n' "$items" | awk 'NF { print "T\037" $0 }'
+    printf '%s\n' "$stages" | awk 'NF { print "S\037" $0 }'
+    spec_part_headings "$root" | awk 'NF { print "H\037" $0 }'
+    [ "${#alloc[@]}" -eq 0 ] || (cd "$root" && awk "$SPEC_SKIP_AWK $ITEM_AWK"'
+        function cites(s, where,   w, pre, tok, post, end, lo, hi, k, pad) {
+            w = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"
+            while (match(s, /[JRQ]-[0-9][0-9]+/)) {
+                pre = RSTART > 1 ? substr(s, RSTART - 1, 1) : ""
+                tok = substr(s, RSTART, RLENGTH); post = substr(s, RSTART + RLENGTH, 1)
+                s = substr(s, RSTART + RLENGTH)
+                if ((pre != "" && index(w ".", pre)) || (post != "" && index(w, post))) continue
+                print "C\037" tok "\037" where
+                if (!match(s, /^[[:space:]]*(to|through|-|–|—|\.\.)[[:space:]]*[JRQ]-[0-9][0-9]+/)) continue
+                end = substr(s, RSTART, RLENGTH); match(end, /[JRQ]-[0-9][0-9]+$/); end = substr(end, RSTART)
+                if (substr(end, 1, 1) != substr(tok, 1, 1)) continue
+                lo = substr(tok, 3) + 0; hi = substr(end, 3) + 0; pad = length(tok) - 2
+                if (lo > hi) { k = lo; lo = hi; hi = k }
+                for (k = lo + 1; k < hi && k <= lo + 99; k++) print "C\037" sprintf("%s-%0" pad "d", substr(tok, 1, 1), k) "\037" where
+            }
+        }
+        function flush(   f) { if (lines) { f = at[1]; sub(/:[0-9]+$/, "", f); cites(text, at[1] "\037" (why ? f : "")) } }
+        function newfile() { why = 0; top = (FILENAME ~ /^specs\/parts\/[^\/]+\.md$/) }
+        /^#/ { why = top && tolower($0) ~ /^##[[:space:]]+why/ }' "${alloc[@]}"); } |
+    awk -F "$SEP" -v now="$now" "$SPEC_STAGE_AWK"'
+        $1 == "T" { at[$2] = $8; if ($6 == "yes") gone[$2] = 1
+                    else if ($2 ~ /^[RQ]-/) need[++n] = $2
+                    else if ($2 ~ /^P[0-9]+$/ && !($2 in listed)) { listed[$2] = 1; part[++m] = $2 }
+                    next }
+        $1 == "S" { from[$2] = $3; next }
+        $1 == "H" { if ($2 ~ /^specs\/parts\/[^\/]+\.md$/ && $3 != "") { file[$3] = $2; if (!($3 in listed)) { listed[$3] = 1; part[++m] = $3 } } next }
+        $1 == "C" { if ($3 != at[$2]) cited[$2] = 1; if ($4 != "") why[$4] = 1; row[$3] = 1 }
+        END {
+            for (i = 1; i <= n; i++) {
+                id = need[i]
+                if (now != "" && (id in from) && stage_rank(from[id]) > stage_rank(now)) continue
+                if (!(id in cited)) print "U\037" id " at " at[id]
+            }
+            for (i = 1; i <= m; i++) {
+                p = part[i]
+                if ((p in gone) || ((p in at) && (at[p] in row)) || ((p in file) && (file[p] in why))) continue
+                print "X\037" p " at " ((p in at) ? at[p] : file[p])
+            }
+        }')"
+trace unallocated "R or Q no part or architecture file cites" "allocate it to a part, or ask the owner whether it is still needed" \
+    "$(pick "$allocation" U)"
+trace part-need "Part citing no journey, R or Q" "say in Why it exists which J, R and Q need it, or ask the owner (spec.md, Parts)" \
+    "$(pick "$allocation" X)"
+
+# Change records are not spec files: one restating a spec item, or citing (once per record) an ID
+# that neither the spec, a record's own item, nor a record's Spec edits section (IDs a change
+# adds) names.
+change_files=(); for file in "$root"/specs/changes/*.md; do [ -f "$file" ] && change_files+=("${file#"$root"/}"); done
+change_ids=""
+if [ "${#change_files[@]}" -gt 0 ]; then
+    change_ids="$({ printf '%s\n' "$items" | awk -F "$SEP" 'NF { print "D" FS $1 FS $7 }'
+        spec_items "$root" "${change_files[@]}" | awk -F "$SEP" 'NF { print "N" FS $1 FS $7 }'
+        (cd "$root" && awk "$SPEC_SKIP_AWK $SPEC_ID_AWK"'
+            FNR == 1 { fence = 0; comment = 0; edits = 0 }
+            { if (spec_skip($0)) next }
+            /^## / { edits = ($0 ~ /^##[[:space:]]+Spec edits/) }
+            { spec_ids($0, FILENAME ":" FNR "\037" edits) }' "${change_files[@]}"); } |
+        awk -F "$SEP" '$1 == "D" { spec[$2] = $3; next }
+            $1 == "N" { own[$2] = 1; if ($2 in spec) print "R" FS $2 " at " $3 " (spec: " spec[$2] ")"; next }
+            { if ($3 == 1) own[$1] = 1; id[++n] = $1; at[n] = $2 }
+            END { for (i = 1; i <= n; i++) {
+                f = at[i]; sub(/:[0-9]+$/, "", f)
+                if (!(id[i] in spec) && !(id[i] in own) && !seen[id[i], f]++) print "U" FS id[i] " at " at[i] } }')"
+fi
+trace change-restates "Change record restates a spec item" "cite its ID and edit the spec instead" \
+    "$(pick "$change_ids" R)"
+trace change-undefined "Change record cites an ID defined nowhere" "list it under Spec edits, define it in the spec, or fix the reference" \
+    "$(pick "$change_ids" U)"
+
 # --- Records and inbox -----------------------------------------------------------------------
 while IFS="$SEP" read -r line type name who _ _ _ date until _ reason; do
     [ -n "$line" ] || continue
@@ -504,8 +699,8 @@ fi
 if $strict; then findings+=(${advisories[@]+"${advisories[@]}"}); advisories=(); fi
 result=pass; [ "${#findings[@]}" -eq 0 ] || result=fail
 if $json; then
-    printf '{"result":"%s","findings":%s,"advisories":%s,"strict":%s,"readiness":"not-evaluated"' \
-        "$result" "$(json_array ${findings[@]+"${findings[@]}"})" "$(json_array ${advisories[@]+"${advisories[@]}"})" "$strict"
+    printf '{"result":"%s","findings":%s,"advisories":%s,"trace":{%s},"strict":%s,"readiness":"not-evaluated"' \
+        "$result" "$(json_array ${findings[@]+"${findings[@]}"})" "$(json_array ${advisories[@]+"${advisories[@]}"})" "$trace_json" "$strict"
     printf ',"adoption":%s' "$(diagnostic_adoption "$root")"
     if $inventory; then printf ',"configuration":%s' "$(diagnostic_configuration "$root")"; fi
     printf '}\n'
