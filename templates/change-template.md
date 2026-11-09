@@ -3,7 +3,8 @@
 **Opened**: <date> · **Parts**: <P-ids> · **Journeys**: <J-ids> · **Tier**: <T0–T3> · **Parent**: none
 
 <!-- Split large scope into independently shippable children (Parent: <id>), preserving the
-parent's outcome, allocation and cumulative attempts/progress. Splitting never renews a budget. -->
+parent's outcome, allocation and cumulative attempts/progress. Splitting never renews a budget.
+The parent keeps one Tasks row per child: id, outcome, status, PR, carry-forward (three lines max). -->
 
 ## Intent
 

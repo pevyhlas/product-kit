@@ -121,10 +121,13 @@ authenticate the reviewer session: shared bot accounts can publish for several r
 main session must still preserve dispatch/report provenance and enforce independent review.
 
 A closing commit that deletes the record is checked against the record's last committed
-version. Finalize new implementation changes in their own PR, retaining context and evidence on
-that PR before deleting the record; no cleanup-only PR is required. Auxiliary tracked plans are
-ordinary reviewed paths: removing them after PASS invalidates coverage. Remove them before final
-review, or use ignored execution scratch with useful context on the PR.
+version; `close-change.sh` makes that commit only after the check passes. A passing check whose
+record is still at the head, with no child or outcome checkpoint, prints a note and reports
+`"record_open":true` in `--json`; a project can fail its CI on that. Finalize new implementation
+changes in their own PR, retaining context and evidence on that PR before deleting the record; no
+cleanup-only PR is required. Auxiliary tracked plans are ordinary reviewed paths: removing them
+after PASS invalidates coverage. Remove them before final review, or use ignored execution scratch
+with useful context on the PR.
 
 For a PR finalizing several changes, use the containing implementation record as review carrier
 ([change workflow](../workflows/change.md#bigger-work)). It inherits all required acceptance,

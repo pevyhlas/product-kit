@@ -25,6 +25,8 @@
 # T1-T3 so must the change's start (its merge base with --base). A merge carrying only the record
 # and the log from a trusted start (a change closed after its code merged) skips coverage. T1-T3
 # need one independent verdict, T3 the owner's too, and no L0/L1 spec edit since the owner's head.
+# A pass whose record is still at the head, with no child or outcome checkpoint, adds a note:
+# close the change before merge (close-change.sh). The note never fails the check.
 #
 # Usage: check-review.sh [--json] [--head <rev>] [--base <rev>] [--repo <dir>] [<change-id>]
 #   <change-id> defaults to the current branch name; --base to the first of origin/HEAD,
@@ -382,9 +384,14 @@ if $verify_reports; then
     fi
 fi
 result=pass; [ "${#problems[@]}" -eq 0 ] || result=fail
+# Advisory: a reviewed PR-scoped record still at this head would merge open (change.md, Closing).
+record_open=false
+if [ "$result" = pass ] && [ "$record_at" = "$head" ]; then
+    case $'\n'"$(spec_unclosed_changes "$root" "$head")"$'\n' in *$'\n'"$id"$'\n'*) record_open=true ;; esac
+fi
 if $json; then
-    printf '{"result":"%s","change":"%s","head":"%s","base":"%s","base_trusted":%s,"record_only":%s,"tier":"%s","rigor":"%s","record_at":"%s","reviews":[' \
-        "$result" "$id" "$head" "$(json_escape "$base_ref")" "$base_trusted" "$record_only" "$tier" "$rigor" "$(json_escape "$record_at")"
+    printf '{"result":"%s","change":"%s","head":"%s","base":"%s","base_trusted":%s,"record_only":%s,"record_open":%s,"tier":"%s","rigor":"%s","record_at":"%s","reviews":[' \
+        "$result" "$id" "$head" "$(json_escape "$base_ref")" "$base_trusted" "$record_only" "$record_open" "$tier" "$rigor" "$(json_escape "$record_at")"
     sep=""
     for row in ${rows[@]+"${rows[@]}"}; do
         IFS="$(printf '\037')" read -r reviewer round from to verdict critical high medium low <<< "$row"
@@ -404,6 +411,7 @@ elif [ "$result" = pass ]; then
     else
         printf 'PASS %s at %s: %s, Rigor %s; %s recorded verdict(s) cover this head.\n' "$id" "$head" "$tier" "$rigor" "${#rows[@]}"
     fi
+    ! $record_open || printf 'Note: %s is still at this head; close it before merge: .prdkit/scripts/bash/close-change.sh %s "<log line>" (change.md, Closing).\n' "$path" "$id"
 else
     printf 'FAIL %s at %s:\n' "$id" "$head"
     $base_trusted || printf '  Base is not trusted for coverage exemptions: establish origin/HEAD or configure review-integration-branches in its committed config.\n'

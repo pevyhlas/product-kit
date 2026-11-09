@@ -33,7 +33,8 @@ children when useful. The PR is the delivery transaction, not proof of every lat
 
 ## The record
 
-Sections of one file; skip a section that has nothing real.
+The record holds work in progress, not truth: whatever stays true after merge lives in the spec,
+edited in the same PR. Sections of one file; skip a section that has nothing real.
 
 1. **Intent**: why now, for whom (the journeys it serves), and one sentence of disposition for each inbox item it
    addresses (folded to its home, still open and why, or proposed for decline).
@@ -216,30 +217,33 @@ Remove any tracked auxiliary execution files before this review; ordinary review
 to their changes/deletions. Ignored scratch may be discarded after useful context is durable.
 
 After PASS, only verdict metadata, record deletion and the log change: commit the final Review line,
-then in a later commit in the same PR append
-`- <date> <id>: <intent> — <IDs> — <disposition; runtime unknown if relevant> — <PR>` to
-`specs/log.md` and delete the record (the check reads its last committed version). Do not change
+then run `.prdkit/scripts/bash/close-change.sh <id> "<intent> — <IDs> — <disposition; runtime unknown
+if relevant> — <PR>"`. It refuses unless `check-review.sh` passes, then adds the `specs/log.md` line
+and deletes the record in one commit. Push both commits together, so required checks run once on the
+closed head; the PR, not the record, carries any handoff to whoever merges. Do not change
 scope, acceptance or policy after review without reviewing the affected changes. Later defects use
 ordinary linked fix changes; carry forward the failing outcome's attempts, limits and holds. Never
-reopen a completed transaction merely to clear working files. For an already-merged legacy open
-change, resolve its outstanding obligations/disposition in the next relevant PR; do not fabricate
-acceptance or require a new cleanup-only PR. After merge run
+reopen a completed transaction merely to clear working files. A change merged with its record still
+open (status flags it) closes in the next relevant PR, whose record is its review carrier ([Bigger
+work](#bigger-work)); never fabricate acceptance or open a cleanup-only PR. After merge run
 `.prdkit/scripts/bash/cleanup-change.sh <id>` from the main checkout: it copies the worktree's
 evidence, retrospectives and ledger events into this checkout, verifies them, and only then
 removes the worktree.
 
-For a record opened with `--no-branch`, finalize the record and log through the project's authorized
-delivery route, with the same acceptance/review obligations. Do not remove the shared checkout or
-run isolated-worktree cleanup merely because this record closed. Detached HEAD can hold a record,
-but publication still needs an authorized named branch; record creation does not create one.
+A `--no-branch` record closes the same way, through the project's authorized delivery route; its
+shared checkout stays, so skip `cleanup-change.sh`. A detached HEAD can hold a record, but
+publishing needs an authorized named branch.
 
 ## Bigger work
 
 A programme is a parent change planned with [planning.md](planning.md): Intent names outcomes,
-Tasks map coverage and children with dependency outcomes and owner gates, State tracks them. A child
-PR closing does not prove the parent's integrated outcome. Update the parent in relevant child PRs;
-finalize it in the last relevant PR when its required outcomes pass or the owner disposes of it,
-keeping non-gating observations explicit. No separate cleanup PR. Edit it in place; no amendment journals.
+Tasks map coverage, dependency outcomes and owner gates with one row per child (id, outcome, status,
+PR, carry-forward of at most three lines), State tracks them. Child plans and execution live in the child
+record and its PR; a child PR updates only its row and the checkpoint, before its final review, and
+never copies its plan, findings or evidence into the parent. A closed child does not prove the
+parent's integrated outcome. Finalize the parent in the last relevant PR when its required outcomes
+pass or the owner disposes of it, keeping non-gating observations explicit. No separate cleanup PR.
+Edit it in place; no amendment journals.
 
 When one PR also finalizes a parent or older change, its implementation record is the **review
 carrier**. Before final review, bring the other record's remaining required acceptance, unresolved
@@ -251,5 +255,4 @@ useful context/evidence on this PR, add its log disposition and delete it **befo
 final review. That review covers the combined diff and integrated outcomes, including these deletions.
 Only the carrier's verdict metadata/deletion and log may change after PASS. Run `check-review.sh`
 for the carrier at the exact final head; do not start mutually dependent post-review updates to two
-records. An inherited approval is not fresh coverage for changed work. This uses one PR review
-transaction without exempting arbitrary change-record paths or dropping the parent's obligations.
+records. An inherited approval is not fresh coverage for changed work.

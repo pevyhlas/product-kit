@@ -17,6 +17,7 @@
 | Doctor: a stage "runs in none of the environments" | Name the environment in the stage's **Environment** line as `specs/architecture/environments.md` spells it, or add a row for it there; `none` suits a stage with nothing running |
 | Doctor: "Link at … points to …, which does not exist" | Fix the path; name a file removed from main on purpose as code, `git show <sha>:<path>`, not as a link |
 | Doctor: closed without a `specs/log.md` line | Add `- <date> <id>: <what changed>` to `specs/log.md` in the PR that deletes the change record |
+| Status or doctor: merged without closing | Close it in the next relevant PR, carried by that PR's record before its final review ([change workflow](../workflows/change.md#closing)); a change that spans PRs is a parent with an outcome checkpoint |
 | Doctor: local machine path | Rewrite it relative to the repository, or as `org/repo` plus a path for another repository |
 | Doctor: raw evidence under `specs/` | `git rm --cached` it, keep it under `.prdkit/cache/evidence/`, and link it from Acceptance |
 | The owner's answer was asked for again | Fold the answer into the canonical spec/policy with its words, date and source; then remove the resolved inbox item. Relayed verbatim answers need no re-asking |

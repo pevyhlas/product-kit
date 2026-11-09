@@ -395,6 +395,14 @@ if git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     done < <(git -C "$root" log -M --diff-filter=D --name-only --format= -- 'specs/changes/*.md' 2>/dev/null |
         sed -n 's|^specs/changes/\(.*\)\.md$|\1|p' | sort -u)
     [ -z "$unlogged" ] || findings+=("Closed without a specs/log.md line: $unlogged; the change that deletes its record adds '- <date> <id>: <what changed>' to specs/log.md")
+    # A reviewed record still on the default branch: its change merged without closing.
+    base="$(spec_default_branch "$root")"
+    if [ -n "$base" ] && spec_objects_local "$root"; then
+        named=" $(spec_open_changes "$root" | awk -F "$SEP" '$7 != "" { printf "%s ", $7 }')"
+        unclosed="$(spec_unclosed_changes "$root" "$base" | awk -v named="$named" 'index(named, " " $0 " ") == 0 {
+            if (++n <= 8) out = out (n > 1 ? ", " : "") $0 } END { if (n > 8) out = out " and " n - 8 " more"; print out }')"
+        [ -z "$unclosed" ] || advisories+=("Merged without closing: $unclosed passed review and are still on $base, with no child or outcome checkpoint keeping them open; close each in the next relevant PR, or give one that spans PRs an outcome checkpoint (.prdkit/workflows/change.md, Closing)")
+    fi
 fi
 
 # --- Raw evidence under specs/ (it belongs in CI, the PR or .prdkit/cache/evidence/) -------------

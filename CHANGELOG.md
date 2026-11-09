@@ -17,6 +17,18 @@ change by change.
 - An optional **Paid preview** lifecycle stage between Public preview and GA: anyone can join,
   for a fee, and it may still change. `**Now**:`, `from: paid preview` markers and `product.md`
   stage columns accept it, and doctor, status and bounds order it before GA.
+- `close-change.sh <id> "<log text>"` closes a reviewed change in its own PR with one commit: it
+  refuses unless `check-review.sh` passes at HEAD, then adds the `specs/log.md` line and deletes
+  the record. Push it with the final verdict commit so required checks run once.
+- `status.sh` and `doctor.sh` flag a reviewed record still on the default branch that no child or
+  outcome checkpoint keeps open: a change merged without closing. `check-review.sh` notes such a
+  record at the head it passes (`record_open` in `--json`). Advisories only.
+
+### Changed
+
+- A change record holds work in progress, not truth. A programme parent keeps one row per child
+  (id, outcome, status, PR, carry-forward of at most three lines); child plans and execution stay in the
+  child record and its PR, and a closing child no longer copies them into the parent.
 
 ### Changed
 

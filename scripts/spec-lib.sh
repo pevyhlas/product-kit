@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # spec-lib.sh — read-only parsers for the 1.0 spec layout, shared by status.sh, doctor.sh,
-# bounds.sh, check-review.sh, new-change.sh and init.sh. Every function prints rows separated
-# by the unit separator (\037, SPEC_SEP) — a tab would let `read` collapse empty fields — and
-# never writes. Bash 3.2 and POSIX awk only.
+# bounds.sh, check-review.sh, close-change.sh, new-change.sh and init.sh. Every function prints
+# rows separated by the unit separator (\037, SPEC_SEP) — a tab would let `read` collapse empty
+# fields — and never writes. Bash 3.2 and POSIX awk only.
 # shellcheck disable=SC2034 # used by the scripts that source this library
 SPEC_SEP="$(printf '\037')"
 
@@ -761,5 +761,63 @@ spec_open_changes() { # root
             row[$1] = r; mine[$1] = own
         }
         END { for (i = 1; i <= n; i++) print row[order[i]] }'
+    return 0
+}
+
+# The default integration branch: origin/HEAD, else a local main or master; blank without one.
+spec_default_branch() { # root
+    local base candidate
+    base="$(git -C "$1" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+    for candidate in main master; do
+        [ -n "$base" ] && break
+        git -C "$1" show-ref --verify --quiet "refs/heads/$candidate" && base="$candidate"
+    done
+    printf '%s\n' "$base"
+}
+
+# Reading an object a partial clone lacks would fetch it from the promisor remote. Git 2.45+
+# refuses under GIT_NO_LAZY_FETCH; with an older Git, callers skip object reads in a partial clone.
+spec_objects_local() { # root
+    { [ -z "$(git -C "$1" config --get extensions.partialclone 2>/dev/null)" ] &&
+        ! git -C "$1" config --get-regexp '^remote\..*\.promisor$' 2>/dev/null | grep -qi ' true$'; } ||
+        [ "$(git version 2>/dev/null | awk '{ split($3, v, "."); print v[1] * 1000 + v[2] }')" -ge 2045 ]
+}
+
+# Records committed at <rev> that a PR-scoped change left behind: every reviewer's latest State
+# verdict is PASS, yet no record at <rev> names it as Parent and it keeps no outcome checkpoint
+# (programme parents legitimately stay open). Committed objects only; prints change ids.
+spec_unclosed_changes() { # root rev
+    local root="$1" rev="$2" path
+    git -C "$root" rev-parse --verify --quiet "$rev^{commit}" >/dev/null 2>&1 || return 0
+    GIT_NO_LAZY_FETCH=1 git -C "$root" ls-tree --name-only "$rev" -- specs/changes/ 2>/dev/null | while IFS= read -r path; do
+        case "$path" in specs/changes/*.md) ;; *) continue ;; esac
+        GIT_NO_LAZY_FETCH=1 git -C "$root" show "$rev:$path" 2>/dev/null |
+            awk -v id="$(spec_field "$(basename "$path" .md)")" "$SPEC_SKIP_AWK"'
+            function trim(s) { gsub(/`/, "", s); gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+            { gsub(/\037/, " "); if (spec_skip($0)) next }
+            /\*\*Parent\*\*:/ && !seen_parent {
+                seen_parent = 1; v = $0; sub(/^.*\*\*Parent\*\*:[[:space:]]*\[?/, "", v)
+                if (match(v, /^[0-9][0-9][0-9]+-[a-z0-9]+(-[a-z0-9]+)*/)) parent = substr(v, 1, RLENGTH)
+            }
+            /^## / { sec = $0; next }
+            sec != "## State" { next }
+            /^### Outcome checkpoint[[:space:]]*$/ { checkpoint = 1 }
+            /^\*\*(Outcome|Milestone|Critical path|Allocation|Progress|Selection|No-progress changes|Progress limit)\*\*:/ {
+                key = $0; sub(/^\*\*/, "", key); sub(/\*\*:.*/, "", key); keys[key] = 1
+            }
+            /^\*\*Review\*\*:/ {
+                split($0, f, " · "); who = tolower(trim(f[3])); verdict = toupper(trim(f[4]))
+                if (verdict == "PASS" || verdict == "FAIL") latest[who] = verdict
+            }
+            END {
+                # The checkpoint shapes spec_change_progress reads, the legacy 1.3.1 one included.
+                if (keys["No-progress changes"] || keys["Progress limit"] || (keys["Outcome"] && keys["Milestone"] &&
+                    (keys["Critical path"] || keys["Allocation"] || keys["Progress"] || keys["Selection"]))) checkpoint = 1
+                passed = 0
+                for (who in latest) { passed = 1; if (latest[who] != "PASS") { passed = 0; break } }
+                print id "\037" parent "\037" (passed && !checkpoint)
+            }'
+    done | awk -F '\037' '{ id[++n] = $1; flagged[n] = $3; if ($2 != "") named[$2] = 1 }
+        END { for (i = 1; i <= n; i++) if (flagged[i] && !(id[i] in named)) print id[i] }'
     return 0
 }
