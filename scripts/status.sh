@@ -46,6 +46,14 @@ later="$(if [ -n "$stage_now" ]; then
 fi)"
 changes="$(spec_open_changes "$root")"
 leftover="$(spec_leftover_features "$root")"
+# Compaction is due every ten closed changes (compact.md): those logged after the newest
+# `- <date> compaction:` line in specs/log.md, or all logged when none is: "<count> [<date>]".
+compaction=""
+[ ! -f "$root/specs/log.md" ] || compaction="$(LC_ALL=C awk '
+    /^- [0-9-]+ compaction:/ { if ($2 > last) last = $2; next }
+    /^- [0-9-]+ [0-9][0-9][0-9][0-9]*-[a-z0-9-]*:/ { date[++n] = $2 }
+    END { for (i = 1; i <= n; i++) if (date[i] > last) c++; print c + 0, last }' "$root/specs/log.md")"
+read -r closed_since last_pass <<< "${compaction:-0}"
 inbox="$(spec_inbox "$root")"
 records="$(spec_records "$root")"
 
@@ -181,8 +189,9 @@ fi
 
 # --- Output -----------------------------------------------------------------------------------
 if $json; then
-    printf '{"date":%s,"layout":%s,"mixed_spec_forms":%s,"stage":{"now":%s,"next":%s,"later":%s},"items":[' "$(js "$today")" "$(js "$layout")" \
-        "$([ -n "$mixed" ] && echo true || echo false)" "$(js "$stage_now")" "$(js "$stage_next")" "$(js "$later")"
+    printf '{"date":%s,"layout":%s,"mixed_spec_forms":%s,"compaction":{"closed_since_last":%s,"last":%s,"due":%s},"stage":{"now":%s,"next":%s,"later":%s},"items":[' "$(js "$today")" "$(js "$layout")" \
+        "$([ -n "$mixed" ] && echo true || echo false)" "$(ju "$closed_since")" "$(if [ -n "$last_pass" ]; then js "$last_pass"; else echo null; fi)" \
+        "$([ "$closed_since" -ge 10 ] && echo true || echo false)" "$(js "$stage_now")" "$(js "$stage_next")" "$(js "$later")"
     sep=""
     while IFS="$SEP" read -r id title mat planned retired unenf where; do
         [ -n "$id" ] || continue
@@ -260,6 +269,10 @@ case "$layout" in
     none) printf '\nNo spec yet — start specs/product.md or specs/SPEC.md (.prdkit/workflows/init.md).\n' ;;
 esac
 [ -z "$mixed" ] || printf '\nTwo spec forms: specs/SPEC.md beside %s — keep one; the views below combine both.\n' "$mixed"
+if [ "$closed_since" -ge 10 ]; then
+    printf '\nCompaction due: %s changes closed %s (.prdkit/workflows/compact.md, Compaction).\n' "$closed_since" \
+        "$(if [ -n "$last_pass" ]; then echo "since the last pass ($last_pass)"; else echo 'and no pass recorded in specs/log.md'; fi)"
+fi
 
 printf '\nOutcome progress (recorded claims; evidence and allocation need review)\n'
 [ -n "$progress" ] || printf '  No open outcome checkpoints.\n'

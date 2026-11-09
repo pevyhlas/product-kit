@@ -127,6 +127,16 @@ run bash "$SCRIPT2" --json --no-worktree --short-name "after-log" "desc"
 assert_contains "$OUTPUT" '"CHANGE_ID":"013-after-log"' "log entry 012 forces 013"
 git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; rm -rf "$PROJ2/specs/changes"
 
+it "a log condensed into specs/archive.md keeps its numbers reserved"
+# shellcheck disable=SC2016 # backticks are Markdown code spans, not command substitution
+printf '# Demo — archive\n\n**Last 0.x feature**: none\n\n**Log condensed through**: 040; those entries: `git show abc1234:specs/log.md`.\n' > "$PROJ2/specs/archive.md"
+run bash "$SCRIPT2" --json --no-worktree --short-name "after-condensed" "desc"
+assert_contains "$OUTPUT" '"CHANGE_ID":"041-after-condensed"' "condensed through 040 forces 041"
+git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; git -C "$PROJ2" branch -qD 041-after-condensed; rm -rf "$PROJ2/specs/changes"
+run bash "$SCRIPT2" --json --no-worktree --number 35 --short-name "explicit-old" "desc"
+assert_contains "$OUTPUT" 'also held by specs/archive.md, closed changes through 040-' "an explicit number names the condensed log"
+git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; git -C "$PROJ2" branch -qD 035-explicit-old; rm -rf "$PROJ2/specs/changes" "$PROJ2/specs/archive.md"
+
 it "changes the spec's planned: markers name stay reserved; comments and code blocks do not count"
 mkdir -p "$PROJ2/specs/product" "$PROJ2/specs/parts"
 cat > "$PROJ2/specs/product/requirements.md" <<'EOF'

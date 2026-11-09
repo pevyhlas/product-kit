@@ -211,6 +211,23 @@ git checkout -q -- specs/changes/004-export.md
 it "status is read-only"
 assert_eq "$before" "$(git status --porcelain; git show-ref; cat specs/*.md specs/changes/*.md)" "no file, index or ref changes"
 
+it "compaction is due after ten closed changes since the last pass, and only then"
+{ i=1; while [ "$i" -le 9 ]; do printf -- '- 2026-10-%02d %03d-c: done — R-01 — #%d\n' "$i" "$((i + 100))" "$i"; i=$((i + 1)); done; } > specs/log.md
+run bash "$STATUS_SH"
+assert_not_contains "$OUTPUT" "Compaction due" "nine closed changes are not yet due"
+printf -- '- 2026-10-10 110-c: done — R-01 — #10\n' >> specs/log.md
+run bash "$STATUS_SH"
+assert_contains "$OUTPUT" "Compaction due: 10 changes closed and no pass recorded in specs/log.md" "ten with no pass on record"
+printf -- '- 2026-10-03 compaction: tightened P1\n' >> specs/log.md
+run bash "$STATUS_SH"
+assert_not_contains "$OUTPUT" "Compaction due" "a pass resets the count; line order does not matter"
+{ i=11; while [ "$i" -le 14 ]; do printf -- '- 2026-10-%02d %03d-c: done — R-01 — #%d\n' "$i" "$((i + 100))" "$i"; i=$((i + 1)); done; } >> specs/log.md
+run bash "$STATUS_SH"
+assert_contains "$OUTPUT" "Compaction due: 11 changes closed since the last pass (2026-10-03)" "changes logged after the pass count"
+run bash "$STATUS_SH" --json
+assert_contains "$OUTPUT" '"compaction":{"closed_since_last":11,"last":"2026-10-03","due":true}' "JSON carries it"
+rm specs/log.md
+
 it "live 0.x canon beside the 1.0 spec is two canons; values with quotes stay valid JSON"
 mkdir -p specs/targets/t1; : > specs/targets/t1/target.md
 printf '2026-10-07 owner "say \\"hi\\" \\\\ now" → open\n' >> specs/inbox.md

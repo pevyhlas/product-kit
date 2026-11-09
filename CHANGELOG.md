@@ -23,6 +23,13 @@ change by change.
 - `status.sh` and `doctor.sh` flag a reviewed record still on the default branch that no child or
   outcome checkpoint keeps open: a change merged without closing. `check-review.sh` notes such a
   record at the head it passes (`record_open` in `--json`). Advisories only.
+- Doctor advisories: `specs/log.md`, `specs/inbox.md` and `specs/records.md` have 150-line
+  budgets, each with its way out; a log entry over 300 characters; a `## D-NN` decision section
+  over 60 reading lines, whose design belongs to its part or topic.
+- A log past its budget condenses older entries into `specs/archive.md` at compaction; the
+  archive's **Log condensed through** line keeps their numbers reserved and closed.
+- Status says when compaction is due: ten or more changes closed since the last
+  `- <date> compaction:` line in `specs/log.md`.
 
 ### Changed
 
@@ -39,6 +46,9 @@ change by change.
   IDs and terms: a copy the diff adds is medium, a contradiction it creates high, and older
   untouched duplication low.
 - Existing specs are not rewritten; a change that edits a fact turns that fact's other copies into citations.
+- Spec budgets count reading length: a line counts once per 100 characters, so long table rows
+  and paragraph lines no longer dodge a budget. Budget numbers are unchanged; files with long
+  lines may newly show a budget advisory.
 
 ## [1.3.3] — 2026-10-31 — inbox review and workflow safeguards
 

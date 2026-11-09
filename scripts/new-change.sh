@@ -110,9 +110,9 @@ list_checkouts() {
 
 # Numbered identities already claimed: open change records, closed changes in the log, 0.x
 # feature folders (on disk before the cutover; in git after it: at the base commit
-# specs/archive.md records, and removed in recent history), the last 0.x feature
-# specs/archive.md names, changes the spec's `planned:` markers name, and local and remote
-# branches. The highest of them all wins.
+# specs/archive.md records, and removed in recent history), the last 0.x feature and the number
+# the log is condensed through that specs/archive.md names, changes the spec's `planned:` markers
+# name, and local and remote branches. The highest of them all wins.
 list_claimed() {
     list_spec_claims
     if [ "$HAS_GIT" = true ]; then
@@ -135,6 +135,8 @@ list_spec_claims() {
         if [ -f "$checkout/specs/archive.md" ]; then
             last="$(spec_archive_last "$checkout")"
             case "$last" in ''|0) ;; *) printf 'specs/archive.md, 0.x features through %03d-\n' "$last" ;; esac
+            last="$(spec_archive_last "$checkout" log)"
+            case "$last" in ''|0) ;; *) printf 'specs/archive.md, closed changes through %03d-\n' "$last" ;; esac
             if [ "$HAS_GIT" = true ]; then
                 while IFS= read -r token; do
                     base="$(git -C "$checkout" rev-parse --verify --quiet "$token^{commit}" 2>/dev/null)" || continue
@@ -257,7 +259,7 @@ if [ -z "$CHANGE_NUMBER" ]; then
     # Never reuse a 0.x feature number silently. With no feature folder anywhere to read, stop on
     # a specs/archive.md that yields no number, and warn in a shallow clone without one: its
     # history is cut short.
-    if ! list_spec_claims | grep -q -e '^feature folder ' -e '^specs/archive.md, '; then
+    if ! list_spec_claims | grep -q -e '^feature folder ' -e '^specs/archive.md, 0.x '; then
         UNREADABLE="$(archive_unreadable | sed -n 1p)"
         if [ -n "$UNREADABLE" ]; then
             echo "[prdkit] Error: $UNREADABLE names no **Base** commit in this repository and no readable **Last 0.x feature** line (a number, or none), and git history shows no removed 0.x feature folder, so an old feature number could be reused. Fix it (.prdkit/templates/archive-template.md) or pass --number." >&2
@@ -291,7 +293,7 @@ else
         held="${held_line##* }"
         case "$held_line" in
             "planned in the spec $NUM-$SLUG"|"planned in the spec $NUM-") continue ;;
-            "specs/archive.md, 0.x features through "*) [ "$((10#$NUM))" -le "$((10#${held%-}))" ] || continue ;;
+            "specs/archive.md, "*" through "*) [ "$((10#$NUM))" -le "$((10#${held%-}))" ] || continue ;;
             *) [ "$((10#${held%%-*}))" -eq "$((10#$NUM))" ] || continue ;;
         esac
         case "; $HOLDERS; " in *"; $held_line; "*) continue ;; esac

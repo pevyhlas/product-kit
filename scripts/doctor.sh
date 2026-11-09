@@ -75,13 +75,20 @@ mixed="$(spec_mixed_forms "$root")"
 [ -z "$mixed" ] || advisories+=("Two spec forms: specs/SPEC.md beside $mixed; keep one form — split SPEC.md fully in one change and delete it, or fold the split files back (.prdkit/workflows/spec.md)")
 
 # --- Reading budgets (never targets; never drop an item to fit) -------------------------------
-budget() { # limit path...
-    local limit="$1" path lines; shift
+# A line counts once per 100 characters (spec_reading_lines), so a long row cannot dodge one.
+budget_fix() { # limit remedy path...
+    local limit="$1" fix="$2" path reading lines size; shift 2
     for path in "$@"; do
         [ -f "$path" ] || continue
-        lines="$(wc -l < "$path" | tr -d ' ')"
-        [ "$lines" -le "$limit" ] || advisories+=("Budget: ${path#"$root"/} has $lines lines, over its $limit-line reading budget; tighten the wording, move detail to code or tests, or split it (spec.md, Layout); never drop an item to fit")
+        read -r reading lines <<< "$(spec_reading_lines "$path")"
+        [ "$reading" -gt "$limit" ] || continue
+        size="$lines lines that read"; [ "$lines" != 1 ] || size="1 line that reads"
+        if [ "$reading" = "$lines" ]; then size="${size% that read*}"; else size="$size as $reading at 100 characters a line"; fi
+        advisories+=("Budget: ${path#"$root"/} has $size, over its $limit-line reading budget; $fix")
     done
+}
+budget() { # limit path...
+    budget_fix "$1" "tighten the wording, move detail to code or tests, or split it (spec.md, Layout); never drop an item to fit" "${@:2}"
 }
 # In the 1.1 layout (beside specs/product/) product.md and architecture.md are one-page summaries;
 # the 1.0 single-file forms keep 150 and 300.
@@ -100,6 +107,28 @@ budget 300 "$root"/specs/product/requirements.md "$root"/specs/product/qualities
     "$root"/specs/architecture/*.md "$root"/specs/architecture/*/*.md "$root"/specs/decisions/*.md \
     "$root"/specs/SPEC.md
 budget 200 "$root"/specs/parts/*.md "$root"/specs/parts/*/*.md
+budget_fix 150 "condense its older entries into specs/archive.md at the next compaction (compact.md)" "$root"/specs/log.md
+budget_fix 150 "incorporate answered items (spec.md, Resolve owner answers), review the rest with the owner (/prdkit-inbox), and keep each item's context in the files it links" "$root"/specs/inbox.md
+budget_fix 150 "remove lifted or expired holds and waivers, and DEPLOY and ATTEST lines a newer one supersedes; git keeps them" "$root"/specs/records.md
+# A log entry is one line of five short fields (change.md, Closing); its detail is on the PR.
+if [ -f "$root/specs/log.md" ]; then
+    long="$(spec_chars "$root/specs/log.md" | LC_ALL=C awk '/^- / { n++; if (length($0) > 300 && ++o <= 3) at = at (o > 1 ? ", " : "") NR }
+        END { if (o) print o " of " n " entries (line" (o > 1 ? "s " : " ") at (o > 3 ? " and " o - 3 " more" : "") ")" }')"
+    [ -z "$long" ] || advisories+=("Log: $long in specs/log.md run over 300 characters; an entry names what changed, its IDs, the disposition and the PR, which holds the detail")
+fi
+# A decision states the choice, its alternatives and when to revisit; a long ## D-NN section is
+# design, which belongs to the part or topic it shapes.
+long=""
+while IFS= read -r file; do
+    long="$long$(spec_chars "$root/$file" | LC_ALL=C awk -v file="$file" "$SPEC_SKIP_AWK$SPEC_READ_AWK"'
+        function close_section() { if (id != "" && n > 60) printf "%s at %s:%d (%d), ", id, file, at, n; id = "" }
+        { if (spec_skip($0)) { if (id != "") n += spec_read(length($0)); next } }
+        /^#/ { level = index($0, " ") - 1; if (id != "" && level > 0 && level <= idlevel) close_section() }
+        /^###? D-[0-9][0-9]/ { close_section(); id = $2; idlevel = index($0, " ") - 1; at = NR; n = 0 }
+        id != "" { n += spec_read(length($0)) }
+        END { close_section() }')"
+done < <(spec_files "$root")
+[ -z "$long" ] || advisories+=("Decisions over 60 reading lines: ${long%, }; keep the choice, its alternatives and when to revisit, and move the design to the part or topic it shapes, with a link")
 
 # --- IDs ---------------------------------------------------------------------------------------
 items="$(spec_items "$root")"
@@ -388,9 +417,11 @@ fi
 
 # --- Closed changes reach the log: a deleted change record needs its specs/log.md line ------------
 if git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    unlogged=""
+    unlogged=""; through="$(spec_archive_last "$root" log)"
     while IFS= read -r id; do
         [ -n "$id" ] && [ ! -f "$root/specs/changes/$id.md" ] || continue
+        # Entries condensed into specs/archive.md (compact.md) left the log on purpose.
+        case "${id%%-*}" in ''|*[!0-9]*) ;; *) [ "$((10#${id%%-*}))" -gt "${through:-0}" ] || continue ;; esac
         grep -q "^- [0-9-]* $id:" "$root/specs/log.md" 2>/dev/null || unlogged="${unlogged:+$unlogged, }$id"
     done < <(git -C "$root" log -M --diff-filter=D --name-only --format= -- 'specs/changes/*.md' 2>/dev/null |
         sed -n 's|^specs/changes/\(.*\)\.md$|\1|p' | sort -u)

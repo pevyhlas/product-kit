@@ -6,7 +6,8 @@
 
 Run `.prdkit/scripts/bash/doctor.sh` (`--json`, `--strict`): 0.x layout or two canons, a
 `specs/archive/` folder on main, a `specs/archive.md` whose base commit or last 0.x feature
-cannot be read, agent context naming removed 0.x paths, files over their reading budgets, cited
+cannot be read, agent context naming removed 0.x paths, files, log entries and decision sections
+over their reading budgets, cited
 IDs that are undefined or retired, malformed records, a closed change without its `specs/log.md`
 line, a reviewed record merged without closing,
 expired holds and waivers, open inbox items by age, pending answers, retained resolved and

@@ -87,4 +87,9 @@ Rewrite within the budgets, by tightening and splitting, never by dropping items
 and revisit conditions, why-it-works assumptions, and retired IDs (one line each). Drop to git: history,
 amendment notes, superseded wording and resolved questions. Keep a rejected alternative that is
 still a plausible proposal; it prevents re-proposals. `specs/archive.md` grows into git
-instead: condense its older entries harder; their details stay at the base.
+instead: condense its older entries harder; their details stay at the base. `specs/log.md` past
+its budget keeps its newest entries: condense the older ones, up to a change number below every
+open change, into archive entries for notable outcomes and lessons, set the archive's **Log
+condensed through** line to that number and the log at the commit before, and delete them. End
+each pass with `- <date> compaction: <what changed>` in `specs/log.md`; status counts the
+changes closed since.
