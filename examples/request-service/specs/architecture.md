@@ -37,23 +37,23 @@ sequenceDiagram
 
 ## Key decisions
 
-None yet; storage and hosting are left open.
+- **One request service, not a help desk** (D-01): P1 owns requests and their status.
+
+All of them: [decisions](architecture/decisions.md).
 
 ## Key areas
 
 | Area | In a line |
 |------|-----------|
 | Security and privacy | Sign-in is the organization's (C-01); only the requester and operators see a resolution (R-02). |
-| Interfaces | Organization identity, for sign-in: when it fails nobody can sign in, and nothing is lost. |
-| Data | Requests and resolutions, owned by P1; retention is left open. |
+| Interfaces | Organization identity, for sign-in through P2; an outage is a J-01 variation. |
+| Data | Requests and resolutions, owned by P1. |
 | Environments | TEST: early access, where a change is tried first; PROD: the whole organization. |
 
 ## Risks
 
-- **Requesters see status without asking (R-01, Q-01)**: P1 alone owns request state and P2
-  reads it on view and on change. Assumes the identity provider returns a stable user id.
-  Rejected: an off-the-shelf help desk, because requests carry organization-specific fields.
-  Revisit when more than one team handles requests.
+- An unstable user id from the identity provider would hide requests from their requester:
+  [why it works](architecture/why-it-works.md).
 
 ## Left open
 

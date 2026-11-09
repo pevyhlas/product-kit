@@ -68,6 +68,11 @@ assert_contains "$spec" 'never drop an item that' "budgets never drop items"
 assert_contains "$spec" 'no amendment journals' "no journals"
 assert_not_contains "$spec" 'proposed' "no constraint proposed mechanics"
 
+it "one home per fact: binding decisions leave the change; reviewers look for second homes"
+assert_contains "$spec" '**One home per fact.**' "one home per fact"
+assert_contains "$spec" 'binds later work in its L1/L2 home now' "binding decisions go to L1/L2"
+assert_contains "$(flat "$T/review-prompt-template.md")" '**One home**' "reviewer checks one home"
+
 it "changes: spec edits with code, test edits touch IDs, Spec impact lines, no no-op notes"
 assert_contains "$change" 'Spec edits land in the PR whose code and tests realize them' "spec with code"
 assert_contains "$change" 'also edits that ID' "tests and IDs move together"

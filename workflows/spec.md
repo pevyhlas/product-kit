@@ -9,7 +9,7 @@ everything in one change and deletes `SPEC.md`).
 
 | File | Level | Holds | Budget | Past its budget |
 |------|-------|-------|--------|-----------------|
-| `specs/product.md` | L0 summary | the executive page, read at a glance: one sentence, the stage, the problem and its pains, a diagram, who it is for, the core loop and supporting journeys, the most important items, the bet, what waits on the owner | 80 | detail moves down to `specs/product/` (all pains and personas to `users.md`); a line and a link stay |
+| `specs/product.md` | L0 summary | the executive page, read at a glance: one sentence, the stage, the problem and its pains, a diagram, who it is for, the core loop and supporting journeys, the most important items, the bet, a link to the inbox | 80 | detail moves down to `specs/product/` (all pains and personas to `users.md`); a line and a link stay |
 | `specs/product/users.md` | L0 | every pain and persona, once `product.md` shows only the main ones | 150 | `users/<area>.md`, 150 each |
 | `specs/product/journeys/j-NN-<slug>.md` | L0 | one journey: who, intent, situation, scenario, variations, success | 150 each | it is two journeys: one intent each, the first keeps its ID, each links the other |
 | `specs/product/requirements.md` | L0 | R- items by area | 300 | `requirements/<area>.md`, 300 each |
@@ -19,7 +19,7 @@ everything in one change and deletes `SPEC.md`).
 | `specs/product/lifecycle.md` | L0 | the current and next stage; per stage its goal, audience, environment, promise and exit criteria (`lifecycle-template.md`) | 150 | `lifecycle/<stage>.md`, 150 each; Now and Next stay |
 | `specs/architecture.md` | L1 summary | the overview, read at a glance: one sentence, the system diagram, parts and why each exists, the core loop's path, key decisions, key areas (security and privacy, observability and live site, data, interfaces, environments, operations) in a line each, risks, left open | 100 | detail moves to a topic or a part; a line and a link stay |
 | `specs/architecture/<topic>.md` | L1 | one topic in detail: `security`, `observability`, `data`, `interfaces` (with external systems), `why-it-works`, `environments` (where the product runs), `operations` (`architecture-topics-template.md`) | 300 each | `architecture/<topic>/<area>.md`, 300 each |
-| `specs/architecture/decisions.md` | L1 | D- decisions, technology choices included, a `## D-NN <title>` section each with bold-label lines: decision, alternatives, revisit when (`decision-template.md`) | 300 | `architecture/decisions/<area>.md`, 300 each; one long decision gets `specs/decisions/D-NN.md` |
+| `specs/architecture/decisions.md` | L1 | D- decisions, a `## D-NN <title>` section each: source, decision, alternatives, revisit when (`decision-template.md`) | 300 | `architecture/decisions/<area>.md`, 300 each; one long decision gets `specs/decisions/D-NN.md` |
 | `specs/architecture/retired.md` | L1 | the `## Retired` list: parts that went and IDs that moved, a line each; linked from `architecture.md` | 300 | `architecture/retired/<area>.md`, each under `## Retired` |
 | `specs/parts/p<n>-<slug>.md` | L2 summary | one part: why it exists, components with their behaviors and invariants, interfaces, failure, budgets | 200 each | a component moves to `parts/p<n>-<slug>/<component>.md` |
 | `specs/parts/p<n>-<slug>/<component>.md` | L2 | one component, once its part outgrows its budget | 200 each | it is two components |
@@ -69,8 +69,7 @@ journey solves a pain (or supports one that does), and each part exists for jour
   research, observed or measured) and the journeys that solve it.
 - **Core loop**: the few journeys the bet depends on. The rest support them.
 - Write from the persona's side: their intent, where they are, what they do, what they see.
-- **Situation** is their context, never delivery status: what is built or planned lives in R
-  and Q markers and in changes.
+- **Situation** is their context, never delivery status.
 - **Variations** cover what changes the experience: no or intermittent connection, an error,
   a missing permission, a limit reached, first use, a mistake to undo, and the project's own.
 - **Success** is observable, for the user and for the business.
@@ -116,12 +115,10 @@ A product moves through stages, and each needs less than the next. Skip the ones
 
 - A part runs, ships or stores on its own: an app, a service, a worker, a store. Name it by what
   it is (phone app, backend, web client), not by a concern.
-- Each part says why it exists: the journeys, R and Q that need it. A part no journey needs is a
-  question for the owner.
+- A part no journey needs is a question for the owner.
 - Components (API, storage, identity, sync) are sections of the part file. Each component's
   behaviors and invariants sit under it and keep the part's numbering (`P2.B-07`).
-- External systems are not parts: the interfaces topic lists each with what it is used for and
-  what users see when it fails.
+- External systems are not parts; the interfaces topic lists them.
 - Build and delivery tooling (CI, migrations, setup jobs, developer utilities) is not a part:
   the operations topic, one line each.
 
@@ -143,8 +140,8 @@ define: IDs, promises and failure meanings stay in text, where agents and checks
 
 ## Writing
 
-- **Crisp**: the shortest wording that keeps the meaning. One fact once; no filler, no
-  restating, no jargon. A reader should never wonder what a sentence adds.
+- **Crisp**: the shortest wording that keeps the meaning. One fact once, in its home
+  (Organizing); no filler, no jargon. A reader should never wonder what a sentence adds.
 - **Roles, never people**: the owner, an operator, a worker. Where tooling needs an account,
   name its handle (`@account`), not the person.
 - **Paths are repo-relative**. Another repository is `org/repo` plus a path inside it. Never a
@@ -176,7 +173,6 @@ A line that only describes how the code currently does something is deleted: the
   on hypothesis items. Validated needs evidence: for a J, R or Q, an owner-stated need or
   observed use; for a part, it runs and its checks pass in a real environment. Only the owner
   promotes.
-- **From**: `from: <stage>` marks an item needed only from a later stage (The lifecycle, above).
 - **Planned**: `planned: <change>` marks owner-decided intent not built yet, written with the
   maturity: `**R-04 Title** (validated, planned: 012-export)`, or in a part's Maturity cell
   `hypothesis, planned: 012-export`. Undecided intent stays in the change record. Remove the
@@ -190,15 +186,8 @@ A line that only describes how the code currently does something is deleted: the
   Action policy says who may act and links the C- for a limit such as a spending ceiling.
 - **Bounds**: constraints, non-goals and qualities bind every change. `bounds.sh <change>` lists
   those in its scope; the change marks each it could break (change.md, The record).
-- **Why it works**: for each key journey, R or Q, the why-it-works topic gives the claim, the
-  mechanism, its assumptions (linked to observed facts), the alternatives considered (at least
-  one managed or off-the-shelf) with why each was rejected, and when to revisit.
-- **Interfaces**: L2 states guarantees (owner, compatibility promise, failure meaning); the schema
-  stays in code and is linked.
-- **Left open**: each level ends with deliberately unresolved details or deferred opportunities.
-  Agents choose technical details within existing bounds; owner deferrals keep their limits and
-  revisit triggers. Anything that needs the owner goes to the inbox instead. The executive page
-  (`product.md`) has no Left open; its Left open items live in the detail files.
+- **Left open**: each level ends with the details agents choose within existing bounds;
+  `product.md` has none.
 
 ## Resolve owner answers
 
@@ -226,8 +215,8 @@ implementation or merge need not be complete before the answered item leaves the
 3. Transfer remaining work to a change's Tasks/State and link it with `planned: <change>` for
    unbuilt intent. Preserve acceptance, attempt/fix-round limits and explicit holds; an answered
    question does not grant implementation, promotion or delivery authority. An owner decline or
-   deferral lives at the relevant non-goal, decision or Left open item, with its reason and revisit
-   trigger; a proposal to decline is still open until decided under the applicable authority.
+   deferral goes to its home (Organizing) with its reason and revisit trigger; a proposal to
+   decline is still open until decided under the applicable authority.
 4. Re-read the destination and diff: verify they contain the full decision and provenance and the
    remaining obligations have a durable home, then remove the answered item and stale links to it
    in the same edit.
@@ -238,20 +227,17 @@ implementation or merge need not be complete before the answered item leaves the
    whether the inbox item was removed, narrowed or awaits processing. Never claim incorporated
    without that verification.
 
-Keep the operative owner words, meaning, qualifications, date/source and question ID with the
-canonical decision, not the full question/options transcript. Git history retains removed inbox
-content after it is committed; it does not preserve uncommitted conversations. Preserve the
-necessary answer provenance in the same durable edit even when the question was never committed.
-Do not create `specs/inbox-archive.md` or a parallel answers database by default. If the owner
-requires a separate audit record, agree its purpose and retention explicitly; it must not become
-a competing source of current intent.
+Git keeps committed inbox content, not uncommitted conversations: preserve the answer's
+provenance in the same durable edit. Create no `specs/inbox-archive.md` or parallel answers
+database unless the owner asks for an audit record with an agreed purpose and retention; it never
+becomes a competing source of current intent.
 
 ## One-way doors
 
 Data ownership, a breaking interface change, a technology choice, a trust boundary, a product
 constraint, anything that deletes user data. These take tier T3: a design review plus the owner's
-verdict ([protocol.md](protocol.md)). Everything else is a two-way door: decide, record it in the
-change.
+verdict ([protocol.md](protocol.md)). Everything else is a two-way door: decide, then record a
+decision that binds later work in its L1/L2 home now, one that only explains this diff in the PR.
 
 ## Budgets
 
@@ -265,3 +251,18 @@ or split (Layout). `observed.md` 150 lines, split into `observed/<area>.md`; an 
 Organize architecture by part. A concern that crosses parts (security, observability, data) is a
 topic of `architecture/`; one that belongs to a part stays in the part file. Edit in place: no amendment journals,
 history sections or "reviewed, no change" notes.
+
+**One home per fact.** Elsewhere a fact is cited by ID or link, never restated; a summary (What
+must be true, Key decisions, Key areas, Risks) is a line and an ID or link per item.
+
+| Fact | Home |
+|------|------|
+| The journeys, R and Q a part serves | its row in the architecture parts table, read by `bounds.sh` |
+| An interface's promise: compatibility, failure meaning | the owner part's Interfaces, linking the schema in code; the interfaces topic is an index |
+| A quality band | the Q-; a part's Budgets states only its share |
+| What users see when something fails | the journey's Variations; a part's Failure gives the mechanism |
+| Why the design works: claim, mechanism, assumptions | the why-it-works topic, citing its D- |
+| Alternatives (one managed or off-the-shelf) and why each lost, when to revisit | the D-, with its source; the design it shapes lives in its part or topic |
+| A technology choice | owner-imposed: a C-; otherwise a D- |
+| A deferral | owner decline: an N-; a later stage: `from:`; a detail agents choose: Left open; needs the owner: the inbox. Never a change record |
+| Live status: built, in flight, waiting on the owner | generated by `status.sh`; `product.md` links the inbox |
