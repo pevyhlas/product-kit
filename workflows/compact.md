@@ -84,7 +84,7 @@
 ## Compaction (on overflow, and every ten closed changes)
 
 Rewrite within the budgets, by tightening and splitting, never by dropping items. Keep current truth, decisions with their alternatives
-and revisit conditions, and retired IDs (one line each). Drop to git: history,
+and revisit conditions, why-it-works assumptions, and retired IDs (one line each). Drop to git: history,
 amendment notes, superseded wording and resolved questions. Keep a rejected alternative that is
 still a plausible proposal; it prevents re-proposals. `specs/archive.md` grows into git
 instead: condense its older entries harder; their details stay at the base.

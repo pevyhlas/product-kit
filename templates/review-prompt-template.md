@@ -1,8 +1,7 @@
 # Independent review: {CHANGE_ID}
 
-You did not implement this change. Read the change record, the spec sections it touches
-({SPEC_PATHS}) and the constitution's review policy; search `specs/` for the IDs and key terms it
-touches (hits, not whole files). Then read the package index and full change diff at
+You did not implement this change. Read the change record and the spec sections it touches,
+{SPEC_PATHS}, the constitution's review policy, then the package index and full change diff at
 {REVIEW_PACKAGE_PATH} for {BASE_SHA}..{HEAD_SHA}. Never judge from a summary. Capabilities:
 {ALLOWED_READ_PATHS}, shell {YES_OR_NO}, network {YES_OR_NO}, report {REPORT_PATH_OR_RETURN_TEXT}.
 Use only those capabilities; do not modify code, the index or HEAD. Missing/inaccessible required
@@ -21,11 +20,14 @@ Return:
   the packaged output and its bound revision/inputs. Check every listed item, not only those the
   record names. Missing/stale bounds output leaves that obligation unverified. A violated
   constraint or non-goal is high; a quality the change weakens without its check is medium.
-- **One home**: each fact the change touches ends with one home (`.prdkit/workflows/spec.md`,
-  Organizing). A spec file restating it is medium; one contradicting it is high.
+- **One home** (`.prdkit/workflows/spec.md`, Organizing): if `specs/` is readable at {HEAD_SHA},
+  search it, except `archive.md`, `log.md` and `changes/`, for the touched IDs and terms (never a
+  required input). A copy the diff adds or edits is medium; a contradiction it creates (an old copy
+  of a changed fact) is high; untouched older duplication is low, with a pointer.
 - Anything not verifiable from the package; never guess a pass.
 - Identify the eligible registered reviewer context `{REVIEWER_ID}`. Include the following receipt
-  with actual full hashes, verdict and counts when the project uses online report verification:
+  with actual full hashes, verdict and counts when the project uses online report verification;
+  the coordinator preserves it with the verbatim report on the PR:
 
 ```text
 <!-- prdkit-review
@@ -40,8 +42,8 @@ Replace all counts with the actual findings; the receipt is metadata, not eviden
   observations presented as PASS. Non-gating observations do not require a cleanup PR. Verify the
   same PR retains useful context, evidence and explicit remaining work before temporary files go.
 
-On re-review, use {SINCE_SHA_OR_INITIAL} and the finding-to-fix/affected-obligation map. Mark
-earlier findings addressed or not, inspect the behavior the fix affects and cross-boundary
-consequences, and keep unchanged approvals. Do not re-ingest every prior transcript. State which
-concern/range the verdict covers. For a design judgment between concepts you did not produce, report
+On re-review, use {SINCE_SHA_OR_INITIAL} and the finding-to-fix/affected-obligation map. Mark earlier
+findings addressed or not, inspect the behavior the fix affects and cross-boundary consequences,
+and keep unchanged approvals. The full diff remains available for context; do not re-ingest every
+prior transcript. State which concern/range the verdict covers. For a design judgment between concepts you did not produce, report
 compliance per concept, real tradeoffs and a recommendation; difference alone is not a defect.

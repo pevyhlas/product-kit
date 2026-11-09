@@ -17,9 +17,9 @@ everything in one change and deletes `SPEC.md`).
 | `specs/product/constraints.md` | L0 | C- items | 300 | `constraints/<area>.md`, 300 each |
 | `specs/product/non-goals.md` | L0 | N- items | 150 | `non-goals/<area>.md`, 150 each |
 | `specs/product/lifecycle.md` | L0 | the current and next stage; per stage its goal, audience, environment, promise and exit criteria (`lifecycle-template.md`) | 150 | `lifecycle/<stage>.md`, 150 each; Now and Next stay |
-| `specs/architecture.md` | L1 summary | the overview, read at a glance: one sentence, the system diagram, parts and why each exists, the core loop's path, key decisions, key areas (security and privacy, observability and live site, data, interfaces, environments, operations) in a line each, risks, left open | 100 | detail moves to a topic or a part; a line and a link stay |
-| `specs/architecture/<topic>.md` | L1 | one topic in detail: `security`, `observability`, `data`, `interfaces` (with external systems), `why-it-works`, `environments` (where the product runs), `operations` (`architecture-topics-template.md`) | 300 each | `architecture/<topic>/<area>.md`, 300 each |
-| `specs/architecture/decisions.md` | L1 | D- decisions, a `## D-NN <title>` section each: source, decision, alternatives, revisit when (`decision-template.md`) | 300 | `architecture/decisions/<area>.md`, 300 each; one long decision gets `specs/decisions/D-NN.md` |
+| `specs/architecture.md` | L1 summary | the overview, read at a glance: one sentence, the system diagram, parts and why each exists, the core loop's path, key decisions, key areas in a line each, risks, left open | 100 | detail moves to a topic or a part; a line and a link stay |
+| `specs/architecture/<topic>.md` | L1 | one topic in detail: `security`, `observability`, `data`, `interfaces`, `why-it-works`, `environments`, `operations` (`architecture-topics-template.md`) | 300 each | `architecture/<topic>/<area>.md`, 300 each |
+| `specs/architecture/decisions.md` | L1 | D- decisions, a `## D-NN <title>` section each (`decision-template.md`) | 300 | `architecture/decisions/<area>.md`, 300 each; one long decision gets `specs/decisions/D-NN.md` |
 | `specs/architecture/retired.md` | L1 | the `## Retired` list: parts that went and IDs that moved, a line each; linked from `architecture.md` | 300 | `architecture/retired/<area>.md`, each under `## Retired` |
 | `specs/parts/p<n>-<slug>.md` | L2 summary | one part: why it exists, components with their behaviors and invariants, interfaces, failure, budgets | 200 each | a component moves to `parts/p<n>-<slug>/<component>.md` |
 | `specs/parts/p<n>-<slug>/<component>.md` | L2 | one component, once its part outgrows its budget | 200 each | it is two components |
@@ -181,13 +181,14 @@ A line that only describes how the code currently does something is deleted: the
   `owner review`) or says `unenforced`.
 - **Qualities are bands** with a method (`p95 sync under 5 s on a slow network`), never a tuning
   number.
-- **Constraints**: rule, why, scope, source, revisit when, and how to ask for an exception. Scope
-  names the parts and journeys it binds, or `all`. A C- says what must hold; the constitution's
-  Action policy says who may act and links the C- for a limit such as a spending ceiling.
+- **Constraints**: Scope names the parts and journeys a C- binds, or `all`. A C- says what must
+  hold; the constitution's Action policy says who may act and links the C- for a limit such as a
+  spending ceiling.
 - **Bounds**: constraints, non-goals and qualities bind every change. `bounds.sh <change>` lists
   those in its scope; the change marks each it could break (change.md, The record).
-- **Left open**: each level ends with the details agents choose within existing bounds;
-  `product.md` has none.
+- **Left open**: each level ends with the details agents choose within existing bounds. An owner
+  deferral is not one: it keeps its limit and revisit trigger in its home, and no agent overrides
+  it. `product.md` has none.
 
 ## Resolve owner answers
 
@@ -204,8 +205,8 @@ implementation or merge need not be complete before the answered item leaves the
    the constitution's Action policy, holds/waivers in `specs/records.md`. Record the disposition,
    operative owner words verbatim, date and source (conversation reference, PR/comment URL or
    recorded git revision/path). Relayed words keep their original source. A bare option number
-   also needs the selected option's meaning. The canonical entry is the record; do not duplicate a transcript
-   or create a second decision journal. Retain the inbox ID as plain provenance text or an
+   also needs the selected option's meaning. The canonical entry is the record; do not duplicate a
+   transcript. Retain the inbox ID as plain provenance text or an
    immutable source link, not a live link back to an entry that will be removed. Update the actual
    governing requirement, design or policy, reconcile superseded contradictory text and affected
    references, and retain concise rationale where it explains the choice. An appended quote or
@@ -253,16 +254,17 @@ topic of `architecture/`; one that belongs to a part stays in the part file. Edi
 history sections or "reviewed, no change" notes.
 
 **One home per fact.** Elsewhere a fact is cited by ID or link, never restated; a summary (What
-must be true, Key decisions, Key areas, Risks) is a line and an ID or link per item.
+must be true, Key decisions, Key areas, Risks) is a line and an ID or link per item. A change that
+edits a fact removes its other copies.
 
 | Fact | Home |
 |------|------|
-| The journeys, R and Q a part serves | its row in the architecture parts table, read by `bounds.sh` |
+| The journeys, R and Q a part serves | its row in the architecture parts table (`bounds.sh` reads its journeys) |
 | An interface's promise: compatibility, failure meaning | the owner part's Interfaces, linking the schema in code; the interfaces topic is an index |
 | A quality band | the Q-; a part's Budgets states only its share |
 | What users see when something fails | the journey's Variations; a part's Failure gives the mechanism |
 | Why the design works: claim, mechanism, assumptions | the why-it-works topic, citing its D- |
 | Alternatives (one managed or off-the-shelf) and why each lost, when to revisit | the D-, with its source; the design it shapes lives in its part or topic |
 | A technology choice | owner-imposed: a C-; otherwise a D- |
-| A deferral | owner decline: an N-; a later stage: `from:`; a detail agents choose: Left open; needs the owner: the inbox. Never a change record |
+| A deferral | owner decline: an N-; an owner-deferred design choice: its D-, with the limit and revisit trigger; a later stage: `from:`; a detail agents choose: Left open; needs the owner: the inbox. Never a change record |
 | Live status: built, in flight, waiting on the owner | generated by `status.sh`; `product.md` links the inbox |

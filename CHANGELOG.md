@@ -26,9 +26,10 @@ change by change.
   why-it-works cites the D- that holds alternatives and revisit triggers, architecture Risks and
   the product page's owner queue are a line and a link, and a decision records its source.
 - A two-way-door decision that binds later work goes to its L1/L2 home when decided; one that only
-  explains the diff stays in the PR. Reviewers search `specs/` for the touched IDs and terms and
-  report any second home or contradiction.
-- Existing specs are not rewritten; reconcile duplicates when a change next touches the fact.
+  explains the diff stays in the PR. When `specs/` is readable, reviewers search it for the touched
+  IDs and terms: a copy the diff adds is medium, a contradiction it creates high, and older
+  untouched duplication low.
+- Existing specs are not rewritten; a change that edits a fact removes that fact's other copies.
 
 ## [1.3.3] — 2026-10-31 — inbox review and workflow safeguards
 

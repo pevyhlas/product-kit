@@ -72,6 +72,7 @@ it "one home per fact: binding decisions leave the change; reviewers look for se
 assert_contains "$spec" '**One home per fact.**' "one home per fact"
 assert_contains "$spec" 'binds later work in its L1/L2 home now' "binding decisions go to L1/L2"
 assert_contains "$(flat "$T/review-prompt-template.md")" '**One home**' "reviewer checks one home"
+assert_contains "$(flat "$T/review-prompt-template.md")" 'never a required input' "the spec search never stalls a review"
 
 it "changes: spec edits with code, test edits touch IDs, Spec impact lines, no no-op notes"
 assert_contains "$change" 'Spec edits land in the PR whose code and tests realize them' "spec with code"

@@ -2,7 +2,7 @@
 
 ## D-01 One request service, not a help desk
 
-**Source**: agent, 2026-10-17
+**Source**: owner direction in this example, 2026-10-17: "Requests stay in a service we own."
 - **Decision**: one service, P1, owns requests and their status.
 - **Alternatives**: an off-the-shelf help desk, rejected because requests carry
   organization-specific fields.
