@@ -2,7 +2,7 @@
 
 **Now**: <stage> since <date> · **Next**: <stage>
 
-<!-- Stages, in order: Idea, Demo, MVP, Private preview, Public preview, GA, Sunset, Retired; skip
+<!-- Stages, in order: Idea, Demo, MVP, Private preview, Public preview, Paid preview, GA, Sunset, Retired; skip
 those the product does not need. Only the owner moves Now, when the exit criteria pass. An item
 needed only from a later stage carries `from: <stage>` with its maturity, for example
 `**R-12 Choose a plan** (hypothesis, from: ga)`; without one it is needed now. Remove a marker

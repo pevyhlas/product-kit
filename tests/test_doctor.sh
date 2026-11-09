@@ -249,6 +249,35 @@ assert_not_contains "$OUTPUT" "shows J-02" "a GA journey in the GA column"
 assert_not_contains "$OUTPUT" "shows J-01" "an unmarked journey in the current stage column"
 rm -rf specs/product; git checkout -q -- specs/product.md
 
+it "the optional paid preview stage sits between public preview and GA"
+mkdir -p specs/product/journeys
+printf '# Demo — lifecycle\n\n**Now**: Public preview since 2026-11-01 · **Next**: Paid Preview\n' > specs/product/lifecycle.md
+printf '# J-01 Join (hypothesis, from: public preview)\n' > specs/product/journeys/j-01-join.md
+printf '# J-02 Pay (hypothesis, from: Paid  Preview)\n' > specs/product/journeys/j-02-pay.md
+printf '# J-03 Scale (hypothesis, from: ga)\n' > specs/product/journeys/j-03-scale.md
+cat > specs/product.md <<'MD'
+# Demo
+
+| Area | Public preview (now) | Paid preview | GA |
+|------|----------------------|--------------|----|
+| Use | J-01 | J-02, J-03 | |
+MD
+run bash "$DOCTOR"
+assert_not_contains "$OUTPUT" "names no stage" "from: paid preview names a stage, in any case and spacing"
+assert_contains "$OUTPUT" "Lifecycle: the stage is Public preview, so remove the reached from: markers of J-01" "public preview is reached"
+assert_not_contains "$OUTPUT" "J-01, J-02" "paid preview comes after public preview"
+assert_not_contains "$OUTPUT" "shows J-02" "a paid preview journey in its column"
+assert_contains "$OUTPUT" "product.md:5 shows J-03 in the paid preview column, but its file has from: ga" "GA comes after paid preview"
+run bash "$PROJ/.prdkit/scripts/bash/status.sh"
+assert_contains "$OUTPUT" "Stage: Public preview; next: Paid Preview" "the next stage keeps both words"
+assert_contains "$OUTPUT" "For later stages, not needed now: J-02 (paid preview), J-03 (ga)" "both are later stages"
+printf '# Demo — lifecycle\n\n**Now**: Paid preview · **Next**: GA\n' > specs/product/lifecycle.md
+run bash "$DOCTOR"
+assert_not_contains "$OUTPUT" "needs '**Now**" "paid preview is a known current stage"
+assert_contains "$OUTPUT" "Lifecycle: the stage is Paid preview, so remove the reached from: markers of J-01, J-02" "public and paid preview are reached"
+assert_not_contains "$OUTPUT" "J-02, J-03" "GA is not reached"
+rm -rf specs/product; git checkout -q -- specs/product.md
+
 it "local machine paths in specs and agent context are advisories"
 printf 'See /home/alex/project/notes.md.\nhttps://example.com/home/x is a URL.\nAlso C:\\Users\\alex\\notes.md.\n' >> specs/architecture.md
 mkdir -p docs; printf '# Runbook\n\nClone into /Users/alex/src, or ~/src by default.\n\n> the owner said: "paths like /home/alex do not belong in docs"\n' > docs/runbook.md; git add docs/runbook.md

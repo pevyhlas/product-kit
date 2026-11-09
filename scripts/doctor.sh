@@ -204,14 +204,13 @@ while IFS= read -r problem; do [ -z "$problem" ] || advisories+=("$problem"); do
 # --- Lifecycle: the current stage, from: markers, the product page's stage columns ----------
 stages="$(spec_stages "$root")"
 now_next="$(spec_stage_now "$root")"; now="${now_next%%"$SEP"*}"
-stage_list='idea, demo, mvp, private preview, public preview, ga, sunset, retired'
 if [ -f "$root/specs/product/lifecycle.md" ]; then
     known="$(awk "$SPEC_STAGE_AWK"' BEGIN { print stage_rank(ARGV[1]); exit }' "$now")"
-    [ "$known" != 0 ] || findings+=("Lifecycle: specs/product/lifecycle.md needs '**Now**: <stage>', one of: $stage_list")
+    [ "$known" != 0 ] || findings+=("Lifecycle: specs/product/lifecycle.md needs '**Now**: <stage>', one of: $SPEC_STAGE_LIST")
 fi
 # An advisory: `from:` may also start a source note, such as `from: owner interview`.
 while IFS= read -r problem; do [ -z "$problem" ] || advisories+=("$problem"); done < <(
-    printf '%s\n' "$stages" | awk -F "$SEP" -v list="$stage_list" "$SPEC_STAGE_AWK"'
+    printf '%s\n' "$stages" | awk -F "$SEP" -v list="$SPEC_STAGE_LIST" "$SPEC_STAGE_AWK"'
         NF && !stage_rank($2) { print "Lifecycle: \"from: " $2 "\" in " $1 " at " $3 " names no stage; stages: " list }')
 if [ -n "$stages" ] && [ -z "$now" ]; then
     advisories+=("Lifecycle: items carry from: markers, but specs/product/lifecycle.md names no current stage, so every item counts as needed now")

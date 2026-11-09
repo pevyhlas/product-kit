@@ -87,6 +87,7 @@ A product moves through stages, and each needs less than the next. Skip the ones
 | MVP | the core loop in real use by the owner, on real data |
 | Private preview | invited users on real data; it may change |
 | Public preview | anyone can join; it may still change |
+| Paid preview | anyone can join, for a fee; it may still change |
 | GA | supported; quality bands enforced; breaking changes need a migration |
 | Sunset | no new users; users export or migrate; the end date is announced |
 | Retired | stopped; data deleted or handed over |
