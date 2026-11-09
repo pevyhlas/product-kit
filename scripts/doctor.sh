@@ -344,10 +344,11 @@ trace() { # code message fix rows (one location each)
     [ "$n" -eq 0 ] || advisories+=("$2 ($n): ${out#*"$SEP"}; $3")
 }
 pick() { printf '%s\n' "$1" | awk -F "$SEP" -v k="$2" '$1 == k { print $2 }'; } # rows kind -> rest
-# A path after a Code: label that is not in the repository. Judged: a code span holding a "/" or
-# ending in a file extension, and a bare word whose first directory exists; a path relative to
-# one named before it in the same item resolves. Placeholders, globs, commands, URLs, absolute
-# paths and org/repo:path are not judged; a #anchor or :line suffix is dropped.
+# A path after a Code: label that is not in the repository. Judged: a code span holding a "/",
+# a bare word whose first directory exists, and a file name (`b.py`) once a path named before it
+# in the same item gives it a directory; a path also resolves in the directory of one before it.
+# Placeholders, globs, commands, URLs, absolute paths and org/repo:path are not judged; a
+# #anchor or :line suffix is dropped.
 code_paths_missing() {
     local kind path where prev="" bases="" base found
     local line_re='^(.*):[0-9]+(-[0-9]+)?$' ext_re='\.[A-Za-z][A-Za-z0-9]*$' odd_re="[][:space:]<>*?{}\$|=:'\"[]"
@@ -362,20 +363,26 @@ code_paths_missing() {
             span) case "$path" in */*) ;; *) [[ "$path" =~ $ext_re ]] || continue ;; esac ;;
             *) [ -e "$root/${path%%/*}" ] || continue ;;
         esac
-        found=false
-        if [ -e "$root/$path" ]; then found=true; bases="$bases$path"$'\n'
+        found=""
+        if [ -e "$root/$path" ]; then found="$path"
         else
             while IFS= read -r base; do
-                [ -n "$base" ] && [ -e "$root/$base/$path" ] && { found=true; break; }
+                [ -n "$base" ] && [ -e "$root/$base/$path" ] && { found="$base/$path"; break; }
             done <<< "$bases"
         fi
-        $found || printf '%s at %s\n' "$path" "$where"
+        if [ -n "$found" ]; then
+            [ -d "$root/$found" ] || case "$found" in */*) found="${found%/*}" ;; *) found=. ;; esac
+            bases="$bases$found"$'\n'
+        elif [ -n "$bases" ] || [ "${path#*/}" != "$path" ]; then
+            printf '%s at %s\n' "$path" "$where"
+        fi
     done < <(spec_code_paths "$root")
 }
 trace code-path "Code path not in the repository" "name repo-relative paths that exist (spec.md, Writing)" "$(code_paths_missing)"
 
 # planned: <change> names an open change record (here, or in a worktree unless the log closed
-# it), else a closed or unknown one.
+# it), else a closed or unknown one. An item marker naming no change number (M1, 12) is unknown
+# too; org/repo#n names another repository's change.
 closed_ids=" $( [ ! -f "$root/specs/log.md" ] || sed -n 's/^- [0-9-]* \([^ :]*\):.*/\1/p' "$root/specs/log.md" | tr '\n' ' ')"
 open_ids=" "
 while IFS="$SEP" read -r path _ loc; do
@@ -395,8 +402,14 @@ while IFS="$SEP" read -r id where; do
         *) planned_unknown+="${id%-} at $where"$'\n' ;;
     esac
 done < <(spec_planned_at "$root")
+xrepo_re='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(#[0-9]+)?$'
+while IFS="$SEP" read -r _ _ _ target _ _ where; do
+    target="${target//\`/}"
+    case "$target" in ''|[0-9][0-9][0-9]*) continue ;; esac
+    [[ "$target" =~ $xrepo_re ]] || planned_unknown+="$target at $where"$'\n'
+done <<< "$items"
 trace planned-closed "Planned for a closed change" "specs/log.md closed it: remove the marker if it was built, or re-plan it to an open change" "$planned_closed"
-trace planned-unknown "Planned for no open change" "open it (new-change.sh --number <n>) or remove the marker" "$planned_unknown"
+trace planned-unknown "Planned for no open change" "point it at an open change record (new-change.sh opens one) or remove the marker" "$planned_unknown"
 
 # Spec text by item, as spec_items reads it. The program defines flush(), which sees the item's
 # line[1..lines], at[1..lines] and text, and newfile(); its own rules run after these.
@@ -410,14 +423,16 @@ ITEM_AWK='
     { add() }
     END { flush() }'
 
-# A retired ID cited in the spec, once per file. Not judged: architecture/retired, a file whose
-# heading retires it, and an item that says retired, superseded or replaced (a retiring line, or
-# history).
-cited_in=(); for file in ${spec_list[@]+"${spec_list[@]}"}; do
-    case "$file" in specs/architecture/retired.md|specs/architecture/retired/*) ;; *) cited_in+=("$file") ;; esac
+# A retired ID cited in the spec, once per file. Not judged: architecture/retired and decision
+# records (history), a file whose heading retires it, and an item that says retired, superseded
+# or replaced (a retiring line, or history).
+cited_in=(); retired_in=(); for file in ${spec_list[@]+"${spec_list[@]}"}; do
+    case "$file" in specs/architecture/retired.md|specs/architecture/retired/*) continue ;; esac
+    cited_in+=("$file")
+    case "$file" in specs/decisions/*|specs/architecture/decisions.md|specs/architecture/decisions/*) ;; *) retired_in+=("$file") ;; esac
 done
 retired_cited=""
-if [ "${#cited_in[@]}" -gt 0 ]; then
+if [ "${#retired_in[@]}" -gt 0 ]; then
     retired_cited="$({ printf '%s\n' "$items" | awk -F "$SEP" 'NF && $5 == "yes" { print "R" FS $1 }'
         (cd "$root" && awk "$SPEC_SKIP_AWK $SPEC_ID_AWK $ITEM_AWK"'
             function flush(   i) {
@@ -425,7 +440,7 @@ if [ "${#cited_in[@]}" -gt 0 ]; then
                 for (i = 1; i <= lines; i++) spec_ids(line[i], "C\037" at[i])
             }
             function newfile() { gone = 0; head = 1 }
-            head && /^#/ { head = 0; gone = (tolower($0) ~ /retired:/) }' "${cited_in[@]}"); } |
+            head && /^#/ { head = 0; gone = (tolower($0) ~ /retired:/) }' "${retired_in[@]}"); } |
         awk -F "$SEP" '$1 == "R" { r[$2] = 1; next }
             $2 == "C" && ($1 in r) { f = $3; sub(/:[0-9]+$/, "", f); if (!seen[$1, f]++) print $1 " at " $3 }')"
 fi

@@ -434,17 +434,23 @@ run bash -c "cd '$RF' && bash .prdkit/scripts/bash/doctor.sh"
 assert_contains "$OUTPUT" "specs/observed/payments.md is not linked from specs/observed.md" "observed pieces without observed.md"
 
 it "trace: a Code path that is not in the repository (advisory)"
-mkdir -p src/web/pages; printf 'x\n' > src/web/app.py; printf 'x\n' > src/web/pages/home.py
+mkdir -p src/web/pages; printf 'x\n' > src/web/app.py; printf 'x\n' > src/web/pages/home.py; printf 'x\n' > src/web/pages/helper.py
 # shellcheck disable=SC2016 # backticks are Markdown code spans
 { printf '# P1 Web\n\n**What it is**: pages · **Maturity**: validated · **Code**: `src/web`, `src/web/app.py:3-9`,\n'
   printf '`src/web/gone.py` (views in `pages/home.py`), src/web/old.py, and/or `<paths>`, `src/*.py`,\n'
   printf '`org/repo:src/x.py`, `https://example.com/x.py`, `dotnet test` · **Owner**: `src/elsewhere.py`\n\n'
   printf -- '- **P1.B-01 Greeting page**: shows the greeting for R-01. Test: test_greeting.\n'
-  printf -- '- Deploy job: ships the pages. Code: `scripts/deploy.sh#L2`; none yet for `src/later.py`.\n'; } > specs/parts/p1-web.md
+  printf -- '- Deploy job: ships the pages. Code: `scripts/deploy.sh#L2`; none yet for `src/later.py`.\n'
+  printf -- '- Mail job: sends receipts. Code: `myapp.web`, `Company.Product.Api`, `api.example.com`.\n'
+  printf -- '- Errors map to a Status Code: `4xx/5xx`.\n'; } > specs/parts/p1-web.md
 run bash "$DOCTOR" --json
 assert_eq 0 "$STATUS" "an advisory"
-assert_contains "$OUTPUT" "Code path not in the repository (4): src/web/gone.py at specs/parts/p1-web.md:3, src/web/old.py at specs/parts/p1-web.md:3, scripts/deploy.sh at specs/parts/p1-web.md:8, src/later.py at specs/parts/p1-web.md:8; name repo-relative paths that exist" "missing spans and bare paths, at their item; a path under one named before it, a :line suffix, placeholders, globs, other repositories, URLs, commands and later labels are not judged"
+assert_contains "$OUTPUT" "Code path not in the repository (4): src/web/gone.py at specs/parts/p1-web.md:3, src/web/old.py at specs/parts/p1-web.md:3, scripts/deploy.sh at specs/parts/p1-web.md:8, src/later.py at specs/parts/p1-web.md:8; name repo-relative paths that exist" "missing spans and bare paths, at their item; a path under one named before it, a :line suffix, placeholders, globs, other repositories, URLs, commands, later labels, a name with no path before it and a label inside a phrase are not judged"
 assert_contains "$OUTPUT" '"code-path":4' "counted in JSON"
+# shellcheck disable=SC2016 # backticks are Markdown code spans
+printf -- '- Helpers. Code: `src/web/pages/home.py`, `helper.py`, `missing.py`.\n\nBuild scripts run in CI.\nCode: `ci/run.sh`.\n' > specs/parts/p1-web.md
+run bash "$DOCTOR"
+assert_contains "$OUTPUT" "Code path not in the repository (2): missing.py at specs/parts/p1-web.md:1, ci/run.sh at specs/parts/p1-web.md:3;" "a file name resolves in the directory of a file before it; a label opening a line counts"
 git checkout -q -- specs; rm -rf src
 
 it "trace: planned: names an open change, else a closed or an unknown one"
@@ -456,11 +462,21 @@ cat >> specs/product.md <<'MD'
 - **R-05 Share** (hypothesis): users share,
   planned: `013`.
 - **R-06 Print** (hypothesis, planned: 012): users print.
+- **R-07 Badge** (hypothesis, planned: M1): a milestone, not a change.
+- **R-08 Theme** (hypothesis, planned: 12): too short for a change number.
+- **R-09 Archive** (hypothesis, planned: 2026-Q4): a date, not a change.
+- **R-10 Sync** (hypothesis, planned: acme/platform#12): another repository's change.
+
+| Area | Note |
+|------|------|
+| Zones | planned: both zones |
 MD
 run bash "$DOCTOR"
 assert_contains "$OUTPUT" "advisory: Planned for a closed change (1): 010-import at specs/product.md:7; specs/log.md closed it: remove the marker if it was built, or re-plan it to an open change" "a marker naming a closed change"
-assert_contains "$OUTPUT" "advisory: Planned for no open change (1): 013 at specs/product.md:8; open it (new-change.sh --number <n>) or remove the marker" "a wrapped marker naming no change"
+assert_contains "$OUTPUT" "advisory: Planned for no open change (4): 013 at specs/product.md:8, 2026-Q4 at specs/product.md:13, M1 at specs/product.md:11, 12 at specs/product.md:12; point it at an open change record (new-change.sh opens one) or remove the marker" "a wrapped marker naming no change, and item markers naming no change number"
 assert_not_contains "$OUTPUT" "012" "an open change, with or without its slug"
+assert_not_contains "$OUTPUT" "acme/platform" "another repository's change is not judged"
+assert_not_contains "$OUTPUT" "both zones" "a table cell is not an item marker"
 git checkout -q -- specs; rm -rf specs/changes specs/log.md
 
 it "trace: a retired ID cited in spec text (advisory)"
@@ -476,10 +492,11 @@ cat >> specs/architecture.md <<'MD'
 MD
 printf '# Demo — retired\n\n## Retired\n\n- **P1.B-09 Old page**: now P1.B-01, as R-02 asked.\n' > specs/architecture/retired.md
 printf '# Demo — old notes (retired: folded into architecture.md)\n\nR-02 lived here.\n' > specs/architecture/old-notes.md
+printf '# D-02 Cache pages\n\nIt amended R-02.\n' > specs/decisions/D-02.md
 run bash "$DOCTOR" --json
-assert_contains "$OUTPUT" "Retired ID cited in the spec (1): R-02 at specs/architecture.md:9; cite what replaced it, or drop the reference" "a live line citing a retired ID, once per file; not its retiring line, a line saying retired or replaced, architecture/retired or a retired file"
+assert_contains "$OUTPUT" "Retired ID cited in the spec (1): R-02 at specs/architecture.md:9; cite what replaced it, or drop the reference" "a live line citing a retired ID, once per file; not its retiring line, a line saying retired or replaced, architecture/retired, a retired file or a decision record"
 assert_contains "$OUTPUT" '"retired-cited":1' "counted in JSON"
-git checkout -q -- specs; rm -rf specs/architecture
+git checkout -q -- specs; rm -rf specs/architecture specs/decisions/D-02.md
 
 it "trace: an R or Q no part or architecture file cites; a part needed by nothing (advisory)"
 mkdir -p specs/product

@@ -41,6 +41,9 @@ cat > specs/product.md <<'MD'
 - **Q-05 Calm pages** (hypothesis): no pop-ups.
 - **Q-06 Short pages** (hypothesis): under 50 KB a page. Enforced
   by: test_pages.
+- **Q-07 Fast search** (hypothesis): p95 under 1 s.
+  - Enforced by: test_search.
+- **Q-08 Small icons** (hypothesis): under 2 KB. ENFORCED BY: test_icons.
 MD
 mkdir -p specs/decisions
 printf '# D-01 Use server rendering\n\nWhy: pages work without scripts.\n' > specs/decisions/D-01.md
@@ -70,6 +73,7 @@ cat > specs/parts/p1-web.md <<'MD'
 
 - **P1.I-01 No names in logs**: never logs user names. Enforced by: unenforced.
 - **P1.I-02 Escaped output**: every page escapes user text.
+- **P1.I-03 Short links**: under 80 characters. Test: test_links.
 MD
 cat > specs/changes/004-export.md <<'MD'
 # Change: Export CSV for users
@@ -160,6 +164,9 @@ assert_contains "$OUTPUT" "P1.I-01 No names in logs" "unenforced invariant liste
 assert_contains "$OUTPUT" "Q-05 Calm pages" "a quality naming nothing that keeps it true is unenforced"
 assert_contains "$OUTPUT" "P1.I-02 Escaped output" "so is such an invariant"
 assert_not_contains "$OUTPUT" "Q-06 Short pages" "Enforced by wrapped across lines names its check"
+assert_not_contains "$OUTPUT" "Q-07 Fast search" "so does Enforced by in a sub-bullet"
+assert_not_contains "$OUTPUT" "Q-08 Small icons" "in any case"
+assert_contains "$OUTPUT" "P1.I-03 Short links" "an invariant names its check after Enforced by, not Test"
 
 it "in flight: step, age, acceptance, attempts, stalls and what each waits on"
 assert_contains "$OUTPUT" "004-export — Export CSV for users" "change with its title"
