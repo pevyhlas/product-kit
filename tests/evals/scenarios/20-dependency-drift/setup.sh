@@ -11,7 +11,11 @@ cat > specs/parts/p2-service.md <<'EOF'
 - **P2.B-01 Interface**: v2 clients read status from the state field, never legacy_status.
   Source: approved D-02 compatibility migration, merged but not deployed.
 EOF
+awk '{ print } /^\| P1 / { print "| P2 Service | serves request status to clients | client status | hypothesis | [p2-service](parts/p2-service.md) |" }' \
+    specs/architecture.md > specs/architecture.md.tmp
+mv specs/architecture.md.tmp specs/architecture.md
 cat >> specs/architecture.md <<'EOF'
+
 ## D-02 Shared interface migration
 P2.B-01 supersedes v1. A production client change must wait for v2 deployment, not merely merge.
 EOF

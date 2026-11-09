@@ -27,28 +27,65 @@ For the greeting fixture, verify exact text using the standard test utility.
 ## Principles
 Produce only the requested plain-text output. No external services or dependencies.
 EOF
-    mkdir -p specs
+    # The split layout (spec.md, Layout): L0 summary and detail, L1 summary, one L2 part.
+    mkdir -p specs/product specs/parts
     cat > specs/product.md <<'EOF'
-# Fixture — product
-**Owner**: the product owner · **Last owner review**: 2026-10-01
+# Fixture
+
+People starting the tool see one concise, predictable greeting.
+
 ## Problem
+
 People starting the tool want a concise, predictable greeting.
-## Requirements
-- **R-01 Greeting** (hypothesis): src/greeting.txt contains Welcome followed by a newline.
-## Thesis
+
+## The bet
+
 A predictable greeting is enough for the first release.
+
+## What must be true
+
+- Starting the tool shows the greeting (R-01).
+
+Detail:
+
+- [Requirements](product/requirements.md)
+EOF
+    cat > specs/product/requirements.md <<'EOF'
+# Fixture — requirements
+
+- **R-01 Greeting** (hypothesis): starting the tool shows exactly the greeting Welcome on its own line.
+
 ## Left open
-- Later opportunities such as notifications are uncommitted.
+
+- Greeting styling: agents choose within R-01.
 EOF
     cat > specs/architecture.md <<'EOF'
 # Fixture — architecture
+
 **Inherits**: none
+
+One plain text file holds the greeting; standard utilities check it.
+
 ## Parts
-| Part | Purpose | Maturity | Owns data | Serves | Spec |
-|------|---------|----------|-----------|--------|------|
-| P1 greeting | Writes the greeting text | hypothesis | none | R-01 | note below |
-## Hypothesis notes
-P1 is one plain text file checked with standard utilities.
+
+| Part | What it is | Why it exists | Maturity | Spec |
+|------|------------|---------------|----------|------|
+| P1 Greeting | a plain text file | R-01: holds the greeting people see | hypothesis | [p1-greeting](parts/p1-greeting.md) |
+EOF
+    cat > specs/parts/p1-greeting.md <<'EOF'
+# P1 Greeting
+
+**What it is**: a plain text file · **Maturity**: hypothesis · **Code**: src/greeting.txt
+
+## Why it exists
+
+R-01: it holds the greeting people see when the tool starts.
+
+## Components
+
+### Greeting text
+
+- **P1.B-01 Exact text**: the file holds the R-01 greeting and one trailing newline, nothing else. Test: unenforced.
 EOF
     git add -A && git commit -qm 'fixture: installed baseline'
 }
@@ -95,6 +132,53 @@ fixture_section() { # file heading
     awk -v h="## $2" '$0 == h { s = 1; next } /^## / { s = 0 } s' "$1"
 }
 
+# The canonical spec (L0 to L2), for checks that it is unchanged.
+# shellcheck disable=SC2034  # used by the scenarios that source this file
+FIXTURE_CANON=(specs/product.md specs/product specs/architecture.md specs/architecture specs/parts)
+
+# Clears the greeting spec for a scenario that writes another product's spec in the same layout.
+fixture_clear_spec() { rm -rf "${FIXTURE_CANON[@]}"; mkdir -p specs/product specs/parts; }
+
+# Prints one spec item for assertions: the top-level bullet that opens with its key, after an
+# optional bold ID (`- **R-01 `, `- Greeting file format:`, `- **P1.I-02 Greeting file format**:`),
+# and everything up to the next top-level bullet or heading, so wrapped lines, sub-bullets and a
+# following Source paragraph belong to it. Trailing blank lines are left out.
+fixture_item() { # key file...
+    local key="$1"; shift
+    awk -v key="$key" '
+        function opens(l,   c) { c = substr(l, length(key) + 1, 1); return index(l, key) == 1 && (c == " " || c == "*" || c == ":") }
+        /^#/ || /^[-*+][[:space:]]/ { s = 0; gap = "" }
+        /^[-*+][[:space:]]/ {
+            l = $0; sub(/^[-*+][[:space:]]+/, "", l); sub(/^[*][*]/, "", l)
+            if (opens(l)) s = 1
+            else if (sub(/^[A-Z][A-Za-z0-9.]*-[0-9]+[[:space:]]+/, "", l) && opens(l)) s = 1
+        }
+        !s { next }
+        /^[[:space:]]*$/ { gap = gap $0 "\n"; next }
+        { printf "%s", gap; gap = ""; print }' "$@"
+}
+
+# Prints text without double-quoted words and Source notes: a quoted answer is provenance, and an
+# appended quote is not incorporation.
+fixture_unquoted() { # < text
+    awk '{ l = $0; sub(/[Ss]ource:.*/, "", l); gsub(/"[^"]*"/, "", l); print l }'
+}
+
+# Prints the files that still state an old value outside quotes and Source notes (grep -E regexes,
+# lower case, the old one without leading context). "from", "was" or "previously" directly before
+# the old value, on a line that also states the new one, makes it history ("tightened from 400 ms").
+fixture_stale() { # old-regex new-regex file...
+    local old="$1" new="$2" f; shift 2
+    for f in "$@"; do
+        OLD="$old" NEW="$new" awk '
+            {
+                l = tolower($0); sub(/source:.*/, "", l); gsub(/"[^"]*"/, "", l)
+                if (l ~ ENVIRON["NEW"]) gsub("(from|was|previously)[[:space:]]+(" ENVIRON["OLD"] ")", "", l)
+                if (l ~ ("(^|[^0-9.])(" ENVIRON["OLD"] ")")) { print FILENAME; exit }
+            }' "$f"
+    done
+}
+
 # Programme with successful adjacent repairs but no progress along its declared critical path.
 fixture_outcome_programme() {
     fixture_project
@@ -103,6 +187,7 @@ fixture_outcome_programme() {
     mkdir -p src scripts .eval-state
     printf 'Legacy greeting\n' > src/legacy.txt
     cat >> specs/architecture.md <<'EOF'
+
 ## D-02 Replacement path
 The first release uses src/greeting.txt, replacing src/legacy.txt. No legacy data migration is
 required. The replacement source check is independent of provider provisioning. Legacy display

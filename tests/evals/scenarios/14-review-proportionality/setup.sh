@@ -4,9 +4,23 @@ source "$PK_ROOT/tests/evals/fixture.sh"
 fixture_project
 fixture_change
 # This review exercises a stdout producer, rather than the file-writing execution fixture.
-sed 's/^- \*\*R-01 Greeting\*\* (hypothesis):.*/- **R-01 Greeting** (hypothesis): bash src\/greeting.sh emits exactly Welcome followed by one newline./' \
-    specs/product.md > specs/product.md.tmp
-mv specs/product.md.tmp specs/product.md
+sed 's/| a plain text file |/| a shell script |/' specs/architecture.md > specs/architecture.md.tmp
+mv specs/architecture.md.tmp specs/architecture.md
+cat > specs/parts/p1-greeting.md <<'EOF'
+# P1 Greeting
+
+**What it is**: a shell script · **Maturity**: hypothesis · **Code**: src/greeting.sh
+
+## Why it exists
+
+R-01: it prints the greeting people see when the tool starts.
+
+## Components
+
+### Greeting producer
+
+- **P1.B-01 Exact output**: `bash src/greeting.sh` prints the R-01 greeting and one trailing newline on standard output, nothing else. Test: unenforced.
+EOF
 cat > "$CHANGE_FILE" <<'EOF'
 # Change: greeting producer
 
@@ -45,7 +59,7 @@ EOF
 cat > evidence/review-scope.md <<'EOF'
 # Current change package
 Source: src/greeting.sh, a new local stdout-only greeting producer.
-Requirement: R-01 (acceptance A1) requires exactly Welcome followed by one newline.
+Requirement: R-01 and P1.B-01 (acceptance A1) require exactly Welcome followed by one newline.
 Review phase: current implementation correctness before task completion.
 The author has not supplied passing exact-byte verification. Do not invent execution.
 There are no external services, secrets or personal data. Localization is future/uncommitted.

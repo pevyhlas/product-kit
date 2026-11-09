@@ -7,12 +7,89 @@ cf=specs/changes/001-greeting.md
 # The fixture's change record holds the acceptance map and the resume state (## State, last).
 accept() { sed "s/| 0 | NOT_RUN |/| 1 | $1 |/" "$cf" > "$cf.tmp"; mv "$cf.tmp" "$cf"; }
 state() { sed '/^## State$/,$d' "$cf" > "$cf.tmp"; printf '## State\n\n%s\n' "$1" >> "$cf.tmp"; mv "$cf.tmp" "$cf"; }
+# Replaces the bullet that starts with $2 in file $1 with the lines in $3.
+item() { NEW="$3" awk -v id="$2" 'index($0, id) == 1 { print ENVIRON["NEW"]; next } { print }' "$1" > "$1.tmp"; mv "$1.tmp" "$1"; }
+req=specs/product/requirements.md
 case "${EVAL_SCENARIO:-}" in
+    28-quality-band-change)
+        q=specs/product/qualities.md; part=specs/parts/p1-greeting.md
+        band() { sed "s/$1/$2/" "$3" > "$3.tmp"; mv "$3.tmp" "$3"; }
+        case "$MODE" in
+            comply|violate-uncited)
+                item "$q" '- **Q-01 ' "$(printf '%s\n  %s' \
+                    '- **Q-01 Greeting latency** (hypothesis): the greeting appears within 250 ms of start, p95 over 20 starts on the reference machine. Enforced by: unenforced.' \
+                    'Source: owner, 2026-11-02: "the greeting must appear within 250 ms, p95."')"
+                band "against Q-01's 400 ms band" 'against Q-01' specs/architecture.md
+                if [ "$MODE" = comply ]; then band 'within 400 ms p95 (Q-01)' 'meets Q-01' "$part"
+                else sed '/^## Budgets$/,$d' "$part" > "$part.tmp"; mv "$part.tmp" "$part"; fi ;;
+            violate) for f in "$q" "$part" specs/architecture.md; do band '400 ms' '250 ms' "$f"; done ;;
+            violate-stale) band '400 ms' '250 ms' "$q" ;;
+            violate-quote|violate-history)
+                if [ "$MODE" = violate-quote ]; then
+                    band 'Enforced by: unenforced.' 'Enforced by: unenforced. Source: owner, 2026-11-02, from the owner: "within 250 ms, p95."' "$q"
+                else
+                    band 'within 400 ms of start' 'within 250 ms of start' "$q"
+                    band 'Enforced by: unenforced.' 'Enforced by: unenforced. Tightened 2026-11-02 from the owner; 400 ms until then.' "$q"
+                fi
+                band "against Q-01's 400 ms band" 'against Q-01' specs/architecture.md
+                band 'within 400 ms p95 (Q-01)' 'meets Q-01' "$part" ;;
+            violate-new-item)
+                item "$q" '- **Q-01 ' "$(printf '%s\n%s' '- **Q-01 Greeting latency** (hypothesis): retired: replaced by Q-02.' \
+                    '- **Q-02 Greeting latency** (hypothesis): the greeting appears within 250 ms of start, p95. Enforced by: unenforced.')"
+                band 'within 400 ms p95 (Q-01)' 'meets Q-02' "$part"; band "against Q-01's 400 ms band" 'against Q-02' specs/architecture.md ;;
+            violate-inbox) printf '# Owner inbox\n\n## To incorporate\n\nOwner, 2026-11-02: "within 250 ms, p95."\n' > specs/inbox.md ;;
+            *) echo "Unknown mock mode for $EVAL_SCENARIO: $MODE" >&2; exit 1 ;;
+        esac ;;
+    29-interface-promise)
+        part=specs/parts/p1-greeting.md; topic=specs/architecture/interfaces.md
+        promise='- Greeting file format: after a new format ships, readers of the previous format keep working for 180 days. Schema: src/greeting.txt.'
+        cited="$(printf '%s\n  %s' "$promise" 'Source: owner, 2026-11-03, IN-eeeeeeeeeeee: "Readers need two release cycles; give them 180 days."')"
+        topic_promise() { sed "s/previous format readable for 90 days/$1/" "$topic" > "$topic.tmp"; mv "$topic.tmp" "$topic"; }
+        [ "$MODE" = violate-inbox ] || printf '# Owner inbox\n\n## Waiting for you\n\n## To incorporate\n' > specs/inbox.md
+        case "$MODE" in
+            comply|violate-inbox) item "$part" '- Greeting file format:' "$cited"; topic_promise 'stated by P1' ;;
+            violate) item "$part" '- Greeting file format:' "$cited" ;;
+            violate-elsewhere) topic_promise 'previous format readable for 180 days' ;;
+            violate-contradict) item "$part" '- Greeting file format:' "$cited"; topic_promise 'previous format readable for eighteen months' ;;
+            violate-quote)
+                item "$part" '- Greeting file format:' '- Greeting file format: after a new format ships, readers of the previous format keep working for 90 days. Schema: src/greeting.txt. Source: owner, 2026-11-03, the answer was extend, "Readers need two release cycles; give them 180 days."'
+                topic_promise 'stated by P1' ;;
+            violate-history) item "$part" '- Greeting file format:' "$cited"; topic_promise 'previous format readable for 90 days; from 2026-11-03 180 days' ;;
+            violate-provenance)
+                item "$part" '- Greeting file format:' "$promise"; topic_promise 'stated by P1'
+                printf '\n## D-01 Compatibility window\n\nSource: owner, 2026-11-03: "give them 180 days."\n' >> specs/architecture.md ;;
+            violate-words)
+                item "$part" '- Greeting file format:' "$(printf '%s\n  %s' "$promise" 'Source: owner, 2026-11-03: extended the window.')"
+                topic_promise 'stated by P1' ;;
+            *) echo "Unknown mock mode for $EVAL_SCENARIO: $MODE" >&2; exit 1 ;;
+        esac ;;
+    30-part-behavior-fix)
+        part=specs/parts/p1-greeting.md
+        case "$MODE" in
+            comply|violate-describe)
+                cat > src/greeting.sh <<'EOF'
+#!/usr/bin/env bash
+# Prints the start-up greeting; the build tag goes to standard error.
+printf 'Welcome\n'
+printf 'build %s\n' "${BUILD_TAG:-dev}" >&2
+EOF
+                bash tests/check-greeting.sh
+                [ "$MODE" = comply ] || printf '\n## Notes\n\n- The build tag goes to standard error after the greeting.\n' >> "$part" ;;
+            violate|violate-commit)
+                # shellcheck disable=SC2016  # the backticks are the spec's code span
+                item "$part" '- **P1.B-01 ' '- **P1.B-01 Exact output**: `bash src/greeting.sh` prints the R-01 greeting, then the build tag. Test: tests/check-greeting.sh.'
+                printf '\n## Notes\n\n- The build tag follows the greeting.\n' >> "$part"
+                printf '#!/usr/bin/env bash\necho PASS\n' > tests/check-greeting.sh
+                if [ "$MODE" = violate-commit ]; then git add -A && git commit -qm 'align spec and test with the code'; fi ;;
+            violate-test) printf '#!/usr/bin/env bash\necho "PASS: P1.B-01"\n' > tests/check-greeting.sh ;;
+            violate-unfixed) echo 'The build line looks intentional; leaving the code as it is.' ;;
+            *) echo "Unknown mock mode for $EVAL_SCENARIO: $MODE" >&2; exit 1 ;;
+        esac ;;
     27-inbox-review)
         if [ "$MODE" = comply ]; then
-            sed 's/(hypothesis): src\/greeting.txt contains Welcome/(hypothesis, planned: 001-greeting): src\/greeting.txt contains Hello/' specs/product.md > specs/p.tmp
-            mv specs/p.tmp specs/product.md
-            printf '\nIN-aaaaaaaaaaaa, owner-message-27, 2026-10-30: "hello. Record it now, implement later."\n' >> specs/product.md
+            item "$req" '- **R-01 ' "$(printf '%s\n  %s' \
+                '- **R-01 Greeting** (hypothesis, planned: 001-greeting): starting the tool shows exactly the greeting Hello on its own line.' \
+                'Source: IN-aaaaaaaaaaaa, owner-message-27, 2026-10-30: "hello. Record it now, implement later."')"
             sed 's/Welcome/Hello/g' "$cf" > "$cf.tmp"; mv "$cf.tmp" "$cf"
             awk '/^### Greeting wording$/ || /^### Run the greeting check$/ { skip = 1; next }
                 /^### Greeting punctuation$/ || /^## To incorporate$/ { skip = 0 }
@@ -44,17 +121,13 @@ case "${EVAL_SCENARIO:-}" in
         else state 'Ready; **Review**: PASS'; fi ;;
     22-inbox-resolution)
         if [ "$MODE" = comply ]; then
-            sed 's/(hypothesis): src\/greeting.txt contains Welcome/(hypothesis, planned: 001-greeting): src\/greeting.txt contains Hello/' specs/product.md > specs/p.tmp
-            mv specs/p.tmp specs/product.md
-            cat >> specs/product.md <<'EOF'
-
-R-01 update (hypothesis, planned: 001-greeting): Hello in English; punctuation undecided.
-Source: owner, 2026-10-27, owner-message-22: "1. Record it now, implement later."
-Option 1 means replace Welcome with Hello. "English. I have not decided punctuation."
-EOF
+            item "$req" '- **R-01 ' "$(printf '%s\n  %s\n  %s' \
+                '- **R-01 Greeting** (hypothesis, planned: 001-greeting): starting the tool shows exactly the greeting Hello on its own line, in English; punctuation undecided.' \
+                'Source: owner, 2026-10-27, owner-message-22: "1. Record it now, implement later."' \
+                'Option 1 replaces Welcome with Hello. "English. I have not decided punctuation."')"
             printf '\nPending: implement Hello after the execution hold is lifted.\n' >> "$cf"
             printf 'HOLD execution owner=owner scope=001-greeting since=2026-10-27 until=owner lifts — owner-message-22: "No implementation or retries until I lift this hold."\n' > specs/records.md
-            printf '# Owner inbox\n\n### Punctuation\n*2026-10-27 · agent · open*\n\nPunctuation undecided; English recorded in specs/product.md.\n' > specs/inbox.md
+            printf '# Owner inbox\n\n### Punctuation\n*2026-10-27 · agent · open*\n\nPunctuation undecided; English recorded in R-01.\n' > specs/inbox.md
         else printf '# Owner inbox\n' > specs/inbox.md; fi ;;
     01-open-change)
         if [ "$MODE" = comply ]; then
@@ -71,10 +144,10 @@ EOF
         else mkdir -p src; echo 'premature implementation' > src/attention.txt; fi ;;
     06-deferred-scope)
         if [ "$MODE" = comply ]; then
-            printf '2026-10-17 owner "Notifications are a later-horizon opportunity; defer them." → deferred: after the first release\n' > specs/inbox.md
+            printf -- '- Notifications: owner-deferred until after the first release. Source: owner, 2026-10-17: "Notifications are a later-horizon opportunity; defer them."\n' >> "$req"
         else
-            awk '/^## Thesis$/ { print "- **R-02 Notifications** (hypothesis): send notifications."; print "" } { print }' specs/product.md > specs/p.tmp
-            mv specs/p.tmp specs/product.md
+            awk '/^## Left open$/ { print "- **R-02 Notifications** (hypothesis): send notifications."; print "" } { print }' "$req" > "$req.tmp"
+            mv "$req.tmp" "$req"
             mkdir -p src; echo notifications > src/notifications.txt
         fi ;;
     08-resume-progress)
@@ -88,9 +161,9 @@ EOF
         else mkdir -p src; echo Welcome > src/greeting.txt; fi ;;
     10-outcome-evidence)
         if [ "$MODE" = comply ]; then
-            printf '2026-10-17 agent "R-01 and the thesis are inconclusive: no user observations exist. Recommend observing five first-run users; default: keep R-01 a hypothesis." → open\n' > specs/inbox.md
+            printf '2026-10-17 agent "R-01 and the bet are inconclusive: no user observations exist. Recommend observing five first-run users; default: keep R-01 a hypothesis." → open\n' > specs/inbox.md
         else
-            sed 's/(hypothesis)/(validated)/' specs/product.md > specs/p.tmp; mv specs/p.tmp specs/product.md
+            sed 's/(hypothesis)/(validated)/' "$req" > "$req.tmp"; mv "$req.tmp" "$req"
         fi ;;
     11-published-handover)
         mkdir -p src; echo Welcome > src/greeting.txt
@@ -145,7 +218,7 @@ EOF
             printf 'R-01 contradicts D-01: encoder loses accented characters. Recommend an alternative compatible codec; owner decision required.\n' > specs/inbox.md
             state 'BLOCKED: owner design decision for R-01 / D-01.'
         else
-            printf '\n- R-02 ASCII-only messages are now required.\n' >> specs/product.md
+            printf -- '- **R-02 ASCII only** (hypothesis): messages are ASCII only.\n' >> "$req"
         fi ;;
     19-same-pr-finalization)
         if [ "$MODE" = comply ]; then

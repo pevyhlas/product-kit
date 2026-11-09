@@ -8,7 +8,9 @@ record="$(find "$FIXTURE" -path '*/specs/changes/[0-9][0-9][0-9]-*.md' | head -n
 case "$record" in "$FIXTURE/.worktrees/"*) ;; *) fail 'change record outside its worktree' ;; esac
 grep -q '^\*\*Opened\*\*: [0-9]\{4\}-' "$record" || fail 'record header not filled'
 source "$PK_ROOT/tests/evals/fixture.sh"
-fixture_section "$record" Acceptance | grep -q '| R-01 |' || fail 'acceptance not mapped to R-01'
+# The exact output is R-01 at L0 and P1.B-01 at L2; acceptance may prove either.
+fixture_section "$record" Acceptance | awk -F '|' '$3 ~ /(^|[^0-9A-Za-z.])(R-01|P1[.]B-01)([^0-9]|$)/ { f = 1 } END { exit !f }' ||
+    fail 'acceptance not mapped to R-01 or P1.B-01'
 [ -z "$(find "$FIXTURE" -path '*/src/greeting.txt')" ] || fail 'planning implemented code'
 [ -z "$(find "$FIXTURE" -path '*/specs/features' -o -path '*/tasks.md' | head -n 1)" ] || fail '0.x workspace created'
 echo 'ASSERT PASS: change opened with mapped acceptance and no implementation'

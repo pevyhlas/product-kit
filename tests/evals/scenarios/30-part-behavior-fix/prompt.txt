@@ -1,0 +1,3 @@
+Read .prdkit/workflows/protocol.md and follow the installed Product-Kit workflows. The check
+bash tests/check-greeting.sh fails. Find out why and resolve it. Work in this checkout: no new
+branch or worktree, and do not commit.

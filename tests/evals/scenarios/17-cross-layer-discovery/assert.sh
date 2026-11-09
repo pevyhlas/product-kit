@@ -17,7 +17,7 @@ test "$total" -gt 0 || fail 'no machine-readable acceptance items'
 test "$passed" -eq 0 || fail 'planning claimed delivered acceptance'
 source "$PK_ROOT/tests/evals/fixture.sh"
 fixture_section "$record" Acceptance | grep -Eq '^\| *Item *\| *Proves *\| *Check *\| *Attempts *\| *Result *\|' || fail 'acceptance table incompatible with status helpers'
-test -z "$(git status --porcelain -- specs/product.md specs/architecture.md specs/parts)" || fail 'canon changed during discovery'
+test -z "$(git status --porcelain -- "${FIXTURE_CANON[@]}")" || fail 'canon changed during discovery'
 test ! -d src || fail 'planning implemented code'
 test ! -d specs/features || fail 'duplicate feature spec hierarchy'
 echo 'ASSERT PASS: cross-layer coverage without canonical or implementation mutations'

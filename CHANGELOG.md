@@ -37,6 +37,7 @@ change by change.
   or architecture file cites (`unallocated`) and parts citing no J/R/Q (`part-need`), and change
   records restating a spec item (`change-restates`) or citing an ID defined nowhere
   (`change-undefined`).
+- Behavioral evals use the split spec layout and add three spec-quality scenarios (28-30).
 
 ### Changed
 

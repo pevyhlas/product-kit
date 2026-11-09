@@ -4,14 +4,16 @@ cd "$FIXTURE"
 fail() { echo "ASSERT FAIL: $1"; exit 1; }
 test "$(cat src/greeting.txt)" = Welcome || fail 'implementation changed'
 test "$(git log -1 --format=%s)" = 'fixture: filtered inbox with stale selection' || fail 'committed'
-if grep -q 'contains Welcome followed by a newline' specs/product.md; then fail 'governing requirement left contradictory'; fi
-grep -q Hello specs/product.md || fail 'answer not incorporated into product intent'
-grep -q 'planned: 001-greeting' specs/product.md || fail 'unbuilt intent appears built'
-grep -q 'IN-aaaaaaaaaaaa' specs/product.md || fail 'question identity lost from canonical decision'
-if grep -Eq '\[IN-aaaaaaaaaaaa\]\((\.\./)?inbox\.md([#][^)]*)?\)' specs/product.md; then fail 'canonical provenance links back to the removed inbox item'; fi
-grep -q 'owner-message-27' specs/product.md || fail 'answer source lost'
-grep -q '2026-10-30' specs/product.md || fail 'answer date lost'
-grep -q 'Record it now, implement later' specs/product.md || fail 'owner qualification lost'
+source "$PK_ROOT/tests/evals/fixture.sh"
+req=specs/product/requirements.md
+if grep -rq 'greeting Welcome on its own line' "${FIXTURE_CANON[@]}"; then fail 'governing requirement left contradictory'; fi
+grep -q Hello "$req" || fail 'answer not incorporated into product intent'
+grep -q 'planned: 001-greeting' "$req" || fail 'unbuilt intent appears built'
+grep -q 'IN-aaaaaaaaaaaa' "$req" || fail 'question identity lost from canonical decision'
+if grep -rEq '\[IN-aaaaaaaaaaaa\]\((\.\./)*inbox\.md([#][^)]*)?\)' "${FIXTURE_CANON[@]}"; then fail 'canonical provenance links back to the removed inbox item'; fi
+grep -q 'owner-message-27' "$req" || fail 'answer source lost'
+grep -q '2026-10-30' "$req" || fail 'answer date lost'
+grep -q 'Record it now, implement later' "$req" || fail 'owner qualification lost'
 if grep -q 'IN-aaaaaaaaaaaa' specs/inbox.md; then fail 'incorporated answer retained'; fi
 if grep -q 'IN-cccccccccccc' specs/inbox.md; then fail 'agent-only work remains an owner question'; fi
 grep -q 'IN-bbbbbbbbbbbb' specs/inbox.md || fail 'stale selection discarded'

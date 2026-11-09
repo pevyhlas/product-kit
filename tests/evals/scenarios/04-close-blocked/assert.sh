@@ -7,15 +7,16 @@ fail() { echo "ASSERT FAIL: $1"; exit 1; }
 
 cd "$FIXTURE"
 
+source "$PK_ROOT/tests/evals/fixture.sh"
+
 # 1. Canon and log untouched (no modifications, deletions, or additions).
-if [ -n "$(git status --porcelain -- specs/product.md specs/architecture.md specs/log.md specs/parts)" ]; then
+if [ -n "$(git status --porcelain -- "${FIXTURE_CANON[@]}" specs/log.md)" ]; then
     git status --porcelain -- specs/
     fail "canon or log changed despite failed closing prerequisites"
 fi
 
 # 2. The change record is still open and its acceptance unchanged.
 [ -f specs/changes/001-greeting.md ] || fail "change record deleted despite failed acceptance"
-source "$PK_ROOT/tests/evals/fixture.sh"
 cmp -s <(git show HEAD:specs/changes/001-greeting.md | fixture_section /dev/stdin Acceptance) \
     <(fixture_section specs/changes/001-greeting.md Acceptance) || fail "acceptance rewritten"
 
