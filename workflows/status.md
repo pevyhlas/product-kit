@@ -26,8 +26,8 @@ Answer the owner's question first, in plain words, with the title next to every 
    A parent referenced by a child stays visible as unknown even if its record/checkpoint is missing.
 2. **True now**: requirements, qualities and parts with maturity, `planned` and unenforced items.
 3. **In flight**: open changes from every registered worktree, with where each lives, step,
-   age, attempts and what each waits on; 0.x feature folders still on main, a cutover to
-   finish; unmerged branches.
+   age, attempts and what each waits on; reviewed records merged without closing; 0.x feature
+   folders still on main, a cutover to finish; unmerged branches.
 4. **Live**: the latest `DEPLOY` record per app and environment (`rev=none`: nothing deployed);
    merged but not deployed.
 5. **Holds and waivers** with owner, scope and expiry; expired ones flagged.

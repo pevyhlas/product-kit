@@ -58,7 +58,7 @@ context is durable; intermediate commits alone may disappear under squash merge.
 |-----------|---------|
 | Tiny fix | Inline tasks, proportional checks/review, same-PR finalization. |
 | Medium feature | Optional execution detail; one bounded change/PR. |
-| Several PRs | Bounded children where useful; integrated programme outcome is not inferred from child merges. Update/finalize the parent in relevant child PRs. |
+| Several PRs | Bounded children where useful; integrated programme outcome is not inferred from child merges. Each child updates its one row in the parent; finalize the parent in the last relevant PR. |
 | Non-gating production observation unavailable | Record “unverified,” its next check/trigger and owner where known on the PR; finish required PR work. No cleanup PR. |
 | Existing live gate or required behavior fails | Remains blocking; no silent reclassification. Owner disposition must be explicit. |
 | Post-merge defect | Ordinary linked fix with inherited attempts/holds for the failing outcome. |

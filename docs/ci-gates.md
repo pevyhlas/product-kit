@@ -121,10 +121,15 @@ authenticate the reviewer session: shared bot accounts can publish for several r
 main session must still preserve dispatch/report provenance and enforce independent review.
 
 A closing commit that deletes the record is checked against the record's last committed
-version. Finalize new implementation changes in their own PR, retaining context and evidence on
-that PR before deleting the record; no cleanup-only PR is required. Auxiliary tracked plans are
-ordinary reviewed paths: removing them after PASS invalidates coverage. Remove them before final
-review, or use ignored execution scratch with useful context on the PR.
+version; `close-change.sh` makes that commit only after the check passes. A passing check whose
+record is still at the head, with no child or outcome checkpoint, prints a note and reports
+`"record_open":true` in `--json`; a project whose changes each close in one PR can fail its CI on
+that. A programme parent's planning PR reports it too until its first child or outcome checkpoint
+exists. Finalize new implementation
+changes in their own PR, retaining context and evidence on that PR before deleting the record; no
+cleanup-only PR is required. Auxiliary tracked plans are ordinary reviewed paths: removing them
+after PASS invalidates coverage. Remove them before final review, or use ignored execution scratch
+with useful context on the PR.
 
 For a PR finalizing several changes, use the containing implementation record as review carrier
 ([change workflow](../workflows/change.md#bigger-work)). It inherits all required acceptance,
@@ -188,7 +193,10 @@ agent definition or tier-map findings, and a change record deleted in history wi
 It reports, as advisories: a 0.x layout or two canons, a `specs/archive/` folder on main, a
 `specs/archive.md` whose base commit or last 0.x feature cannot be read, agent context naming
 removed 0.x paths, spec files over their reading budgets,
-cited IDs that are undefined or retired (in spec files and tests), expired holds and waivers,
+cited IDs that are undefined or retired (in spec files and tests), a reviewed change record
+still on the default branch and in the checkout with no child or outcome checkpoint keeping it
+open (merged without closing; a record with no verdict, such as T0, is not detected),
+expired holds and waivers,
 open inbox items and their age, retained resolved items, inbox items in the old one-line form, local machine paths in
 specs and agent context, links to missing files in the spec and `specs/archive.md`, spec files
 that no chain of links from

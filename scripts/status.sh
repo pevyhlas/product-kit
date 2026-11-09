@@ -71,24 +71,21 @@ done <<< "$parents")"
 # --- Git: default branch, unmerged branches, deployments behind it ------------------------
 # Reading a missing object in a partial clone would fetch it from the promisor remote. Git 2.45+
 # (and some maintenance releases) refuse under GIT_NO_LAZY_FETCH; in a partial clone any older
-# Git skips the object reads instead (squash detection, deploy distance), reporting them unknown.
+# Git skips the object reads instead (squash detection, deploy distance, unclosed records).
 export GIT_NO_LAZY_FETCH=1
 objects_local=true
-base=""; branches=""
+base=""; branches=""; unclosed=""
 if git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    if { [ -n "$(git -C "$root" config --get extensions.partialclone 2>/dev/null)" ] ||
-            git -C "$root" config --get-regexp '^remote\..*\.promisor$' 2>/dev/null | grep -qi ' true$'; } &&
-        [ "$(git version 2>/dev/null | awk '{ split($3, v, "."); print v[1] * 1000 + v[2] }')" -lt 2045 ]; then
-        objects_local=false
-    fi
-    base="$(git -C "$root" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
-    for candidate in main master; do
-        [ -n "$base" ] && break
-        git -C "$root" show-ref --verify --quiet "refs/heads/$candidate" && base="$candidate"
-    done
+    spec_objects_local "$root" || objects_local=false
+    base="$(spec_default_branch "$root")"
     if [ -n "$base" ]; then
         branches="$(git -C "$root" for-each-ref --no-merged="$base" --sort=committerdate \
             --format="%(refname:short)$SEP%(committerdate:short)" refs/heads 2>/dev/null || true)"
+        # Reviewed PR-scoped records still on the default branch; a child in any checkout keeps its parent open.
+        if $objects_local; then
+            unclosed=" $(spec_unclosed_changes "$root" "$base" |
+                awk -v named=" $(printf '%s\n' "$parents" | tr -d '`' | tr '\n' ' ') " 'index(named, " " $0 " ") == 0' | tr '\n' ' ')"
+        fi
     fi
 fi
 # A squash merge leaves the branch unmerged in git's eyes: when the default branch has, or had
@@ -197,9 +194,11 @@ if $json; then
     printf '],"changes":['; sep=""
     while IFS="$SEP" read -r id title opened step waits nxt parent total passed failed maxatt stalled_items loc; do
         [ -n "$id" ] || continue
-        printf '%s{"id":%s,"title":%s,"opened":%s,"age_days":%s,"step":%s,"waiting_on":%s,"next":%s,"parent":%s,"location":%s,"acceptance":{"total":%s,"passed":%s,"failed_or_blocked":%s,"max_attempts":%s,"stalled":%s}}' "$sep" \
+        flag=false; case "$unclosed" in *" $id "*) flag=true ;; esac
+        printf '%s{"id":%s,"title":%s,"opened":%s,"age_days":%s,"step":%s,"waiting_on":%s,"next":%s,"parent":%s,"location":%s,"merged_unclosed":%s,"acceptance":{"total":%s,"passed":%s,"failed_or_blocked":%s,"max_attempts":%s,"stalled":%s}}' "$sep" \
             "$(js "$id")" "$(js "$title")" "$(js "$opened")" "$(ji "$(age "$opened")")" "$(js "$step")" "$(js "$waits")" \
-            "$(js "$nxt")" "$(js "$parent")" "$(js "$loc")" "$(ju "$total")" "$(ju "$passed")" "$(ju "$failed")" "$(ju "$maxatt")" "$(js "$stalled_items")"
+            "$(js "$nxt")" "$(js "$parent")" "$(js "$loc")" "$flag" \
+            "$(ju "$total")" "$(ju "$passed")" "$(ju "$failed")" "$(ju "$maxatt")" "$(js "$stalled_items")"
         sep=,
     done <<< "$changes"
     printf '],"leftover_features":['; sep=""
@@ -322,6 +321,7 @@ while IFS="$SEP" read -r id title opened step waits nxt parent total passed fail
     [ -z "$waits" ] || printf '    waiting on: %s\n' "$waits"
     [ -z "$nxt" ] || printf '    next: %s\n' "$nxt"
     case "$parent" in ''|none) ;; *) printf '    parent: %s\n' "$parent" ;; esac
+    case "$unclosed" in *" $id "*) printf '    merged without closing: reviewed and on %s, with no child or outcome checkpoint keeping it open; close it in the next relevant PR, or give a change spanning PRs a checkpoint (change.md)\n' "$base" ;; esac
 done <<< "$changes"
 while IFS="$SEP" read -r id done_n total_n; do
     [ -n "$id" ] || continue
