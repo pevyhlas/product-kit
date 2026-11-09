@@ -33,15 +33,17 @@ SPEC_SKIP_AWK='function spec_skip(line) {
     return 0
 }'
 
-# Lifecycle stages, in order: idea, demo, mvp, private preview, public preview, ga, sunset,
-# retired. A project may skip stages; only the owner moves the current one (lifecycle.md, Now).
+# Lifecycle stages, in order. A project may skip stages; only the owner moves the current one
+# (lifecycle.md, Now). stage_rank below keeps the same order.
+# shellcheck disable=SC2034 # read by the scripts that source this library
+SPEC_STAGE_LIST='idea, demo, mvp, private preview, public preview, paid preview, ga, sunset, retired'
 # shellcheck disable=SC2016 # awk code: its $ is awk's, never the shell's
 SPEC_STAGE_AWK='function stage_rank(s) {
     s = tolower(s); gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); gsub(/[[:space:]]+/, " ", s)
     if (s == "idea") return 1; if (s == "demo") return 2; if (s == "mvp") return 3
     if (s == "private preview") return 4; if (s == "public preview") return 5
-    if (s == "ga" || s == "general availability") return 6
-    if (s == "sunset") return 7; if (s == "retired") return 8
+    if (s == "paid preview") return 6; if (s == "ga" || s == "general availability") return 7
+    if (s == "sunset") return 8; if (s == "retired") return 9
     return 0
 }
 # The stage named by a `from: <stage>` marker in text (the parenthetical of an item heading or
@@ -50,7 +52,7 @@ function stage_from(text,   t, m) {
     t = tolower(text)
     if (!match(t, /from:[[:space:]]*[a-z]+([[:space:]]+[a-z]+)?/)) return ""
     m = substr(t, RSTART, RLENGTH); sub(/^from:[[:space:]]*/, "", m); gsub(/[[:space:]]+/, " ", m)
-    if (m !~ /^(private|public) preview$/ && m !~ /^general availability$/) sub(/ .*/, "", m)
+    if (m !~ /^(private|public|paid) preview$/ && m !~ /^general availability$/) sub(/ .*/, "", m)
     return m
 }'
 
@@ -371,7 +373,7 @@ spec_stage_now() { # root
         function field(name,   t, l) {
             if (!match($0, "\\*\\*" name "\\*\\*:[^*·]*")) return ""
             t = substr($0, RSTART, RLENGTH); sub(/^[^:]*:[[:space:]]*/, "", t); l = tolower(t)
-            if (l ~ /^(private|public)[[:space:]]+preview/ || l ~ /^general[[:space:]]+availability/) match(t, /^[A-Za-z]+[[:space:]]+[A-Za-z]+/)
+            if (l ~ /^(private|public|paid)[[:space:]]+preview/ || l ~ /^general[[:space:]]+availability/) match(t, /^[A-Za-z]+[[:space:]]+[A-Za-z]+/)
             else match(t, /^[A-Za-z]+/)
             return RSTART ? substr(t, 1, RLENGTH) : ""
         }

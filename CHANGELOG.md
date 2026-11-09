@@ -14,6 +14,9 @@ change by change.
   layout-derived migration state in ordinary text and a shared JSON `adoption` summary. A current
   installation can still require a legacy-spec cutover; current layout alone never certifies
   migration completion. Missing or ambiguous installed-version metadata remains unknown.
+- An optional **Paid preview** lifecycle stage between Public preview and GA: anyone can join,
+  for a fee, and it may still change. `**Now**:`, `from: paid preview` markers and `product.md`
+  stage columns accept it, and doctor, status and bounds order it before GA.
 
 ## [1.3.3] — 2026-10-31 — inbox review and workflow safeguards
 

@@ -12,8 +12,8 @@ answer. You do not write the spec yourself unless you want to.
 
 - `specs/product.md` (L0): one page: the stage the product is in, the pains and the journeys
   that solve them, who it is for, the core loop, journeys by stage and the bet. You move the
-  stage in `specs/product/lifecycle.md` (Idea, Demo, MVP, Private preview, Public preview, GA,
-  Sunset, Retired); agents build for the stage it is in. Then `specs/product/`: the journeys (who, intent, scenario,
+  stage in `specs/product/lifecycle.md` (Idea, Demo, MVP, Private preview, Public preview,
+  Paid preview, GA, Sunset, Retired); agents build for the stage it is in. Then `specs/product/`: the journeys (who, intent, scenario,
   variations, success) first, then requirements, qualities, constraints and non-goals, which
   bind every change. The agent edits L0 only with your words, quoted. Only you promote a hypothesis to
   validated.
