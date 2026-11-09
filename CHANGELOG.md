@@ -77,21 +77,23 @@ change by change.
 
 - Pin the kit to `v1.4.0`, run `bash .product-kit/scripts/init.sh --check`, then
   `bash .product-kit/scripts/init.sh --upgrade`. The upgrade adds `.prdkit/workflows/review.md`
-  and refreshes the generated agent entry text, so that file changes too. Update configured
+  and `close-change.sh`, and changes the kit-managed section of `AGENTS.md`. Update configured
   adoption pins and manifest hashes with the kit pin.
-- Expect new doctor advisories after upgrading: budgets by reading length, `log.md`, `inbox.md`
-  and `records.md` budgets, trace drift, and records merged without closing. They are advisories;
-  `doctor --strict` promotes them. Record the `trace` counts from `doctor --json` as a CI ratchet
-  baseline instead of failing on all of them at once.
+- New doctor advisories appear after upgrading: budgets by reading length; `log.md`, `inbox.md`
+  and `records.md` budgets; trace drift; records merged without closing. A CI step running
+  `doctor.sh --strict` fails after upgrading until they are fixed. Fix them first, or run
+  `doctor.sh --json` in CI with a ratchet on the advisory count and the `trace` counts until they
+  are down.
 - Close each record merged without closing in the next relevant PR, which carries it
   (`review.md`, Review carrier); no cleanup-only PR. Reduce programme parents to one row per
   child; child plans and evidence stay in the child record, its PR and git.
 - A log with ten or more entries and no `compaction` line shows **Compaction due**: run a
-  compaction pass (`compact.md`), which condenses older entries into `specs/archive.md` and records
-  **Log condensed through**.
-- `planned:` markers that name no change record are now reported: point them at an open change or
-  remove them. Existing specs are not rewritten; one home per fact applies to the facts a change
-  edits, and older copies are consolidated when touched.
+  compaction pass (`compact.md`). It ends with a `- <date> compaction:` line; a log over its
+  budget also condenses older entries into `specs/archive.md` and records **Log condensed
+  through**.
+- `planned:` markers that name a closed change or no change record are now reported: point them
+  at an open change or remove them. Existing specs are not rewritten; one home per fact applies
+  to the facts a change edits, and older copies are consolidated when touched.
 
 ## [1.3.3] — 2026-10-31 — inbox review and workflow safeguards
 
