@@ -195,8 +195,9 @@ It reports, as advisories: a 0.x layout or two canons, a `specs/archive/` folder
 removed 0.x paths, spec files over their reading budgets,
 cited IDs that are undefined or retired (in spec files and tests), a reviewed change record
 still on the default branch and in the checkout with no child or outcome checkpoint keeping it
-open (merged without closing; a record with no verdict, such as T0, is not detected),
-expired holds and waivers,
+open (merged without closing; a record with no verdict, such as T0, is not detected), trace
+drift (`Code:` paths not in the repository, stale `planned:` markers, unallocated R/Q items and
+parts, change records restating or citing undefined IDs), expired holds and waivers,
 open inbox items and their age, retained resolved items, inbox items in the old one-line form, local machine paths in
 specs and agent context, links to missing files in the spec and `specs/archive.md`, spec files
 that no chain of links from
@@ -207,4 +208,5 @@ registration, and
 agent context files (`CLAUDE.md`, `AGENTS.md`, ...) over `context-budget-bytes` (default
 16384; 0 disables) in the `## Configuration` section of `.prdkit/memory/config.md`.
 `--strict` promotes advisories to failing findings, which makes it an opt-in CI gate; `--json`
-reports `{result, findings, advisories, strict, ...}`.
+reports `{result, findings, advisories, trace, strict, ...}`, where `trace` counts each trace
+check by a stable code, so CI can ratchet a count down without failing on every advisory.

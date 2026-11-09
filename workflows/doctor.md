@@ -15,10 +15,13 @@ revisions, local machine
 paths, links to missing files in the spec and `specs/archive.md`, spec files no summary links
 (1.1 layout), `observed/` pieces `observed.md` does not link, a lifecycle stage naming no
 environment the environments topic lists, raw evidence under `specs/`, oversized agent context
-files and agent projection drift. Malformed spec IDs/records, an unlogged close, duplicate inbox
-identities/fields/option keys and mismatched answer revisions are errors; the rest are advisories that
-`--strict` fails. The kit's `scripts/init.sh --check` reports installation drift. Never repair
-during diagnosis or read a clean report as readiness.
+files and agent projection drift. Trace advisories, counted by code under `trace` in `--json`:
+missing `Code:` paths, `planned:` markers naming a closed or no open change, retired IDs cited in
+spec text, R/Q items no part or architecture file cites, parts citing no J/R/Q, and change
+records restating spec items or citing undefined IDs. Malformed spec IDs/records, an unlogged
+close, duplicate inbox identities/fields/option keys and mismatched answer revisions are errors;
+the rest are advisories that `--strict` fails. The kit's `scripts/init.sh --check` reports
+installation drift. Never repair during diagnosis or read a clean report as readiness.
 
 Ordinary text and JSON also separate installed kit version (manifest), observed spec layout and
 layout-derived migration state. `required` means legacy 0.x; `incomplete` means competing canons

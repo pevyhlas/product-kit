@@ -30,6 +30,13 @@ change by change.
 - Status says when compaction is due: ten or more log entries after the last
   `- <date> compaction:` line in `specs/log.md`. A project with ten or more entries and no such
   line sees the notice after upgrading, until its next pass.
+- Doctor trace advisories, each grouped with its count and first locations, and counted by code
+  under `trace` in `--json` for a CI ratchet: `Code:` paths not in the repository
+  (`code-path`), `planned:` markers naming a closed (`planned-closed`) or no open change
+  (`planned-unknown`), retired IDs cited in spec text (`retired-cited`), live R/Q items no part
+  or architecture file cites (`unallocated`) and parts citing no J/R/Q (`part-need`), and change
+  records restating a spec item (`change-restates`) or citing an ID defined nowhere
+  (`change-undefined`).
 
 ### Changed
 
@@ -49,6 +56,11 @@ change by change.
 - Spec budgets count reading length: a line counts once per 100 characters, so long table rows
   and paragraph lines no longer dodge a budget. Budget numbers are unchanged; files with long
   lines may newly show a budget advisory.
+
+### Fixed
+
+- Status counts a Q or I that names no `Enforced by` as unenforced, not only one saying
+  `unenforced`.
 
 ## [1.3.3] — 2026-10-31 — inbox review and workflow safeguards
 
