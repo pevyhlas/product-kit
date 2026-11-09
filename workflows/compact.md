@@ -88,8 +88,8 @@ and revisit conditions, why-it-works assumptions, and retired IDs (one line each
 amendment notes, superseded wording and resolved questions. Keep a rejected alternative that is
 still a plausible proposal; it prevents re-proposals. `specs/archive.md` grows into git
 instead: condense its older entries harder; their details stay at the base. `specs/log.md` past
-its budget keeps its newest entries: condense the older ones, up to a change number below every
-open change, into archive entries for notable outcomes and lessons, set the archive's **Log
-condensed through** line to that number and the log at the commit before, and delete them. End
-each pass with `- <date> compaction: <what changed>` in `specs/log.md`; status counts the
-changes closed since.
+its budget keeps its newest entries; the older ones, up to a number below every open change,
+become archive entries for notable outcomes and lessons, and the archive's **Log condensed
+through** line names that number and the log at the commit before. A first `specs/archive.md`
+starts from `archive-template.md` (`Last 0.x feature: none`), so numbering works. End each pass
+with `- <date> compaction: <what changed>` in `specs/log.md`.

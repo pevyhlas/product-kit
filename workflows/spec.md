@@ -246,11 +246,9 @@ Budgets are reading budgets, never targets: never pad toward one, and never drop
 passes the line test to fit. A line counts once per 100 characters, so a long row counts as the
 lines it takes to read. Past a budget, tighten the wording, move detail to code or tests, or
 split (Layout). `observed.md` 150 lines, split into `observed/<area>.md`; an open change 150,
-split into changes that each ship on their own; `log.md` 150, each entry at most 300 characters,
-older entries condensed into `archive.md` (compact.md); `inbox.md` 150, drained by incorporating
-answers and reviewing the rest with the owner; `records.md` 150, lifted, expired and superseded
-lines removed (git keeps them). A `## D-NN` section over 60 lines holds design: keep the choice,
-alternatives and revisit trigger, and move the design to the part or topic it shapes.
+split into changes that each ship on their own; `log.md` 150, older entries condensed into
+`archive.md` (compact.md); `inbox.md` 150, answers incorporated and the rest reviewed with the
+owner; `records.md` 150, lifted, expired and superseded lines removed (git keeps them).
 
 ## Organizing
 

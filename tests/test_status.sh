@@ -218,14 +218,14 @@ assert_not_contains "$OUTPUT" "Compaction due" "nine closed changes are not yet 
 printf -- '- 2026-10-10 110-c: done — R-01 — #10\n' >> specs/log.md
 run bash "$STATUS_SH"
 assert_contains "$OUTPUT" "Compaction due: 10 changes closed and no pass recorded in specs/log.md" "ten with no pass on record"
-printf -- '- 2026-10-03 compaction: tightened P1\n' >> specs/log.md
+printf -- '- 2026-10-10 compaction: tightened P1\n' >> specs/log.md
 run bash "$STATUS_SH"
-assert_not_contains "$OUTPUT" "Compaction due" "a pass resets the count; line order does not matter"
-{ i=11; while [ "$i" -le 14 ]; do printf -- '- 2026-10-%02d %03d-c: done — R-01 — #%d\n' "$i" "$((i + 100))" "$i"; i=$((i + 1)); done; } >> specs/log.md
+assert_not_contains "$OUTPUT" "Compaction due" "a pass resets the count"
+{ i=1; while [ "$i" -le 10 ]; do printf -- '- 2026-10-%d %03d-c: done — R-01 — #%d\n' "$((i < 2 ? 10 : i))" "$((i + 110))" "$i"; i=$((i + 1)); done; } >> specs/log.md
 run bash "$STATUS_SH"
-assert_contains "$OUTPUT" "Compaction due: 11 changes closed since the last pass (2026-10-03)" "changes logged after the pass count"
+assert_contains "$OUTPUT" "Compaction due: 10 changes closed since the last pass (2026-10-10)" "entries after the pass count, by line order: same-day and unpadded dates too"
 run bash "$STATUS_SH" --json
-assert_contains "$OUTPUT" '"compaction":{"closed_since_last":11,"last":"2026-10-03","due":true}' "JSON carries it"
+assert_contains "$OUTPUT" '"compaction":{"closed_since_last":10,"last":"2026-10-10","due":true}' "JSON carries it"
 rm specs/log.md
 
 it "live 0.x canon beside the 1.0 spec is two canons; values with quotes stay valid JSON"

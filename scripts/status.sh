@@ -46,13 +46,13 @@ later="$(if [ -n "$stage_now" ]; then
 fi)"
 changes="$(spec_open_changes "$root")"
 leftover="$(spec_leftover_features "$root")"
-# Compaction is due every ten closed changes (compact.md): those logged after the newest
-# `- <date> compaction:` line in specs/log.md, or all logged when none is: "<count> [<date>]".
+# Compaction is due every ten closed changes (compact.md): the entries appended after the last
+# `- <date> compaction:` line in specs/log.md, or all of them when none is: "<count> [<date>]".
 compaction=""
 [ ! -f "$root/specs/log.md" ] || compaction="$(LC_ALL=C awk '
-    /^- [0-9-]+ compaction:/ { if ($2 > last) last = $2; next }
-    /^- [0-9-]+ [0-9][0-9][0-9][0-9]*-[a-z0-9-]*:/ { date[++n] = $2 }
-    END { for (i = 1; i <= n; i++) if (date[i] > last) c++; print c + 0, last }' "$root/specs/log.md")"
+    /^- [0-9-]+ compaction:/ { c = 0; last = $2; next }
+    /^- [0-9-]+ [0-9][0-9][0-9][0-9]*-[a-z0-9-]*:/ { c++ }
+    END { print c + 0, last }' "$root/specs/log.md")"
 read -r closed_since last_pass <<< "${compaction:-0}"
 inbox="$(spec_inbox "$root")"
 records="$(spec_records "$root")"

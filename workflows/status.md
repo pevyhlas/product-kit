@@ -11,6 +11,7 @@ written as prose in the spec or docs. Its handwritten inputs are change State an
 The adoption summary separates manifest-recorded installed version, observed spec layout and
 layout-derived migration state (same contract as [doctor.md](doctor.md)). Keep these distinct:
 installing a newer kit does not migrate specs; a current layout does not verify migration completion.
+`Compaction due` (JSON `compaction`) appears at ten log entries after the last `compaction` line.
 
 Answer the owner's question first, in plain words, with the title next to every ID. Then:
 

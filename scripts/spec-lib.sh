@@ -180,18 +180,28 @@ spec_archive_base_tokens() { # root
     [ -z "$v" ] || printf '%s\n' "$v" | tr -c '0-9a-fA-F' '\n' | sed -n '/^[0-9a-fA-F]\{7,40\}$/p'
     return 0
 }
-# The last 0.x feature number, or with `log` the change number the log is condensed through:
-# the highest number before any "(", ";" or ",", 0 for none, nothing when the line is missing or
-# holds no number.
-spec_archive_last() { # root [last|log]
+# The last 0.x feature number: the highest number before any "(", ";" or ",", 0 for none,
+# nothing when the line is missing or holds no number.
+spec_archive_last() { # root
     local v d max=""
-    v="$(_spec_archive_value "$1/specs/archive.md" "${2:-last}")"
+    v="$(_spec_archive_value "$1/specs/archive.md" last)"
     case "$v" in [Nn][Oo][Nn][Ee]*) echo 0; return 0 ;; esac
     for d in $(printf '%s' "${v%%[(;,]*}" | tr -c '0-9' ' '); do
         [ "${#d}" -le 9 ] || continue
         d=$((10#$d)); { [ -n "$max" ] && [ "$max" -ge "$d" ]; } || max="$d"
     done
     [ -z "$max" ] || echo "$max"
+    return 0
+}
+# The change number specs/log.md is condensed through: the number its value starts with (a sha
+# or date after it never counts), 0 for none, nothing otherwise.
+spec_archive_log_through() { # root
+    local v d
+    v="$(_spec_archive_value "$1/specs/archive.md" log)"
+    case "$v" in
+        [Nn][Oo][Nn][Ee]*) echo 0 ;;
+        [0-9]*) d="${v%%[!0-9]*}"; [ "${#d}" -gt 9 ] || echo "$((10#$d))" ;;
+    esac
     return 0
 }
 
@@ -211,12 +221,11 @@ spec_removed_features() { # root
 }
 
 # Reading length: a line counts once per 100 characters, rounded up, and at least once, so a
-# long table row or paragraph cannot dodge a line budget. spec_chars drops UTF-8 continuation
-# bytes, so under LC_ALL=C each character is one byte for every awk.
-SPEC_READ_AWK='function spec_read(len) { return len > 100 ? int((len + 99) / 100) : 1 }'
-spec_chars() { LC_ALL=C tr -d '\200-\277' < "$1"; } # file
+# long table row or paragraph cannot dodge a line budget. Dropping UTF-8 continuation bytes
+# leaves one byte per character for every awk under LC_ALL=C.
 spec_reading_lines() { # file -> "<reading lines> <lines>"
-    spec_chars "$1" | LC_ALL=C awk "$SPEC_READ_AWK"'{ n += spec_read(length($0)) } END { print n + 0, NR }'
+    LC_ALL=C tr -d '\200-\277' < "$1" |
+        LC_ALL=C awk '{ l = length($0); n += l > 100 ? int((l + 99) / 100) : 1 } END { print n + 0, NR }'
 }
 
 # Spec files that define IDs, relative to root.

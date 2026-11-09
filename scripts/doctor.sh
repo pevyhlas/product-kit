@@ -110,25 +110,6 @@ budget 200 "$root"/specs/parts/*.md "$root"/specs/parts/*/*.md
 budget_fix 150 "condense its older entries into specs/archive.md at the next compaction (compact.md)" "$root"/specs/log.md
 budget_fix 150 "incorporate answered items (spec.md, Resolve owner answers), review the rest with the owner (/prdkit-inbox), and keep each item's context in the files it links" "$root"/specs/inbox.md
 budget_fix 150 "remove lifted or expired holds and waivers, and DEPLOY and ATTEST lines a newer one supersedes; git keeps them" "$root"/specs/records.md
-# A log entry is one line of five short fields (change.md, Closing); its detail is on the PR.
-if [ -f "$root/specs/log.md" ]; then
-    long="$(spec_chars "$root/specs/log.md" | LC_ALL=C awk '/^- / { n++; if (length($0) > 300 && ++o <= 3) at = at (o > 1 ? ", " : "") NR }
-        END { if (o) print o " of " n " entries (line" (o > 1 ? "s " : " ") at (o > 3 ? " and " o - 3 " more" : "") ")" }')"
-    [ -z "$long" ] || advisories+=("Log: $long in specs/log.md run over 300 characters; an entry names what changed, its IDs, the disposition and the PR, which holds the detail")
-fi
-# A decision states the choice, its alternatives and when to revisit; a long ## D-NN section is
-# design, which belongs to the part or topic it shapes.
-long=""
-while IFS= read -r file; do
-    long="$long$(spec_chars "$root/$file" | LC_ALL=C awk -v file="$file" "$SPEC_SKIP_AWK$SPEC_READ_AWK"'
-        function close_section() { if (id != "" && n > 60) printf "%s at %s:%d (%d), ", id, file, at, n; id = "" }
-        { if (spec_skip($0)) { if (id != "") n += spec_read(length($0)); next } }
-        /^#/ { level = index($0, " ") - 1; if (id != "" && level > 0 && level <= idlevel) close_section() }
-        /^###? D-[0-9][0-9]/ { close_section(); id = $2; idlevel = index($0, " ") - 1; at = NR; n = 0 }
-        id != "" { n += spec_read(length($0)) }
-        END { close_section() }')"
-done < <(spec_files "$root")
-[ -z "$long" ] || advisories+=("Decisions over 60 reading lines: ${long%, }; keep the choice, its alternatives and when to revisit, and move the design to the part or topic it shapes, with a link")
 
 # --- IDs ---------------------------------------------------------------------------------------
 items="$(spec_items "$root")"
@@ -417,7 +398,7 @@ fi
 
 # --- Closed changes reach the log: a deleted change record needs its specs/log.md line ------------
 if git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    unlogged=""; through="$(spec_archive_last "$root" log)"
+    unlogged=""; through="$(spec_archive_log_through "$root")"
     while IFS= read -r id; do
         [ -n "$id" ] && [ ! -f "$root/specs/changes/$id.md" ] || continue
         # Entries condensed into specs/archive.md (compact.md) left the log on purpose.

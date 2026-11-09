@@ -184,15 +184,10 @@ run bash "$DOCTOR"
 assert_not_contains "$OUTPUT" "Budget: specs/product.md" "a character is counted once, however many bytes it takes"
 git checkout -q -- specs/product.md
 
-it "the log, inbox and records have budgets; a log entry stays one short line"
-{ printf -- '- 2026-10-17 001-a: done — R-01 — #1\n- 2026-10-17 002-b: %s\n' "$(printf '%0300d' 0)"; } > specs/log.md
-run bash "$DOCTOR"
-assert_contains "$OUTPUT" "advisory: Log: 1 of 2 entries (line 2) in specs/log.md run over 300 characters" "the long entry is named"
-assert_not_contains "$OUTPUT" "Budget: specs/log.md" "two entries are within the budget"
+it "the log, inbox and records have budgets, each with its way out"
 { i=0; while [ "$i" -lt 151 ]; do printf -- '- 2026-10-17 %03d-c: done — R-01 — #%d\n' "$((i + 100))" "$i"; i=$((i + 1)); done; } > specs/log.md
 run bash "$DOCTOR"
 assert_contains "$OUTPUT" "advisory: Budget: specs/log.md has 151 lines, over its 150-line reading budget; condense its older entries into specs/archive.md" "the log condenses into the archive"
-assert_not_contains "$OUTPUT" "advisory: Log:" "short entries pass"
 rm specs/log.md
 { printf '# Owner inbox\n\n<!--\n'; i=0; while [ "$i" -lt 150 ]; do echo "note $i"; i=$((i + 1)); done; printf -- '-->\n\n## Waiting for you\n'; } > specs/inbox.md
 printf 'DEPLOY web env=test rev=abc1234 date=2026-10-17 by=https://example.invalid/run/1 — %s\n' "$(printf '%016000d' 0)" > specs/records.md
@@ -201,19 +196,6 @@ assert_eq 0 "$STATUS" "budgets stay advisories"
 assert_contains "$OUTPUT" "advisory: Budget: specs/inbox.md has 156 lines, over its 150-line reading budget; incorporate answered items" "the inbox drains"
 assert_contains "$OUTPUT" "advisory: Budget: specs/records.md has 1 line that reads as 161 at 100 characters a line, over its 150-line reading budget; remove lifted or expired" "superseded records leave"
 rm specs/inbox.md specs/records.md
-
-it "a long decision section is design: its detail belongs to its part or topic"
-mkdir -p specs/architecture
-{ printf '# Demo — decisions\n\n## D-05 Long one\n\n'; i=0; while [ "$i" -lt 60 ]; do echo "detail $i"; i=$((i + 1)); done
-  printf '\n## D-06 Short one\n\n- **Decision**: x.\n'; } > specs/architecture/decisions.md
-{ printf '# D-07 A long decision in its own file\n\n'; i=0; while [ "$i" -lt 70 ]; do echo "detail $i"; i=$((i + 1)); done; } > specs/decisions/D-07.md
-run bash "$DOCTOR"
-assert_eq 0 "$STATUS" "an advisory"
-assert_contains "$OUTPUT" "advisory: Decisions over 60 reading lines: D-05 at specs/architecture/decisions.md:3 (63); keep the choice" "the long section, with where it starts"
-assert_contains "$OUTPUT" "move the design to the part or topic it shapes" "where its detail goes"
-assert_not_contains "$OUTPUT" "D-06 at" "a short section passes"
-assert_not_contains "$OUTPUT" "D-07 at" "a decision's own file keeps its file budget"
-rm -rf specs/architecture specs/decisions/D-07.md
 
 it "a 1.0 product.md with one-digit journey bullets still passes, with an advisory"
 printf -- '\n## Users and journeys\n\n- **J-1 Greet**: a visitor is greeted.\n' >> specs/product.md
@@ -346,9 +328,12 @@ rm specs/log.md
 printf '# Demo — archive\n\n**Last 0.x feature**: none\n\n**Log condensed through**: 003; those entries: `git show abc1234:specs/log.md`.\n' > specs/archive.md
 run bash "$DOCTOR"
 assert_not_contains "$OUTPUT" "Closed without" "a log condensed into the archive keeps it closed"
-printf '# Demo — archive\n\n**Last 0.x feature**: none\n\n**Log condensed through**: 002\n' > specs/archive.md
-run bash "$DOCTOR"
-assert_contains "$OUTPUT" "Closed without a specs/log.md line: 003-x" "a change past the condensed number still needs its line"
+# shellcheck disable=SC2016 # backticks are Markdown code spans, not command substitution
+for value in '002 — entries at `git show 9f81234:specs/log.md`' '002 as of 2026-10-30' 'through 9'; do
+    printf '# Demo — archive\n\n**Last 0.x feature**: none\n\n**Log condensed through**: %s\n' "$value" > specs/archive.md
+    run bash "$DOCTOR"
+    assert_contains "$OUTPUT" "Closed without a specs/log.md line: 003-x" "only a leading number counts: $value"
+done
 rm specs/archive.md; git reset -q --hard HEAD~2
 
 it "a renamed change record is not a closed one"

@@ -135,7 +135,7 @@ list_spec_claims() {
         if [ -f "$checkout/specs/archive.md" ]; then
             last="$(spec_archive_last "$checkout")"
             case "$last" in ''|0) ;; *) printf 'specs/archive.md, 0.x features through %03d-\n' "$last" ;; esac
-            last="$(spec_archive_last "$checkout" log)"
+            last="$(spec_archive_log_through "$checkout")"
             case "$last" in ''|0) ;; *) printf 'specs/archive.md, closed changes through %03d-\n' "$last" ;; esac
             if [ "$HAS_GIT" = true ]; then
                 while IFS= read -r token; do
@@ -293,7 +293,11 @@ else
         held="${held_line##* }"
         case "$held_line" in
             "planned in the spec $NUM-$SLUG"|"planned in the spec $NUM-") continue ;;
-            "specs/archive.md, "*" through "*) [ "$((10#$NUM))" -le "$((10#${held%-}))" ] || continue ;;
+            "specs/archive.md, closed changes through "*)
+                [ "$((10#$NUM))" -le "$((10#${held%-}))" ] || continue
+                echo "[prdkit] Error: change number $NUM is reserved: specs/archive.md condenses the log through ${held%-}; pick a higher number." >&2
+                exit 1 ;;
+            "specs/archive.md, 0.x features through "*) [ "$((10#$NUM))" -le "$((10#${held%-}))" ] || continue ;;
             *) [ "$((10#${held%%-*}))" -eq "$((10#$NUM))" ] || continue ;;
         esac
         case "; $HOLDERS; " in *"; $held_line; "*) continue ;; esac

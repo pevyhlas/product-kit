@@ -134,8 +134,17 @@ run bash "$SCRIPT2" --json --no-worktree --short-name "after-condensed" "desc"
 assert_contains "$OUTPUT" '"CHANGE_ID":"041-after-condensed"' "condensed through 040 forces 041"
 git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; git -C "$PROJ2" branch -qD 041-after-condensed; rm -rf "$PROJ2/specs/changes"
 run bash "$SCRIPT2" --json --no-worktree --number 35 --short-name "explicit-old" "desc"
-assert_contains "$OUTPUT" 'also held by specs/archive.md, closed changes through 040-' "an explicit number names the condensed log"
-git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; git -C "$PROJ2" branch -qD 035-explicit-old; rm -rf "$PROJ2/specs/changes" "$PROJ2/specs/archive.md"
+assert_eq 1 "$STATUS" "an explicit number at or below the mark is refused"
+assert_contains "$OUTPUT" 'change number 035 is reserved: specs/archive.md condenses the log through 040' "the refusal names the mark"
+assert_eq absent "$([ -e "$PROJ2/specs/changes/035-explicit-old.md" ] && echo present || echo absent)" "no record is created"
+# shellcheck disable=SC2016 # backticks are Markdown code spans, not command substitution
+for value in '040 — entries at `git show 9f81234:specs/log.md`' '040 as of 2026-10-30'; do
+    printf '# Demo — archive\n\n**Last 0.x feature**: none\n\n**Log condensed through**: %s\n' "$value" > "$PROJ2/specs/archive.md"
+    run bash "$SCRIPT2" --json --no-worktree --short-name "after-mark" "desc"
+    assert_contains "$OUTPUT" '"CHANGE_ID":"041-after-mark"' "a sha or date after the number is no number: $value"
+    git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; git -C "$PROJ2" branch -qD 041-after-mark; rm -rf "$PROJ2/specs/changes"
+done
+rm -f "$PROJ2/specs/archive.md"
 
 it "changes the spec's planned: markers name stay reserved; comments and code blocks do not count"
 mkdir -p "$PROJ2/specs/product" "$PROJ2/specs/parts"

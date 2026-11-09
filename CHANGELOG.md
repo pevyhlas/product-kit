@@ -24,12 +24,12 @@ change by change.
   outcome checkpoint keeps open: a change merged without closing. `check-review.sh` notes such a
   record at the head it passes (`record_open` in `--json`). Advisories only.
 - Doctor advisories: `specs/log.md`, `specs/inbox.md` and `specs/records.md` have 150-line
-  budgets, each with its way out; a log entry over 300 characters; a `## D-NN` decision section
-  over 60 reading lines, whose design belongs to its part or topic.
+  budgets, each with its way out.
 - A log past its budget condenses older entries into `specs/archive.md` at compaction; the
   archive's **Log condensed through** line keeps their numbers reserved and closed.
-- Status says when compaction is due: ten or more changes closed since the last
-  `- <date> compaction:` line in `specs/log.md`.
+- Status says when compaction is due: ten or more log entries after the last
+  `- <date> compaction:` line in `specs/log.md`. A project with ten or more entries and no such
+  line sees the notice after upgrading, until its next pass.
 
 ### Changed
 
