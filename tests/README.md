@@ -36,6 +36,7 @@ reproduce the duplicate number; synchronization markers avoid a scheduler-depend
 | Outcome checkpoint projection: successful-change stalls, unknown/malformed accounting, worktree provenance and read-only reporting | outcome_progress |
 | Diagnostics: IDs, records, layout, ceilings, citations, inbox, evidence, example spec | doctor |
 | Effective provenance, ownership, winning model rules and explicit runtime unknowns | diagnostics_inventory |
+| Installed version versus spec layout, conservative migration states, unknown metadata and source-less diagnostics | adoption_state |
 | Current-source consumer installation, repeated upgrades, customization and source-less helpers | consumer_smoke |
 | Change bounds: constraints, non-goals and qualities in scope for a change's parts and journeys, ranges, later-stage items | bounds |
 | Merge gate: recorded review verdicts cover the merged head, per tier and rigor | check_review |

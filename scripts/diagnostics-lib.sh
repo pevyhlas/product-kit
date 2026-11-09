@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Read-only effective configuration inventory. Source common/install/agent-tiers libraries first.
+# Read-only adoption summary and effective configuration inventory. Source common/install/spec
+# libraries first; configuration inventory also needs agent-tiers.
 # Never probes a CLI, imports plugins, fetches Git objects or interprets policy as authority.
 
 diagnostic_config_value() { # root key; same section/first-key contract as check-adoption.sh
@@ -11,6 +12,29 @@ diagnostic_config_value() { # root key; same section/first-key contract as check
 
 diagnostic_string() { # absent values are unknown, never invented defaults
     if [ -n "$1" ]; then printf '"%s"' "$(json_escape "$1")"; else printf null; fi
+}
+
+diagnostic_adoption() { # root [--text] -> local observations, never migration certification
+    local root="$1" version='' layout mixed=false migration detail label
+    if [ -f "$root/.prdkit/.manifest" ]; then
+        version="$(install_manifest_value "$root/.prdkit/.manifest" version || true)"
+    fi
+    layout="$(spec_layout "$root")"
+    [ -z "$(spec_mixed_forms "$root")" ] || mixed=true
+    case "$layout" in
+        0.x) label='legacy (0.x)'; migration=required; detail='0.x cutover needed' ;;
+        both) label='mixed (0.x + 1.x)'; migration=incomplete; detail='two canons remain' ;;
+        1.0) label='current (1.x)'; migration=not-indicated; detail='no layout migration indicated; completion not verified'
+             if $mixed; then migration=incomplete; detail='single-file and split spec forms coexist'; fi ;;
+        *) label=none; migration=unknown; detail='no recognized spec layout' ;;
+    esac
+    if [ "${2:-}" = --text ]; then
+        printf 'Installed kit version (manifest): %s\nSpec layout: %s\nMigration state: %s — %s.\n' \
+            "${version:-unknown}" "$label" "$migration" "$detail"
+    else
+        printf '{"installed_version":%s,"spec_layout":"%s","mixed_spec_forms":%s,"migration_state":"%s"}' \
+            "$(diagnostic_string "$version")" "$layout" "$mixed" "$migration"
+    fi
 }
 
 diagnostic_file_hash() { # root relative-path; don't follow outside links while inventorying

@@ -19,6 +19,12 @@ identities/fields/option keys and mismatched answer revisions are errors; the re
 `--strict` fails. The kit's `scripts/init.sh --check` reports installation drift. Never repair
 during diagnosis or read a clean report as readiness.
 
+Ordinary text and JSON also separate installed kit version (manifest), observed spec layout and
+layout-derived migration state. `required` means legacy 0.x; `incomplete` means competing canons
+or spec forms; `not-indicated` means current layout only; `unknown` means no recognized spec.
+Neither a current installed version nor `not-indicated` verifies migration completion. Missing
+or ambiguous manifest version stays unknown; the source checkout is not a substitute.
+
 For configuration/provenance questions add `--inventory --json`. It reports installed hashes,
 project-owned customizations, source pins and resolved versus projected agent models with winning
 rules. Unobserved active harness/model and runtime capabilities remain unknown. This is opt-in:
