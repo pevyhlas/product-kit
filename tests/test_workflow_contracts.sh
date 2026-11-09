@@ -7,6 +7,7 @@ W="$PK_ROOT/workflows"; T="$PK_ROOT/templates"
 # Prose wraps freely, so match phrases against whitespace-normalized text.
 flat() { cat "$@" | tr '\n' ' ' | tr -s ' '; }
 protocol="$(flat "$W/protocol.md")"; spec="$(flat "$W/spec.md")"; change="$(flat "$W/change.md")"
+review="$(flat "$W/review.md")"
 
 it "operational playbooks identify inputs, writes, and results"
 for file in "$W"/*.md; do
@@ -43,10 +44,11 @@ assert_contains "$protocol" "Never discard an external tool's stderr" "stderr ke
 it "review is independent, tiered and never empty"
 assert_contains "$protocol" '| T0 | docs only, no behavior change | none |' "T0"
 assert_contains "$protocol" '| T3 | L0 edit or L1 one-way door | design review plus the owner |' "T3"
-assert_contains "$protocol" 'never dispatch a round when no source changed' "no empty re-review"
-assert_contains "$change" 'did not implement' "independent reviewer"
-assert_contains "$change" 'untracked file contents' "uncommitted review includes new files"
-assert_contains "$change" '.prdkit/scripts/bash/build-review-package.sh <change-id> <base>' "package helper"
+assert_contains "$review" 'Never dispatch a round when no source changed' "no empty re-review"
+assert_contains "$review" 'did not implement' "independent reviewer"
+assert_contains "$review" 'untracked file contents' "uncommitted review includes new files"
+assert_contains "$review" '.prdkit/scripts/bash/build-review-package.sh <change-id> <base>' "package helper"
+assert_contains "$change" 'read [review.md](review.md)' "the always-read change playbook routes review, merge and closing"
 assert_contains "$(flat "$T/review-prompt-template.md")" 'You did not implement this change' "reviewer contract"
 
 it "merged, live and validated stay distinct; status answers first and names the longest pole"

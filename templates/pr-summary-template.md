@@ -32,6 +32,3 @@ and their evidence; unknown stays unknown. A task checkmark or exit zero is not 
 <Non-gating runtime observations and known limitations, or none. State why an observation is
 non-gating under agreed scope/policy, its next check/trigger and owner where known. Link follow-up
 work for known required work; never hide it in discarded scratch or imply merged means live.>
-
-<!-- Finalize this context on the same PR before deleting the change record. Do not rely on
-intermediate commits surviving squash merge. Later defects use ordinary linked fix PRs. -->

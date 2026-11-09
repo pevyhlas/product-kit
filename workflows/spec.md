@@ -28,7 +28,12 @@ everything in one change and deletes `SPEC.md`).
 
 Each level opens with a one-page summary that links its detail: `product.md`, `architecture.md`,
 each part file. A topic with little to say stays a short section of its summary until the summary
-passes its budget; then it moves to its own file.
+passes its budget; then it moves to its own file. Each file starts from its template in
+`.prdkit/templates/`: the one its row names, or `product-template.md`, `journey-template.md`,
+`requirements-template.md`, `qualities-template.md`, `constraints-template.md`,
+`non-goals-template.md`, `architecture-template.md`, `part-template.md` and, for `SPEC.md`,
+`spec-template.md`; `users.md` and `retired.md` follow the comments in the product and
+architecture templates.
 
 **Splitting**: a budget holds only because every file has somewhere to grow. Past one, a file
 splits as the table says, never by dropping items; a piece past its own budget becomes two
@@ -236,9 +241,9 @@ becomes a competing source of current intent.
 ## One-way doors
 
 Data ownership, a breaking interface change, a technology choice, a trust boundary, a product
-constraint, anything that deletes user data. These take tier T3: a design review plus the owner's
-verdict ([protocol.md](protocol.md)). Everything else is a two-way door: decide, then record a
-decision that binds later work in its L1/L2 home now, one that only explains this diff in the PR.
+constraint, anything that deletes user data. These take tier T3 ([protocol.md](protocol.md)).
+Everything else is a two-way door: decide, then record a decision that binds later work in its
+L1/L2 home now, one that only explains this diff in the PR.
 
 ## Budgets
 

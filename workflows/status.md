@@ -22,7 +22,7 @@ Answer the owner's question first, in plain words, with the title next to every 
    available; the local helper only projects recorded State fields and the no-progress count/limit,
    not evidence validity or prose deadlines. Missing fields stay unknown, malformed/duplicate ones
    invalid; reaching the count limit says `reassess`, never grants authority or claims a failed test.
-   Read `### Outcome checkpoint` within State (legacy checkpoint compatibility: change.md).
+   Read `### Outcome checkpoint` within State (legacy checkpoint compatibility: planning.md).
    Children link their parent; standalone changes without a checkpoint have no outcome row.
    A parent referenced by a child stays visible as unknown even if its record/checkpoint is missing.
 2. **True now**: requirements, qualities and parts with maturity, `planned` and unenforced items.

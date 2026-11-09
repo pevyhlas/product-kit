@@ -35,8 +35,9 @@ Everyday entry points are `/prdkit`, `/prdkit-inbox` and `/prdkit-status`; the o
 Without native slash commands, follow the matching installed playbook. Status and doctor are
 read-only. Raw evidence stays in CI or the gitignored `.prdkit/cache/evidence/`, never `specs/`.
 For product-to-feature discovery use `.prdkit/workflows/planning.md`; ready work follows
-`.prdkit/workflows/implementation.md`. Preserve useful context/evidence on the same PR and finalize
-its execution record there; runtime unknowns do not become PASS when a PR closes.
+`.prdkit/workflows/implementation.md`, and review, merge and closing follow
+`.prdkit/workflows/review.md`. Preserve useful context/evidence on the same PR and finalize its
+execution record there; runtime unknowns do not become PASS when a PR closes.
 For inbox review follow `.prdkit/workflows/inbox.md`: reconcile answers, ask one unresolved
 question at a time, then verify canonical incorporation and report its destination.
 EOF

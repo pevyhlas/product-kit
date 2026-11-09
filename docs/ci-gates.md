@@ -54,7 +54,7 @@ bash .prdkit/scripts/bash/check-review.sh [--json] [--head <rev>] [--base <rev>]
 Reviews are run by the worker, never by CI: the worker dispatches the tier's independent
 reviewers (`protocol.md`), posts each report on the PR and appends one `**Review**:` line per
 verdict, with the commit hashes the review package printed, to the change record's State
-(`change.md`). Before merging, the merging agent runs the check on the exact head it merges
+(`review.md`). Before merging, the merging agent runs the check on the exact head it merges
 (`--head <sha>`, then `gh pr merge --match-head-commit <sha>`). It passes when:
 
 - every recorded verdict, in any tier, is PASS with no critical or high finding (no medium
@@ -132,7 +132,7 @@ after PASS invalidates coverage. Remove them before final review, or use ignored
 with useful context on the PR.
 
 For a PR finalizing several changes, use the containing implementation record as review carrier
-([change workflow](../workflows/change.md#bigger-work)). It inherits all required acceptance,
+([review workflow](../workflows/review.md#review-carrier)). It inherits all required acceptance,
 unresolved findings and the combined tier/reviewer concerns. Log/delete the other records before
 the combined final review, then finalize only the carrier after PASS. Check the carrier ID; the
 helper does not automatically transfer obligations or exempt sibling record deletions.

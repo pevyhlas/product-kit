@@ -5,12 +5,11 @@ tests, current dependency evidence and project policy.
 **Writes**: code/tests, the change's Tasks/Acceptance/State, optional ignored execution detail and
 the same PR's context/evidence. Spec changes are limited to approved deltas and honest enforcement
 or delivery markers; new product/design decisions return to Product-Kit's existing process.
-**Result**: verified PR-scoped implementation ready for [change.md](change.md)'s review/finalization,
-or a recorded blocker/decision. Merge, deployment, runtime verification and validation remain distinct.
+**Result**: verified PR-scoped implementation ready for review and closing in the same PR
+([review.md](review.md)), or a recorded blocker/decision.
 
 The upstream flow owns intent, architecture and design. Execution normally consumes that definition;
 it does not run a second feature-specification exercise or routinely ask the owner to approve it again.
-An already-specified fix may need no canonical edit: use `Spec impact: none — <reason>`.
 
 ## Plan, tasks, analyze
 
@@ -42,12 +41,13 @@ needs investigation, collect only what resolves it and route the finding below.
 
 ## Implement, verify, converge
 
-Before selecting the next task or child change, reload the programme's outcome checkpoint and
-check dependencies against current evidence. In State's **Selection**, name the milestone or
-predeclared enabling step this task advances, why it comes before the next critical-path candidate,
-and how it fits the lane and remaining allocation. For temporary/retiring code, include its
-carry-forward or removal rationale from [planning.md](planning.md). A tiny standalone fix needs
-only a sentence; no extra document or routine owner approval is required.
+Before selecting the next task or child change, reload the programme's outcome checkpoint
+([planning.md](planning.md)) and check dependencies against current evidence. In State's
+**Selection**, name the milestone or predeclared enabling step this task advances, why it comes
+before the next critical-path candidate, and how it fits the lane and remaining allocation. For
+temporary/retiring code, include its carry-forward or removal rationale from
+[planning.md](planning.md). A tiny standalone fix needs only a sentence; no extra document or
+routine owner approval is required.
 
 A blocked deployment, review or owner decision blocks only its actual dependants. Check whether
 source/design prerequisites or another approved lane can advance independently. If none can, name
@@ -55,11 +55,11 @@ the blocker and the decision that unlocks the outcome; do not substitute an unli
 adjacent improvements. Broad instructions to continue preserve the outcome, lane purposes, timebox
 and explicit holds unless the owner changes them.
 
-Take the selected authorized task whose dependency outcome is evidenced. Implement and run its checks;
-review and publish coherent increments per [change.md](change.md). Converge the actual diff against
-approved intent and design, not just the task list. Check failure behavior and cross-part interactions
-where relevant; tests that merely repeat the implementation do not establish the intended outcome.
-Independent review still receives the full diff and canonical context.
+Take the selected authorized task whose dependency outcome is evidenced. Implement and run its
+checks; publish coherent increments per [change.md](change.md) and review them per
+[review.md](review.md). Converge the actual diff against approved intent and design, not just the
+task list. Check failure behavior and cross-part interactions where relevant; tests that merely
+repeat the implementation do not establish the intended outcome.
 
 After integration, compare evidence with the programme milestone and its predeclared dependency
 checks. Record the actual advance, or increment **No-progress changes** once for that integrated
@@ -73,13 +73,11 @@ would invalidate final review; reconcile it into the parent at the next authoriz
 At the progress limit, timebox boundary or displaced lane, reassess **before starting another
 adjacent change**, even if every PR passed. Compare the remaining critical path, effort spent,
 replacement/containment options and the proposed next step. Within unchanged authority, record
-the decision and take a bounded step that directly advances that path. Keep the count until its
-evidence establishes progress. If continuation needs more investment, different scope or a lifted
+the decision and take a bounded step that directly advances that path. If continuation needs more investment, different scope or a lifted
 hold, report NEEDS_DECISION with a recommendation in the inbox; only the owner changes those bounds.
 This selection checkpoint neither waives a safety defect nor creates a new review/approval gate.
 
-At interruption, record remaining work, attempts, blockers, authority, outcome checkpoint and next
-action in State. On resume/rebase, compare the actual spec/code/dependency baseline with the recorded one. Revalidate
+On resume/rebase, compare the actual spec/code/dependency baseline with the recorded one. Revalidate
 affected tasks and evidence when a shared contract or bound changed; preserve unaffected work and
 valid review coverage. Missing scratch is reconstructed from the record/PR and actual state, never
 treated as a reason to restart product discovery. Local tasks and tracker assignment grant no authority.
@@ -98,11 +96,3 @@ Implementation observations are evidence about the implementation, not permissio
 New requirements need the provenance in [planning.md](planning.md). Stop affected work at an unresolved
 consequential choice; continue independent ready work. Apply the decided change to its canonical owner,
 then update affected tasks/checks. Never manufacture requirements from a library, method or schema.
-
-## Finish in the same PR
-
-Use [change.md](change.md)'s Closing rules and `.prdkit/templates/pr-summary-template.md`: preserve
-scope/design references, approach, verification, review evidence and explicit unknowns on the PR.
-Discard temporary execution detail after that context is durable. No cleanup PR or permanent task
-archive is required. Later runtime findings use ordinary linked fix work; they cannot retroactively
-turn an unknown into a PASS, erase a known unmet obligation or reset a failed outcome's attempt budget.

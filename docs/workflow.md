@@ -23,5 +23,5 @@ diagnostics.
 
 The playbooks are internal agent operations, not human checkpoints. Consequential questions
 come before a change opens; ordinary building continues within authorized scope. Every
-acceptance item still needs actual evidence. See [spec.md](../workflows/spec.md) and
-[change.md](../workflows/change.md).
+acceptance item still needs actual evidence. See [spec.md](../workflows/spec.md),
+[change.md](../workflows/change.md) and [review.md](../workflows/review.md).

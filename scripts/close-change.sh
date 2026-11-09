@@ -53,7 +53,7 @@ elif [ -e "$root/$log" ]; then
 fi
 default="$(spec_default_branch "$root")"
 if [ -n "$default" ] && git -C "$root" cat-file -e "$default:$path" 2>/dev/null; then
-    refuse "$path is already on $default: a change merged with its record closes inside the next relevant PR, before that PR's final review (change.md, Closing)"
+    refuse "$path is already on $default: a change merged with its record closes inside the next relevant PR, before that PR's final review (review.md, Closing)"
 fi
 
 check() { bash "$SCRIPT_DIR/check-review.sh" --repo "$root" --head HEAD ${base_args[@]+"${base_args[@]}"} "$id" 2>&1; }
