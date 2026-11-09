@@ -49,7 +49,7 @@ explicit user authorization or the constitution's action policy; a hold wins unt
 lifts it. `check-delivery.sh --json` observes whether a checkpoint is remotely available; a
 matching SHA proves availability, not acceptance. Closing removes built `planned` markers,
 keeps lasting decisions in L1/L2 and preserves useful context and evidence on the PR; after the
-final PASS, `close-change.sh` appends one line to `specs/log.md` and deletes the record before
+final PASS, `close-change.sh` adds one line to `specs/log.md` and deletes the record before
 merge. Required PR checks still gate; non-gating runtime observations stay unverified and later
 findings use linked fixes, not cleanup PRs.
 `cleanup-change.sh` removes the worktree after merge. See [feature delivery](feature-delivery.md).

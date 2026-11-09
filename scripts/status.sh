@@ -84,7 +84,7 @@ if git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         # Reviewed PR-scoped records still on the default branch; a child in any checkout keeps its parent open.
         if $objects_local; then
             unclosed=" $(spec_unclosed_changes "$root" "$base" |
-                awk -v named=" $(printf '%s\n' "$parents" | tr '\n' ' ') " 'index(named, " " $0 " ") == 0' | tr '\n' ' ')"
+                awk -v named=" $(printf '%s\n' "$parents" | tr -d '`' | tr '\n' ' ') " 'index(named, " " $0 " ") == 0' | tr '\n' ' ')"
         fi
     fi
 fi

@@ -785,7 +785,8 @@ spec_objects_local() { # root
 
 # Records committed at <rev> that a PR-scoped change left behind: every reviewer's latest State
 # verdict is PASS, yet no record at <rev> names it as Parent and it keeps no outcome checkpoint
-# (programme parents legitimately stay open). Committed objects only; prints change ids.
+# (programme parents legitimately stay open). A record with no verdict, such as T0, is never
+# listed. Committed objects only; prints change ids.
 spec_unclosed_changes() { # root rev
     local root="$1" rev="$2" path
     git -C "$root" rev-parse --verify --quiet "$rev^{commit}" >/dev/null 2>&1 || return 0
@@ -796,7 +797,7 @@ spec_unclosed_changes() { # root rev
             function trim(s) { gsub(/`/, "", s); gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
             { gsub(/\037/, " "); if (spec_skip($0)) next }
             /\*\*Parent\*\*:/ && !seen_parent {
-                seen_parent = 1; v = $0; sub(/^.*\*\*Parent\*\*:[[:space:]]*\[?/, "", v)
+                seen_parent = 1; v = $0; sub(/^.*\*\*Parent\*\*:[[:space:]]*[[`]?/, "", v)
                 if (match(v, /^[0-9][0-9][0-9]+-[a-z0-9]+(-[a-z0-9]+)*/)) parent = substr(v, 1, RLENGTH)
             }
             /^## / { sec = $0; next }

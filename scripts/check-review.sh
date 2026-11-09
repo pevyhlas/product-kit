@@ -26,7 +26,7 @@
 # and the log from a trusted start (a change closed after its code merged) skips coverage. T1-T3
 # need one independent verdict, T3 the owner's too, and no L0/L1 spec edit since the owner's head.
 # A pass whose record is still at the head, with no child or outcome checkpoint, adds a note:
-# close the change before merge (close-change.sh). The note never fails the check.
+# if the PR completes the change, close it before merge (close-change.sh). It never fails.
 #
 # Usage: check-review.sh [--json] [--head <rev>] [--base <rev>] [--repo <dir>] [<change-id>]
 #   <change-id> defaults to the current branch name; --base to the first of origin/HEAD,
@@ -411,7 +411,7 @@ elif [ "$result" = pass ]; then
     else
         printf 'PASS %s at %s: %s, Rigor %s; %s recorded verdict(s) cover this head.\n' "$id" "$head" "$tier" "$rigor" "${#rows[@]}"
     fi
-    ! $record_open || printf 'Note: %s is still at this head; close it before merge: .prdkit/scripts/bash/close-change.sh %s "<log line>" (change.md, Closing).\n' "$path" "$id"
+    ! $record_open || printf 'Note: %s is still at this head; if this PR completes the change, close it before merge: .prdkit/scripts/bash/close-change.sh %s "<log line>" (change.md, Closing).\n' "$path" "$id"
 else
     printf 'FAIL %s at %s:\n' "$id" "$head"
     $base_trusted || printf '  Base is not trusted for coverage exemptions: establish origin/HEAD or configure review-integration-branches in its committed config.\n'

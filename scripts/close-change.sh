@@ -7,7 +7,7 @@
 #
 # Usage: close-change.sh [--base <rev>] [--date YYYY-MM-DD] [-m <message>] <change-id> "<log text>"
 #   <log text> follows "- <date> <id>: " on the log line: "<intent> — <IDs> — <disposition> — <PR>".
-#   The line is appended, or put first when the log lists the newest change first.
+#   The line goes above the first entry, or last when the log lists the oldest change first.
 #   Exit 0 closed and check-review.sh passes at the new head, 1 refused or failing, 2 usage.
 set -euo pipefail
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -42,37 +42,41 @@ git -C "$root" cat-file -e "HEAD:$path" 2>/dev/null || refuse "no record $path a
 git -C "$root" diff --quiet HEAD -- "$path" ||
     refuse "$path has uncommitted edits: commit the final Review line first; the check reads committed state"
 git -C "$root" diff --cached --quiet || refuse "other changes are staged; commit or unstage them, so this commit holds only the record and the log"
-if [ -e "$root/$log" ]; then
-    if ! git -C "$root" ls-files --error-unmatch -- "$log" >/dev/null 2>&1 || ! git -C "$root" diff --quiet HEAD -- "$log"; then
-        refuse "$log has uncommitted edits; commit or discard them first"
+if git -C "$root" cat-file -e "HEAD:$log" 2>/dev/null; then
+    # A tracked log must be here unchanged: never rebuild it from one line.
+    if [ ! -f "$root/$log" ] || ! git -C "$root" diff --quiet HEAD -- "$log"; then
+        refuse "$log is missing or has uncommitted edits; restore or commit it first"
     fi
     ! grep -q "^- [0-9-]* $id:" "$root/$log" || refuse "$log already has a line for $id"
+elif [ -e "$root/$log" ]; then
+    refuse "$log is not tracked; commit or remove it first"
+fi
+default="$(spec_default_branch "$root")"
+if [ -n "$default" ] && git -C "$root" cat-file -e "$default:$path" 2>/dev/null; then
+    refuse "$path is already on $default: a change merged with its record closes inside the next relevant PR, before that PR's final review (change.md, Closing)"
 fi
 
 check() { bash "$SCRIPT_DIR/check-review.sh" --repo "$root" --head HEAD ${base_args[@]+"${base_args[@]}"} "$id" 2>&1; }
 if ! out="$(check)"; then
     printf '%s\n' "$out" >&2
-    default="$(spec_default_branch "$root")"
-    if [ -n "$default" ] && git -C "$root" cat-file -e "$default:$path" 2>/dev/null; then
-        refuse "$path is already on $default: a change merged with its record closes inside the next relevant PR, before that PR's final review (change.md, Closing)"
-    fi
     refuse "check-review.sh does not pass at HEAD; commit the final passing Review line first"
 fi
 
-line="- $day $id: $text"
-if [ -s "$root/$log" ]; then
-    tmp="$root/$log.close-change.$$"
-    # Dates are compared, never matched: the line itself reaches awk only through ENVIRON.
-    CLOSE_LINE="$line" awk '
+line="- $day $id: $text"; src="$root/$log"; tmp="$root/$log.close-change.$$"
+[ -f "$src" ] || src=/dev/null
+# Dates are compared, never matched; the line reaches awk only through ENVIRON. It goes above the
+# first entry unless the first entry is older than the last; a CRLF log keeps CRLF.
+if ! { mkdir -p "$root/specs" && CLOSE_LINE="$line" awk '
+        NR == 1 && substr($0, length($0)) == "\r" { cr = "\r" }
         { lines[NR] = $0 }
         /^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] / { d = substr($0, 3, 10); if (!first) { first = NR; newest = d }; oldest = d }
         END {
-            top = first && newest > oldest
-            for (i = 1; i <= NR; i++) { if (top && i == first) print ENVIRON["CLOSE_LINE"]; print lines[i] }
-            if (!top) print ENVIRON["CLOSE_LINE"]
-        }' "$root/$log" > "$tmp" && mv "$tmp" "$root/$log"
-else
-    mkdir -p "$root/specs"; printf '%s\n' "$line" > "$root/$log"
+            top = first && newest >= oldest
+            for (i = 1; i <= NR; i++) { if (top && i == first) print ENVIRON["CLOSE_LINE"] cr; print lines[i] }
+            if (!top) print ENVIRON["CLOSE_LINE"] cr
+        }' "$src" > "$tmp" && mv "$tmp" "$root/$log"; } 2>/dev/null; then
+    rm -f "$tmp"
+    refuse "could not write $log; nothing was deleted or committed"
 fi
 git -C "$root" rm -q -- "$path"
 git -C "$root" add -- "$log"

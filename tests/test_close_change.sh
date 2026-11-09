@@ -80,6 +80,39 @@ assert_eq 0 "$STATUS" "closes"
 assert_eq '- 2026-11-03 002-greet: warmer — R-01 — #3' "$(sed -n 3p specs/log.md)" "first entry"
 assert_eq '002-greet: close' "$(git log -1 --format=%s)" "custom message"
 
+it "a tracked log that is missing or unwritable stops the close before anything changes"
+git checkout -q "$DEFAULT"
+printf '# Closed changes\r\n\r\n- 2026-11-01 000-d: same day\r\n- 2026-11-01 000-c: same day\r\n' > specs/log.md
+git add specs/log.md; git commit -qm 'crlf log' >/dev/null
+git update-ref "refs/remotes/origin/$DEFAULT" HEAD
+branch_with_code 013-guard
+pass_line code "$(git merge-base HEAD "$DEFAULT")" "$(git rev-parse HEAD)" >> specs/changes/013-guard.md
+git commit -qam "013-guard: review PASS" >/dev/null
+GUARDED="$(git rev-parse HEAD)"
+rm specs/log.md
+run bash "$B/close-change.sh" 013-guard "guarded — R-01 — #6"
+assert_eq 1 "$STATUS" "an unstaged deletion of the tracked log is refused"
+assert_contains "$OUTPUT" "specs/log.md is missing or has uncommitted edits" "names the log"
+assert_eq "$GUARDED" "$(git rev-parse HEAD)" "nothing committed"
+git checkout -q -- specs/log.md
+chmod a-w specs
+if ( : > specs/.probe ) 2>/dev/null; then
+    rm -f specs/.probe; chmod u+w specs; _ok "skipped: directory permissions are not enforced for this user"
+else
+    run bash "$B/close-change.sh" 013-guard "guarded — R-01 — #6"
+    chmod u+w specs
+    assert_eq 1 "$STATUS" "a log that cannot be written is refused"
+    assert_contains "$OUTPUT" "nothing was deleted or committed" "says nothing changed"
+    assert_eq "$GUARDED" "$(git rev-parse HEAD)" "nothing committed"
+    assert_eq '' "$(git status --porcelain)" "record and log untouched"
+fi
+
+it "a CRLF log keeps CRLF, and a same-day log gets the line on top"
+run bash "$B/close-change.sh" --date 2026-11-01 013-guard "guarded — R-01 — #6"
+assert_eq 0 "$STATUS" "closes: $OUTPUT"
+assert_eq "$(printf -- '- 2026-11-01 013-guard: guarded — R-01 — #6\r')" "$(sed -n 3p specs/log.md)" "first entry, with CR"
+assert_eq 0 "$(grep -cv "$(printf '\r')\$" specs/log.md)" "every line still ends in CRLF"
+
 it "a T3 owner verdict on the reviewed head still passes after the record-only close"
 branch_with_code 003-owner
 sed -i.bak 's/Tier\*\*: T1/Tier**: T3/' specs/changes/003-owner.md; rm -f specs/changes/003-owner.md.bak
@@ -99,11 +132,14 @@ record 005-programme T2 none "$(pass_line code "$START" "$REVIEWED")" '### Outco
 record 006-parent T2 none "$(pass_line code "$START" "$REVIEWED")"
 record 007-child T1 006-parent
 record 008-planned T1 none
+record 010-tzero T0 none
+record 012-prog T2 none "$(pass_line code "$START" "$REVIEWED")"
+record 011-child T1 "\`012-prog\`"
 git add -A >/dev/null; git commit -qm "records on the default branch" >/dev/null
 git update-ref "refs/remotes/origin/$DEFAULT" HEAD
 run bash "$B/status.sh"
 assert_contains "$OUTPUT" "merged without closing: reviewed and on origin/$DEFAULT" "status flags the left record"
-assert_eq 1 "$(printf '%s\n' "$OUTPUT" | grep -c 'merged without closing')" "only that record: parents, children and unreviewed records are quiet"
+assert_eq 1 "$(printf '%s\n' "$OUTPUT" | grep -c 'merged without closing')" "only that record: parents (also named in backticks), children and unreviewed records are quiet"
 run bash "$B/status.sh" --json
 assert_contains "$OUTPUT" '"id":"004-left","title":"004-left"' "JSON row"
 assert_contains "$OUTPUT" '"merged_unclosed":true' "JSON flag"
@@ -115,4 +151,16 @@ git checkout -q -b 009-next
 run bash "$B/close-change.sh" 004-left "left open — R-01 — #5"
 assert_eq 1 "$STATUS" "the helper refuses a record already merged"
 assert_contains "$OUTPUT" "closes inside the next relevant PR" "and names the remedy"
+run bash "$B/close-change.sh" 010-tzero "unreviewed — #7"
+assert_eq 1 "$STATUS" "a merged T0 record is refused too, before check-review could pass it"
+assert_contains "$OUTPUT" "is already on origin/$DEFAULT" "the default-branch refusal comes first"
+
+it "a branch that closes the left record is not flagged by doctor or status"
+git rm -q specs/changes/004-left.md
+printf -- '- 2026-11-09 004-left: left open — R-01 — #5; closed in #8\r\n' >> specs/log.md
+git add specs/log.md; git commit -qm "close 004-left in the next PR" >/dev/null
+run bash "$B/doctor.sh"
+assert_not_contains "$OUTPUT" "Merged without closing" "doctor reads the checkout, not only the default branch"
+run bash "$B/status.sh"
+assert_not_contains "$OUTPUT" "merged without closing" "status agrees"
 finish
