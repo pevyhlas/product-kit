@@ -29,9 +29,6 @@ change by change.
 - A change record holds work in progress, not truth. A programme parent keeps one row per child
   (id, outcome, status, PR, carry-forward of at most three lines); child plans and execution stay in the
   child record and its PR, and a closing child no longer copies them into the parent.
-
-### Changed
-
 - One home per fact: `spec.md` (Organizing) names the single home for each kind of fact; summaries
   and other files cite it by ID or link. Templates drop the second homes: the interfaces topic is
   an index without a promise column, a part's Budgets and Failure cite the Q- and journey,
