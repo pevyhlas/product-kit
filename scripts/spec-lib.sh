@@ -211,7 +211,7 @@ spec_archive_log_through() { # root
 spec_log_newest_first() { # log file
     [ -f "$1" ] || return 1
     LC_ALL=C awk '/^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] / { d = substr($0, 3, 10); if (!n++) first = d; last = d }
-        END { exit !(n && first >= last) }' "$1"
+        END { exit !(n && first >= last) }' "$1" 2>/dev/null
 }
 
 # 0.x feature folder names (NNN-slug) in a commit's tree, or deleted in the last 20 commits that

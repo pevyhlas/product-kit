@@ -248,7 +248,7 @@ make_receipt | publish_fixture
 owner_receipt | publish_owner
 online
 assert_eq 1 "$STATUS" "an owner line without a link fails verification"
-assert_contains "$OUTPUT" "$RECORD:5: report link must name an issuecomment" "counts are never read as the owner's link"
+assert_contains "$OUTPUT" "$RECORD:5: report link must name an issuecomment" "counts in the link's place are rejected as a link"
 record code
 
 it "a missing registry is not a permissive legacy fallback"

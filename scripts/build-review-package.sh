@@ -12,7 +12,8 @@
 #
 # Usage: ./build-review-package.sh CHANGE_ID BASE_SHA [HEAD_SHA] [options]
 #   --since REV       Add a focused delta of what the branch changed since REV, an earlier
-#                     reviewed head in HEAD's history; retain the full BASE..HEAD diff
+#                     reviewed head in HEAD's history; retain the full BASE..HEAD diff. After
+#                     a base merge, pass the current merge base as BASE to leave the base out
 #   --context PATH    Snapshot a repo-relative tracked file at HEAD (repeatable)
 #   --evidence PATH   Copy a completed repo-relative evidence file (repeatable)
 #
@@ -175,19 +176,23 @@ inventory() {
         "$(git -C "$REPO_ROOT" hash-object --no-filters "$PACKAGE_DIR/$file")" "$source" >> "$PACKAGE_DIR/manifest.tsv"
 }
 for p in commits.txt diffstat.txt diff.patch; do inventory "$p" "$BASE_SHA..$HEAD_SHA"; done
-# The focused delta is what the branch changed since SINCE, never what the base brought. When
-# BASE is in SINCE's history that is SINCE..HEAD. When the base was merged in after SINCE, a plain
+# The focused delta is what the branch changed since SINCE, leaving out what BASE brought. When
+# BASE is in SINCE's history that is SINCE..HEAD, which includes any later base merge: BASE must
+# be the current merge base to leave it out. When the base was merged in after SINCE, a plain
 # SINCE..HEAD diff would also show everything the base brought, so the delta compares HEAD with
 # Git's automatic merge of BASE into SINCE: commits since SINCE and merge resolutions show, the
-# base's own changes do not. Without `merge-tree --write-tree` (Git 2.38+), it falls back to the
-# patches of the non-merge commits since SINCE that BASE does not contain, and index.md names the
-# merges to check in the full diff: a combined diff of a merge can still carry base lines.
+# base's own changes do not. When that merge is unavailable (merge-tree --write-tree needs Git
+# 2.38+ and full history), it falls back to the patches of the non-merge commits since SINCE that
+# BASE does not contain, and index.md names the merges to check in the full diff: a combined diff
+# of a merge can still carry base lines.
 DELTA="none"
 if [ -n "$SINCE" ]; then
     delta_from=""; source_label="$SINCE..$HEAD_SHA"
     if git -C "$REPO_ROOT" merge-base --is-ancestor "$BASE_SHA" "$SINCE"; then
         delta_from="$SINCE"
         DELTA="$SINCE..$HEAD_SHA, everything since $SINCE."
+        merges="$(git -C "$REPO_ROOT" rev-list --min-parents=2 "$SINCE..$HEAD_SHA" | tr '\n' ' ' | sed 's/ $//')"
+        [ -z "$merges" ] || DELTA="$DELTA It includes merge $merges: if that brought the base in, rebuild with the current merge base as BASE to leave the base's changes out."
     elif git -C "$REPO_ROOT" merge-base --is-ancestor "$SINCE" "$BASE_SHA"; then
         delta_from="$BASE_SHA"; source_label="$BASE_SHA..$HEAD_SHA"
         DELTA="the whole change, $BASE_SHA..$HEAD_SHA: $SINCE is in the base's history."
@@ -211,7 +216,7 @@ if [ -n "$SINCE" ]; then
         git -C "$REPO_ROOT" log --reverse --no-merges --no-color --no-decorate --format=medium --no-ext-diff --no-textconv --binary -p \
             "$HEAD_SHA" --not "$SINCE" "$BASE_SHA" > "$PACKAGE_DIR/delta.patch"
         merges="$(git -C "$REPO_ROOT" rev-list --min-parents=2 "$HEAD_SHA" --not "$SINCE" "$BASE_SHA" | tr '\n' ' ' | sed 's/ $//')"
-        DELTA="$SINCE..$HEAD_SHA without what the base brought: the patches of the non-merge commits since $SINCE that $BASE_SHA does not contain, oldest first, as this Git lacks merge-tree --write-tree (2.38+)."
+        DELTA="$SINCE..$HEAD_SHA without what the base brought: the patches of the non-merge commits since $SINCE that $BASE_SHA does not contain, oldest first, as the automatic merge was unavailable (merge-tree --write-tree needs Git 2.38+ and full history)."
         [ -z "$merges" ] || DELTA="$DELTA Merge resolutions are not in it: check merge $merges in the full diff."
     fi
     inventory delta.patch "$source_label"

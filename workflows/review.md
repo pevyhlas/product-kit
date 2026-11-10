@@ -44,15 +44,16 @@ leaves the default branch:
 ```
 
 Re-review only changed source, scoped to the fix: `--since <previous-reviewed-head>` keeps a
-focused delta alongside the full diff; after a base merge it leaves out what the base brought, and
-the package index says what it covers. Never dispatch a round when no source changed since the
-last verdict. Map findings to fixes and affected obligations, preserving unaffected approvals and
-evidence; re-open a concern only when its source, bounds or evidence applicability changed. The
-recorded range is the range actually inspected, starting at or before that reviewer's prior head
-so the rounds chain; the full package range alone is not a new full-review claim. Required
-reviewers and the final-head check still apply. A T3 change also records the owner's verdict,
-reviewer `owner`, over the head the owner approved, ending with a link to their words; counts may
-precede the link and are not read. A later L0 or L1 edit needs the owner again:
+focused delta alongside the full diff; after a base merge, with the current merge base as BASE,
+it leaves out what the base brought, and the package index says what it covers. Never dispatch a
+round when no source changed since the last verdict. Map findings to fixes and affected
+obligations, preserving unaffected approvals and evidence; re-open a concern only when its source,
+bounds or evidence applicability changed. The recorded range is the range actually inspected,
+starting at or before that reviewer's prior head so the rounds chain; the full package range
+alone is not a new full-review claim. Required reviewers and the final-head check still apply. A
+T3 change also records the owner's verdict, reviewer `owner`, over the head the owner approved,
+ending with a link to their words; counts may precede the link and are not read. A later L0 or
+L1 edit needs the owner again:
 
 ```text
 **Review**: round 1 · <base sha>..<approved head sha> · owner · PASS · <link to the owner's words>

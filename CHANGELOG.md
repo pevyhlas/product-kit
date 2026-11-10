@@ -26,10 +26,11 @@ compaction count in a newest-first log, and a focused re-review after the base i
   which status reads as `close-change.sh` does.
 - `build-review-package.sh --since` refused a previous reviewed head once the base had been merged
   into the change branch, because the new BASE is newer than that head. It now accepts any
-  earlier head in HEAD's history, and the focused delta leaves out what the base brought: it
-  compares HEAD with Git's automatic merge of BASE into that head, so new commits and conflict
-  resolutions show. Where Git lacks `merge-tree --write-tree` (before 2.38), the delta holds the
-  change's own non-merge commits and `index.md` names the merges to check in the full diff.
+  earlier head in HEAD's history. With the current merge base as BASE, the focused delta leaves
+  out what the base brought: it compares HEAD with Git's automatic merge of BASE into that head,
+  so new commits and conflict resolutions show. When that merge is unavailable
+  (`merge-tree --write-tree` needs Git 2.38+ and full history), the delta holds the change's own
+  non-merge commits and `index.md` names the merges to check in the full diff.
 
 ### Adoption
 

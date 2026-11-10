@@ -149,6 +149,10 @@ assert_not_contains "$(cat "$pkg/delta.patch")" 'base five' "delta leaves out th
 assert_contains "$(cat "$pkg/diff.patch")" '+branch' "full diff still covers the whole change"
 assert_contains "$(cat "$pkg/index.md")" "without what the base brought: HEAD against" "index says what the delta covers"
 assert_contains "$(cat "$pkg/manifest.tsv")" "automatic merge of $MERGED_BASE into $PREV" "inventory names the delta's source"
+out="$(cd "$mr" && bash "$SCRIPT" 007-merged "$START" --since "$PREV")"
+pkg="$(pkg_of "$out")"
+assert_contains "$(cat "$pkg/delta.patch")" 'from the base' "with the round-1 base as BASE, the plain delta carries the merged base"
+assert_contains "$(cat "$pkg/index.md")" "It includes merge $(g rev-parse HEAD^): if that brought the base in, rebuild with the current merge base as BASE" "index says so and names the remedy"
 
 it "Conflict resolutions after a base merge show in the delta, even one that keeps the reviewed side"
 PREV2="$(g rev-parse HEAD)"
@@ -180,16 +184,22 @@ out="$(cd "$mr" && PATH="$FAKE:$PATH" bash "$SCRIPT" 007-merged "$MERGED_BASE" "
 pkg="$(pkg_of "$out")"
 assert_contains "$(cat "$pkg/delta.patch")" '+v2' "fallback delta shows the commit since PREV"
 assert_not_contains "$(cat "$pkg/delta.patch")" 'from the base' "fallback delta leaves out what the base brought"
+# A combined (--cc) or first-parent (-m) diff of the clean merge would carry this base line.
 assert_not_contains "$(cat "$pkg/delta.patch")" 'base five' "no merge diff carries base lines into the fallback delta"
-assert_contains "$(cat "$pkg/index.md")" "lacks merge-tree --write-tree" "index says the fallback is in use"
+assert_not_contains "$(cat "$pkg/delta.patch")" "commit $MERGE1" "the fallback delta leaves the merge commit out"
+assert_contains "$(cat "$pkg/index.md")" "the automatic merge was unavailable (merge-tree --write-tree needs Git 2.38+ and full history)" "index says the fallback is in use"
 assert_contains "$(cat "$pkg/index.md")" "check merge $MERGE1 in the full diff" "index names the merge to check"
+MERGE2="$(g rev-parse HEAD)"
+echo v3 > "$mr/feature.txt"; g commit -q -am 'feature v3'
 out="$(cd "$mr" && PATH="$FAKE:$PATH" bash "$SCRIPT" 007-merged "$MERGED_BASE2" --since "$PREV2")"
 pkg="$(pkg_of "$out")"
-assert_not_contains "$(cat "$pkg/delta.patch")" 'base three' "a conflicted merge brings no base lines either"
-assert_contains "$(cat "$pkg/index.md")" "check merge $(g rev-parse HEAD) in the full diff" "index names the resolving merge"
+assert_contains "$(cat "$pkg/delta.patch")" '+v3' "after a conflicted merge, the fallback delta shows the later commit"
+# A plain PREV2..HEAD diff, or a first-parent diff of the merge, would carry this base file.
+assert_not_contains "$(cat "$pkg/delta.patch")" 'more from the base' "and nothing the base brought"
+assert_not_contains "$(cat "$pkg/delta.patch")" "commit $MERGE2" "the resolving merge stays out of the delta"
+assert_contains "$(cat "$pkg/index.md")" "check merge $MERGE2 in the full diff" "index names the resolving merge"
 
 it "A --since outside HEAD's history is refused"
-UNMERGED="$(g rev-parse "$MAIN")"
 g checkout -q "$MAIN"; echo later > "$mr/later.txt"; g add -A; g commit -q -m 'base later'; UNMERGED="$(g rev-parse HEAD)"
 g checkout -q 007-merged
 run bash -c 'cd "$1" && bash "$2" 008-invalid "$3" --since "$4"' _ "$mr" "$SCRIPT" "$MERGED_BASE2" "$UNMERGED"
