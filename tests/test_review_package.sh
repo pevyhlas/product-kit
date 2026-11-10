@@ -7,6 +7,7 @@
 #   - JSON output shape: {"ROUND":N,"BASE_SHA":"...","HEAD_SHA":"...","PACKAGE_DIR":"...","REPORT_PATH":"..."}
 #   - raw packages go to the gitignored .prdkit/cache/evidence/, never specs/
 #   - revision and usage errors exit non-zero
+#   - --since needs BASE to be the change's current merge base with a trusted integration branch
 
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -92,10 +93,21 @@ assert_eq "1" "$status" "missing BASE_SHA exits 1"
 (cd "$dir" && bash "$SCRIPT" "specs/features/001-demo" "$BASE" 2>/dev/null) && status=$? || status=$?
 assert_eq "1" "$status" "a feature directory path is not a change id"
 
+# The trusted integration branch is origin/HEAD, which a clone sets up; a fixture sets it up by hand.
+trust() { # repo, branch: make origin/HEAD point at origin/<branch>, which tracks <branch>'s tip
+    git -C "$1" update-ref "refs/remotes/origin/$2" "$2"
+    git -C "$1" symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$2"
+}
+trust_at() { # repo, branch, rev: the same, with the remote branch at an explicit commit
+    git -C "$1" update-ref "refs/remotes/origin/$2" "$3"
+    git -C "$1" symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$2"
+}
+
 it "Selected context is frozen at HEAD; evidence is copied and indexed; focused delta keeps full context"
 printf 'dirty working copy\n' > "$dir/alpha.txt"
 mkdir -p "$dir/results"
 printf 'command: test; revision: %s; exit: 0; PASS\n' "$(git -C "$dir" rev-parse HEAD)" > "$dir/results/check.txt"
+trust_at "$dir" "$(git -C "$dir" symbolic-ref --short HEAD)" "$BASE"
 out="$(cd "$dir" && bash "$SCRIPT" 004-prepared "$BASE" --since "$FIX_BASE" --context alpha.txt --evidence results/check.txt)"
 prepared="$dir/.prdkit/cache/evidence/004-prepared/reviews/round-1"
 assert_contains "$out" "\"SINCE_SHA\":\"$FIX_BASE\"" "focused range resolved"
@@ -137,6 +149,7 @@ g checkout -q "$MAIN"
 echo 'from the base' > "$mr/base.txt"; printf '1\n2\n3\n4\nbase five\n' > "$mr/shared.txt"; g add -A; g commit -q -m 'base work'
 g checkout -q 007-merged; g merge -q --no-edit "$MAIN" >/dev/null
 echo v2 > "$mr/feature.txt"; g commit -q -am 'feature v2'
+trust "$mr" "$MAIN"
 MERGED_BASE="$(g merge-base "$MAIN" HEAD)"
 
 it "After the base is merged in, --since takes the earlier head; the delta leaves out what the base brought"
@@ -149,15 +162,16 @@ assert_not_contains "$(cat "$pkg/delta.patch")" 'base five' "delta leaves out th
 assert_contains "$(cat "$pkg/diff.patch")" '+branch' "full diff still covers the whole change"
 assert_contains "$(cat "$pkg/index.md")" "without what the base brought: HEAD against" "index says what the delta covers"
 assert_contains "$(cat "$pkg/manifest.tsv")" "automatic merge of $MERGED_BASE into $PREV" "inventory names the delta's source"
-out="$(cd "$mr" && bash "$SCRIPT" 007-merged "$START" --since "$PREV")"
-pkg="$(pkg_of "$out")"
-assert_contains "$(cat "$pkg/delta.patch")" 'from the base' "with the round-1 base as BASE, the plain delta carries the merged base"
-assert_contains "$(cat "$pkg/index.md")" "It includes merge $(g rev-parse HEAD^): if that brought the base in, rebuild with the current merge base as BASE" "index says so and names the remedy"
+run bash -c 'cd "$1" && bash "$2" 007-merged "$3" --since "$4"' _ "$mr" "$SCRIPT" "$START" "$PREV"
+assert_eq 1 "$STATUS" "the round-1 base is no longer the merge base: refused"
+assert_contains "$OUTPUT" "BASE must be the change's current merge base" "refusal says what BASE must be"
+assert_contains "$OUTPUT" "origin/$MAIN=$MERGED_BASE" "refusal names the merge base to pass"
 
 it "Conflict resolutions after a base merge show in the delta, even one that keeps the reviewed side"
 PREV2="$(g rev-parse HEAD)"
 g checkout -q "$MAIN"
 echo 'more from the base' > "$mr/base2.txt"; printf '1\n2\nbase three\n4\nbase five\n' > "$mr/shared.txt"; g add -A; g commit -q -m 'base conflict'
+trust "$mr" "$MAIN"
 g checkout -q 007-merged
 g merge -q --no-edit "$MAIN" >/dev/null 2>&1 || true
 printf '1\n2\nbranch\n4\nbase five\n' > "$mr/shared.txt"; g add -A; g commit -q --no-edit
@@ -180,6 +194,7 @@ FAKE="$(mktemp -d)"; track_tmp "$FAKE"
 printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = merge-tree ] && { echo "usage: git merge-tree <base-tree> <branch1> <branch2>" >&2; exit 129; }; done\nexec "%s" "$@"\n' "$(command -v git)" > "$FAKE/git"
 chmod +x "$FAKE/git"
 MERGE1="$(g rev-parse "$PREV2^")"
+trust "$mr" "$MAIN"
 out="$(cd "$mr" && PATH="$FAKE:$PATH" bash "$SCRIPT" 007-merged "$MERGED_BASE" "$PREV2" --since "$PREV")"
 pkg="$(pkg_of "$out")"
 assert_contains "$(cat "$pkg/delta.patch")" '+v2' "fallback delta shows the commit since PREV"
@@ -201,9 +216,76 @@ assert_contains "$(cat "$pkg/index.md")" "check merge $MERGE2 in the full diff" 
 
 it "A --since outside HEAD's history is refused"
 g checkout -q "$MAIN"; echo later > "$mr/later.txt"; g add -A; g commit -q -m 'base later'; UNMERGED="$(g rev-parse HEAD)"
+trust "$mr" "$MAIN"
 g checkout -q 007-merged
 run bash -c 'cd "$1" && bash "$2" 008-invalid "$3" --since "$4"' _ "$mr" "$SCRIPT" "$MERGED_BASE2" "$UNMERGED"
 assert_eq 1 "$STATUS" 'a base commit not merged into HEAD is refused'
 assert_contains "$OUTPUT" "must be a commit in HEAD's history" 'refusal explained'
+
+# The scenario behind the --since BASE check: R is reviewed, X is not, then the base is merged in.
+#   main0 --- M ---------+
+#     \                   \
+#      R --- X --- ------ Mb --- H     (branch 001-x; M is the true merge base with main)
+bm="$(setup_fixture_repo)"; track_tmp "$bm"
+b() { git -C "$bm" "$@"; }
+BMAIN="$(b symbolic-ref --short HEAD)"
+b checkout -q -b 001-x
+echo reviewed > "$bm/r.txt"; b add -A; b commit -q -m R; R="$(b rev-parse HEAD)"
+echo evil > "$bm/evil.txt"; b add -A; b commit -q -m X; X="$(b rev-parse HEAD)"
+b checkout -q "$BMAIN"
+echo base > "$bm/m.txt"; b add -A; b commit -q -m M; M="$(b rev-parse HEAD)"
+b checkout -q 001-x; b merge -q --no-edit "$BMAIN" >/dev/null; Mb="$(b rev-parse HEAD)"
+echo fix > "$bm/fix.txt"; b add -A; b commit -q -m fix; H="$(b rev-parse HEAD)"
+trust "$bm" "$BMAIN"
+cd_run() { run bash -c 'cd "$1" && shift && bash "$@"' _ "$bm" "$SCRIPT" "$@"; }
+
+it "--since refuses a BASE that is the branch's own merge commit"
+cd_run 001-x "$Mb" "$H" --since "$R"
+assert_eq 1 "$STATUS" "the branch's merge commit is not the merge base"
+assert_contains "$OUTPUT" "BASE must be the change's current merge base" "refusal names the rule"
+assert_not_contains "$OUTPUT" "whole change" "no package is described as complete"
+assert_eq absent "$([ -e "$bm/.prdkit/cache/evidence/001-x" ] && echo present || echo absent)" "no round is allocated"
+
+it "--since refuses a BASE that is a plain branch commit"
+cd_run 001-x "$X" "$H" --since "$R"
+assert_eq 1 "$STATUS" "an unreviewed branch commit is not the merge base"
+assert_contains "$OUTPUT" "BASE must be the change's current merge base" "refusal names the rule"
+cd_run 001-x "$R" "$H" --since "$R"
+assert_eq 1 "$STATUS" "the reviewed head itself is not the merge base either"
+assert_eq absent "$([ -e "$bm/.prdkit/cache/evidence/001-x" ] && echo present || echo absent)" "no round is allocated"
+
+it "--since with the true merge base still works after a base merge, and shows the unreviewed commit"
+out="$(cd "$bm" && bash "$SCRIPT" 001-x "$M" "$H" --since "$R")"
+pkg="$(pkg_of "$out")"
+assert_contains "$(cat "$pkg/delta.patch")" 'evil' "the unreviewed commit is in the delta"
+assert_contains "$(cat "$pkg/delta.patch")" '+fix' "so is the fix"
+assert_not_contains "$(cat "$pkg/delta.patch")" '+base' "the base's own change is not"
+assert_contains "$(cat "$pkg/diff.patch")" 'evil' "the full diff carries it too"
+assert_not_contains "$(cat "$pkg/index.md")" "whole change" "the index never claims a complete change"
+
+it "--since with no trusted integration branch is refused; a full package still builds"
+b symbolic-ref --delete refs/remotes/origin/HEAD
+cd_run 001-x "$M" "$H" --since "$R"
+assert_eq 1 "$STATUS" "no origin/HEAD, nothing to check BASE against"
+assert_contains "$OUTPUT" "needs a trusted integration branch" "refusal says why"
+b symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/missing
+cd_run 001-x "$M" "$H" --since "$R"
+assert_eq 1 "$STATUS" "an origin/HEAD that resolves to no commit trusts nothing"
+out="$(cd "$bm" && bash "$SCRIPT" 001-x "$M" "$H")"
+assert_contains "$out" "\"BASE_SHA\":\"$M\"" "without --since the package still builds"
+assert_contains "$(cat "$(pkg_of "$out")/diff.patch")" 'evil' "and carries the whole range"
+
+it "--since accepts the merge base with a configured integration branch"
+b checkout -q "$BMAIN"
+mkdir -p "$bm/.prdkit/memory"
+printf '# Config\n\n## Configuration\n\n- review-integration-branches: origin/release\n' > "$bm/.prdkit/memory/config.md"
+b add -A; b commit -q -m 'config'; CONFIG="$(b rev-parse HEAD)"
+b update-ref refs/remotes/origin/release "$M"
+trust_at "$bm" "$BMAIN" "$CONFIG"
+b checkout -q 001-x
+out="$(cd "$bm" && bash "$SCRIPT" 001-x "$M" "$H" --since "$R")"
+assert_contains "$(cat "$(pkg_of "$out")/delta.patch")" 'evil' "origin/release, named in origin/HEAD's committed config, is trusted"
+cd_run 001-x "$X" "$H" --since "$R"
+assert_eq 1 "$STATUS" "and a branch commit is still refused"
 
 finish
