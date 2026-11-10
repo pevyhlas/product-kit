@@ -8,6 +8,38 @@ change by change.
 
 ## [Unreleased]
 
+## [1.4.1] — 2026-11-10 — review and compaction fixes
+
+Three fixes found adopting 1.4.0: the owner's Review line under report verification, the
+compaction count in a newest-first log, and a focused re-review after the base is merged in.
+
+### Fixed
+
+- `check-review.sh --verify-reports` reads each Review line's report link from its last field.
+  An owner line with counts before its link failed with "report link must name an issuecomment";
+  it now verifies like one without counts, and the owner's counts are still not read.
+  `review.md` and `docs/ci-gates.md` give the owner line's shape and the receipt its linked
+  comment needs under `--verify-reports`: reviewer `owner`, the line's full hashes, verdict PASS.
+- Status counted **Compaction due** from the entries after the last `compaction` line, so in a
+  newest-first log, `close-change.sh`'s default, a pass recorded on top still counted every older
+  entry. It now counts the closed changes newer than the latest pass, in either log order,
+  which status reads as `close-change.sh` does.
+- `build-review-package.sh --since` refused a previous reviewed head once the base had been merged
+  into the change branch, because the new BASE is newer than that head. It now accepts any
+  earlier head in HEAD's history, and the focused delta leaves out what the base brought: it
+  compares HEAD with Git's automatic merge of BASE into that head, so new commits and conflict
+  resolutions show. Where Git lacks `merge-tree --write-tree` (before 2.38), the delta holds the
+  change's own non-merge commits and `index.md` names the merges to check in the full diff.
+
+### Adoption
+
+- Pin the kit to `v1.4.1`, run `bash .product-kit/scripts/init.sh --check`, then
+  `bash .product-kit/scripts/init.sh --upgrade`. Update configured adoption pins and manifest
+  hashes with the kit pin. Specs and records need no change.
+- A compaction line goes where a new entry goes: on top of a newest-first log. If you appended
+  one at the bottom of a newest-first log to clear the 1.4.0 notice, move it to the top: at the
+  bottom it makes the log read as oldest first, so `close-change.sh` would add later entries there.
+
 ## [1.4.0] — 2026-11-09 — one home per fact, closed records and a lighter change read
 
 ### Added
