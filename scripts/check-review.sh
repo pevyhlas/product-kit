@@ -8,9 +8,9 @@
 # A record line, one per verdict, appended in order; a later line supersedes the same reviewer's
 # earlier one whatever its round number. Both ends of the range are commit hashes:
 #   **Review**: round <n> · <base sha>..<head sha> · <reviewer> · PASS|FAIL · <c> critical, <h> high, <m> medium, <l> low · <link>
-# The owner's line (reviewer `owner`, T3) needs PASS and the head the owner approved; its counts
-# are not read. The record is read at the head, or, when the closing commit deleted it, from the
-# last commit that still had it.
+# The owner's line (reviewer `owner`, T3) needs PASS and the head the owner approved; it may omit
+# the counts, which are not read. The link is always the last field. The record is read at the
+# head, or, when the closing commit deleted it, from the last commit that still had it.
 #
 # Every reviewer's latest verdict, in any tier, must be PASS with nothing blocking for the Rigor.
 # A blocking line (a FAIL, or counts that block for the Rigor or cannot be read) stands until a
@@ -236,7 +236,9 @@ else
             if (!cut) { cut = index(range, ".."); width = 2 }
             from = cut ? substr(range, 1, cut - 1) : ""; to = cut ? substr(range, cut + width) : ""
             verdict = toupper(trim(f[4]))
-            print "\035" NR "\037" reviewer "\037" from "\037" to "\037" verdict "\037" count(f[5], "critical") "\037" count(f[5], "high") "\037" count(f[5], "medium") "\037" count(f[5], "low") "\037" trim(f[reviewer == "owner" ? 5 : 6])
+            # The link is the last field: after the counts, or after the verdict on an owner line.
+            link = (n > (reviewer == "owner" ? 4 : 5)) ? trim(f[n]) : ""
+            print "\035" NR "\037" reviewer "\037" from "\037" to "\037" verdict "\037" count(f[5], "critical") "\037" count(f[5], "high") "\037" count(f[5], "medium") "\037" count(f[5], "low") "\037" link
             if (reviewer != "owner" && (verdict == "PASS" || verdict == "FAIL")) print "\036" reviewer "\037" trim(f[1]) "\037" verdict "\037" from "\037" to "\037" count(f[5], "critical") "\037" count(f[5], "high") "\037" count(f[5], "medium")
             if (!(reviewer in row)) order[++k] = reviewer
             row[reviewer] = reviewer "\037" trim(f[1]) "\037" from "\037" to "\037" verdict "\037" count(f[5], "critical") "\037" count(f[5], "high") "\037" count(f[5], "medium") "\037" count(f[5], "low")

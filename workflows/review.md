@@ -50,15 +50,26 @@ evidence; re-open a concern only when its source, bounds or evidence applicabili
 recorded range is the range actually inspected, starting at or before that reviewer's prior head
 so the rounds chain; the full package range alone is not a new full-review claim. Required
 reviewers and the final-head check still apply. A T3 change also records the owner's verdict,
-reviewer `owner`, with the head the owner approved and a link to their words in place of counts;
-a later L0 or L1 edit needs the owner again.
+reviewer `owner`, over the head the owner approved, ending with a link to their words; counts may
+precede the link and are not read. A later L0 or L1 edit needs the owner again:
+
+```text
+**Review**: round 1 · <base sha>..<approved head sha> · owner · PASS · <link to the owner's words>
+```
 
 Register identities on the integration baseline before using them; maker, unregistered and
 ambiguous identities cannot count as independent verdicts or coverage. Preserve standing FAILs
 while reconciling older records. Registry eligibility is not proof that a fresh context ran. The
 offline gate leaves report links unverified; `check-review.sh --verify-reports --pr <GitHub PR
 URL> <change-id>` optionally compares them with the recorded metadata and needs `gh`, `jq` and
-readable reports on that exact PR head.
+readable reports on that exact PR head. Each linked comment, the owner's included, then carries
+one receipt with the line's full hashes (`review-prompt-template.md`); the owner's needs no counts:
+
+```text
+<!-- prdkit-review
+{"schema":"prdkit.review.v1","reviewer":"owner","base":"<full base sha>","head":"<full approved head sha>","verdict":"PASS"}
+-->
+```
 
 ## Merge
 
