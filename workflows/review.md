@@ -126,7 +126,11 @@ known unmet obligation. Never reopen a completed transaction merely to clear wor
 change merged with its record still open (status flags it) closes in the next relevant PR, whose
 record is its review carrier; never fabricate acceptance or open a cleanup-only PR. After merge
 run `.prdkit/scripts/bash/cleanup-change.sh <id>` from the main checkout; it keeps the worktree's
-evidence, retrospectives and ledger events before removing the worktree.
+evidence, retrospectives and ledger events before removing the worktree. A repository with
+submodules needs no `--force`: the script retries a clean worktree that git refuses only for its
+submodules. `cleanup-change.sh --closed` sweeps every worktree whose change is closed on the
+trusted integration branch (record gone, log line present), skipping dirty or locked ones and
+leaving branches alone; run it after merges so finished worktrees do not pile up.
 
 A `--no-branch` record closes the same way, through the project's authorized delivery route; its
 shared checkout stays, so skip `cleanup-change.sh`. A detached HEAD can hold a record, but

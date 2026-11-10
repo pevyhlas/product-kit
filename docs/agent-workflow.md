@@ -53,7 +53,8 @@ keeps lasting decisions in L1/L2 and preserves useful context and evidence on th
 final PASS, `close-change.sh` adds one line to `specs/log.md` and deletes the record before
 merge. Required PR checks still gate; non-gating runtime observations stay unverified and later
 findings use linked fixes, not cleanup PRs.
-`cleanup-change.sh` removes the worktree after merge. See [feature delivery](feature-delivery.md).
+`cleanup-change.sh <id>` removes the worktree after merge, and `cleanup-change.sh --closed` every
+closed change's worktree at once (branches are kept). See [feature delivery](feature-delivery.md).
 
 ## Helpers
 

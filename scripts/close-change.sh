@@ -3,7 +3,7 @@
 # check-review.sh passes at HEAD, then add the change's specs/log.md line and delete its record.
 # Run it once the final Review line is committed and before the final push, so required checks
 # run once on the closed head. It commits in the current checkout only; it never pushes, merges
-# or removes a worktree (cleanup-change.sh does that after merge).
+# or removes a worktree (cleanup-change.sh does that after merge, or --closed for every closed change).
 #
 # Usage: close-change.sh [--base <rev>] [--date YYYY-MM-DD] [-m <message>] <change-id> "<log text>"
 #   <log text> follows "- <date> <id>: " on the log line: "<intent> — <IDs> — <disposition> — <PR>".

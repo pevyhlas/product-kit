@@ -124,4 +124,6 @@ Pick one mode per project policy:
 
 Either way, tear worktrees down with `cleanup-change.sh`, never `rm -rf`: a worktree directory
 removed out of band leaves a stale registration that blocks a session trying to re-enter it on
-resume. `doctor.sh` flags stale registrations read-only.
+resume. `doctor.sh` flags stale registrations read-only. `cleanup-change.sh --closed` removes every
+worktree whose change is closed on the trusted integration branch; it keeps each worktree's
+evidence and never deletes branches.
