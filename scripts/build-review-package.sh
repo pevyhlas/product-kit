@@ -12,8 +12,11 @@
 #
 # Usage: ./build-review-package.sh CHANGE_ID BASE_SHA [HEAD_SHA] [options]
 #   --since REV       Add a focused delta of what the branch changed since REV, an earlier
-#                     reviewed head in HEAD's history; retain the full BASE..HEAD diff. After
-#                     a base merge, pass the current merge base as BASE to leave the base out
+#                     reviewed head in HEAD's history; retain the full BASE..HEAD diff. BASE must
+#                     be the change's current merge base with a trusted integration branch
+#                     (origin/HEAD, or one named by review-integration-branches in its committed
+#                     config); anything else is refused. After a base merge, pass the new merge
+#                     base as BASE to leave the base out
 #   --context PATH    Snapshot a repo-relative tracked file at HEAD (repeatable)
 #   --evidence PATH   Copy a completed repo-relative evidence file (repeatable)
 #
@@ -41,7 +44,9 @@
 set -e
 
 # shellcheck source=/dev/null
-source "$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+source "$SCRIPT_DIR/spec-lib.sh"
 
 case "${1:-}" in
     --help|-h)
@@ -104,6 +109,27 @@ if [ -n "$SINCE" ]; then
     # (the merge base) is newer than the previous reviewed head, and that head still counts.
     if ! git -C "$REPO_ROOT" merge-base --is-ancestor "$SINCE" "$HEAD_SHA" || [ "$SINCE" = "$HEAD_SHA" ]; then
         echo "ERROR: --since must be a commit in HEAD's history, before HEAD" >&2; exit 1
+    fi
+    # BASE decides what the focused delta leaves out, so it must be where the change leaves the
+    # integration branch. Any other commit on the branch would drop the commits between SINCE and
+    # BASE from both patches while the package still looked complete.
+    trusted_refs="$(spec_trusted_refs "$REPO_ROOT")"
+    if [ -z "$trusted_refs" ]; then
+        echo "ERROR: --since needs a trusted integration branch to check BASE against: set origin/HEAD (git remote set-head origin --auto) and fetch it, or build the full package without --since" >&2
+        exit 1
+    fi
+    base_is_merge_base=false; merge_bases=""
+    while IFS= read -r trusted; do
+        [ -n "$trusted" ] || continue
+        git -C "$REPO_ROOT" rev-parse --verify --quiet "$trusted^{commit}" >/dev/null 2>&1 || continue
+        git -C "$REPO_ROOT" merge-base --is-ancestor "$BASE_SHA" "$trusted" || continue
+        mb="$(git -C "$REPO_ROOT" merge-base "$trusted" "$HEAD_SHA" 2>/dev/null || true)"
+        [ -z "$mb" ] || merge_bases="$merge_bases ${trusted#refs/remotes/}=${mb}"
+        if [ "$mb" = "$BASE_SHA" ]; then base_is_merge_base=true; break; fi
+    done <<<"$trusted_refs"
+    if ! $base_is_merge_base; then
+        echo "ERROR: with --since, BASE must be the change's current merge base with a trusted integration branch ($(printf '%s' "$trusted_refs" | sed 's#^refs/remotes/##' | tr '\n' ' ' | sed 's/ $//')), and is not: $BASE_SHA${merge_bases:+; merge base(s) found:$merge_bases}. Pass the current merge base as BASE, or build the full package without --since" >&2
+        exit 1
     fi
 fi
 
@@ -176,9 +202,10 @@ inventory() {
         "$(git -C "$REPO_ROOT" hash-object --no-filters "$PACKAGE_DIR/$file")" "$source" >> "$PACKAGE_DIR/manifest.tsv"
 }
 for p in commits.txt diffstat.txt diff.patch; do inventory "$p" "$BASE_SHA..$HEAD_SHA"; done
-# The focused delta is what the branch changed since SINCE, leaving out what BASE brought. When
-# BASE is in SINCE's history that is SINCE..HEAD, which includes any later base merge: BASE must
-# be the current merge base to leave it out. When the base was merged in after SINCE, a plain
+# The focused delta is what the branch changed since SINCE, leaving out what BASE brought. BASE
+# is the current merge base with a trusted integration branch (checked above), so everything in
+# SINCE..BASE is integration history, not unreviewed branch work. When BASE is in SINCE's history
+# that is SINCE..HEAD. When the base was merged in after SINCE, a plain
 # SINCE..HEAD diff would also show everything the base brought, so the delta compares HEAD with
 # Git's automatic merge of BASE into SINCE: commits since SINCE and merge resolutions show, the
 # base's own changes do not. When that merge is unavailable (merge-tree --write-tree needs Git
@@ -192,10 +219,10 @@ if [ -n "$SINCE" ]; then
         delta_from="$SINCE"
         DELTA="$SINCE..$HEAD_SHA, everything since $SINCE."
         merges="$(git -C "$REPO_ROOT" rev-list --min-parents=2 "$SINCE..$HEAD_SHA" | tr '\n' ' ' | sed 's/ $//')"
-        [ -z "$merges" ] || DELTA="$DELTA It includes merge $merges: if that brought the base in, rebuild with the current merge base as BASE to leave the base's changes out."
+        [ -z "$merges" ] || DELTA="$DELTA It includes merge $merges; check its resolution here."
     elif git -C "$REPO_ROOT" merge-base --is-ancestor "$SINCE" "$BASE_SHA"; then
         delta_from="$BASE_SHA"; source_label="$BASE_SHA..$HEAD_SHA"
-        DELTA="the whole change, $BASE_SHA..$HEAD_SHA: $SINCE is in the base's history."
+        DELTA="$BASE_SHA..$HEAD_SHA, the full range: $SINCE is in the base's history, so nothing on the branch lies between $SINCE and $BASE_SHA."
     else
         merge_status=0
         merged="$(git -C "$REPO_ROOT" -c core.quotepath=true merge-tree --write-tree --name-only --no-messages \

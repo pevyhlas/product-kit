@@ -849,6 +849,34 @@ spec_default_branch() { # root
     printf '%s\n' "$base"
 }
 
+# The trusted integration refs: origin/HEAD's target (a full refs/remotes/ name, always first),
+# then each ref named by `review-integration-branches` in the committed config at that target,
+# never the worktree's own. One full ref per line; blank when origin/HEAD does not resolve to a
+# commit, in which case nothing is trusted.
+spec_trusted_refs() { # root
+    local root="$1" default sha policy configured candidate
+    default="$(git -C "$root" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
+    case "$default" in refs/remotes/*) ;; *) return 0 ;; esac
+    sha="$(git -C "$root" rev-parse --verify --quiet "$default^{commit}" || true)"
+    [ -n "$sha" ] || return 0
+    printf '%s\n' "$default"
+    policy="$(git -C "$root" show "$sha:.prdkit/memory/config.md" 2>/dev/null || true)"
+    configured="$(printf '%s\n' "$policy" | awk "$SPEC_SKIP_AWK"'
+        { if (spec_skip($0)) next }
+        /^## / { section = $0; next }
+        section == "## Configuration" && /^- review-integration-branches:/ {
+            n++; value = $0; sub(/^- review-integration-branches:[[:space:]]*/, "", value)
+        }
+        END { if (n == 1) { gsub(/,/, " ", value); print value } }')"
+    # Configuration is a list of literal refs, never patterns.
+    while IFS= read -r candidate; do
+        [ -n "$candidate" ] || continue
+        case "$candidate" in refs/remotes/*) ;; *) candidate="refs/remotes/$candidate" ;; esac
+        git check-ref-format "$candidate" >/dev/null 2>&1 || continue
+        printf '%s\n' "$candidate"
+    done < <(printf '%s\n' "$configured" | tr ' \t\r' '\n')
+}
+
 # Reading an object a partial clone lacks would fetch it from the promisor remote. Git 2.45+
 # refuses under GIT_NO_LAZY_FETCH; with an older Git, callers skip object reads in a partial clone.
 spec_objects_local() { # root

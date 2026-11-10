@@ -44,8 +44,11 @@ leaves the default branch:
 ```
 
 Re-review only changed source, scoped to the fix: `--since <previous-reviewed-head>` keeps a
-focused delta alongside the full diff; after a base merge, with the current merge base as BASE,
-it leaves out what the base brought, and the package index says what it covers. Never dispatch a
+focused delta alongside the full diff. BASE must be the change's current merge base with a
+trusted integration branch (`origin/HEAD`, or one named by `review-integration-branches` in its
+committed config, as `check-review.sh` reads them), or the script refuses; there must be one to
+use `--since`. After a base merge, pass the new merge base: the delta then leaves out what the
+base brought, and the package index says what it covers. Never dispatch a
 round when no source changed since the last verdict. Map findings to fixes and affected
 obligations, preserving unaffected approvals and evidence; re-open a concern only when its source,
 bounds or evidence applicability changed. The recorded range is the range actually inspected,

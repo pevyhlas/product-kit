@@ -8,6 +8,30 @@ change by change.
 
 ## [Unreleased]
 
+## [1.4.2] — 2026-11-10 — review package base check
+
+### Fixed
+
+- `build-review-package.sh --since` accepted any BASE, not only the change's merge base with
+  the integration branch. A BASE on the change branch after SINCE, such as its own merge commit
+  or an unreviewed commit, dropped `SINCE..BASE` from both patches while `index.md` called the
+  package the whole change, so unreviewed commits passed under a recorded PASS. With `--since`,
+  BASE must now be an ancestor of a trusted integration branch and equal its merge base with
+  HEAD, or the script refuses and names the merge base to pass. The trusted branch is resolved
+  as `check-review.sh` does: `origin/HEAD`, plus any `review-integration-branches` in that
+  branch's committed config (now one shared function, `spec_trusted_refs` in `spec-lib.sh`).
+  With none resolvable, `--since` is refused; a full package without `--since` is unchanged.
+  The index no longer says "the whole change" for a range that starts after SINCE.
+
+### Adoption
+
+- Pin the kit to `v1.4.2`, run `bash .product-kit/scripts/init.sh --check`, then
+  `bash .product-kit/scripts/init.sh --upgrade`. Update configured adoption pins and manifest
+  hashes with the kit pin. Specs and records need no change.
+- `--since` now needs `origin/HEAD` set and fetched (`git remote set-head origin --auto`), and
+  BASE must be the current merge base (`git merge-base origin/HEAD HEAD`). A round-1 base passed
+  after the base was merged into the branch is refused; pass the new merge base.
+
 ## [1.4.1] — 2026-11-10 — review and compaction fixes
 
 Three fixes found adopting 1.4.0: the owner's Review line under report verification, the

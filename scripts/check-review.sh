@@ -73,30 +73,11 @@ fi
 # Only origin/HEAD establishes the default integration branch. Other bases may locate a
 # comparison, but do not grant exemptions. Additional integration refs must be configured in
 # the default branch's committed config, never in the change/worktree being checked.
-trusted_default="$(git -C "$root" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
-case "$trusted_default" in refs/remotes/*) ;; *) trusted_default="" ;; esac
+approved_refs="$(spec_trusted_refs "$root")"
+trusted_default="$(printf '%s\n' "$approved_refs" | sed -n 1p)"
 trusted_default_sha=""
 if [ -n "$trusted_default" ]; then
     trusted_default_sha="$(git -C "$root" rev-parse --verify --quiet "$trusted_default^{commit}" || true)"
-fi
-approved_refs=""
-if [ -n "$trusted_default_sha" ]; then
-    approved_refs="$trusted_default"
-    policy="$(git -C "$root" show "$trusted_default_sha:.prdkit/memory/config.md" 2>/dev/null || true)"
-    configured="$(printf '%s\n' "$policy" | awk "$SPEC_SKIP_AWK"'
-        { if (spec_skip($0)) next }
-        /^## / { section = $0; next }
-        section == "## Configuration" && /^- review-integration-branches:/ {
-            n++; value = $0; sub(/^- review-integration-branches:[[:space:]]*/, "", value)
-        }
-        END { if (n == 1) { gsub(/,/, " ", value); print value } }')"
-    # Disable glob expansion: configuration is a list of literal refs, never patterns.
-    while IFS= read -r candidate; do
-        [ -n "$candidate" ] || continue
-        case "$candidate" in refs/remotes/*) ;; *) candidate="refs/remotes/$candidate" ;; esac
-        git check-ref-format "$candidate" >/dev/null 2>&1 || continue
-        approved_refs="$approved_refs"$'\n'"$candidate"
-    done < <(printf '%s\n' "$configured" | tr ' \t\r' '\n')
 fi
 import_base=""
 base_trusted=false
