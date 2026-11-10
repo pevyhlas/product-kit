@@ -8,6 +8,56 @@ change by change.
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-11-10 — worktree cleanup
+
+`cleanup-change.sh` could never remove a worktree in a repository with a git submodule, which
+includes every project that pins the kit as one, and nothing swept finished worktrees after a
+merge. Agents fell back to a raw `git worktree remove --force`, which loses the gitignored
+evidence, retrospectives and ledger events the script exists to keep.
+
+### Fixed
+
+- `cleanup-change.sh <id>` without `--force` refused every worktree in a repository whose
+  worktree had initialized submodules, clean ones included, because git refuses to remove such a
+  worktree ("working trees containing submodules cannot be moved or removed"), and reported it as
+  "uncommitted or untracked changes". The cleanliness refusal (`git status --porcelain
+  --untracked-files=all` must be empty) and the evidence preservation are unchanged. When git then
+  refuses only because of submodules, the script re-checks that the worktree is still clean and
+  retries with `git worktree remove --force`; nothing is discarded, because cleanliness was proven.
+  The refusal is recognised from git's message or from a gitlink (mode 160000) entry in the
+  worktree's index, so a translated or reworded message does not defeat it. A locked worktree is
+  never retried.
+- Any other git refusal, such as a locked worktree, is now reported with git's own reason and
+  says the worktree is clean, instead of claiming uncommitted changes. A dirty worktree and a git
+  refusal read differently, in text and JSON.
+
+### Added
+
+- `cleanup-change.sh [--json] --closed` removes the worktree of every change that is closed on
+  the trusted integration branch: its record `specs/changes/<id>.md` is gone there and
+  `specs/log.md` there has the id's line, as `close-change.sh` writes it. A change id matches a
+  worktree's branch name or directory name. The trusted branches are the ones `check-review.sh`
+  and `build-review-package.sh` use (`spec_trusted_refs`: `origin/HEAD` plus any
+  `review-integration-branches`); the worktree's own branch is never read, and with none
+  resolvable the whole mode is refused. Each worktree takes the single-change path: the
+  cleanliness refusal, evidence preservation, then removal with the submodule retry. A dirty,
+  locked or otherwise refused worktree is reported and skipped and the run continues; the exit
+  status is 1 if any was refused. It never forces, skips the main checkout and any worktree
+  holding the current directory, prunes stale registrations as `--prune` does, and lists removed
+  and skipped paths with reasons (also in `--json`). It does not delete branches; that stays your
+  choice.
+
+### Adoption
+
+- Pin the kit to `v1.5.0`, run `bash .product-kit/scripts/init.sh --check`, then
+  `bash .product-kit/scripts/init.sh --upgrade`. Update configured adoption pins and manifest
+  hashes with the kit pin. Specs and records need no change.
+- Drop any `--force` fallback or raw `git worktree remove` your agent instructions carry for
+  repositories with submodules; `cleanup-change.sh <id>` now works there and keeps the evidence.
+- To sweep finished worktrees after merges, run `cleanup-change.sh --closed` from the main
+  checkout. It needs `origin/HEAD` set and fetched (`git remote set-head origin --auto`), and a
+  change counts as closed only once its closing commit is on that branch.
+
 ## [1.4.2] — 2026-11-10 — review package base check
 
 ### Fixed

@@ -30,7 +30,8 @@
 | Missing usage numbers | Provide optional documented enrichment, or accept unknown usage |
 | `new-change.sh`: branch already exists | Continue it (`git checkout <id>`) or choose another short name |
 | Harness cannot enter or resume a worktree | A worktree directory was removed without `git worktree remove`; run `.prdkit/scripts/bash/cleanup-change.sh --prune` |
-| Finished change worktree lingers | From the main checkout, run `.prdkit/scripts/bash/cleanup-change.sh <change-id>` |
+| Finished change worktree lingers | From the main checkout, run `.prdkit/scripts/bash/cleanup-change.sh <change-id>`, or `cleanup-change.sh --closed` for every closed change's worktree (needs `origin/HEAD`: `git remote set-head origin --auto`) |
+| `cleanup-change.sh` says git refused the removal | The message carries git's reason, such as a locked worktree (`git worktree unlock <path>`); uncommitted changes are reported as such. Submodules alone never block it |
 | Agent context file huge, slow costly turns | Keep `CLAUDE.md`/`AGENTS.md` to orientation and pointers within `context-budget-bytes` |
 | Old `/prdkit-*` commands or helpers still installed | Run `init.sh --upgrade`; it removes kit files no longer shipped (`--check` lists them as RETIRED) |
 | Upgrade kept an edited retired template | Fold what you need into the constitution or a 1.0 template, then delete it |
