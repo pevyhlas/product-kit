@@ -44,7 +44,8 @@ leaves the default branch:
 ```
 
 Re-review only changed source, scoped to the fix: `--since <previous-reviewed-head>` keeps a
-focused delta alongside the full diff. Never dispatch a round when no source changed since the
+focused delta alongside the full diff; after a base merge it leaves out what the base brought, and
+the package index says what it covers. Never dispatch a round when no source changed since the
 last verdict. Map findings to fixes and affected obligations, preserving unaffected approvals and
 evidence; re-open a concern only when its source, bounds or evidence applicability changed. The
 recorded range is the range actually inspected, starting at or before that reviewer's prior head

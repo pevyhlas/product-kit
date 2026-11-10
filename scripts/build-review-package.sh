@@ -11,7 +11,8 @@
 # silently drops all but the last commit of a multi-commit change.
 #
 # Usage: ./build-review-package.sh CHANGE_ID BASE_SHA [HEAD_SHA] [options]
-#   --since REV       Add a focused REV..HEAD delta; retain the full BASE..HEAD diff
+#   --since REV       Add a focused delta of what the branch changed since REV, an earlier
+#                     reviewed head in HEAD's history; retain the full BASE..HEAD diff
 #   --context PATH    Snapshot a repo-relative tracked file at HEAD (repeatable)
 #   --evidence PATH   Copy a completed repo-relative evidence file (repeatable)
 #
@@ -26,7 +27,7 @@
 #   diff.patch    git diff BASE..HEAD
 #   index.md      source bindings, inventory and dispatch preflight
 #   manifest.tsv  file, bytes, Git blob object id, source
-#   delta.patch   optional --since range; full context remains available
+#   delta.patch   optional --since delta (index.md says what it covers); full diff remains
 #   context/      optional immutable HEAD snapshots
 #   evidence/     optional copied evidence; producer must state revision/result/limits
 # The reviewer writes its report (report.md) into the same directory.
@@ -98,9 +99,10 @@ if ! git -C "$REPO_ROOT" merge-base --is-ancestor "$BASE_SHA" "$HEAD_SHA"; then
 fi
 if [ -n "$SINCE" ]; then
     SINCE="$(git -C "$REPO_ROOT" rev-parse --verify "${SINCE}^{commit}")" || exit 1
-    if ! git -C "$REPO_ROOT" merge-base --is-ancestor "$BASE_SHA" "$SINCE" ||
-       ! git -C "$REPO_ROOT" merge-base --is-ancestor "$SINCE" "$HEAD_SHA" || [ "$SINCE" = "$HEAD_SHA" ]; then
-        echo "ERROR: --since must be within BASE..HEAD and before HEAD" >&2; exit 1
+    # Any earlier head in HEAD's history: after the base is merged into the branch, the new BASE
+    # (the merge base) is newer than the previous reviewed head, and that head still counts.
+    if ! git -C "$REPO_ROOT" merge-base --is-ancestor "$SINCE" "$HEAD_SHA" || [ "$SINCE" = "$HEAD_SHA" ]; then
+        echo "ERROR: --since must be a commit in HEAD's history, before HEAD" >&2; exit 1
     fi
 fi
 
@@ -173,9 +175,46 @@ inventory() {
         "$(git -C "$REPO_ROOT" hash-object --no-filters "$PACKAGE_DIR/$file")" "$source" >> "$PACKAGE_DIR/manifest.tsv"
 }
 for p in commits.txt diffstat.txt diff.patch; do inventory "$p" "$BASE_SHA..$HEAD_SHA"; done
+# The focused delta is what the branch changed since SINCE, never what the base brought. When
+# BASE is in SINCE's history that is SINCE..HEAD. When the base was merged in after SINCE, a plain
+# SINCE..HEAD diff would also show everything the base brought, so the delta compares HEAD with
+# Git's automatic merge of BASE into SINCE: commits since SINCE and merge resolutions show, the
+# base's own changes do not. Without `merge-tree --write-tree` (Git 2.38+), it falls back to the
+# patches of the non-merge commits since SINCE that BASE does not contain, and index.md names the
+# merges to check in the full diff: a combined diff of a merge can still carry base lines.
+DELTA="none"
 if [ -n "$SINCE" ]; then
-    git -C "$REPO_ROOT" diff --no-ext-diff --no-textconv --binary "$SINCE..$HEAD_SHA" > "$PACKAGE_DIR/delta.patch"
-    inventory delta.patch "$SINCE..$HEAD_SHA"
+    delta_from=""; source_label="$SINCE..$HEAD_SHA"
+    if git -C "$REPO_ROOT" merge-base --is-ancestor "$BASE_SHA" "$SINCE"; then
+        delta_from="$SINCE"
+        DELTA="$SINCE..$HEAD_SHA, everything since $SINCE."
+    elif git -C "$REPO_ROOT" merge-base --is-ancestor "$SINCE" "$BASE_SHA"; then
+        delta_from="$BASE_SHA"; source_label="$BASE_SHA..$HEAD_SHA"
+        DELTA="the whole change, $BASE_SHA..$HEAD_SHA: $SINCE is in the base's history."
+    else
+        merge_status=0
+        merged="$(git -C "$REPO_ROOT" -c core.quotepath=true merge-tree --write-tree --name-only --no-messages \
+            "$SINCE" "$BASE_SHA" 2>/dev/null)" || merge_status=$?
+        tree="$(printf '%s\n' "$merged" | sed -n 1p)"
+        if [ "$merge_status" -le 1 ] && [ -n "$tree" ] &&
+            git -C "$REPO_ROOT" rev-parse --verify --quiet "$tree^{tree}" >/dev/null; then
+            delta_from="$tree"; source_label="$tree..$HEAD_SHA (automatic merge of $BASE_SHA into $SINCE)"
+            DELTA="$SINCE..$HEAD_SHA without what the base brought: HEAD against $tree, the automatic merge of $BASE_SHA into $SINCE, so commits since $SINCE and merge resolutions show and the base's own changes do not."
+            conflicts="$(printf '%s\n' "$merged" | sed -n '2,$p' | sed '/^$/d' | tr '\n' ' ' | sed 's/ $//')"
+            [ -z "$conflicts" ] || DELTA="$DELTA That merge conflicts on $conflicts; the delta shows HEAD's resolution against its conflict markers."
+        fi
+    fi
+    if [ -n "$delta_from" ]; then
+        git -C "$REPO_ROOT" diff --no-ext-diff --no-textconv --binary "$delta_from" "$HEAD_SHA" > "$PACKAGE_DIR/delta.patch"
+    else
+        source_label="$HEAD_SHA ^$SINCE ^$BASE_SHA (non-merge commit patches)"
+        git -C "$REPO_ROOT" log --reverse --no-merges --no-color --no-decorate --format=medium --no-ext-diff --no-textconv --binary -p \
+            "$HEAD_SHA" --not "$SINCE" "$BASE_SHA" > "$PACKAGE_DIR/delta.patch"
+        merges="$(git -C "$REPO_ROOT" rev-list --min-parents=2 "$HEAD_SHA" --not "$SINCE" "$BASE_SHA" | tr '\n' ' ' | sed 's/ $//')"
+        DELTA="$SINCE..$HEAD_SHA without what the base brought: the patches of the non-merge commits since $SINCE that $BASE_SHA does not contain, oldest first, as this Git lacks merge-tree --write-tree (2.38+)."
+        [ -z "$merges" ] || DELTA="$DELTA Merge resolutions are not in it: check merge $merges in the full diff."
+    fi
+    inventory delta.patch "$source_label"
 fi
 for p in ${CONTEXT[@]+"${CONTEXT[@]}"}; do
     mkdir -p "$(dirname "$PACKAGE_DIR/context/$p")"
@@ -197,7 +236,7 @@ cat > "$PACKAGE_DIR/index.md" <<EOF
 # Review package: $CHANGE_ID
 
 - Full range: $BASE_SHA..$HEAD_SHA
-- Focused delta: ${SINCE:-none}${SINCE:+..$HEAD_SHA}
+- Focused delta (delta.patch): $DELTA
 - Inventory: manifest.tsv (bytes and Git blob object IDs of exact packaged content).
 - Tracked context is read from the named HEAD, never the working copy.
 - Evidence is a stable copy, not proof of completion or applicability to HEAD.
