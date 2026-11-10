@@ -92,4 +92,5 @@ its budget keeps its newest entries; the older ones, up to a number below every 
 change, become archive entries for notable outcomes and lessons, and the archive's **Log condensed
 through** line names that number and the log at the commit before. A first `specs/archive.md`
 starts from `archive-template.md` (`Last 0.x feature: none`), so numbering works. End each pass
-with `- <date> compaction: <what changed>` in `specs/log.md`.
+with `- <date> compaction: <what changed>` as the newest entry in `specs/log.md` (on top, unless
+the log lists the oldest change first).

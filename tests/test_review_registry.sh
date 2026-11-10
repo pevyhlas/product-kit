@@ -108,6 +108,7 @@ printf '%s\n' "$*" >> "$RR_FIXTURE/requests"
 case "$4" in
     repos/fixture/project/pulls/7) cat "$RR_FIXTURE/pr.json" ;;
     repos/fixture/project/issues/comments/11) cat "$RR_FIXTURE/comment.json" ;;
+    repos/fixture/project/issues/comments/12) cat "$RR_FIXTURE/owner-comment.json" ;;
     *) exit 1 ;;
 esac
 EOF
@@ -199,6 +200,55 @@ make_receipt | publish_fixture
 online
 assert_eq 1 "$STATUS" 'superseded invalid report still needs verification'
 assert_contains "$OUTPUT" "$RECORD:4: report link" 'earlier offending line named'
+record code
+
+it "an owner line passes report verification with or without counts; its comment needs an owner receipt"
+OWNER_LINK=https://github.com/fixture/project/pull/7#issuecomment-12
+owner_record() { # the owner line's fields after its verdict
+    mkdir -p specs/changes
+    printf '# Change: Fixture\n**Tier**: T3\n## State\n**Review**: round 1 · %s..%s · code · PASS · %s · %s\n**Review**: round 1 · %s..%s · owner · PASS · %s\n' \
+        "$BASE" "$REVIEWED" "$CLEAN" "$LINK" "$BASE" "$REVIEWED" "$1" > "$RECORD"
+    git add "$RECORD"; git commit -qm 'record owner verdict'
+}
+owner_receipt() {
+    jq -n --arg base "$BASE" --arg head "$REVIEWED" '{schema:"prdkit.review.v1",reviewer:"owner",base:$base,head:$head,verdict:"PASS"}'
+}
+publish_owner() { # receipt on stdin; empty publishes the owner's words without one
+    local receipt body='Approved.'
+    receipt="$(cat)"
+    [ -z "$receipt" ] || body="$(printf 'Approved.\n<!-- prdkit-review\n%s\n-->\n' "$receipt")"
+    jq -n --arg body "$body" '{issue_url:"https://api.github.com/repos/fixture/project/issues/7",body:$body}' > .git/owner-comment.json
+}
+for fields in "$OWNER_LINK" "$CLEAN · $OWNER_LINK" "0 critical, 1 high · $OWNER_LINK"; do
+    owner_record "$fields"
+    make_receipt | publish_fixture
+    owner_receipt | publish_owner
+    : > .git/requests
+    check
+    assert_eq 0 "$STATUS" "offline gate passes the owner line: $fields"
+    online
+    assert_eq 0 "$STATUS" "owner line verifies: $fields: $OUTPUT"
+    assert_contains "$OUTPUT" '"report_verification":"matched"' "owner report matched: $fields"
+    assert_contains "$(cat .git/requests)" 'issues/comments/12' "owner link read from the last field: $fields"
+done
+owner_record "$CLEAN · $OWNER_LINK"
+make_receipt | publish_fixture
+printf '' | publish_owner
+online
+assert_eq 1 "$STATUS" "owner words without a receipt stay unverified"
+assert_contains "$OUTPUT" "$RECORD:5: report receipt is absent" "missing owner receipt names the owner line"
+for edit in '.reviewer="code"' '.head="wrong"' '.verdict="FAIL"' '.schema="other"'; do
+    owner_receipt | jq "$edit" | publish_owner
+    online
+    assert_eq 1 "$STATUS" "mismatching owner receipt rejected: $edit"
+    assert_contains "$OUTPUT" "$RECORD:5: report receipt" "owner receipt mismatch names the owner line: $edit"
+done
+owner_record "$CLEAN"
+make_receipt | publish_fixture
+owner_receipt | publish_owner
+online
+assert_eq 1 "$STATUS" "an owner line without a link fails verification"
+assert_contains "$OUTPUT" "$RECORD:5: report link must name an issuecomment" "counts in the link's place are rejected as a link"
 record code
 
 it "a missing registry is not a permissive legacy fallback"

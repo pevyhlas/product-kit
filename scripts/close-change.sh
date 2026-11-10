@@ -65,13 +65,13 @@ fi
 line="- $day $id: $text"; src="$root/$log"; tmp="$root/$log.close-change.$$"
 [ -f "$src" ] || src=/dev/null
 # Dates are compared, never matched; the line reaches awk only through ENVIRON. It goes above the
-# first entry unless the first entry is older than the last; a CRLF log keeps CRLF.
-if ! { mkdir -p "$root/specs" && CLOSE_LINE="$line" awk '
+# first entry of a newest-first log (spec_log_newest_first), else last; a CRLF log keeps CRLF.
+top=0; if spec_log_newest_first "$src"; then top=1; fi
+if ! { mkdir -p "$root/specs" && CLOSE_LINE="$line" awk -v top="$top" '
         NR == 1 && substr($0, length($0)) == "\r" { cr = "\r" }
         { lines[NR] = $0 }
-        /^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] / { d = substr($0, 3, 10); if (!first) { first = NR; newest = d }; oldest = d }
+        !first && /^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] / { first = NR }
         END {
-            top = first && newest >= oldest
             for (i = 1; i <= NR; i++) { if (top && i == first) print ENVIRON["CLOSE_LINE"] cr; print lines[i] }
             if (!top) print ENVIRON["CLOSE_LINE"] cr
         }' "$src" > "$tmp" && mv "$tmp" "$root/$log"; } 2>/dev/null; then

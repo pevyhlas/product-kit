@@ -114,11 +114,12 @@ verdict and finding counts. Append this receipt to the report comment, filling a
 -->
 ```
 
-Owner receipts use reviewer `owner`; counts are optional. Historical reports also need receipts
-when this mode is used. Missing tools, unavailable/offline API access, missing history or a
-mismatch returns a failing result rather than a verified PASS. Matching metadata does not
-authenticate the reviewer session: shared bot accounts can publish for several roles. The
-main session must still preserve dispatch/report provenance and enforce independent review.
+The owner's linked comment needs one too, with reviewer `owner` and verdict PASS; counts are
+optional there and in the owner's line, whose link is its last field. Historical reports also
+need receipts when this mode is used. Missing tools, unavailable/offline API access, missing
+history or a mismatch returns a failing result rather than a verified PASS. Matching metadata
+does not authenticate the reviewer session: shared bot accounts can publish for several roles.
+The main session must still preserve dispatch/report provenance and enforce independent review.
 
 A closing commit that deletes the record is checked against the record's last committed
 version; `close-change.sh` makes that commit only after the check passes. A passing check whose

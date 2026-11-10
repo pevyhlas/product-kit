@@ -80,6 +80,19 @@ assert_eq 0 "$STATUS" "closes"
 assert_eq '- 2026-11-03 002-greet: warmer — R-01 — #3' "$(sed -n 3p specs/log.md)" "first entry"
 assert_eq '002-greet: close' "$(git log -1 --format=%s)" "custom message"
 
+it "a log listing the oldest change first gets the line last"
+git checkout -q "$DEFAULT"
+printf '# Closed changes\n\n- 2026-11-01 000-a: earlier — #1\n- 2026-11-02 000-b: later — #2\n' > specs/log.md
+git add specs/log.md; git commit -qm 'oldest-first log' >/dev/null
+git update-ref "refs/remotes/origin/$DEFAULT" HEAD
+branch_with_code 014-order
+pass_line code "$(git merge-base HEAD "$DEFAULT")" "$(git rev-parse HEAD)" >> specs/changes/014-order.md
+git commit -qam "014-order: review PASS" >/dev/null
+run bash "$B/close-change.sh" --date 2026-11-03 014-order "ordered — R-01 — #9"
+assert_eq 0 "$STATUS" "closes: $OUTPUT"
+assert_eq '- 2026-11-03 014-order: ordered — R-01 — #9' "$(tail -n 1 specs/log.md)" "last entry"
+assert_eq '- 2026-11-01 000-a: earlier — #1' "$(sed -n 3p specs/log.md)" "older entries keep their place"
+
 it "a tracked log that is missing or unwritable stops the close before anything changes"
 git checkout -q "$DEFAULT"
 printf '# Closed changes\r\n\r\n- 2026-11-01 000-d: same day\r\n- 2026-11-01 000-c: same day\r\n' > specs/log.md

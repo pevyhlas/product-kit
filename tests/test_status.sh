@@ -246,6 +246,31 @@ run bash "$STATUS_SH"
 assert_contains "$OUTPUT" "Compaction due: 10 changes closed since the last pass (2026-10-10)" "entries after the pass count, by line order: same-day and unpadded dates too"
 run bash "$STATUS_SH" --json
 assert_contains "$OUTPUT" '"compaction":{"closed_since_last":10,"last":"2026-10-10","due":true}' "JSON carries it"
+printf -- '- 2026-10-11 compaction: split P2\n' >> specs/log.md
+{ i=1; while [ "$i" -le 9 ]; do printf -- '- 2026-10-11 %03d-c: done — R-01 — #%d\n' "$((i + 120))" "$i"; i=$((i + 1)); done; } >> specs/log.md
+run bash "$STATUS_SH" --json
+assert_contains "$OUTPUT" '"compaction":{"closed_since_last":9,"last":"2026-10-11","due":false}' "oldest first: the entries below the latest of several passes"
+rm specs/log.md
+
+it "in a newest-first log, the changes above the latest compaction line count"
+newest_log() { # first change number, last, day of month: entries from the newest down
+    i="$1"; while [ "$i" -ge "$2" ]; do printf -- '- 2026-10-%02d %03d-c: done — R-01 — #%d\n' "$3" "$i" "$i"; i=$((i - 1)); done
+}
+{ printf '# Closed changes\n\n'; newest_log 176 101 20; printf -- '- 2026-10-01 100-c: first — R-01 — #1\n'; } > specs/log.md
+run bash "$STATUS_SH"
+assert_contains "$OUTPUT" "Compaction due: 77 changes closed and no pass recorded in specs/log.md" "no pass: every entry counts"
+{ printf '# Closed changes\n\n- 2026-10-21 compaction: tightened P1\n'; sed -n '3,$p' specs/log.md; } > specs/log.next
+mv specs/log.next specs/log.md
+run bash "$STATUS_SH" --json
+assert_contains "$OUTPUT" '"compaction":{"closed_since_last":0,"last":"2026-10-21","due":false}' "a pass on top counts nothing below it"
+{ printf '# Closed changes\n\n'; newest_log 186 177 22; printf -- '- 2026-10-22 compaction: split P2\n'; sed -n '3,$p' specs/log.md; } > specs/log.next
+mv specs/log.next specs/log.md
+run bash "$STATUS_SH"
+assert_contains "$OUTPUT" "Compaction due: 10 changes closed since the last pass (2026-10-22)" "only the entries above the latest of several passes, same-day ones too"
+{ printf '# Closed changes\n\n'; newest_log 187 187 23; sed -n '3,$p' specs/log.md; } > specs/log.next
+mv specs/log.next specs/log.md
+run bash "$STATUS_SH" --json
+assert_contains "$OUTPUT" '"compaction":{"closed_since_last":11,"last":"2026-10-22","due":true}' "a new entry on top adds to the count"
 rm specs/log.md
 
 it "live 0.x canon beside the 1.0 spec is two canons; values with quotes stay valid JSON"

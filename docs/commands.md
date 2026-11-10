@@ -40,7 +40,7 @@ Ordinary `status.sh` and `doctor.sh` output includes these three observations se
 Their `--json` output adds an `adoption` object, for example a current kit with legacy specs:
 
 ```json
-{"installed_version":"1.4.0","spec_layout":"0.x","mixed_spec_forms":false,"migration_state":"required"}
+{"installed_version":"1.4.1","spec_layout":"0.x","mixed_spec_forms":false,"migration_state":"required"}
 ```
 
 `installed_version` comes only from `.prdkit/.manifest`; missing, empty or duplicate version
