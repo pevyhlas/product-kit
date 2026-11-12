@@ -8,6 +8,26 @@ change by change.
 
 ## [Unreleased]
 
+### Fixed
+
+- `cleanup-change.sh` could delete a submodule commit that existed nowhere else (#85). A linked
+  worktree keeps its own copy of each submodule repository, and removing the worktree deletes it.
+  A commit made there and recorded in the superproject branch, but never pushed, left the
+  worktree clean, so the forced retry for submodules (or `--force`) removed it and the branch
+  pointed at a commit that no longer existed. Every removal, `--force` included, now refuses while
+  that copy holds a commit (its HEAD, a local branch, tag or stash, or a gitlink the worktree
+  records) that no remote-tracking ref there and no ref or HEAD in the main checkout's copy of the
+  submodule contains, and names the submodule and the commit. Push it, or fetch it into the main
+  checkout's submodule, then rerun.
+- The forced removal now takes a worktree lock first and repeats its checks under it, so two
+  sweeps cannot race; a refused or failed removal unlocks again. `--force` on a worktree someone
+  else has locked is refused with git's reason, as before.
+- `cleanup-change.sh --closed` matched a worktree by its branch or its directory name, so it could
+  remove a detached-HEAD worktree whose directory carried a closed change id (losing commits no
+  ref reaches), a worktree on an unrelated branch, or one outside `.worktrees/`. It now matches
+  only the layout `new-change.sh` creates: `.worktrees/<id>` in the main checkout, on the branch
+  `<id>`. Any other worktree is left for removal by id.
+
 ## [1.5.0] — 2026-11-10 — worktree cleanup
 
 `cleanup-change.sh` could never remove a worktree in a repository with a git submodule, which

@@ -291,6 +291,117 @@ run test -d "$PROJ/.worktrees/058-plain"
 assert_eq 0 "$STATUS" "worktree kept"
 git -C "$PROJ" worktree remove --force "$PROJ/.worktrees/058-plain" >/dev/null 2>&1 || true
 
+# --- Submodule commits kept only in the worktree's copy of the submodule --------------------------
+# Each linked worktree keeps its own submodule repository (<git-dir>/modules/<name>), which the
+# removal deletes. A commit made there and recorded in the superproject branch, but never pushed,
+# leaves the worktree clean; removing it would leave the branch pointing at a commit that exists
+# nowhere.
+GITID=(-c user.email=t@example.com -c user.name=test)
+sub_commit() { # change id: commit in the worktree's submodule, record it in the superproject; echoes the commit
+    git -C "$PROJ2/.worktrees/$1/vendor/sub" "${GITID[@]}" commit -q --allow-empty -m "local $1" >/dev/null 2>&1
+    git -C "$PROJ2/.worktrees/$1" add vendor/sub >/dev/null 2>&1
+    git -C "$PROJ2/.worktrees/$1" "${GITID[@]}" commit -qm "record $1" >/dev/null 2>&1
+    git -C "$PROJ2/.worktrees/$1/vendor/sub" rev-parse HEAD
+}
+nowhere_else() { # commit: true when neither the submodule's origin nor the main checkout's copy has it
+    ! git -C "$SUBSRC" cat-file -e "$1^{commit}" 2>/dev/null && ! git -C "$PROJ2/vendor/sub" cat-file -e "$1^{commit}" 2>/dev/null
+}
+wt_locked() { # change id: true when git lists the worktree as locked
+    git -C "$PROJ2" worktree list --porcelain | awk -v p="worktree $PROJ2/.worktrees/$1" '$0 == p { on = 1; next } /^worktree / { on = 0 } on && /^locked/ { found = 1 } END { exit !found }'
+}
+
+it "an unpushed submodule commit the branch records refuses the removal, with and without --force"
+sub_worktree 080-sub-unpushed
+c80="$(sub_commit 080-sub-unpushed)"
+assert_eq "" "$(git -C "$PROJ2/.worktrees/080-sub-unpushed" status --porcelain --untracked-files=all)" "fixture: the worktree is clean"
+if nowhere_else "$c80"; then _ok "fixture: the commit exists only in the worktree"; else _no "fixture: the commit exists only in the worktree"; fi
+run bash "$CLEAN2" 080-sub-unpushed
+assert_eq 1 "$STATUS" "refused"
+assert_contains "$OUTPUT" "submodule vendor/sub holds commit $c80" "names the submodule and the commit"
+assert_contains "$OUTPUT" "Push it" "says how to keep it"
+run bash "$CLEAN2" --json 080-sub-unpushed
+assert_contains "$OUTPUT" '"result":"refused"' "JSON refuses"
+run bash "$CLEAN2" --force 080-sub-unpushed
+assert_eq 1 "$STATUS" "--force refused too: it discards uncommitted changes only"
+run test -d "$PROJ2/.worktrees/080-sub-unpushed"
+assert_eq 0 "$STATUS" "worktree kept"
+run git -C "$PROJ2/.worktrees/080-sub-unpushed/vendor/sub" cat-file -e "$c80^{commit}"
+assert_eq 0 "$STATUS" "the commit is kept"
+if wt_locked 080-sub-unpushed; then _no "a refusal leaves no lock behind"; else _ok "a refusal leaves no lock behind"; fi
+
+it "once pushed, the same worktree is removed and the commit lives on"
+git -C "$PROJ2/.worktrees/080-sub-unpushed/vendor/sub" -c protocol.file.allow=always push -q origin HEAD:refs/heads/kept-080 >/dev/null 2>&1
+run bash "$CLEAN2" 080-sub-unpushed
+assert_eq 0 "$STATUS" "removed"
+run test ! -d "$PROJ2/.worktrees/080-sub-unpushed"
+assert_eq 0 "$STATUS" "worktree gone"
+run git -C "$SUBSRC" cat-file -e "$c80^{commit}"
+assert_eq 0 "$STATUS" "the commit is on the submodule's remote"
+
+it "a commit fetched into the main checkout's copy of the submodule is held there"
+sub_worktree 081-sub-fetched
+c81="$(sub_commit 081-sub-fetched)"
+git -C "$PROJ2/vendor/sub" -c protocol.file.allow=always fetch -q "$PROJ2/.worktrees/081-sub-fetched/vendor/sub" HEAD:refs/heads/from-081 >/dev/null 2>&1
+run bash "$CLEAN2" 081-sub-fetched
+assert_eq 0 "$STATUS" "removed"
+run git -C "$PROJ2/vendor/sub" cat-file -e "$c81^{commit}"
+assert_eq 0 "$STATUS" "the main checkout's submodule still has the commit"
+
+it "a local branch in the worktree's submodule that nothing records refuses --force"
+sub_worktree 082-sub-branch
+git -C "$PROJ2/.worktrees/082-sub-branch/vendor/sub" checkout -qb scratch >/dev/null 2>&1
+git -C "$PROJ2/.worktrees/082-sub-branch/vendor/sub" "${GITID[@]}" commit -q --allow-empty -m scratch >/dev/null 2>&1
+git -C "$PROJ2/.worktrees/082-sub-branch/vendor/sub" checkout -q --detach HEAD~1 >/dev/null 2>&1
+c82="$(git -C "$PROJ2/.worktrees/082-sub-branch/vendor/sub" rev-parse scratch)"
+run bash "$CLEAN2" --force 082-sub-branch
+assert_eq 1 "$STATUS" "refused"
+assert_contains "$OUTPUT" "holds commit $c82" "names the branch's commit"
+run test -d "$PROJ2/.worktrees/082-sub-branch"
+assert_eq 0 "$STATUS" "worktree kept"
+git -C "$PROJ2" worktree remove --force --force "$PROJ2/.worktrees/082-sub-branch" >/dev/null 2>&1 || true
+
+it "negative control: without the submodule-commit check the removal deletes the only copy"
+sub_worktree 083-sub-control
+c83="$(sub_commit 083-sub-control)"
+NOCHECK="$PROJ2/.prdkit/scripts/bash/cleanup-nocheck.sh"
+sed 's/check_submodule_commits ||/true ||/' "$CLEAN2" > "$NOCHECK"
+if cmp -s "$CLEAN2" "$NOCHECK"; then _no "negative control built" "the check was not found in the script"; else _ok "negative control built"; fi
+run bash "$NOCHECK" 083-sub-control
+assert_eq 0 "$STATUS" "removed without the check"
+if nowhere_else "$c83"; then _ok "the commit the branch records is gone everywhere"; else _no "the commit the branch records is gone everywhere"; fi
+assert_eq "$c83" "$(git -C "$PROJ2" ls-tree refs/heads/083-sub-control vendor/sub | awk '{ print $3 }')" "while the branch still records it"
+rm -f "$NOCHECK"
+
+it "the forced retry holds a lock while it removes, and drops it when the removal fails"
+SHIM2="$(mktemp -d)"; track_tmp "$SHIM2"
+cat > "$SHIM2/git" <<EOF
+#!/usr/bin/env bash
+case " \$* " in
+    *" worktree remove "*" --force "*) "$REAL_GIT" -C "$PROJ2" worktree list --porcelain > "$SHIM2/list"; echo "fatal: simulated failure" >&2; exit 1 ;;
+esac
+exec "$REAL_GIT" "\$@"
+EOF
+chmod +x "$SHIM2/git"
+sub_worktree 084-sub-lock
+run env PATH="$SHIM2:$PATH" bash "$CLEAN2" 084-sub-lock
+assert_eq 1 "$STATUS" "the simulated failure refuses"
+assert_contains "$OUTPUT" "simulated failure" "git's reason reported"
+assert_contains "$(awk -v p="worktree $PROJ2/.worktrees/084-sub-lock" '$0 == p { on = 1; next } /^worktree / { on = 0 } on' "$SHIM2/list")" "locked cleanup-change.sh is removing this worktree" "locked during the forced removal"
+if wt_locked 084-sub-lock; then _no "unlocked after the failure"; else _ok "unlocked after the failure"; fi
+run bash "$CLEAN2" 084-sub-lock
+assert_eq 0 "$STATUS" "a later run removes it"
+
+it "a worktree another run has locked is refused by --force with git's reason"
+sub_worktree 085-sub-held
+git -C "$PROJ2" worktree lock --reason "another sweep" "$PROJ2/.worktrees/085-sub-held"
+run bash "$CLEAN2" --force 085-sub-held
+assert_eq 1 "$STATUS" "refused"
+assert_contains "$OUTPUT" "another sweep" "git's reason reported"
+run test -d "$PROJ2/.worktrees/085-sub-held"
+assert_eq 0 "$STATUS" "worktree kept"
+git -C "$PROJ2" worktree unlock "$PROJ2/.worktrees/085-sub-held"
+git -C "$PROJ2" worktree remove --force --force "$PROJ2/.worktrees/085-sub-held" >/dev/null 2>&1 || true
+
 # --- --closed: sweep every closed change's worktree ----------------------------------------------
 # Closed means the record specs/changes/<id>.md is gone from, and specs/log.md has the line on, the
 # trusted integration branch (origin/HEAD), never the worktree's own branch.
@@ -386,6 +497,36 @@ assert_contains "$OUTPUT" "Removed 0 closed change worktree" "idempotent"
 for id in 061-open 064-self-claimed 065-logged-record 066-never-logged; do
     run test -d "$PROJ/.worktrees/$id"
     assert_eq 0 "$STATUS" "$id still kept"
+done
+
+it "--closed matches only .worktrees/<id> on branch <id>: a detached HEAD, another branch or directory stays"
+OUTSIDE="$(mktemp -d)"; track_tmp "$OUTSIDE"; OUTSIDE="$(cd "$OUTSIDE" && pwd -P)"
+git -C "$PROJ" worktree add -q --detach "$PROJ/.worktrees/090-closed-detached" >/dev/null 2>&1
+git -C "$PROJ/.worktrees/090-closed-detached" commit -q --allow-empty -m 'reachable from no ref'
+c90="$(git -C "$PROJ/.worktrees/090-closed-detached" rev-parse HEAD)"
+git -C "$PROJ" worktree add -qb feature-x "$PROJ/.worktrees/091-closed-other-branch" >/dev/null 2>&1
+git -C "$PROJ" worktree add -qb 092-closed-elsewhere "$OUTSIDE/092-closed-elsewhere" >/dev/null 2>&1
+git -C "$PROJ" worktree add -qb 093-closed-renamed "$PROJ/.worktrees/scratch" >/dev/null 2>&1
+git -C "$PROJ" worktree add -qb 094-closed-exact "$PROJ/.worktrees/094-closed-exact" >/dev/null 2>&1
+{
+    printf -- '- 2026-11-11 090-closed-detached: x\n- 2026-11-11 091-closed-other-branch: x\n'
+    printf -- '- 2026-11-11 092-closed-elsewhere: x\n- 2026-11-11 093-closed-renamed: x\n- 2026-11-11 094-closed-exact: x\n'
+} >> "$PROJ/specs/log.md"
+git -C "$PROJ" add specs >/dev/null 2>&1; git -C "$PROJ" commit -qm 'close more' >/dev/null 2>&1
+git -C "$PROJ" update-ref "refs/remotes/origin/$BRANCH" HEAD
+run bash "$CLEAN" --json --closed
+assert_eq 0 "$STATUS" "nothing refused"
+assert_contains "$OUTPUT" '"paths":["'"$PROJ"'/.worktrees/094-closed-exact"]' "only the exact layout removed"
+assert_contains "$OUTPUT" "Removed 1 closed change worktree(s), skipped 0," "the others are not candidates, so not skipped either"
+run test ! -d "$PROJ/.worktrees/094-closed-exact"
+assert_eq 0 "$STATUS" "the exact layout removed"
+for wt in "$PROJ/.worktrees/090-closed-detached" "$PROJ/.worktrees/091-closed-other-branch" "$OUTSIDE/092-closed-elsewhere" "$PROJ/.worktrees/scratch"; do
+    run test -d "$wt"
+    assert_eq 0 "$STATUS" "${wt##*/} kept"
+done
+assert_eq "$c90" "$(git -C "$PROJ/.worktrees/090-closed-detached" rev-parse HEAD)" "the detached HEAD's commit is kept"
+for wt in "$PROJ/.worktrees/090-closed-detached" "$PROJ/.worktrees/091-closed-other-branch" "$OUTSIDE/092-closed-elsewhere" "$PROJ/.worktrees/scratch"; do
+    git -C "$PROJ" worktree remove --force "$wt" >/dev/null 2>&1 || true
 done
 
 it "--closed removes a closed change's clean worktree that has submodules"
