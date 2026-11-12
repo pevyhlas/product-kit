@@ -77,18 +77,25 @@ if tiers_absent "$PROJ"; then _ok "refusals change nothing"; else _no "refusals 
 it "a pre-2.0 install that never used agent tiers loses them on upgrade, with a note"
 PROJ="$(make_project)"; track_tmp "$PROJ"
 make_legacy "$PROJ" || _no "legacy manifest prepared"
-mkdir -p "$PROJ/.github/workflows"
+mkdir -p "$PROJ/.github/workflows" "$PROJ/scripts"
 printf 'jobs:\n  agents:\n    steps:\n      - run: bash .prdkit/scripts/bash/render-agents.sh --check\n' > "$PROJ/.github/workflows/agents.yml"
+# A tracked script that builds the renderer's path from its name.
+printf 'helper(root, "render-agents.sh")\n' > "$PROJ/scripts/tool.py"
+git -C "$PROJ" add scripts/tool.py >/dev/null 2>&1
 run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --check"
 assert_contains "$OUTPUT" ".prdkit/scripts/bash/render-agents.sh" "check lists the renderer for removal"
 assert_contains "$OUTPUT" ".github/workflows/agents.yml: render-agents.sh" "check flags the CI call before the upgrade"
+assert_contains "$OUTPUT" "scripts/tool.py: render-agents.sh" "check flags a script that builds the renderer's path"
 run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --upgrade"
 assert_eq 0 "$STATUS" "upgrade succeeds"
 if tiers_absent "$PROJ"; then _ok "unused agent-tier files removed"; else _no "unused agent-tier files removed"; fi
 assert_contains "$OUTPUT" "install them" "upgrade says how to get them back"
 assert_contains "$OUTPUT" "again with --with agent-tiers" "names the option"
 assert_contains "$OUTPUT" ".github/workflows/agents.yml: render-agents.sh" "upgrade flags the CI call"
+assert_contains "$OUTPUT" "scripts/tool.py: render-agents.sh" "upgrade flags the constructed path"
 assert_contains "$OUTPUT" "install with --with agent-tiers" "CI warning names the option"
+run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --check"
+assert_contains "$OUTPUT" "scripts/tool.py: render-agents.sh" "check keeps flagging it after the upgrade"
 assert_contains "$(cat "$PROJ/.prdkit/.manifest")" "options: none" "choice recorded"
 
 it "an edited agent-definition template is kept when its subsystem is dropped"
@@ -112,10 +119,14 @@ for marker in definition baseline; do
         mkdir -p "$PROJ/.prdkit/agent-library"
         printf '{}\n' > "$PROJ/.prdkit/agent-library/tiers.json"
     fi
+    mkdir -p "$PROJ/scripts"
+    printf 'helper(root, "render-agents.sh")\n' > "$PROJ/scripts/tool.py"
+    git -C "$PROJ" add scripts/tool.py >/dev/null 2>&1
     run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --upgrade"
     assert_eq 0 "$STATUS" "upgrade succeeds ($marker)"
     if tiers_installed "$PROJ"; then _ok "agent tiers kept ($marker)"; else _no "agent tiers kept ($marker)"; fi
     assert_contains "$(cat "$PROJ/.prdkit/.manifest")" "options: agent-tiers" "choice recorded ($marker)"
+    assert_not_contains "$OUTPUT" "scripts/tool.py: render-agents.sh" "a constructed path to an installed renderer is not flagged ($marker)"
 done
 
 it "doctor reports agent definitions without the renderer"

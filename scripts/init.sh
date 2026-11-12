@@ -514,8 +514,11 @@ kit_file_retired() { # installed or kit path -> 0 when the kit does not ship or 
     [ -f "$MANIFEST" ] && awk -v rel="$1" 'substr($0, index($0, "  ") + 2) == rel { found = 1 } END { exit !found }' "$MANIFEST"
 }
 list_retired_ci_calls() {
-    local file rel ref name alt quoted
-    alt="$(printf '%s' "$RETIRED_HELPERS" | tr -s ' \n' '||' | sed 's/[.]/\\./g')"
+    local file rel ref name alt quoted names="$RETIRED_HELPERS"
+    # A deselected optional subsystem's files are gone from the install too, so a script that
+    # builds their path breaks the same way.
+    has_option agent-tiers || names="$names render-agents.sh agent-definition-template.md"
+    alt="$(printf '%s' "$names" | tr -s ' \n' '||' | sed 's/[.]/\\./g')"
     quoted="[\"']($alt)[\"']"
     {
         for file in "$TARGET"/.github/workflows/*.yml "$TARGET"/.github/workflows/*.yaml; do
