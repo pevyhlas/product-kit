@@ -103,18 +103,16 @@ registry_at="$policy_at"; registry=""
 if [ -n "$registry_at" ]; then
     registry="$( { git -C "$root" show "$registry_at:.prdkit/memory/agents.md" 2>/dev/null || true; } | review_registry)"
 fi
-# Rigor: exactly one Rigor line, whose value is light or full followed by nothing or a space;
-# anything else (none, two, light/full, light1) is unknown, which fails and blocks medium.
+# Rigor: exactly one Rigor line, an empty one included, whose value is light or full followed by
+# nothing or a space; anything else (none, two, light/full, light1) is unknown, which fails.
 read_rigor() { # rev -> light|full|unknown
-    local values
-    values="$( { git -C "$root" show "$1:.prdkit/memory/constitution.md" 2>/dev/null || true; } |
-        tr -d '\r' | sed -n 's/^[-*[:space:]]*[Rr]igor\**:\**[[:space:]]*//p' | tr '[:upper:]' '[:lower:]')"
-    case "$values" in
-        *$'\n'*) printf 'unknown\n' ;;
-        light|full) printf '%s\n' "$values" ;;
-        "light "*|"full "*|"light	"*|"full	"*) printf '%s\n' "${values%%[[:space:]]*}" ;;
-        *) printf 'unknown\n' ;;
-    esac
+    { git -C "$root" show "$1:.prdkit/memory/constitution.md" 2>/dev/null || true; } | tr -d '\r' | awk '
+        { line = $0 }
+        sub(/^[-*[:space:]]*[Rr]igor\**:\**[[:space:]]*/, "", line) { n++; value = tolower(line) }
+        END {
+            if (n == 1 && value ~ /^(light|full)([[:space:]]|$)/) { sub(/[[:space:]].*/, "", value); print value }
+            else print "unknown"
+        }'
 }
 rigor=unknown
 if [ -n "$policy_at" ]; then
@@ -158,16 +156,12 @@ t0_paths() { # rev -> configured entries, one per line
         END { if (n == 1) { gsub(/,/, " ", value); print value } }' | tr -s ' \t\r' '\n' |
         grep -v -e '^$' -e '^/' -e '[][*?\\"]' -e '^\.\./' -e '/\.\./' -e '/\.\.$' -e '^\.\.$' || true
 }
-metadata_mode_problems() { # from to -> the record or log path when either is not a regular file
-    local raw meta file old new
-    raw="$(GIT_NO_REPLACE_OBJECTS=1 git -C "$root" -c core.quotepath=true diff --raw --no-abbrev --no-renames \
-        --no-ext-diff --no-textconv --ignore-submodules=none "$1" "$2" -- \
-        ":(top,literal)$path" ":(top,literal)specs/log.md")" || return 1
-    while IFS="$(printf '\t')" read -r meta file; do
-        [ -n "$meta" ] || continue
-        old="${meta%% *}"; old="${old#:}"; new="${meta#* }"; new="${new%% *}"
-        case "$old:$new" in 000000:100644|100644:100644|100644:000000) ;; *) printf '%s\n' "$file" ;; esac
-    done <<< "$raw"
+metadata_mode_problems() { # rev -> the record or log path when it is there but not a regular file
+    local file entry
+    for file in "$path" specs/log.md; do
+        entry="$(GIT_NO_REPLACE_OBJECTS=1 git -C "$root" ls-tree "$1" -- "$file")" || return 1
+        case "$entry" in ""|"100644 blob "*) ;; *) printf '%s\n' "$file" ;; esac
+    done
 }
 t0_violations() { # from to
     local allowed raw meta file old new entry ok
@@ -304,10 +298,18 @@ else
     raise_floor() { # tier where
         if [ -n "$1" ] && { [ -z "$floor" ] || [[ "$1" > "$floor" ]]; }; then floor="$1"; floor_at="$2"; fi
     }
-    [ -z "$policy_at" ] || raise_floor "$(tier_floor_of "$policy_at")" "the trusted base (${trusted_default#refs/remotes/})"
-    [ -z "$import_base" ] || raise_floor "$(tier_floor_of "$import_base")" "the base ($base_ref)"
+    trusted_floor() { # rev where: a record there must name a tier, or the minimum is unknown
+        local named
+        git -C "$root" cat-file -e "$1:$path" 2>/dev/null || return 0
+        named="$(tier_floor_of "$1")"
+        if [ -z "$named" ]; then
+            problems+=("The record at $2 names no readable tier, so the trusted minimum is unknown; fix it there first")
+        else raise_floor "$named" "$2"; fi
+    }
+    [ -z "$policy_at" ] || trusted_floor "$policy_at" "the trusted base (${trusted_default#refs/remotes/})"
+    [ -z "$import_base" ] || trusted_floor "$import_base" "the base ($base_ref)"
     if [ -n "$start" ]; then
-        raise_floor "$(tier_floor_of "$start")" "the change's start ${start:0:12}"
+        trusted_floor "$start" "the change's start ${start:0:12}"
         while IFS= read -r commit; do
             [ -n "$commit" ] || continue
             raise_floor "$(tier_floor_of "$commit")" "commit ${commit:0:12}"
@@ -320,10 +322,11 @@ else
         problems+=("The record claims $tier, but its floor is $floor, from $floor_at: a branch may raise its tier, never lower it; claim **Tier**: $floor")
         tier="$floor"
     fi
-    # The record and the log are exempt from coverage only as regular, non-executable files.
-    if [ -n "$start" ] && ! odd="$(metadata_mode_problems "$start" "$head")"; then
-        problems+=("The diff from ${start:0:12} cannot be read to check the record and the log")
-    elif [ -n "${odd:-}" ]; then
+    # The record and the log are exempt from coverage only as regular, non-executable files: a
+    # directory there would exempt everything inside it.
+    if ! odd="$(metadata_mode_problems "$head")"; then
+        problems+=("The tree at $head cannot be read to check the record and the log")
+    elif [ -n "$odd" ]; then
         problems+=("$(printf '%s' "$odd" | tr '\n' ' ' | sed 's/ $//') must stay a regular, non-executable file")
     fi
     if $base_trusted && [ -n "$start" ] && [ "$start" != "$head" ] && [ -z "$(changed_since "$start")" ]; then

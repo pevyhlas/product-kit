@@ -170,7 +170,8 @@ git update-ref "refs/remotes/origin/$DEFAULT" "$TRUSTED_TIP"
 
 it "the trusted constitution must name exactly one well-formed Rigor, even with no findings"
 record T1 "$(verdict code PASS "$CLEAN")"
-for rigor_lines in '' '- **Rigor**: light\n- **Rigor**: light\n' '- **Rigor**: light/full\n' '- **Rigor**: light1\n'; do
+for rigor_lines in '' '- **Rigor**: light\n- **Rigor**: light\n' '- **Rigor**: light/full\n' '- **Rigor**: light1\n' \
+    '- **Rigor**: light\n- **Rigor**:\n' '- **Rigor**: light\n- **Rigor**:   \n'; do
     { git show "$TRUSTED_TIP:.prdkit/memory/constitution.md" | sed '/\*\*Rigor\*\*:/d'; printf '%b' "$rigor_lines"; } |
         trusted_edit "refs/remotes/origin/$DEFAULT" .prdkit/memory/constitution.md
     run bash "$CHECK"
@@ -245,8 +246,35 @@ chmod +x specs/log.md; git add specs/log.md; git commit -qm "close with an execu
 run bash "$CHECK" 005-close
 assert_eq 1 "$STATUS" "an executable log fails"
 assert_contains "$OUTPUT" "specs/log.md must stay a regular, non-executable file" "says why"
+git checkout -q 005-close; git branch -q -D 005-close-branch
+git checkout -q -b 005-close-branch
+git rm -q specs/changes/005-close.md; mkdir -p specs/log.md; printf 'echo run\n' > specs/log.md/payload.sh
+git add specs/log.md; git commit -qm "close with a log directory" >/dev/null
+run bash "$CHECK" --json 005-close
+assert_eq 1 "$STATUS" "a directory at the log path cannot exempt what it holds"
+assert_contains "$OUTPUT" "specs/log.md must stay a regular, non-executable file" "says why"
+git checkout -q 005-close; git branch -q -D 005-close-branch
+mkdir -p specs; printf -- '- 2026-10-19 004-older: older — #4\n' > specs/log.md; git add specs/log.md; git commit -qm "a log on the base" >/dev/null
+git update-ref "refs/remotes/origin/$DEFAULT" HEAD
+git checkout -q -b 005-close-branch
+git rm -q specs/log.md specs/changes/005-close.md; mkdir -p specs/log.md; printf -- '- 2026-10-20 005-close: closed — #5\n' > specs/log.md/entry
+git add specs/log.md; git commit -qm "replace the log with a directory" >/dev/null
+run bash "$CHECK" 005-close
+assert_eq 1 "$STATUS" "replacing the log with a directory fails"
+assert_contains "$OUTPUT" "specs/log.md must stay a regular, non-executable file" "says why"
 git checkout -q 001-greet; git branch -q -D 005-close 005-close-branch
 git update-ref "refs/remotes/origin/$DEFAULT" "$TRUSTED_TIP"
+
+it "a record on a trusted branch must name a readable tier, or the minimum is unknown"
+record T1 "$(verdict code PASS "$CLEAN")"
+for bad in T4 TBD; do
+    git show HEAD:specs/changes/001-greet.md | sed "s/\*\*Tier\*\*: T[0-3]/**Tier**: $bad/" |
+        trusted_edit "refs/remotes/origin/$DEFAULT" specs/changes/001-greet.md
+    run bash "$CHECK"
+    assert_eq 1 "$STATUS" "a trusted record with **Tier**: $bad fails"
+    assert_contains "$OUTPUT" "The record at the trusted base (origin/$DEFAULT) names no readable tier" "says why"
+    git update-ref "refs/remotes/origin/$DEFAULT" "$TRUSTED_TIP"
+done
 
 it "missing counts or a missing review fail; the tier must be named"
 record T1 "$(verdict code PASS 'looks fine')"

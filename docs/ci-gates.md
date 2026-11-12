@@ -102,10 +102,11 @@ The tier is the record's one `**Tier**:` field, whose value is exactly one of T0
 `T1-T3` or a second field, even in a comment, fails). It may rise, never fall. Its floor is the
 highest tier the record names on the default branch, on `--base`, where the change left the base
 and at every commit of the branch since, and T3 when the change edits L0 (`specs/product.md` or
-`specs/product/`, as `protocol.md` tiers it). A record-only commit that lowers T3 to T1 after
-review fails and the owner's verdict is still required. The record and `specs/log.md` stay exempt
-from coverage only as regular, non-executable files, and a submodule's `ignore` setting never
-hides a gitlink change. To land a policy change, merge it first in its own pull request, checked
+`specs/product/`, as `protocol.md` tiers it). A record on the default branch, on `--base` or at
+the change's start that names no readable tier fails the check. A record-only commit that lowers
+T3 to T1 after review fails and the owner's verdict is still required. The record and
+`specs/log.md` stay exempt from coverage only as regular, non-executable files at the head (never
+a directory, link or submodule), and a submodule's `ignore` setting never hides a gitlink change. To land a policy change, merge it first in its own pull request, checked
 under the policy it replaces.
 
 ### Reviewer eligibility and report links

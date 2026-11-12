@@ -35,9 +35,10 @@ change by change.
     field (even in a comment) or a value such as `T1/T3` fails. A branch may raise its tier, never
     lower it: the floor is the highest tier the record names on the default branch, on `--base`,
     at the change's start or at any commit of the branch since, and T3 when the change edits L0
-    (`specs/product.md`, `specs/product/`), as the protocol tiers it. A lower claim fails.
-  - The record and `specs/log.md` are exempt from coverage only as regular, non-executable files,
-    and the coverage diffs pass `--ignore-submodules=none`, so a submodule whose `.gitmodules`
+    (`specs/product.md`, `specs/product/`), as the protocol tiers it. A lower claim fails, and so
+    does a record on one of those trusted commits that names no readable tier.
+  - The record and `specs/log.md` are exempt from coverage only as regular, non-executable files
+    at the head (a directory there would exempt everything in it), and the coverage diffs pass `--ignore-submodules=none`, so a submodule whose `.gitmodules`
     entry says `ignore = all` can no longer hide a gitlink change behind a record-only close.
   - This is the first of three steps toward binding review to content: it changes no Review-line
     or receipt format. Coverage across merges, rebases and record-only commits (#66, #86) and
