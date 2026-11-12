@@ -306,8 +306,8 @@ sub_commit() { # change id: commit in the worktree's submodule, record it in the
 nowhere_else() { # commit: true when neither the submodule's origin nor the main checkout's copy has it
     ! git -C "$SUBSRC" cat-file -e "$1^{commit}" 2>/dev/null && ! git -C "$PROJ2/vendor/sub" cat-file -e "$1^{commit}" 2>/dev/null
 }
-wt_locked() { # change id: true when git lists the worktree as locked
-    git -C "$PROJ2" worktree list --porcelain | awk -v p="worktree $PROJ2/.worktrees/$1" '$0 == p { on = 1; next } /^worktree / { on = 0 } on && /^locked/ { found = 1 } END { exit !found }'
+mutex_of() { # change id: the path of the removal mutex in the worktree's git directory
+    printf '%s/prdkit-cleanup.lock' "$(git -C "$PROJ2/.worktrees/$1" rev-parse --absolute-git-dir)"
 }
 
 it "an unpushed submodule commit the branch records refuses the removal, with and without --force"
@@ -327,7 +327,8 @@ run test -d "$PROJ2/.worktrees/080-sub-unpushed"
 assert_eq 0 "$STATUS" "worktree kept"
 run git -C "$PROJ2/.worktrees/080-sub-unpushed/vendor/sub" cat-file -e "$c80^{commit}"
 assert_eq 0 "$STATUS" "the commit is kept"
-if wt_locked 080-sub-unpushed; then _no "a refusal leaves no lock behind"; else _ok "a refusal leaves no lock behind"; fi
+run test ! -e "$(mutex_of 080-sub-unpushed)"
+assert_eq 0 "$STATUS" "a refusal leaves no lock behind"
 
 it "once pushed, the same worktree is removed and the commit lives on"
 git -C "$PROJ2/.worktrees/080-sub-unpushed/vendor/sub" -c protocol.file.allow=always push -q origin HEAD:refs/heads/kept-080 >/dev/null 2>&1
@@ -377,21 +378,23 @@ SHIM2="$(mktemp -d)"; track_tmp "$SHIM2"
 cat > "$SHIM2/git" <<EOF
 #!/usr/bin/env bash
 case " \$* " in
-    *" worktree remove "*" --force "*) "$REAL_GIT" -C "$PROJ2" worktree list --porcelain > "$SHIM2/list"; echo "fatal: simulated failure" >&2; exit 1 ;;
+    *" worktree remove --force "*) find "$PROJ2/.git/worktrees" -name prdkit-cleanup.lock > "$SHIM2/list"; echo "fatal: simulated failure" >&2; exit 1 ;;
 esac
 exec "$REAL_GIT" "\$@"
 EOF
 chmod +x "$SHIM2/git"
 sub_worktree 084-sub-lock
+M84="$(mutex_of 084-sub-lock)"
 run env PATH="$SHIM2:$PATH" bash "$CLEAN2" 084-sub-lock
 assert_eq 1 "$STATUS" "the simulated failure refuses"
 assert_contains "$OUTPUT" "simulated failure" "git's reason reported"
-assert_contains "$(awk -v p="worktree $PROJ2/.worktrees/084-sub-lock" '$0 == p { on = 1; next } /^worktree / { on = 0 } on' "$SHIM2/list")" "locked cleanup-change.sh is removing this worktree" "locked during the forced removal"
-if wt_locked 084-sub-lock; then _no "unlocked after the failure"; else _ok "unlocked after the failure"; fi
+assert_eq "$M84" "$(cat "$SHIM2/list")" "the mutex is held during the forced removal"
+run test ! -e "$M84"
+assert_eq 0 "$STATUS" "and released after the failure"
 run bash "$CLEAN2" 084-sub-lock
 assert_eq 0 "$STATUS" "a later run removes it"
 
-it "a worktree another run has locked is refused by --force with git's reason"
+it "a worktree someone has locked with git is refused by --force with git's reason"
 sub_worktree 085-sub-held
 git -C "$PROJ2" worktree lock --reason "another sweep" "$PROJ2/.worktrees/085-sub-held"
 run bash "$CLEAN2" --force 085-sub-held
@@ -401,6 +404,82 @@ run test -d "$PROJ2/.worktrees/085-sub-held"
 assert_eq 0 "$STATUS" "worktree kept"
 git -C "$PROJ2" worktree unlock "$PROJ2/.worktrees/085-sub-held"
 git -C "$PROJ2" worktree remove --force --force "$PROJ2/.worktrees/085-sub-held" >/dev/null 2>&1 || true
+
+it "a second run cannot take the mutex: refused, kept, and the other run's mutex is left alone"
+sub_worktree 086-sub-busy
+M86="$(mutex_of 086-sub-busy)"
+mkdir "$M86"
+run bash "$CLEAN2" 086-sub-busy
+assert_eq 1 "$STATUS" "refused"
+assert_contains "$OUTPUT" "another cleanup-change.sh run holds $M86" "names the mutex"
+run test -d "$PROJ2/.worktrees/086-sub-busy"
+assert_eq 0 "$STATUS" "worktree kept"
+run test -d "$M86"
+assert_eq 0 "$STATUS" "the other run's mutex kept"
+rmdir "$M86"
+run bash "$CLEAN2" 086-sub-busy
+assert_eq 0 "$STATUS" "removed once the mutex is free"
+
+it "an older stash in the submodule lives only in the reflog, and is kept"
+sub_worktree 087-sub-stash
+S87="$PROJ2/.worktrees/087-sub-stash/vendor/sub"
+echo one > "$S87/one.txt"; git -C "$S87" "${GITID[@]}" stash push -qu -m one >/dev/null 2>&1
+echo two > "$S87/two.txt"; git -C "$S87" "${GITID[@]}" stash push -qu -m two >/dev/null 2>&1
+old87="$(git -C "$S87" rev-parse 'stash@{1}')"
+git -C "$PROJ2/vendor/sub" -c protocol.file.allow=always fetch -q "$S87" refs/stash:refs/heads/newest-stash-087 >/dev/null 2>&1
+run git -C "$PROJ2/vendor/sub" cat-file -e "$(git -C "$S87" rev-parse 'stash@{0}')^{commit}"
+assert_eq 0 "$STATUS" "fixture: the newest stash is held by the main checkout's copy"
+run bash "$CLEAN2" 087-sub-stash
+assert_eq 1 "$STATUS" "refused"
+assert_contains "$OUTPUT" "holds commit $old87" "names the older stash"
+run git -C "$S87" cat-file -e "$old87^{commit}"
+assert_eq 0 "$STATUS" "the older stash is kept"
+git -C "$PROJ2" worktree remove --force "$PROJ2/.worktrees/087-sub-stash" >/dev/null 2>&1 || true
+
+it "a git that cannot list the submodule's commits refuses, before and under the mutex"
+# The first listing passes and the second fails: that one runs under the mutex, before the removal.
+SHIM3="$(mktemp -d)"; track_tmp "$SHIM3"
+cat > "$SHIM3/git" <<EOF
+#!/usr/bin/env bash
+case " \$* " in
+    *" --git-dir="*" for-each-ref --format=%(refname) "*)
+        n="\$(cat "$SHIM3/count" 2>/dev/null || echo 0)"; n=\$((n + 1)); echo "\$n" > "$SHIM3/count"
+        [ "\$n" -lt "\${FAIL_AT:-1}" ] || { echo "fatal: simulated read error" >&2; exit 128; } ;;
+esac
+exec "$REAL_GIT" "\$@"
+EOF
+chmod +x "$SHIM3/git"
+sub_worktree 088-sub-unreadable
+rm -f "$SHIM3/count"
+run env PATH="$SHIM3:$PATH" FAIL_AT=1 bash "$CLEAN2" 088-sub-unreadable
+assert_eq 1 "$STATUS" "refused when the first listing fails"
+assert_contains "$OUTPUT" "could not list the commits in the worktree's submodules" "says git could not say"
+rm -f "$SHIM3/count"
+run env PATH="$SHIM3:$PATH" FAIL_AT=2 bash "$CLEAN2" --json 088-sub-unreadable
+assert_eq 1 "$STATUS" "refused when the listing under the mutex fails"
+assert_contains "$OUTPUT" '"result":"refused"' "JSON refuses"
+assert_eq 2 "$(cat "$SHIM3/count")" "the second listing ran under the mutex"
+run test -d "$PROJ2/.worktrees/088-sub-unreadable"
+assert_eq 0 "$STATUS" "worktree kept"
+run test ! -e "$(mutex_of 088-sub-unreadable)"
+assert_eq 0 "$STATUS" "mutex released"
+
+it "a failed search for the submodule copies refuses"
+SHIM4="$(mktemp -d)"; track_tmp "$SHIM4"
+REAL_FIND="$(command -v find)"
+cat > "$SHIM4/find" <<EOF
+#!/usr/bin/env bash
+case "\$1" in */modules) echo "find: simulated failure" >&2; exit 1 ;; esac
+exec "$REAL_FIND" "\$@"
+EOF
+chmod +x "$SHIM4/find"
+run env PATH="$SHIM4:$PATH" bash "$CLEAN2" 088-sub-unreadable
+assert_eq 1 "$STATUS" "refused"
+assert_contains "$OUTPUT" "could not list the commits in the worktree's submodules" "says git could not say"
+run test -d "$PROJ2/.worktrees/088-sub-unreadable"
+assert_eq 0 "$STATUS" "worktree kept"
+run bash "$CLEAN2" 088-sub-unreadable
+assert_eq 0 "$STATUS" "the real tools remove it"
 
 # --- --closed: sweep every closed change's worktree ----------------------------------------------
 # Closed means the record specs/changes/<id>.md is gone from, and specs/log.md has the line on, the
