@@ -10,7 +10,7 @@ cd "$FIXTURE"
 source "$PK_ROOT/tests/evals/fixture.sh"
 
 # 1. Canon and log untouched (no modifications, deletions, or additions).
-if [ -n "$(git status --porcelain -- "${FIXTURE_CANON[@]}" specs/log.md)" ]; then
+if [ -n "$(git status --porcelain -- "${FIXTURE_CANON[@]}" specs/log.md specs/log)" ]; then
     git status --porcelain -- specs/
     fail "canon or log changed despite failed closing prerequisites"
 fi

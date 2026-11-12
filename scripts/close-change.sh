@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 # close-change.sh — Close a reviewed change in its own PR with one commit: refuse unless
-# check-review.sh passes at HEAD, then add the change's specs/log.md line and delete its record.
+# check-review.sh passes at HEAD, then write the change's log entry and delete its record.
 # Run it once the final Review line is committed and before the final push, so required checks
 # run once on the closed head. It commits in the current checkout only; it never pushes, merges
 # or removes a worktree (cleanup-change.sh does that after merge, or --closed for every closed change).
 #
 # Usage: close-change.sh [--base <rev>] [--date YYYY-MM-DD] [-m <message>] <change-id> "<log text>"
-#   <log text> follows "- <date> <id>: " on the log line: "<intent> — <IDs> — <disposition> — <PR>".
-#   The line goes above the first entry, or last when the log lists the oldest change first.
+#   <log text> follows "- <date> <id>: " on the entry: "<intent> — <IDs> — <disposition> — <PR>",
+#   at most 300 characters. The entry is its own file, specs/log/<id>.md, so two branches that
+#   each close a change never conflict; compaction folds entries into specs/log.md (compact.md).
 #   Exit 0 closed and check-review.sh passes at the new head, 1 refused or failing, 2 usage.
 set -euo pipefail
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 source "$SCRIPT_DIR/spec-lib.sh"
-usage='Usage: close-change.sh [--base <rev>] [--date YYYY-MM-DD] [-m <message>] <change-id> "<intent> — <IDs> — <disposition> — <PR>"'
+usage='Usage: close-change.sh [--base <rev>] [--date YYYY-MM-DD] [-m <message>] <change-id> "<intent> — <IDs> — <disposition> — <PR>" (at most 300 characters)'
 base_args=(); day=""; message=""; id=""; text=""; options=true
 while [ "$#" -gt 0 ]; do
     if $options; then
@@ -35,21 +36,19 @@ is_change_id "$id" && [ -n "$text" ] || { echo "$usage" >&2; exit 2; }
 spec_is_date "$day" || { echo "--date takes YYYY-MM-DD (got: $day)" >&2; exit 2; }
 refuse() { echo "close-change.sh: $*" >&2; exit 1; }
 case "$text" in *$'\n'*|*$'\r'*) refuse "the log text is one line" ;; esac
+# Characters, not bytes: UTF-8 continuation bytes do not count, whatever the locale.
+max=300; length="$(printf '%s' "$text" | LC_ALL=C tr -d '\200-\277' | wc -c | tr -d ' ')"
+[ "$length" -le "$max" ] || refuse "the log text is $length characters, over $max: keep \"<intent> — <IDs> — <disposition> — <PR>\"; carried findings and follow-ups go to the parent's row or the spec, and evidence stays in the PR"
 
 root="$(git rev-parse --show-toplevel 2>/dev/null)" || refuse "not inside a Git checkout"
-path="specs/changes/$id.md"; log="specs/log.md"
+path="specs/changes/$id.md"; log="specs/log.md"; entry="specs/log/$id.md"
 git -C "$root" cat-file -e "HEAD:$path" 2>/dev/null || refuse "no record $path at HEAD"
 git -C "$root" diff --quiet HEAD -- "$path" ||
     refuse "$path has uncommitted edits: commit the final Review line first; the check reads committed state"
-git -C "$root" diff --cached --quiet || refuse "other changes are staged; commit or unstage them, so this commit holds only the record and the log"
-if git -C "$root" cat-file -e "HEAD:$log" 2>/dev/null; then
-    # A tracked log must be here unchanged: never rebuild it from one line.
-    if [ ! -f "$root/$log" ] || ! git -C "$root" diff --quiet HEAD -- "$log"; then
-        refuse "$log is missing or has uncommitted edits; restore or commit it first"
-    fi
-    ! grep -q "^- [0-9-]* $id:" "$root/$log" || refuse "$log already has a line for $id"
-elif [ -e "$root/$log" ]; then
-    refuse "$log is not tracked; commit or remove it first"
+git -C "$root" diff --cached --quiet || refuse "other changes are staged; commit or unstage them, so this commit holds only the record and its log entry"
+if [ -e "$root/$entry" ] || git -C "$root" cat-file -e "HEAD:$entry" 2>/dev/null ||
+    { [ -f "$root/$log" ] && grep -q "^- [0-9-]* $id:" "$root/$log"; }; then
+    refuse "the log already has an entry for $id"
 fi
 default="$(spec_default_branch "$root")"
 if [ -n "$default" ] && git -C "$root" cat-file -e "$default:$path" 2>/dev/null; then
@@ -62,26 +61,14 @@ if ! out="$(check)"; then
     refuse "check-review.sh does not pass at HEAD; commit the final passing Review line first"
 fi
 
-line="- $day $id: $text"; src="$root/$log"; tmp="$root/$log.close-change.$$"
-[ -f "$src" ] || src=/dev/null
-# Dates are compared, never matched; the line reaches awk only through ENVIRON. It goes above the
-# first entry of a newest-first log (spec_log_newest_first), else last; a CRLF log keeps CRLF.
-top=0; if spec_log_newest_first "$src"; then top=1; fi
-if ! { mkdir -p "$root/specs" && CLOSE_LINE="$line" awk -v top="$top" '
-        NR == 1 && substr($0, length($0)) == "\r" { cr = "\r" }
-        { lines[NR] = $0 }
-        !first && /^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] / { first = NR }
-        END {
-            for (i = 1; i <= NR; i++) { if (top && i == first) print ENVIRON["CLOSE_LINE"] cr; print lines[i] }
-            if (!top) print ENVIRON["CLOSE_LINE"] cr
-        }' "$src" > "$tmp" && mv "$tmp" "$root/$log"; } 2>/dev/null; then
-    rm -f "$tmp"
-    refuse "could not write $log; nothing was deleted or committed"
+if ! { mkdir -p "$root/specs/log" && printf -- '- %s %s: %s\n' "$day" "$id" "$text" > "$root/$entry"; } 2>/dev/null; then
+    rm -f "$root/$entry" 2>/dev/null || true
+    refuse "could not write $entry; nothing was deleted or committed"
 fi
 git -C "$root" rm -q -- "$path"
-git -C "$root" add -- "$log"
-git -C "$root" commit -q -m "${message:-$id: close (log line, record deleted)}" ||
-    refuse "the commit failed; the record deletion and the log line are staged"
+git -C "$root" add -- "$entry"
+git -C "$root" commit -q -m "${message:-$id: close (log entry, record deleted)}" ||
+    refuse "the commit failed; the record deletion and the log entry are staged"
 
 head="$(git -C "$root" rev-parse --short HEAD)"
 if out="$(check)"; then

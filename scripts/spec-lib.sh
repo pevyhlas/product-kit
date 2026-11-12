@@ -205,7 +205,34 @@ spec_archive_log_through() { # root
     return 0
 }
 
-# specs/log.md order, as close-change.sh writes it: newest first, unless its first dated entry
+# The closed-change log: the lines of specs/log.md, then each entry file specs/log/<id>.md, one
+# "- <date> <id>: <text>" line that close-change.sh writes, so two branches that each close a
+# change touch different files and never conflict. Compaction folds the entry files into
+# specs/log.md (compact.md). Callers match the dated lines they need; awk ends every line.
+spec_log_entries() { # root
+    [ ! -f "$1/specs/log.md" ] || awk 1 "$1/specs/log.md"
+    spec_log_files "$1"
+    return 0
+}
+spec_log_files() { # root -> the entry files' lines only
+    local file
+    for file in "$1"/specs/log/[0-9]*.md; do [ ! -f "$file" ] || awk 1 "$file"; done
+    return 0
+}
+# The same at a commit, for a gate that reads a ref and never the checkout. No lazy fetch in a
+# partial clone; a missing object reads as nothing.
+spec_log_entries_at() { # root rev
+    local path
+    GIT_NO_LAZY_FETCH=1 git -C "$1" show "$2:specs/log.md" 2>/dev/null | awk 1 || true
+    { GIT_NO_LAZY_FETCH=1 git -C "$1" ls-tree --name-only "$2" -- specs/log/ 2>/dev/null || true; } |
+        while IFS= read -r path; do
+            case "${path#specs/log/}" in [0-9]*.md) ;; *) continue ;; esac
+            GIT_NO_LAZY_FETCH=1 git -C "$1" show "$2:$path" 2>/dev/null | awk 1 || true
+        done
+    return 0
+}
+
+# specs/log.md order, as compaction folds entries into it: newest first, unless its first dated entry
 # (`- YYYY-MM-DD `) is older than its last. Equal dates read as newest first. Succeeds for a
 # newest-first log; fails for an oldest-first one, a log with no dated entry and a missing file.
 spec_log_newest_first() { # log file
@@ -819,8 +846,7 @@ spec_checkouts() { # root
 spec_open_changes() { # root
     local root="$1" path branch loc row closed
     # A worktree branched before a close still carries the record: the root's log has the final word.
-    closed=" "
-    [ ! -f "$root/specs/log.md" ] || closed=" $(sed -n 's/^- [0-9-]* \([^ :]*\):.*/\1/p' "$root/specs/log.md" | tr '\n' ' ')"
+    closed=" $(spec_log_entries "$root" | sed -n 's/^- [0-9-]* \([^ :]*\):.*/\1/p' | tr '\n' ' ')"
     while IFS="$SPEC_SEP" read -r path branch loc; do
         [ -n "$path" ] || continue
         while IFS= read -r row; do

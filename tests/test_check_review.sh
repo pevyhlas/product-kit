@@ -331,7 +331,12 @@ git checkout -q -b 001-close-nolog "$DEFAULT"
 git rm -q specs/changes/001-greet.md; git commit -qm close >/dev/null
 run bash "$CHECK" 001-greet
 assert_eq 1 "$STATUS" "fails"
-assert_contains "$OUTPUT" "001-greet is closed (its record is deleted) but specs/log.md" "names the missing log line"
+assert_contains "$OUTPUT" "001-greet is closed (its record is deleted) but the log at" "names the missing log entry"
+assert_contains "$OUTPUT" "(specs/log/001-greet.md, as close-change.sh writes it, or a line in specs/log.md)" "and where it goes"
+mkdir -p specs/log; printf -- '- 2026-10-19 001-greet: warmer greeting — R-01 — #5\n' > specs/log/001-greet.md
+git add specs/log; git commit -qm 'log entry' >/dev/null
+run bash "$CHECK" 001-greet
+assert_not_contains "$OUTPUT" "has no '- <date> 001-greet" "its entry file is the log entry"
 git checkout -q "$DEFAULT"; git branch -q -D 001-close-nolog
 
 it "a reviewed head outside the history fails"

@@ -18,8 +18,8 @@
 # then does its range link. A blocking head that is not a commit hash always stands; one gone
 # from the history (rebased or squashed away) is ignored. Every non-blocking PASS range,
 # superseded rounds included, links. A point is covered when links chain from it (each starting
-# at or before a head already reached) to a head after which only the record and specs/log.md
-# changed, or through verified imports from the trusted base that preserve the exact branch
+# at or before a head already reached) to a head after which only the record and the log (specs/log.md,
+# specs/log/<id>.md) changed, or through verified imports from the trusted base that preserve the exact branch
 # delta (modes, blob IDs and paths). Overlapping source edits/resolutions remain uncovered.
 # Each reviewer's head must be covered, and for
 # T1-T3 so must the change's start (its merge base with --base). A merge carrying only the record
@@ -100,7 +100,7 @@ path="specs/changes/$id.md"
 spec_l01=(specs/product.md specs/product specs/architecture.md specs/architecture specs/SPEC.md specs/decisions)
 changed_since() { # sha [pathspec...] -> paths changed from sha to head, outside the record and the log
     local sha="$1"; shift
-    [ "$#" -gt 0 ] || set -- . ":(exclude)$path" ":(exclude)specs/log.md"
+    [ "$#" -gt 0 ] || set -- . ":(exclude)$path" ":(exclude)specs/log.md" ":(exclude)specs/log/$id.md"
     git -C "$root" diff --name-only "$sha" "$head" -- "$@" | tr '\n' ' ' | sed 's/ $//'
 }
 # Exact tree-entry deltas, without rename heuristics, external diff drivers, textconv or
@@ -113,7 +113,7 @@ delta_signature() { # from to pathspec...
 unchanged_since() { # sha [pathspec...] -> covered without another review of this delta
     local sha="$1" delta merges cursor parents first second extra common before after
     shift
-    [ "$#" -gt 0 ] || set -- . ":(exclude)$path" ":(exclude)specs/log.md"
+    [ "$#" -gt 0 ] || set -- . ":(exclude)$path" ":(exclude)specs/log.md" ":(exclude)specs/log/$id.md"
     delta="$(delta_signature "$sha" "$head" "$@")" || return 1
     merges="$(git -C "$root" rev-list --first-parent --min-parents=2 "$sha..$head")" || return 1
     # Inspect merges even if the resulting tree equals the reviewed tree: resolving an
@@ -174,10 +174,10 @@ if [ -z "$record_at" ]; then
         hint=" (a 0.x feature the owner keeps open becomes a change record at the cutover or restructure; see .prdkit/workflows/compact.md)"
     problems+=("No change record $path at $head or in its history$hint")
 else
-    # Closing a change deletes its record; the same history must add its log line.
-    log="$(git -C "$root" show "$head:specs/log.md" 2>/dev/null)" || log=""
+    # Closing a change deletes its record; the same history must add its log entry.
+    log="$(spec_log_entries_at "$root" "$head")"
     if [ "$record_at" != "$head" ] && ! grep -q "^- [0-9-]* $id:" <<< "$log"; then
-        problems+=("$id is closed (its record is deleted) but specs/log.md at $head has no '- <date> $id: <what changed>' line")
+        problems+=("$id is closed (its record is deleted) but the log at $head has no '- <date> $id: <what changed>' entry (specs/log/$id.md, as close-change.sh writes it, or a line in specs/log.md)")
     fi
     record="$(git -C "$root" show "$record_at:$path")"
     tier="$(printf '%s\n' "$record" | sed -n 's/.*\*\*Tier\*\*:[[:space:]]*\(T[0-3]\)\([^0-9].*\)\{0,1\}$/\1/p' | head -n 1)"

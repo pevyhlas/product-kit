@@ -43,7 +43,7 @@ resume, apply [spec.md](spec.md), Resolve owner answers, before asking it again.
 | Holds, waivers, attestations, deployments | `specs/records.md` (`records-template.md`) |
 | Open change (deleted when it closes) | `specs/changes/<id>.md` |
 | Optional execution scratch (never the sole handover) | gitignored `.prdkit/cache/implementation/<id>.md`; useful context on the same PR |
-| Closed changes, one line each | `specs/log.md` |
+| Closed changes, one line each | `specs/log/<id>.md` per close, folded into `specs/log.md` at compaction |
 
 Templates are in `.prdkit/templates/`. Raw evidence never lives in `specs/`: diffs, results,
 logs and captures stay in CI, the PR or the gitignored `.prdkit/cache/evidence/`, linked by URL

@@ -319,11 +319,27 @@ mkdir -p specs/changes; printf '# 003-x\n' > specs/changes/003-x.md; git add spe
 git rm -q specs/changes/003-x.md; git commit -qm close >/dev/null
 run bash "$DOCTOR"
 assert_eq 1 "$STATUS" "doctor fails"
-assert_contains "$OUTPUT" "Closed without a specs/log.md line: 003-x" "the unlogged change is named"
+assert_contains "$OUTPUT" "Closed without a log entry: 003-x" "the unlogged change is named"
 printf -- '- 2026-10-17 003-x: done\n' > specs/log.md
 run bash "$DOCTOR"
 assert_not_contains "$OUTPUT" "Closed without" "its log line clears it"
 rm specs/log.md
+mkdir -p specs/log; printf -- '- 2026-10-17 003-x: done\n' > specs/log/003-x.md
+run bash "$DOCTOR"
+assert_eq 0 "$STATUS" "an entry file is a log entry: $OUTPUT"
+assert_not_contains "$OUTPUT" "Closed without" "its entry file clears it"
+assert_not_contains "$OUTPUT" "Malformed log entry" "a well-formed entry file is quiet"
+for bad in '- 2026-10-17 004-y: names another change' '- 2026-10-17 003-x: done
+- 2026-10-17 003-x: twice' 'done, no date' '- 2026-10-17 003-x: '; do
+    printf '%s\n' "$bad" > specs/log/003-x.md
+    run bash "$DOCTOR"
+    assert_eq 1 "$STATUS" "a malformed entry fails doctor: $bad"
+    assert_contains "$OUTPUT" "Malformed log entry specs/log/003-x.md" "names the file: $bad"
+done
+printf -- '- 2026-10-17 003-x: done\n' > specs/log/003-x.md; printf 'x\n' > specs/log/notes.txt
+run bash "$DOCTOR"
+assert_contains "$OUTPUT" "Malformed log entry specs/log/notes.txt" "only change entries belong in specs/log/"
+rm -rf specs/log
 # shellcheck disable=SC2016 # backticks are Markdown code spans, not command substitution
 printf '# Demo — archive\n\n**Last 0.x feature**: none\n\n**Log condensed through**: 003; those entries: `git show abc1234:specs/log.md`.\n' > specs/archive.md
 run bash "$DOCTOR"
@@ -332,7 +348,7 @@ assert_not_contains "$OUTPUT" "Closed without" "a log condensed into the archive
 for value in '002 — entries at `git show 9f81234:specs/log.md`' '002 as of 2026-10-30' 'through 9'; do
     printf '# Demo — archive\n\n**Last 0.x feature**: none\n\n**Log condensed through**: %s\n' "$value" > specs/archive.md
     run bash "$DOCTOR"
-    assert_contains "$OUTPUT" "Closed without a specs/log.md line: 003-x" "only a leading number counts: $value"
+    assert_contains "$OUTPUT" "Closed without a log entry: 003-x" "only a leading number counts: $value"
 done
 rm specs/archive.md; git reset -q --hard HEAD~2
 
