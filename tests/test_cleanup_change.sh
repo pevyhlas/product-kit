@@ -481,6 +481,55 @@ assert_eq 0 "$STATUS" "worktree kept"
 run bash "$CLEAN2" 088-sub-unreadable
 assert_eq 0 "$STATUS" "the real tools remove it"
 
+it "any other git inspection that fails refuses too: reflogs, the worktree's HEAD, the gitlink lookup"
+SHIM5="$(mktemp -d)"; track_tmp "$SHIM5"
+cat > "$SHIM5/git" <<EOF
+#!/usr/bin/env bash
+# shellcheck disable=SC2254 # FAIL_ON is a glob pattern on purpose
+case " \$* " in
+    \$FAIL_ON) echo "fatal: simulated read error" >&2; exit 128 ;;
+esac
+exec "$REAL_GIT" "\$@"
+EOF
+chmod +x "$SHIM5/git"
+sub_worktree 089-sub-inspect
+for pattern in '* log -g *' "* -C $PROJ2/.worktrees/089-sub-inspect rev-parse --verify -q HEAD *" '* cat-file --batch-check *'; do
+    run env PATH="$SHIM5:$PATH" FAIL_ON="$pattern" bash "$CLEAN2" 089-sub-inspect
+    assert_eq 1 "$STATUS" "refused when [$pattern] fails"
+    assert_contains "$OUTPUT" "could not list the commits in the worktree's submodules" "says git could not say [$pattern]"
+done
+run test -d "$PROJ2/.worktrees/089-sub-inspect"
+assert_eq 0 "$STATUS" "worktree kept"
+run bash "$CLEAN2" 089-sub-inspect
+assert_eq 0 "$STATUS" "the real git removes it"
+
+it "two overlapping runs: the second is refused while the first holds the mutex, and the first removes"
+SHIM6="$(mktemp -d)"; track_tmp "$SHIM6"
+cat > "$SHIM6/git" <<EOF
+#!/usr/bin/env bash
+case " \$* " in
+    *" worktree remove --force "*)
+        : > "$SHIM6/in"
+        n=0; while [ ! -e "$SHIM6/go" ] && [ "\$n" -lt 600 ]; do sleep 0.1; n=\$((n + 1)); done ;;
+esac
+exec "$REAL_GIT" "\$@"
+EOF
+chmod +x "$SHIM6/git"
+sub_worktree 079-sub-overlap
+env PATH="$SHIM6:$PATH" bash "$CLEAN2" 079-sub-overlap > "$SHIM6/first.out" 2>&1 &
+first=$!
+n=0; while [ ! -e "$SHIM6/in" ] && [ "$n" -lt 600 ]; do sleep 0.1; n=$((n + 1)); done
+run test -e "$SHIM6/in"
+assert_eq 0 "$STATUS" "fixture: the first run is inside its forced removal"
+run bash "$CLEAN2" 079-sub-overlap
+assert_eq 1 "$STATUS" "the second run is refused"
+assert_contains "$OUTPUT" "another cleanup-change.sh run holds" "because the first holds the mutex"
+: > "$SHIM6/go"
+if wait "$first"; then STATUS=0; else STATUS=$?; fi
+assert_eq 0 "$STATUS" "the first run removes the worktree"
+run test ! -d "$PROJ2/.worktrees/079-sub-overlap"
+assert_eq 0 "$STATUS" "worktree gone"
+
 # --- --closed: sweep every closed change's worktree ----------------------------------------------
 # Closed means the record specs/changes/<id>.md is gone from, and specs/log.md has the line on, the
 # trusted integration branch (origin/HEAD), never the worktree's own branch.

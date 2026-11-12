@@ -310,49 +310,56 @@ held_outside() { # module git dir, main checkout's module git dir, commit
     git --git-dir="$2" merge-base --is-ancestor "$3" HEAD 2>/dev/null && return 0
     [ -n "$(git --git-dir="$2" for-each-ref --contains "$3" 2>/dev/null)" ]
 }
-# The commits a submodule copy keeps for itself, one per line; fails when git cannot list them.
+# HEAD of a repository (git options in "$@"): prints it and returns 0; returns 1 when it is unborn
+# (a symbolic ref to a branch with no commit yet) and 2 when git cannot say.
+head_of() {
+    local ref found
+    git "$@" rev-parse --verify -q HEAD 2>/dev/null && return 0
+    ref="$(git "$@" symbolic-ref -q HEAD 2>/dev/null)" || return 2
+    found="$(git "$@" for-each-ref --format='%(refname)' "$ref" 2>/dev/null)" || return 2
+    [ -z "$found" ] || return 2
+    return 1
+}
+# The commits a submodule copy keeps for itself, one per line: HEAD, every ref outside
+# refs/remotes/ and every entry in their reflogs. Fails when git cannot list them.
 module_commits() { # module git dir
-    local mod="$1" refs ref
+    local mod="$1" refs ref state=0
     refs="$(git --git-dir="$mod" for-each-ref --format='%(refname)' 2>/dev/null)" || return 1
     refs="$(printf '%s\n' "$refs" | awk 'NF && index($0, "refs/remotes/") != 1')"
-    if ! git --git-dir="$mod" rev-parse --verify -q HEAD 2>/dev/null; then
-        # Only an unborn HEAD, a symbolic ref to a branch with no commit yet, holds nothing.
-        ref="$(git --git-dir="$mod" symbolic-ref -q HEAD 2>/dev/null)" || return 1
-        if git --git-dir="$mod" rev-parse --verify -q "$ref" >/dev/null 2>&1; then return 1; fi
-    fi
+    head_of --git-dir="$mod" >/dev/null || state=$?
+    case "$state" in
+        0) refs="HEAD
+$refs" ;;
+        1) ;;
+        *) return 1 ;;
+    esac
     while IFS= read -r ref; do
         [ -n "$ref" ] || continue
         git --git-dir="$mod" rev-parse --verify -q "$ref" 2>/dev/null || return 1
-    done <<EOF
-$refs
-EOF
-    while IFS= read -r ref; do
-        [ -n "$ref" ] || continue
-        git --git-dir="$mod" reflog exists "$ref" 2>/dev/null || continue
+        # A ref without a reflog lists nothing and succeeds.
         git --git-dir="$mod" log -g --format=%H "$ref" -- 2>/dev/null || return 1
     done <<EOF
-HEAD
 $refs
 EOF
 }
-submodule_commits_held() {
-    local admin common mods head mod rel links own c t
-    UNSAFE_MODULE=""; UNSAFE_COMMIT=""
-    admin="$(git -C "$WT" rev-parse --absolute-git-dir 2>/dev/null)" || return 2
-    mods="$admin/modules"
-    [ -d "$mods" ] || return 0
+# Checks every submodule copy whose HEAD file is listed, NUL-separated, in $2 (found under $1).
+scan_modules() { # modules dir, list file
+    local mods="$1" common head mod rel links own present c t state=0
     common="$(git -C "$ROOT" rev-parse --git-common-dir 2>/dev/null)" || return 2
     common="$(CDPATH="" cd "$ROOT" && CDPATH="" cd "$common" && pwd -P)" || return 2
     links="$(git -C "$WT" ls-files -s 2>/dev/null)" || return 2
     links="$(printf '%s\n' "$links" | awk '$1 == "160000" { print $2 }')"
-    if git -C "$WT" rev-parse --verify -q HEAD >/dev/null 2>&1; then
-        own="$(git -C "$WT" ls-tree -r HEAD 2>/dev/null)" || return 2
-        links="$links
-$(printf '%s\n' "$own" | awk '$2 == "commit" { print $3 }')"
-    fi
+    head_of -C "$WT" >/dev/null || state=$?
+    case "$state" in
+        0) own="$(git -C "$WT" ls-tree -r HEAD 2>/dev/null)" || return 2
+           links="$links
+$(printf '%s\n' "$own" | awk '$2 == "commit" { print $3 }')" ;;
+        1) ;;
+        *) return 2 ;;
+    esac
+    links="$(printf '%s\n' "$links" | awk 'NF' | sort -u)"
     # A submodule copy is a directory under modules/ with its own HEAD and objects; nested
     # submodules sit under its own modules/ and are found the same way.
-    find "$mods" -type f -name HEAD >/dev/null 2>&1 || return 2
     while IFS= read -r -d '' head; do
         mod="${head%/HEAD}"
         [ -d "$mod/objects" ] || continue
@@ -369,18 +376,33 @@ $(printf '%s\n' "$own" | awk '$2 == "commit" { print $3 }')"
         done <<EOF
 $(printf '%s\n' "$own" | sort -u)
 EOF
+        [ -n "$links" ] || continue
+        # "<id> commit <size>" for a gitlink this copy holds, "<id> missing" for another one's.
+        present="$(printf '%s\n' "$links" | git --git-dir="$mod" cat-file --batch-check 2>/dev/null)" || return 2
         while IFS= read -r c; do
             [ -n "$c" ] || continue
-            # A gitlink of another submodule is not in this copy.
-            git --git-dir="$mod" cat-file -e "$c^{commit}" 2>/dev/null || continue
             held_outside "$mod" "$common/modules/$rel" "$c" && continue
             UNSAFE_MODULE="$rel"; UNSAFE_COMMIT="$c"
             return 1
         done <<EOF
-$(printf '%s\n' "$links" | sort -u)
+$(printf '%s\n' "$present" | awk '$2 == "commit" { print $1 }')
 EOF
-    done < <(find "$mods" -type f -name HEAD -print0 2>/dev/null)
+    done < "$2"
     return 0
+}
+submodule_commits_held() {
+    local admin list state=0
+    UNSAFE_MODULE=""; UNSAFE_COMMIT=""
+    admin="$(git -C "$WT" rev-parse --absolute-git-dir 2>/dev/null)" || return 2
+    [ -d "$admin/modules" ] || return 0
+    list="$(mktemp 2>/dev/null)" || return 2
+    if find "$admin/modules" -type f -name HEAD -print0 > "$list" 2>/dev/null; then
+        scan_modules "$admin/modules" "$list" || state=$?
+    else
+        state=2
+    fi
+    rm -f "$list"
+    return "$state"
 }
 # Refuses (and returns 1) unless every submodule commit is held outside the worktree.
 check_submodule_commits() {
