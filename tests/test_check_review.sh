@@ -2,7 +2,8 @@
 # check-review.sh passes a change only when its recorded independent review covers the head being
 # merged: PASS verdicts, nothing blocking for the rigor, only the record and the log changed since,
 # the tier's reviewers present. It reads committed state, so a closing commit that deletes the
-# record still checks against the record's last version.
+# record still checks against the record's last version. Its policy (Rigor, registry, T0 paths)
+# comes from the trusted integration base, and a branch cannot lower its own tier.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 PROJ="$(make_inited_project)"; track_tmp "$PROJ"
@@ -22,6 +23,9 @@ BASE="$(git rev-parse --short HEAD~1)"; REVIEWED="$(git rev-parse --short HEAD)"
 
 record() { # tier, then State review lines
     local tier="$1"; shift
+    # Each call is a fresh scenario: replace the previous scenario's record commit, so its tier is
+    # not part of this branch's history (a branch cannot lower a tier it named; tested below).
+    [ "$(git log -1 --format=%s)" != record ] || git reset -q --soft HEAD~1
     mkdir -p specs/changes
     {
         printf '# Change: Warmer greeting\n\n**Opened**: 2026-10-15 · **Parts**: P1 · **Tier**: %s · **Parent**: none\n\n' "$tier"
@@ -103,19 +107,54 @@ record T1 "$(verdict code FAIL '0 critical, 1 high, 0 medium, 0 low')" "$(verdic
 run bash "$CHECK"
 assert_eq 0 "$STATUS" "the latest verdict counts"
 
-it "medium findings block under Rigor: full, or when the constitution names no Rigor"
+it "medium findings block under the trusted base's Rigor: full, or when it names no Rigor"
+TRUSTED_TIP="$(git rev-parse "refs/remotes/origin/$DEFAULT")"
 record T1 "$(verdict code PASS '0 critical, 0 high, 1 medium, 0 low')"
-sed -i.bak 's/^- \*\*Rigor\*\*: light/- **Rigor**: full/' .prdkit/memory/constitution.md && rm -f .prdkit/memory/constitution.md.bak
-git commit -qam "rigor full" >/dev/null
+git show "$TRUSTED_TIP:.prdkit/memory/constitution.md" | sed 's/^- \*\*Rigor\*\*: light/- **Rigor**: full/' |
+    trusted_edit "refs/remotes/origin/$DEFAULT" .prdkit/memory/constitution.md
 run bash "$CHECK"
 assert_eq 1 "$STATUS" "fails under full"
 assert_contains "$OUTPUT" "1 medium finding(s) block under Rigor: full" "rigor named"
-sed -i.bak '/\*\*Rigor\*\*:/d' .prdkit/memory/constitution.md && rm -f .prdkit/memory/constitution.md.bak
-git commit -qam "no rigor" >/dev/null
+git show "$TRUSTED_TIP:.prdkit/memory/constitution.md" | sed '/\*\*Rigor\*\*:/d' |
+    trusted_edit "refs/remotes/origin/$DEFAULT" .prdkit/memory/constitution.md
 run bash "$CHECK"
 assert_eq 1 "$STATUS" "fails closed without a Rigor"
-assert_contains "$OUTPUT" "the constitution names no Rigor (light or full), so medium blocks" "says why"
-git reset -q --hard HEAD~2
+assert_contains "$OUTPUT" "the trusted base's constitution names no single Rigor (light or full), so medium blocks" "says why"
+{ git show "$TRUSTED_TIP:.prdkit/memory/constitution.md"; printf -- '- **Rigor**: full\n'; } |
+    trusted_edit "refs/remotes/origin/$DEFAULT" .prdkit/memory/constitution.md
+run bash "$CHECK"
+assert_eq 1 "$STATUS" "two different Rigor values read as unknown, so medium blocks"
+git update-ref "refs/remotes/origin/$DEFAULT" "$TRUSTED_TIP"
+
+it "the branch cannot change its own Rigor: full to light keeps the medium blocking"
+git show "$TRUSTED_TIP:.prdkit/memory/constitution.md" | sed 's/^- \*\*Rigor\*\*: light/- **Rigor**: full/' |
+    trusted_edit "refs/remotes/origin/$DEFAULT" .prdkit/memory/constitution.md
+run bash "$CHECK"
+assert_eq 1 "$STATUS" "fails under the trusted full"
+git merge -q --no-edit "refs/remotes/origin/$DEFAULT" >/dev/null 2>&1
+sed -i.bak 's/^- \*\*Rigor\*\*: full/- **Rigor**: light/' .prdkit/memory/constitution.md && rm -f .prdkit/memory/constitution.md.bak
+git commit -qam "the branch lowers its own Rigor" >/dev/null
+record T1 "$(verdict code PASS '0 critical, 0 high, 1 medium, 0 low' "$BASE..$(git rev-parse --short HEAD)")"
+run bash "$CHECK" --json
+assert_eq 1 "$STATUS" "a branch-side full-to-light flip does not unblock the medium"
+assert_contains "$OUTPUT" '"rigor":"full"' "the trusted base's Rigor is used"
+assert_contains "$OUTPUT" '1 medium finding(s) block under Rigor: full' "the medium still blocks"
+run bash "$CHECK"
+assert_contains "$OUTPUT" "this head's constitution says Rigor light; the check uses the trusted base's (full)" "says why"
+git update-ref "refs/remotes/origin/$DEFAULT" "$TRUSTED_TIP"
+git reset -q --hard "$REVIEWED"
+
+it "the reviewer registry is the trusted base's current one: a reviewer revoked there no longer counts"
+record T1 "$(verdict code PASS "$CLEAN")"
+run bash "$CHECK"
+assert_eq 0 "$STATUS" "registered at the trusted base"
+git show "$TRUSTED_TIP:.prdkit/memory/agents.md" | sed 's/| code | reviewer |/| code | maker |/' |
+    trusted_edit "refs/remotes/origin/$DEFAULT" .prdkit/memory/agents.md
+run bash "$CHECK" --json
+assert_eq 1 "$STATUS" "revoked after the branch left the base"
+assert_contains "$OUTPUT" "reviewer 'code' is maker" "the current trusted registry decides"
+assert_contains "$OUTPUT" "\"policy_at\":\"$(git rev-parse "refs/remotes/origin/$DEFAULT")\"" "the policy snapshot is the trusted tip"
+git update-ref "refs/remotes/origin/$DEFAULT" "$TRUSTED_TIP"
 
 it "missing counts or a missing review fail; the tier must be named"
 record T1 "$(verdict code PASS 'looks fine')"
@@ -133,15 +172,101 @@ record T1 '<!-- example:' "$(verdict code PASS "$CLEAN")" '-->' '```' "$(verdict
 run bash "$CHECK"
 assert_contains "$OUTPUT" "T1 needs a recorded independent review; none found in State" "examples ignored"
 
-it "T0 needs no review, but a recorded verdict still counts"
+it "a self-declared T0 on code fails: T0 is checked against the trusted review-t0-paths"
 record T0
 run bash "$CHECK"
-assert_eq 0 "$STATUS" "T0 passes"
-assert_contains "$OUTPUT" "tier T0 needs no independent review" "says why"
-record T0 "$(verdict docs FAIL '0 critical, 1 high, 0 medium, 0 low')"
+assert_eq 1 "$STATUS" "T0 with code and no T0 paths configured fails"
+assert_contains "$OUTPUT" "lists no review-t0-paths, so T0 covers only the record and the log; this change also touches: src/app.txt" "says why"
+assert_not_contains "$OUTPUT" "PASS 001-greet" "never the old claim-based pass"
+TRUSTED_TIP="$(git rev-parse "refs/remotes/origin/$DEFAULT")"
+{ git show "$TRUSTED_TIP:.prdkit/memory/config.md"; printf -- '- review-t0-paths: docs/, README.md\n'; } |
+    trusted_edit "refs/remotes/origin/$DEFAULT" .prdkit/memory/config.md
 run bash "$CHECK"
+assert_eq 1 "$STATUS" "code outside the T0 paths still fails"
+assert_contains "$OUTPUT" "not regular files under the trusted base's review-t0-paths" "says why"
+assert_contains "$OUTPUT" "src/app.txt" "names the code path"
+git update-ref "refs/remotes/origin/$DEFAULT" "$TRUSTED_TIP"
+
+it "a branch cannot widen its own T0 paths; only docs under the trusted paths are T0"
+git checkout -q -b 003-docs "$DEFAULT"
+mkdir -p docs specs/changes; echo 'how to' > docs/guide.md; echo 'readme' > README.md
+printf '# Change: Docs\n\n**Tier**: T0\n\n## State\n\n**Step**: review\n' > specs/changes/003-docs.md
+git add -A >/dev/null; git commit -qm docs >/dev/null
+run bash "$CHECK" 003-docs
+assert_eq 1 "$STATUS" "no trusted T0 paths: docs are not T0 by name"
+assert_contains "$OUTPUT" "this change also touches: README.md docs/guide.md" "names the docs"
+printf '\n## Configuration\n- review-integration-branches: origin/develop\n- review-t0-paths: docs/, README.md, src/\n' > .prdkit/memory/config.md
+git commit -qam "the branch lists its own T0 paths" >/dev/null
+run bash "$CHECK" 003-docs
+assert_eq 1 "$STATUS" "the branch's own config is not trusted"
+assert_contains "$OUTPUT" ".prdkit/memory/config.md" "and editing the policy is never docs only"
+git reset -q --hard HEAD~1
+{ git show "$TRUSTED_TIP:.prdkit/memory/config.md"; printf -- '- review-t0-paths: docs/, README.md\n'; } |
+    trusted_edit "refs/remotes/origin/$DEFAULT" .prdkit/memory/config.md
+run bash "$CHECK" 003-docs
+assert_eq 0 "$STATUS" "docs under the trusted T0 paths pass"
+assert_contains "$OUTPUT" "tier T0 needs no independent review (every changed path is docs only under the trusted review-t0-paths)" "says why"
+chmod +x docs/guide.md; git commit -qam "executable doc" >/dev/null
+run bash "$CHECK" 003-docs
+assert_eq 1 "$STATUS" "an executable file is not docs only"
+assert_contains "$OUTPUT" "docs/guide.md" "names it"
+git reset -q --hard HEAD~1
+ln -s ../src/app.txt docs/link.md; git add docs/link.md; git commit -qm "symlink doc" >/dev/null
+run bash "$CHECK" 003-docs
+assert_eq 1 "$STATUS" "a symlink is not docs only"
+assert_contains "$OUTPUT" "docs/link.md" "names it"
+git reset -q --hard HEAD~1
+mkdir -p docs/sub; echo x > docs/sub/a.md; echo y > docsx.md; git add -A >/dev/null; git commit -qm "prefix edge" >/dev/null
+run bash "$CHECK" 003-docs
+assert_eq 1 "$STATUS" "a directory entry matches only paths inside it"
+assert_contains "$OUTPUT" "docsx.md" "names the near miss"
+assert_not_contains "$OUTPUT" "docs/sub/a.md" "nested docs are inside the entry"
+git reset -q --hard HEAD~1
+echo '# Product' > specs/product.md; git add specs/product.md; git commit -qm "L0" >/dev/null
+run bash "$CHECK" 003-docs
+assert_eq 1 "$STATUS" "an L0 spec edit is never T0"
+git reset -q --hard HEAD~1
+record_t0_fail="$(printf '**Review**: round 1 · %s..%s · docs · FAIL · 0 critical, 1 high, 0 medium, 0 low · https://example.invalid/pr/3#c1' "$(git rev-parse --short "$DEFAULT")" "$(git rev-parse --short HEAD)")"
+printf '%s\n' "$record_t0_fail" >> specs/changes/003-docs.md; git commit -qam "record a FAIL" >/dev/null
+run bash "$CHECK" 003-docs
 assert_eq 1 "$STATUS" "a recorded FAIL fails T0 too"
 assert_contains "$OUTPUT" "docs (round 1): verdict FAIL, not PASS" "the FAIL is named"
+git update-ref "refs/remotes/origin/$DEFAULT" "$TRUSTED_TIP"
+git checkout -q 001-greet; git branch -q -D 003-docs
+
+it "a branch may raise its tier but never lower it, even by a record-only commit after review"
+record T3 "$(verdict design PASS "$CLEAN")"
+run bash "$CHECK"
+assert_eq 1 "$STATUS" "T3 without the owner fails"
+assert_contains "$OUTPUT" "T3 needs the owner's verdict too" "owner required"
+sed -i.bak 's/\*\*Tier\*\*: T3/**Tier**: T1/' specs/changes/001-greet.md && rm -f specs/changes/001-greet.md.bak
+git commit -qam "lower the tier after review" >/dev/null
+run bash "$CHECK" --json
+assert_eq 1 "$STATUS" "a record-only T3-to-T1 commit does not drop the owner gate"
+assert_contains "$OUTPUT" "The record claims T1, but it named T3 at commit" "names the lowering"
+assert_contains "$OUTPUT" "T3 needs the owner's verdict too" "the owner gate stands"
+assert_contains "$OUTPUT" '"tier":"T3"' "the effective tier is the floor"
+git reset -q --hard HEAD~1
+sed -i.bak 's/\*\*Tier\*\*: T3/**Tier**: T1 <!-- **Tier**: T0 -->/' specs/changes/001-greet.md && rm -f specs/changes/001-greet.md.bak
+git commit -qam "a decoy tier" >/dev/null
+run bash "$CHECK"
+assert_eq 1 "$STATUS" "a second tier field, even in a comment, fails"
+assert_contains "$OUTPUT" "The record names more than one review tier" "says why"
+git reset -q --hard HEAD~1
+record T1 "$(verdict code PASS "$CLEAN")"
+sed -i.bak 's/\*\*Tier\*\*: T1/**Tier**: T2/' specs/changes/001-greet.md && rm -f specs/changes/001-greet.md.bak
+git commit -qam "raise the tier" >/dev/null
+run bash "$CHECK"
+assert_eq 0 "$STATUS" "raising the tier is allowed"
+assert_contains "$OUTPUT" "T2, Rigor light" "checked at the raised tier"
+git reset -q --hard HEAD~1
+# The trusted base's copy of the record is a floor too, for a change merged with its record open.
+git show HEAD:specs/changes/001-greet.md | sed 's/\*\*Tier\*\*: T1/**Tier**: T2/' |
+    trusted_edit "refs/remotes/origin/$DEFAULT" specs/changes/001-greet.md
+run bash "$CHECK"
+assert_eq 1 "$STATUS" "a tier below the trusted base's record fails"
+assert_contains "$OUTPUT" "The record claims T1, but it named T2 at the trusted base (origin/HEAD)" "names the trusted floor"
+git update-ref "refs/remotes/origin/$DEFAULT" "$TRUSTED_TIP"
 
 it "T3 also needs the owner's verdict, which carries no counts and covers the L0 and L1 spec"
 record T3 "$(verdict design PASS "$CLEAN")"
@@ -252,20 +377,27 @@ printf '# Change: Solo\n\n**Tier**: T1\n\n## State\n\n**Review**: round 1 · %s.
 git -C "$TRUNK" add specs; git -C "$TRUNK" commit -qm record >/dev/null
 run bash "$CHECK" --repo "$TRUNK" 008-solo
 assert_eq 1 "$STATUS" "no default branch and no --base fails"
-assert_contains "$OUTPUT" "no base to find the change's start" "asks for --base"
+assert_contains "$OUTPUT" "No trusted integration base: origin/HEAD does not resolve here" "asks for a trusted base"
 run bash "$CHECK" --repo "$TRUNK" --base trunk 008-solo
 assert_eq 1 "$STATUS" "a comparison base alone cannot establish registry authority"
 assert_contains "$OUTPUT" 'No trusted integration-baseline registry' 'names missing authority'
+assert_contains "$OUTPUT" '--base trunk is not a trusted integration branch' 'refuses the untrusted base'
 git -C "$TRUNK" update-ref refs/remotes/origin/trunk trunk
 git -C "$TRUNK" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/trunk
 run bash "$CHECK" --repo "$TRUNK" --base trunk 008-solo
-assert_eq 0 "$STATUS" "full coverage passes with a trusted registry and a local comparison base"
+assert_eq 1 "$STATUS" "a local branch is still not the trusted base, even with origin/HEAD"
+assert_contains "$OUTPUT" '--base trunk is not a trusted integration branch' 'says why'
+run bash "$CHECK" --repo "$TRUNK" 008-solo
+assert_eq 0 "$STATUS" "full coverage passes against origin/HEAD's trusted policy"
+run bash "$CHECK" --repo "$TRUNK" --base "$(git -C "$TRUNK" rev-parse origin/trunk)" 008-solo
+assert_eq 1 "$STATUS" "a raw commit hash is never a trusted base, even origin/HEAD's own"
 
 it "a --base inside the change's own history cannot hide its code"
 echo 'unreviewed' > src/evil.txt; git add src/evil.txt; git commit -qm "after review" >/dev/null
 printf -- '- note\n' >> specs/log.md; git add specs/log.md; git commit -qm "log only" >/dev/null
 run bash "$CHECK" --base HEAD~1
-assert_eq 1 "$STATUS" "falls back to coverage"
+assert_eq 1 "$STATUS" "an untrusted base is refused"
+assert_contains "$OUTPUT" "--base HEAD~1 is not a trusted integration branch" "says why"
 assert_contains "$OUTPUT" "src/evil.txt" "the unreviewed code is named"
 git branch -q wip-001 HEAD~1
 run bash "$CHECK" --base wip-001
@@ -275,7 +407,7 @@ git reset -q --hard HEAD~2
 
 it "the head and change id can be given, as CI does for a pull request"
 git checkout -q "$DEFAULT"
-run bash "$CHECK" --head 001-greet --base "$DEFAULT" 001-greet
+run bash "$CHECK" --head 001-greet --base "origin/$DEFAULT" 001-greet
 assert_eq 0 "$STATUS" "explicit head, base and id"
 run bash "$CHECK"
 assert_eq 2 "$STATUS" "the default branch is not a change id"

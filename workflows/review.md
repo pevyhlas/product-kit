@@ -62,7 +62,8 @@ L1 edit needs the owner again:
 **Review**: round 1 · <base sha>..<approved head sha> · owner · PASS · <link to the owner's words>
 ```
 
-Register identities on the integration baseline before using them; maker, unregistered and
+Register identities on the trusted integration branch before using them (the check reads its
+current registry); maker, unregistered and
 ambiguous identities cannot count as independent verdicts or coverage. Preserve standing FAILs
 while reconciling older records. Registry eligibility is not proof that a fresh context ran. The
 offline gate leaves report links unverified; `check-review.sh --verify-reports --pr <GitHub PR
