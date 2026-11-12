@@ -36,10 +36,13 @@ change by change.
     lower it: the floor is the highest tier the record names on the default branch, on `--base`,
     at the change's start or at any commit of the branch since, and T3 when the change edits L0
     (`specs/product.md`, `specs/product/`), as the protocol tiers it. A lower claim fails, and so
-    does a record on one of those trusted commits that names no readable tier.
+    does a record on one of those trusted commits whose tier field is not exactly one tier
+    (`T4`, `TBD`, `T1junk`, `T4/T1`).
   - The record and `specs/log.md` are exempt from coverage only as regular, non-executable files
-    at the head (a directory there would exempt everything in it), and the coverage diffs pass `--ignore-submodules=none`, so a submodule whose `.gitmodules`
-    entry says `ignore = all` can no longer hide a gitlink change behind a record-only close.
+    (or absent) both where the change starts and at the head: a directory there would exempt
+    everything in it, and converting or deleting an unsafe entry would hide that change. The
+    coverage diffs pass `--ignore-submodules=none`, so a submodule whose `.gitmodules` entry says
+    `ignore = all` can no longer hide a gitlink change behind a record-only close.
   - This is the first of three steps toward binding review to content: it changes no Review-line
     or receipt format. Coverage across merges, rebases and record-only commits (#66, #86) and
     native owner approval (#69) are not addressed here.
@@ -55,6 +58,8 @@ change by change.
   at it. An open change that edits `specs/product.md` or `specs/product/` below T3 needs T3 and
   the owner's verdict.
 - The default branch's constitution must hold exactly one well-formed Rigor line. Land a Rigor, registry or `review-t0-paths` change in its own pull request first.
+- If the integration branch holds `specs/log.md` as an executable file or a directory, every
+  change that starts there fails until it holds a regular file; fix that on the branch first.
 
 ## [1.5.0] — 2026-11-10 — worktree cleanup
 

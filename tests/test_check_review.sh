@@ -215,7 +215,7 @@ git update-ref "refs/remotes/origin/$DEFAULT" HEAD; FORK="$(git rev-parse HEAD)"
 git rm -q specs/changes/004-floor.md; git commit -qm "the base closes it" >/dev/null
 git update-ref "refs/remotes/origin/$DEFAULT" HEAD
 git checkout -q -b 004-floor-branch "$FORK"
-echo 'code' > src/floor.txt; git add src/floor.txt; git commit -qm code >/dev/null; FLOOR_HEAD="$(git rev-parse --short HEAD)"
+mkdir -p src; echo 'code' > src/floor.txt; git add src/floor.txt; git commit -qm code >/dev/null; FLOOR_HEAD="$(git rev-parse --short HEAD)"
 printf '# Change: Floor\n\n**Tier**: T1\n\n## State\n\n%s\n' "$(verdict code PASS "$CLEAN" "$(git rev-parse --short "$FORK")..$FLOOR_HEAD")" > specs/changes/004-floor.md
 git commit -qam "lower to T1" >/dev/null
 run bash "$CHECK" 004-floor
@@ -265,10 +265,39 @@ assert_contains "$OUTPUT" "specs/log.md must stay a regular, non-executable file
 git checkout -q 001-greet; git branch -q -D 005-close 005-close-branch
 git update-ref "refs/remotes/origin/$DEFAULT" "$TRUSTED_TIP"
 
+it "an unsafe log where the change starts cannot be converted or deleted without review"
+for unsafe in executable directory; do
+    git checkout -q -b 006-start "$DEFAULT"
+    mkdir -p specs/changes; printf '# Change: Start\n\n**Tier**: T1\n\n## State\n' > specs/changes/006-start.md
+    if [ "$unsafe" = executable ]; then
+        printf -- '- 2026-10-19 004-older: older — #4\n' > specs/log.md; chmod +x specs/log.md
+    else
+        mkdir -p specs/log.md; printf -- '- 2026-10-19 004-older: older — #4\n' > specs/log.md/entry
+        printf 'echo run\n' > specs/log.md/payload.sh
+    fi
+    git add specs; git commit -qm "an unsafe log on the base ($unsafe)" >/dev/null
+    git update-ref "refs/remotes/origin/$DEFAULT" HEAD
+    for how in convert delete; do
+        git checkout -q -b 006-start-branch
+        git rm -r -q specs/log.md
+        if [ "$how" = convert ]; then
+            printf -- '- 2026-10-19 004-older: older — #4\n' > specs/log.md; git add specs/log.md
+        fi
+        git commit -qm "$how the $unsafe log" >/dev/null
+        run bash "$CHECK" 006-start
+        assert_eq 1 "$STATUS" "$how an unsafe log at the start ($unsafe): it still fails"
+        assert_contains "$OUTPUT" "specs/log.md is not a regular, non-executable file at the change's start" "says why"
+        assert_not_contains "$OUTPUT" "specs/log.md must stay a regular" "the head is clean"
+        git checkout -q 006-start; git branch -q -D 006-start-branch
+    done
+    git checkout -q 001-greet; git branch -q -D 006-start
+    git update-ref "refs/remotes/origin/$DEFAULT" "$TRUSTED_TIP"
+done
+
 it "a record on a trusted branch must name a readable tier, or the minimum is unknown"
 record T1 "$(verdict code PASS "$CLEAN")"
-for bad in T4 TBD; do
-    git show HEAD:specs/changes/001-greet.md | sed "s/\*\*Tier\*\*: T[0-3]/**Tier**: $bad/" |
+for bad in T4 TBD T1junk T4/T1 'TBD (formerly T1)'; do
+    git show HEAD:specs/changes/001-greet.md | sed "s|\*\*Tier\*\*: T[0-3]|**Tier**: $bad|" |
         trusted_edit "refs/remotes/origin/$DEFAULT" specs/changes/001-greet.md
     run bash "$CHECK"
     assert_eq 1 "$STATUS" "a trusted record with **Tier**: $bad fails"

@@ -298,13 +298,14 @@ else
     raise_floor() { # tier where
         if [ -n "$1" ] && { [ -z "$floor" ] || [[ "$1" > "$floor" ]]; }; then floor="$1"; floor_at="$2"; fi
     }
-    trusted_floor() { # rev where: a record there must name a tier, or the minimum is unknown
+    trusted_floor() { # rev where: a record there must name exactly one tier, or the minimum is unknown
         local named
         git -C "$root" cat-file -e "$1:$path" 2>/dev/null || return 0
-        named="$(tier_floor_of "$1")"
-        if [ -z "$named" ]; then
-            problems+=("The record at $2 names no readable tier, so the trusted minimum is unknown; fix it there first")
-        else raise_floor "$named" "$2"; fi
+        named="$( { git -C "$root" show "$1:$path" 2>/dev/null || true; } | record_tiers)"
+        case "$named" in
+            T[0-3]) raise_floor "$named" "$2" ;;
+            *) problems+=("The record at $2 names no readable tier, so the trusted minimum is unknown; fix it there first") ;;
+        esac
     }
     [ -z "$policy_at" ] || trusted_floor "$policy_at" "the trusted base (${trusted_default#refs/remotes/})"
     [ -z "$import_base" ] || trusted_floor "$import_base" "the base ($base_ref)"
@@ -322,13 +323,20 @@ else
         problems+=("The record claims $tier, but its floor is $floor, from $floor_at: a branch may raise its tier, never lower it; claim **Tier**: $floor")
         tier="$floor"
     fi
-    # The record and the log are exempt from coverage only as regular, non-executable files: a
-    # directory there would exempt everything inside it.
-    if ! odd="$(metadata_mode_problems "$head")"; then
-        problems+=("The tree at $head cannot be read to check the record and the log")
-    elif [ -n "$odd" ]; then
-        problems+=("$(printf '%s' "$odd" | tr '\n' ' ' | sed 's/ $//') must stay a regular, non-executable file")
-    fi
+    # The record and the log are exempt from coverage only as regular, non-executable files, where
+    # the change starts and at its head: a directory there would exempt everything inside it, and
+    # converting or deleting an unsafe entry would hide that transition.
+    metadata_ends=("$head"); [ -z "$start" ] || [ "$start" = "$head" ] || metadata_ends=("$start" "$head")
+    for at in "${metadata_ends[@]}"; do
+        where="$head"; [ "$at" = "$head" ] || where="the change's start ${start:0:12}"
+        if ! odd="$(metadata_mode_problems "$at")"; then
+            problems+=("The tree at $where cannot be read to check the record and the log")
+        elif [ -n "$odd" ] && [ "$at" = "$head" ]; then
+            problems+=("$(printf '%s' "$odd" | tr '\n' ' ' | sed 's/ $//') must stay a regular, non-executable file")
+        elif [ -n "$odd" ]; then
+            problems+=("$(printf '%s' "$odd" | tr '\n' ' ' | sed 's/ $//') is not a regular, non-executable file at $where, so changing it cannot be exempt from review; fix it on the base first")
+        fi
+    done
     if $base_trusted && [ -n "$start" ] && [ "$start" != "$head" ] && [ -z "$(changed_since "$start")" ]; then
         record_only=true
     fi
