@@ -18,8 +18,10 @@ change by change.
   that copy holds a commit (its HEAD, a local branch, tag or stash, any reflog entry of those, or a
   gitlink the worktree records) that no remote-tracking ref there and no ref or HEAD in the main
   checkout's copy of the submodule contains, and names the submodule and the commit. Push it, or
-  fetch it into the main checkout's submodule, then rerun. When git cannot list those commits, the
-  removal is refused too.
+  fetch it into the main checkout's submodule, then rerun. The removal is refused too when git
+  cannot list those commits, and when any file or directory in that copy cannot be read, since git
+  reads around such a file (`log -g` lists nothing, `cat-file` calls the object missing); that
+  refusal names the unreadable path.
 - The forced removal now runs under a mutex, the directory `prdkit-cleanup.lock` in the
   worktree's git directory (created atomically with `mkdir`), and repeats its checks under it, so
   two runs cannot remove the same worktree at once. A refused, failed or interrupted removal

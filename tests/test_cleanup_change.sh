@@ -503,6 +503,129 @@ assert_eq 0 "$STATUS" "worktree kept"
 run bash "$CLEAN2" 089-sub-inspect
 assert_eq 0 "$STATUS" "the real git removes it"
 
+# --- Unreadable files in the worktree's copy of the submodule ------------------------------------
+# Git reads around a file it cannot open: `log -g` lists nothing and `cat-file --batch-check` says
+# "missing", both with exit 0. The removal must refuse before git looks. These fixtures use real
+# permissions, so they need a user the permissions bind (not root).
+module_of() { # change id: the worktree's copy of vendor/sub
+    printf '%s/modules/vendor/sub' "$(git -C "$PROJ2/.worktrees/$1" rev-parse --absolute-git-dir)"
+}
+PERM_PROBE="$(mktemp -d)"; track_tmp "$PERM_PROBE"
+printf 'x\n' > "$PERM_PROBE/f"; chmod 000 "$PERM_PROBE/f"
+if cat "$PERM_PROBE/f" >/dev/null 2>&1; then PERMS_BIND=false; else PERMS_BIND=true; fi
+chmod 600 "$PERM_PROBE/f"
+if [ "$PERMS_BIND" = false ]; then
+    it "unreadable submodule files (skipped: file permissions do not bind this user)"
+    _ok "skipped: running as a user that reads mode-000 files"
+else
+
+it "an unreadable stash reflog in the submodule copy refuses, though git would list nothing"
+sub_worktree 090-sub-reflog
+S90="$PROJ2/.worktrees/090-sub-reflog/vendor/sub"
+echo one > "$S90/one.txt"; git -C "$S90" "${GITID[@]}" stash push -qu -m one >/dev/null 2>&1
+echo two > "$S90/two.txt"; git -C "$S90" "${GITID[@]}" stash push -qu -m two >/dev/null 2>&1
+old90="$(git -C "$S90" rev-parse 'stash@{1}')"
+git -C "$PROJ2/vendor/sub" -c protocol.file.allow=always fetch -q "$S90" refs/stash:refs/heads/newest-stash-090 >/dev/null 2>&1
+M90="$(module_of 090-sub-reflog)"
+run test -f "$M90/logs/refs/stash"
+assert_eq 0 "$STATUS" "fixture: the stash reflog exists"
+chmod 000 "$M90/logs/refs/stash"
+run bash "$CLEAN2" --force 090-sub-reflog
+assert_eq 1 "$STATUS" "refused"
+assert_contains "$OUTPUT" "cannot read $M90/logs/refs/stash" "names the unreadable reflog"
+run test -d "$PROJ2/.worktrees/090-sub-reflog"
+assert_eq 0 "$STATUS" "worktree kept"
+run test ! -e "$(mutex_of 090-sub-reflog)"
+assert_eq 0 "$STATUS" "mutex released"
+chmod 600 "$M90/logs/refs/stash"
+run git -C "$S90" cat-file -e "$old90^{commit}"
+assert_eq 0 "$STATUS" "the older stash is recoverable once readable"
+run bash "$CLEAN2" --force 090-sub-reflog
+assert_contains "$OUTPUT" "holds commit $old90" "readable again, the older stash itself refuses"
+git -C "$PROJ2" worktree remove --force "$PROJ2/.worktrees/090-sub-reflog" >/dev/null 2>&1 || true
+
+it "an unreadable object directory in the submodule copy refuses"
+sub_worktree 091-sub-objdir
+M91="$(module_of 091-sub-objdir)"
+run test -d "$M91/objects/pack"
+assert_eq 0 "$STATUS" "fixture: the copy has a pack directory"
+chmod 000 "$M91/objects/pack"
+run bash "$CLEAN2" 091-sub-objdir
+chmod 755 "$M91/objects/pack"
+assert_eq 1 "$STATUS" "refused"
+assert_contains "$OUTPUT" "cannot read $M91/objects/pack" "names the unreadable directory"
+run test -d "$PROJ2/.worktrees/091-sub-objdir"
+assert_eq 0 "$STATUS" "worktree kept"
+run test ! -e "$(mutex_of 091-sub-objdir)"
+assert_eq 0 "$STATUS" "mutex released"
+chmod 644 "$M91/objects/pack"
+run bash "$CLEAN2" 091-sub-objdir
+chmod 755 "$M91/objects/pack" 2>/dev/null || true
+assert_eq 1 "$STATUS" "a directory it can read but not search refuses too"
+assert_contains "$OUTPUT" "cannot read" "says so"
+run bash "$CLEAN2" 091-sub-objdir
+assert_eq 0 "$STATUS" "readable again, the copy holds nothing of its own and is removed"
+
+it "an unreadable loose commit held only through the gitlink refuses, even with --force"
+sub_worktree 092-sub-object
+c92="$(sub_commit 092-sub-object)"
+S92="$PROJ2/.worktrees/092-sub-object/vendor/sub"
+M92="$(module_of 092-sub-object)"
+# The copy's HEAD moves back to the pushed commit and its reflogs go, so only the gitlink in the
+# superproject branch still names the commit.
+git -C "$S92" checkout -q --detach HEAD~1 >/dev/null 2>&1
+git --git-dir="$M92" reflog expire --expire=now --all >/dev/null 2>&1
+O92="$M92/objects/$(printf '%s' "$c92" | cut -c1-2)/$(printf '%s' "$c92" | cut -c3-)"
+run test -f "$O92"
+assert_eq 0 "$STATUS" "fixture: the commit is a loose object in the copy"
+if nowhere_else "$c92"; then _ok "fixture: the commit exists only in the worktree"; else _no "fixture: the commit exists only in the worktree"; fi
+chmod 000 "$O92"
+run bash "$CLEAN2" --force 092-sub-object
+assert_eq 1 "$STATUS" "refused"
+assert_contains "$OUTPUT" "cannot read $O92" "names the unreadable object"
+run test -d "$PROJ2/.worktrees/092-sub-object"
+assert_eq 0 "$STATUS" "worktree kept"
+run test ! -e "$(mutex_of 092-sub-object)"
+assert_eq 0 "$STATUS" "mutex released"
+chmod 444 "$O92"
+run git --git-dir="$M92" cat-file -e "$c92^{commit}"
+assert_eq 0 "$STATUS" "the commit is recoverable once readable"
+run bash "$CLEAN2" --force 092-sub-object
+assert_eq 1 "$STATUS" "readable again, the gitlink commit itself refuses"
+assert_contains "$OUTPUT" "holds commit $c92" "names it"
+git -C "$PROJ2" worktree remove --force "$PROJ2/.worktrees/092-sub-object" >/dev/null 2>&1 || true
+
+it "a file that becomes unreadable before the check under the mutex refuses and releases it"
+# The first probe passes; the second, under the mutex, finds the HEAD reflog unreadable.
+SHIM7="$(mktemp -d)"; track_tmp "$SHIM7"
+REAL_FIND="$(command -v find)"
+cat > "$SHIM7/find" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = -L ]; then
+    n="\$(cat "$SHIM7/count" 2>/dev/null || echo 0)"; n=\$((n + 1)); echo "\$n" > "$SHIM7/count"
+    [ "\$n" -ne 2 ] || chmod 000 "\$DENY"
+fi
+exec "$REAL_FIND" "\$@"
+EOF
+chmod +x "$SHIM7/find"
+sub_worktree 093-sub-late
+M93="$(module_of 093-sub-late)"
+run test -f "$M93/logs/HEAD"
+assert_eq 0 "$STATUS" "fixture: the copy has a HEAD reflog"
+run env PATH="$SHIM7:$PATH" DENY="$M93/logs/HEAD" bash "$CLEAN2" 093-sub-late
+assert_eq 1 "$STATUS" "refused"
+assert_contains "$OUTPUT" "cannot read $M93/logs/HEAD" "names the file"
+assert_eq 2 "$(cat "$SHIM7/count")" "the second probe ran under the mutex"
+run test -d "$PROJ2/.worktrees/093-sub-late"
+assert_eq 0 "$STATUS" "worktree kept"
+run test ! -e "$(mutex_of 093-sub-late)"
+assert_eq 0 "$STATUS" "mutex released"
+chmod 644 "$M93/logs/HEAD"
+run bash "$CLEAN2" 093-sub-late
+assert_eq 0 "$STATUS" "readable again, it is removed"
+
+fi
+
 it "two overlapping runs: the second is refused while the first holds the mutex, and the first removes"
 SHIM6="$(mktemp -d)"; track_tmp "$SHIM6"
 cat > "$SHIM6/git" <<EOF

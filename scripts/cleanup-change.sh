@@ -390,11 +390,40 @@ EOF
     done < "$2"
     return 0
 }
+# Git reads around a file it cannot open: `log -g` lists nothing and `cat-file --batch-check` says
+# "missing", both with exit 0. So before git looks, every path under the submodule copies must be
+# a directory this run can read and search or a regular file it can open for reading. Sets
+# UNREADABLE to the first path that is not and returns 2; a traversal that fails returns 2 too.
+UNREADABLE=""
+modules_readable() { # modules dir
+    local list p state=0
+    list="$(mktemp 2>/dev/null)" || return 2
+    # A failed traversal refuses whatever it listed; what it listed still names the culprit.
+    find -L "$1" -print0 > "$list" 2>/dev/null || state=2
+    while IFS= read -r -d '' p; do
+        if [ -d "$p" ]; then
+            [ -r "$p" ] && [ -x "$p" ] && continue
+        elif [ -f "$p" ]; then
+            [ -r "$p" ] && true 2>/dev/null < "$p" && continue
+        fi
+        UNREADABLE="$p"; state=2
+        break
+    done < "$list"
+    rm -f "$list"
+    return "$state"
+}
 submodule_commits_held() {
     local admin list state=0
-    UNSAFE_MODULE=""; UNSAFE_COMMIT=""
+    UNSAFE_MODULE=""; UNSAFE_COMMIT=""; UNREADABLE=""
     admin="$(git -C "$WT" rev-parse --absolute-git-dir 2>/dev/null)" || return 2
-    [ -d "$admin/modules" ] || return 0
+    # A modules entry this run cannot see, or one that is not a directory, is not an absent one.
+    { [ -r "$admin" ] && [ -x "$admin" ]; } || { UNREADABLE="$admin"; return 2; }
+    if [ ! -e "$admin/modules" ]; then
+        [ -L "$admin/modules" ] && { UNREADABLE="$admin/modules"; return 2; }
+        return 0
+    fi
+    [ -d "$admin/modules" ] || { UNREADABLE="$admin/modules"; return 2; }
+    modules_readable "$admin/modules" || return 2
     list="$(mktemp 2>/dev/null)" || return 2
     if find "$admin/modules" -type f -name HEAD -print0 > "$list" 2>/dev/null; then
         scan_modules "$admin/modules" "$list" || state=$?
@@ -412,7 +441,12 @@ check_submodule_commits() {
         0) return 0 ;;
         1) refuse_with "unpushed submodule commit $UNSAFE_COMMIT in $UNSAFE_MODULE" \
             "Refusing to remove $WT: its copy of submodule $UNSAFE_MODULE holds commit $UNSAFE_COMMIT, which no remote-tracking ref there and no ref in the main checkout's copy of that submodule contains, so removing the worktree would delete it. Push it from the submodule (or fetch it into the main checkout's submodule), then rerun." ;;
-        *) refuse_git "git could not list the commits in the worktree's submodules" ;;
+        *) if [ -n "$UNREADABLE" ]; then
+               refuse_with "cannot read $UNREADABLE" \
+                   "Refusing to remove $WT: this run cannot read $UNREADABLE, so it cannot tell whether the worktree's copy of a submodule holds commits that exist nowhere else, and git would not say. Restore read access (and search access for a directory), then rerun."
+           else
+               refuse_git "git could not list the commits in the worktree's submodules"
+           fi ;;
     esac
     return 1
 }

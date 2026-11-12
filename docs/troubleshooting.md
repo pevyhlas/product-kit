@@ -33,6 +33,7 @@
 | Finished change worktree lingers | From the main checkout, run `.prdkit/scripts/bash/cleanup-change.sh <change-id>`, or `cleanup-change.sh --closed` for every closed change's worktree (needs `origin/HEAD`: `git remote set-head origin --auto`) |
 | `cleanup-change.sh` says git refused the removal | The message carries git's reason, such as a locked worktree (`git worktree unlock <path>`); uncommitted changes are reported as such. Submodules alone never block it |
 | `cleanup-change.sh` refuses an unpushed submodule commit | The worktree's own copy of that submodule holds a commit nothing else has, and removing the worktree would delete it, `--force` included. Push it from the submodule, or fetch it into the main checkout's copy, then rerun |
+| `cleanup-change.sh` refuses: cannot read a path in the worktree's git directory | A file or directory in the worktree's copy of a submodule is unreadable, and git would silently skip what it holds. Restore read access (and search access for a directory), then rerun |
 | `cleanup-change.sh --closed` leaves a closed change's worktree | It removes only the layout `new-change.sh` creates, `.worktrees/<id>` on branch `<id>`. Remove any other worktree by id |
 | Agent context file huge, slow costly turns | Keep `CLAUDE.md`/`AGENTS.md` to orientation and pointers within `context-budget-bytes` |
 | Old `/prdkit-*` commands or helpers still installed | Run `init.sh --upgrade`; it removes kit files no longer shipped (`--check` lists them as RETIRED) |
