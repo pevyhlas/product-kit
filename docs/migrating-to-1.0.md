@@ -112,11 +112,8 @@ until then.
 | `update-agent-context.sh` | removed; context files are hand-kept orientation, and doctor reports their size |
 | `artifact-lib.sh`, `evidence-lib.sh`, `parts-lib.sh`, `review-scope-lib.sh`, `status-lib.sh` (sourced libraries) | `spec-lib.sh`, internal; a project script reads `doctor.sh --json` or `status.sh --json` instead |
 | `record-analysis.sh` (removed in 0.17) | none; an analysis is part of the change record or its review report |
+| `ledger-emit.sh`, `ledger-spool-adapter.sh`, `json-lib.sh`, `retrospective.sh` (removed in 2.0) | none; remove the call, and delete `.prdkit/memory/task-ledger.md` if you edited it |
 | `status.sh --target/--feature/--overview`, linked repositories | `status.sh [--json]`, one generated view |
-| Retrospectives under the feature folder | `.prdkit/cache/retrospectives/<change-id>.md` |
-
-The execution ledger keeps `prdkit.ledger.v1`; the feature id is now the change id. 0.x event
-types stay schema-valid in existing spools, and 1.0 emits the subset listed in the
-[task-ledger template](../templates/task-ledger-template.md).
+| Retrospectives under the feature folder | removed in 2.0 with the execution ledger; nothing replaces them |
 
 To undo an upgrade before the cutover, revert its commit; `specs/` was not modified.

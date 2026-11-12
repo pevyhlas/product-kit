@@ -62,8 +62,8 @@ git diff --check 4b825dc642cb6eb9a060e54bf8d69288fbee4904 HEAD
 find scripts tests -name '*.sh' -print0 | xargs -0 shellcheck --exclude=SC1091
 ```
 
-The suite needs Bash, Git, standard utilities, and jq 1.6+ for enrichment tests; core helpers do
-not need jq. CI lints with ShellCheck 0.11.0, so use that version locally. Helpers that run on
+The suite needs Bash, Git, standard utilities, and jq 1.6+ for the tests; core helpers do not
+need jq. CI lints with ShellCheck 0.11.0, so use that version locally. Helpers that run on
 macOS stay portable to its `/bin/bash` 3.2 and BSD userland. Run relevant real-agent scenarios
 locally for behavioral changes, recording driver/version and limitations. Mock-driver success
 only establishes evaluation plumbing. See [test docs](tests/README.md).

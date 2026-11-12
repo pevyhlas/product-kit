@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Product-Kit test runner. Discovers and runs every tests/test_*.sh file in its
-# own process, aggregates results. Bash + coreutils + git; enrichment tests use jq.
+# own process, aggregates results. Bash + coreutils + git; tests use jq.
 #
 # Usage: bash tests/run.sh [-v]
 

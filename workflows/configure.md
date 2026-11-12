@@ -9,4 +9,4 @@ on open changes first; a configuration edit never grants itself authority. `agen
 capabilities to agents or humans. Optional neutral definitions
 (`.prdkit/templates/agent-definition-template.md`) name a tier, never a model; render projections
 with `.prdkit/scripts/bash/render-agents.sh` and `--check`, never by hand. `config.md` holds
-optional settings and `task-ledger.md` the event ledger. Run doctor afterward.
+optional settings. Run doctor afterward.

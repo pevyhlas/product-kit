@@ -1,6 +1,10 @@
 <!--
 SYNC IMPACT REPORT
-- Version change: 1.1.4 → 1.1.5 (2026-10-31)
+- Version change: 1.1.5 → 1.2.0 (2026-11-12)
+- Principle III loses its retrospective-enrichment jq exception: the kit removes the execution
+  ledger and the retrospective. The gh and jq exception for GitHub report checks is unchanged;
+  the full test suite still requires jq.
+- Prior (1.1.4 → 1.1.5, 2026-10-31):
 - Owner-directed release versioning: small backward-compatible additions can use a patch;
   reserve minor bumps for larger compatible changes (issue #63).
 - Prior (1.1.3 → 1.1.4, 2026-10-30):
@@ -19,9 +23,9 @@ SYNC IMPACT REPORT
 
 # Product-Kit Constitution
 
-**Version**: 1.1.5
+**Version**: 1.2.0
 **Ratified**: 2026-06-02
-**Last Amended**: 2026-10-31
+**Last Amended**: 2026-11-12
 
 > This is Product-Kit's *own* constitution — the principles governing the toolkit itself.
 > It is meta: Product-Kit ships a generic `templates/constitution-template.md` for projects
@@ -46,7 +50,7 @@ public product.
 <!-- PRDKIT-MANAGED:TECH-STACK:BEGIN -->
 - **Languages**: Bash (scripts), Markdown (commands, templates, docs)
 - **Frameworks/Runtimes**: none — POSIX/bash only, no npm/pip/build step
-- **Optional tools**: jq 1.6+ for retrospective enrichment; gh and jq for opt-in GitHub review-report consistency
+- **Optional tools**: gh and jq for opt-in GitHub review-report consistency
 - **Storage**: files on disk
 - **Platform/Deploy**: consumed as a git submodule (`.product-kit`) on macOS and Linux
 <!-- PRDKIT-MANAGED:TECH-STACK:END -->
@@ -58,7 +62,7 @@ public product.
 # (none — Product-Kit is not compiled)
 
 # Tests
-bash tests/run.sh        # bash test runner; jq 1.6+ for enrichment coverage
+bash tests/run.sh        # bash test runner; requires jq 1.6+
 ```
 
 ## Test Personas
@@ -81,14 +85,13 @@ Product-Kit. Examples MUST use neutral, generic subjects.
 
 ### Principle III — Minimal dependencies and portability
 
-Scripts MUST run with bash + coreutils + git, identically on macOS and Linux, with bounded
-optional-tool exceptions: retrospective enrichment uses jq 1.6+ as its standard JSON parser
-(2026-09-12), and explicitly requested GitHub review-report consistency uses gh and jq
-(2026-10-30). Ledger-only reports and offline review checks require no jq or network.
-Missing optional tools MUST fail clearly when their mode is requested; enrichment failures
-MUST NOT replace a report, and unavailable report checks MUST NOT claim verified links.
+Scripts MUST run with bash + coreutils + git, identically on macOS and Linux, with one bounded
+optional-tool exception: explicitly requested GitHub review-report consistency uses gh and jq
+(2026-10-30). Offline review checks require no jq or network.
+Missing optional tools MUST fail clearly when their mode is requested, and unavailable report
+checks MUST NOT claim verified links.
 No runtime package manager or compile step; the generator never installs dependencies.
-The full test suite requires jq and MUST cover the no-jq ledger-only path.
+The full test suite requires jq.
 
 ### Principle IV — Project-owned customization
 

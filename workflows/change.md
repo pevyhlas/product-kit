@@ -67,9 +67,6 @@ edited in the same PR. Sections of one file; skip a section that has nothing rea
   and parts get no note at all.
 - Acceptance links its evidence. The cache is local to one machine: link a CI run or PR comment
   for evidence anyone else needs. A green PR does not pass an acceptance item.
-- Emit the ledger events `.prdkit/memory/task-ledger.md` lists, at their boundaries, validating
-  the declared assignment as it says; retain session/parent IDs and reviewed range in payload
-  when available. A stale session tag is not event-time provenance.
 - At verified increments and before a stop, commit only intended work, publish when authorized (a
   draft PR while acceptance is open) and run `.prdkit/scripts/bash/check-delivery.sh --json`
   before claiming a remote checkpoint: a matching SHA proves availability, not acceptance. Without
