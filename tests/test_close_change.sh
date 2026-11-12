@@ -72,6 +72,38 @@ git add specs/log; git commit -qm "another entry after review" >/dev/null
 run bash "$B/check-review.sh" 001-greet
 assert_eq 1 "$STATUS" "only the change's own entry is exempt from review coverage: $OUTPUT"
 git reset -q --hard HEAD~1
+git rm -q specs/log/001-greet.md; mkdir -p specs/log/001-greet.md
+printf 'echo unreviewed\n' > specs/log/001-greet.md/unreviewed.sh
+printf 'x\n' > "specs/log/001-greet.md/- 2026-11-09 001-greet: a name, not a line"
+git add -A specs/log; git commit -qm "a directory where the entry goes" >/dev/null
+run bash "$B/check-review.sh" 001-greet
+assert_eq 1 "$STATUS" "a directory at the entry's path cannot carry unreviewed files past the gate: $OUTPUT"
+assert_contains "$OUTPUT" "specs/log/001-greet.md at $(git rev-parse HEAD) is not a regular file" "names the path"
+assert_contains "$OUTPUT" "has no '- <date> 001-greet: <what changed>' entry" "a file name is not a log line"
+git reset -q --hard HEAD~1
+rm specs/log/001-greet.md; ln -s ../../src/001-greet.txt specs/log/001-greet.md
+git add -A specs/log; git commit -qm "a symlink where the entry goes" >/dev/null
+run bash "$B/check-review.sh" 001-greet
+assert_eq 1 "$STATUS" "a symlink is no entry"
+assert_contains "$OUTPUT" "is not a regular file" "says why"
+git reset -q --hard HEAD~1
+printf -- '- 2026-11-09 001-greet: warmer greeting — R-01 — #1\nand a second line\n' > specs/log/001-greet.md
+git commit -qam "a second line in the entry" >/dev/null
+run bash "$B/check-review.sh" 001-greet
+assert_eq 1 "$STATUS" "the entry is one line"
+assert_contains "$OUTPUT" "specs/log/001-greet.md at $(git rev-parse HEAD) must hold one line" "says why"
+git reset -q --hard HEAD~1
+# A Git without GIT_NO_LAZY_FETCH would fetch a missing object in a partial clone: the log stays unread.
+FAKE="$(mktemp -d)"; track_tmp "$FAKE"
+# shellcheck disable=SC2016  # the stub's own $1 and $@, expanded when it runs
+printf '#!/bin/sh\nif [ "$1" = version ]; then echo "git version 2.39.3"; exit 0; fi\nexec "%s" "$@"\n' "$(command -v git)" > "$FAKE/git"
+chmod +x "$FAKE/git"; git config remote.origin.promisor true
+run env PATH="$FAKE:$PATH" bash "$B/check-review.sh" 001-greet
+git config --unset remote.origin.promisor
+assert_eq 1 "$STATUS" "an older Git in a partial clone fails closed"
+assert_contains "$OUTPUT" "cannot be read without fetching from the promisor remote" "says why"
+run bash "$B/check-review.sh" 001-greet
+assert_eq 0 "$STATUS" "the closed head passes again: $OUTPUT"
 
 it "a newest-first log is left as it is; the entry is its own file"
 git checkout -q "$DEFAULT"; mkdir -p specs

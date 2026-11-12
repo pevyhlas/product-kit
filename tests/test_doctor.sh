@@ -339,6 +339,16 @@ done
 printf -- '- 2026-10-17 003-x: done\n' > specs/log/003-x.md; printf 'x\n' > specs/log/notes.txt
 run bash "$DOCTOR"
 assert_contains "$OUTPUT" "Malformed log entry specs/log/notes.txt" "only change entries belong in specs/log/"
+rm specs/log/notes.txt; printf 'x\n' > specs/log/.notes
+run bash "$DOCTOR"
+assert_contains "$OUTPUT" "Malformed log entry specs/log/.notes" "a hidden file is seen too"
+rm specs/log/.notes; mv specs/log/003-x.md specs/log.entry; ln -s ../log.entry specs/log/003-x.md
+run bash "$DOCTOR"
+assert_contains "$OUTPUT" "Malformed log entry specs/log/003-x.md" "a symlink is no entry"
+assert_contains "$OUTPUT" "Closed without a log entry: 003-x" "and closes nothing"
+rm specs/log/003-x.md specs/log.entry; ln -s missing.md specs/log/003-x.md
+run bash "$DOCTOR"
+assert_contains "$OUTPUT" "Malformed log entry specs/log/003-x.md" "a dangling symlink is seen too"
 rm -rf specs/log
 # shellcheck disable=SC2016 # backticks are Markdown code spans, not command substitution
 printf '# Demo — archive\n\n**Last 0.x feature**: none\n\n**Log condensed through**: 003; those entries: `git show abc1234:specs/log.md`.\n' > specs/archive.md

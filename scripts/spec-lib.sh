@@ -214,20 +214,23 @@ spec_log_entries() { # root
     spec_log_files "$1"
     return 0
 }
-spec_log_files() { # root -> the entry files' lines only
+spec_log_files() { # root -> the entry files' lines only; a symlink is never an entry
     local file
-    for file in "$1"/specs/log/[0-9]*.md; do [ ! -f "$file" ] || awk 1 "$file"; done
+    for file in "$1"/specs/log/[0-9]*.md; do [ ! -f "$file" ] || [ -L "$file" ] || awk 1 "$file"; done
     return 0
 }
-# The same at a commit, for a gate that reads a ref and never the checkout. No lazy fetch in a
-# partial clone; a missing object reads as nothing.
+# The same at a commit, for a gate that reads a ref and never the checkout. Only regular files
+# count (a blob of mode 100644 or 100755): a tree, symlink or submodule at specs/log.md or
+# specs/log/<id>.md is no entry. Fails, reading nothing, where an object read could fetch from a
+# promisor remote (spec_objects_local); a missing object reads as nothing.
 spec_log_entries_at() { # root rev
-    local path
-    GIT_NO_LAZY_FETCH=1 git -C "$1" show "$2:specs/log.md" 2>/dev/null | awk 1 || true
-    { GIT_NO_LAZY_FETCH=1 git -C "$1" ls-tree --name-only "$2" -- specs/log/ 2>/dev/null || true; } |
-        while IFS= read -r path; do
-            case "${path#specs/log/}" in [0-9]*.md) ;; *) continue ;; esac
-            GIT_NO_LAZY_FETCH=1 git -C "$1" show "$2:$path" 2>/dev/null | awk 1 || true
+    local mode type sha path
+    spec_objects_local "$1" || return 1
+    { GIT_NO_LAZY_FETCH=1 git -C "$1" ls-tree "$2" -- specs/log.md specs/log/ 2>/dev/null || true; } |
+        while read -r mode type sha path; do
+            case "$mode $type" in "100644 blob"|"100755 blob") ;; *) continue ;; esac
+            case "$path" in specs/log.md|specs/log/[0-9]*.md) ;; *) continue ;; esac
+            GIT_NO_LAZY_FETCH=1 git -C "$1" cat-file blob "$sha" 2>/dev/null | awk 1 || true
         done
     return 0
 }

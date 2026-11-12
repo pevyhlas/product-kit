@@ -20,7 +20,12 @@ change by change.
   `cleanup-change.sh --closed`, `doctor.sh`, `new-change.sh` numbering and `status.sh`, whose
   compaction count includes the entry files. Lines already in `specs/log.md` stay valid; nothing
   needs migrating. `check-review.sh` exempts only the change's own entry file from review
-  coverage, beside `specs/log.md` as before.
+  coverage, beside `specs/log.md` as before, and fails when either is not a plain file at the
+  head (a path exclusion also covers everything under a directory of that name, so a directory
+  there could carry unreviewed files) or the entry is not one line for the change. Committed
+  readers take only regular files, and in a partial clone whose Git is older than 2.45 they read
+  nothing rather than fetch: `check-review.sh` then fails closed and `cleanup-change.sh --closed`
+  keeps the worktree.
 - `close-change.sh` refuses a log text over 300 characters (counted as characters, not bytes),
   three reading lines by the spec's budget rule; the kit's own example entries are under 50. The
   refusal says that carried findings and follow-ups go to the parent's row or the spec, and

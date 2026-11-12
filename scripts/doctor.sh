@@ -593,13 +593,13 @@ fi
 
 # --- Closed changes reach the log: a deleted change record needs its log entry ---------------------
 # An entry file holds exactly its own change's one dated line, so folding it at compaction is safe.
-for entry_file in "$root"/specs/log/*; do
-    [ -e "$entry_file" ] || continue
+for entry_file in "$root"/specs/log/* "$root"/specs/log/.[!.]* "$root"/specs/log/..?*; do
+    [ -e "$entry_file" ] || [ -L "$entry_file" ] || continue
     entry_id="${entry_file##*/}"; entry_id="${entry_id%.md}"
-    if [ "${entry_file##*/}" = "$entry_id.md" ] && is_change_id "$entry_id" && [ -f "$entry_file" ] &&
+    if [ "${entry_file##*/}" = "$entry_id.md" ] && is_change_id "$entry_id" && [ -f "$entry_file" ] && [ ! -L "$entry_file" ] &&
         [ "$(awk 'END { print NR }' "$entry_file")" = 1 ] &&
         grep -q "^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] $entry_id: ." "$entry_file"; then continue; fi
-    findings+=("Malformed log entry specs/log/${entry_file##*/}: it holds one line, '- <date> <id>: <what changed>', for the change its name gives (close-change.sh writes it)")
+    findings+=("Malformed log entry specs/log/${entry_file##*/}: a plain file <id>.md holding one line, '- <date> <id>: <what changed>', for the change its name gives (close-change.sh writes it)")
 done
 if git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     unlogged=""; through="$(spec_archive_log_through "$root")"; entries="$(spec_log_entries "$root")"

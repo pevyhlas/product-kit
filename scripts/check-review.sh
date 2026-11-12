@@ -175,10 +175,26 @@ if [ -z "$record_at" ]; then
     problems+=("No change record $path at $head or in its history$hint")
 else
     # Closing a change deletes its record; the same history must add its log entry.
-    log="$(spec_log_entries_at "$root" "$head")"
-    if [ "$record_at" != "$head" ] && ! grep -q "^- [0-9-]* $id:" <<< "$log"; then
+    if [ "$record_at" = "$head" ]; then :
+    elif ! log="$(spec_log_entries_at "$root" "$head")"; then
+        problems+=("$id is closed (its record is deleted), but the log at $head cannot be read without fetching from the promisor remote (a partial clone with Git older than 2.45): fetch the branch's blobs or use Git 2.45+")
+    elif ! grep -q "^- [0-9-]* $id:" <<< "$log"; then
         problems+=("$id is closed (its record is deleted) but the log at $head has no '- <date> $id: <what changed>' entry (specs/log/$id.md, as close-change.sh writes it, or a line in specs/log.md)")
     fi
+    # The log paths leave review coverage, so each must be a plain file at the head: a pathspec
+    # also excludes whatever lies under a directory of that name. The entry is its own one line.
+    while read -r log_mode log_type log_sha log_path; do
+        case "$log_mode $log_type" in
+            "100644 blob"|"100755 blob")
+                { [ "$log_path" != specs/log.md ] && spec_objects_local "$root"; } || continue
+                entry_text="$(GIT_NO_LAZY_FETCH=1 git -C "$root" cat-file blob "$log_sha" 2>/dev/null)" || entry_text=""
+                if [ "$(printf '%s\n' "$entry_text" | awk 'END { print NR }')" != 1 ] ||
+                    ! grep -q "^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] $id: ." <<< "$entry_text"; then
+                    problems+=("$log_path at $head must hold one line, '- <date> $id: <what changed>'")
+                fi ;;
+            *) problems+=("$log_path at $head is not a regular file; the log and the change's entry are plain files") ;;
+        esac
+    done < <(GIT_NO_LAZY_FETCH=1 git -C "$root" ls-tree "$head" -- specs/log.md "specs/log/$id.md" 2>/dev/null)
     record="$(git -C "$root" show "$record_at:$path")"
     tier="$(printf '%s\n' "$record" | sed -n 's/.*\*\*Tier\*\*:[[:space:]]*\(T[0-3]\)\([^0-9].*\)\{0,1\}$/\1/p' | head -n 1)"
     rigor="$(git -C "$root" show "$head:.prdkit/memory/constitution.md" 2>/dev/null |
