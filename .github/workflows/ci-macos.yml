@@ -29,6 +29,7 @@ jobs:
           /bin/bash tests/test_init.sh
           /bin/bash tests/test_upgrade_1_0.sh
           /bin/bash tests/test_upgrade_2_0.sh
+          /bin/bash tests/test_optional_subsystems.sh
           /bin/bash tests/test_upgrade_recovery.sh
           /bin/bash tests/test_new_change.sh
           /bin/bash tests/test_record_only_change.sh

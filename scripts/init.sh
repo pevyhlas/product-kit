@@ -22,6 +22,12 @@
 #                   unmodified templates/memory, add new files. Consumer edits to
 #                   templates/memory are preserved and listed; edits to kit-owned
 #                   commands/scripts are overwritten (and called out in the output).
+#   --with NAME     Also install an optional subsystem (agent-tiers: render-agents.sh and the
+#                   neutral agent-definition template). The manifest records the choice and
+#                   later runs keep it; a project that uses agent tiers (.prdkit/agents/*.md
+#                   or a vendored .prdkit/agent-library/) keeps them without the flag
+#   --without NAME  Stop installing an optional subsystem; --upgrade removes its files.
+#                   Refused while the project still uses it
 #   --check         Read-only drift report against the install manifest (no changes)
 #   --force         Overwrite project-owned templates/memory from Product-Kit (use with care)
 #   --target DIR    Target project root (default: current git root, else cwd)
@@ -54,6 +60,8 @@ CHECK=false
 FORCE=false
 TARGET=""
 HARNESS_RAW=""
+WITH_RAW=""
+WITHOUT_RAW=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -66,6 +74,12 @@ while [ $# -gt 0 ]; do
             shift
             [ $# -gt 0 ] || { echo "Error: --harness requires a value (claude|opencode|codex|agents|all)" >&2; exit 2; }
             HARNESS_RAW="$HARNESS_RAW,$1"
+            ;;
+        --with|--without)
+            opt_flag="$1"
+            shift
+            [ $# -gt 0 ] || { echo "Error: $opt_flag requires a value (agent-tiers)" >&2; exit 2; }
+            if [ "$opt_flag" = --with ]; then WITH_RAW="$WITH_RAW $1"; else WITHOUT_RAW="$WITHOUT_RAW $1"; fi
             ;;
         --target)
             shift
@@ -189,6 +203,66 @@ fi
 # Codex has no per-project command mechanism — its install is the AGENTS.md section.
 has_harness codex && add_harness agents
 
+# --- Resolve optional subsystems ----------------------------------------------
+# The core install is the same for every project; an optional subsystem installs only when the
+# consumer asks for it (--with), an earlier install recorded it (`options:` in the manifest), or
+# the project already uses it. 2.0 has one: agent-tiers, the neutral agent definitions and
+# render-agents.sh. agent-tiers-lib.sh stays core, because doctor and the adoption gate check the
+# tier map in agents.md. A manifest written before 2.0 has no `options:` line; its install keeps
+# agent tiers only when the project uses them.
+KNOWN_OPTIONS="agent-tiers"
+OPTIONS=""
+has_option() {
+    case " $OPTIONS " in *" $1 "*) return 0 ;; *) return 1 ;; esac
+}
+option_used() { # name -> 0 when the project's files already depend on the subsystem
+    local def
+    case "$1" in
+        agent-tiers)
+            [ -d "$TARGET/.prdkit/agent-library" ] && return 0
+            for def in "$TARGET"/.prdkit/agents/*.md; do [ -f "$def" ] && return 0; done
+            return 1 ;;
+    esac
+    return 1
+}
+# Kit files that belong to an optional subsystem, by kit-relative path: 0 when the file is core
+# or its subsystem is selected for this install.
+kit_file_wanted() {
+    case "$1" in
+        scripts/render-agents.sh|templates/agent-definition-template.md) has_option agent-tiers ;;
+        *) return 0 ;;
+    esac
+}
+RECORDED_OPTIONS=""
+if [ -f "$MANIFEST" ] && grep -q '^options: ' "$MANIFEST"; then
+    RECORDED_OPTIONS="$(grep '^options: ' "$MANIFEST" | head -n 1)"
+    RECORDED_OPTIONS="${RECORDED_OPTIONS#options: }"
+    [ "$RECORDED_OPTIONS" != none ] || RECORDED_OPTIONS=""
+fi
+for opt in $WITH_RAW $WITHOUT_RAW; do
+    case " $KNOWN_OPTIONS " in *" $opt "*) ;; *)
+        echo "Error: unknown optional subsystem '$opt' (known: $KNOWN_OPTIONS)." >&2; exit 2 ;;
+    esac
+done
+for opt in $KNOWN_OPTIONS; do
+    with=false; without=false
+    case " $WITH_RAW " in *" $opt "*) with=true ;; esac
+    case " $WITHOUT_RAW " in *" $opt "*) without=true ;; esac
+    if $with && $without; then
+        echo "Error: --with $opt and --without $opt contradict each other." >&2; exit 2
+    fi
+    if $without; then
+        if option_used "$opt"; then
+            echo "Error: --without $opt would remove files this project uses (.prdkit/agents/*.md or .prdkit/agent-library/)." >&2
+            echo "       Remove those first, or keep the subsystem." >&2
+            exit 2
+        fi
+        continue
+    fi
+    case " $RECORDED_OPTIONS " in *" $opt "*) with=true ;; esac
+    if $with || option_used "$opt"; then OPTIONS="${OPTIONS:+$OPTIONS }$opt"; fi
+done
+
 # The previous install's command mode wins unless --copy/--symlink is passed
 # explicitly, so an upgrade never silently flips an install between copies and symlinks.
 # Pre-0.10 manifests recorded no mode; infer it from the installed files (any regular
@@ -246,10 +320,12 @@ list_kit_files() {
         [ -e "$src" ] || continue
         base="$(basename "$src")"
         [ "$base" = "init.sh" ] && continue   # the bootstrap itself is never installed
+        kit_file_wanted "scripts/$base" || continue
         printf '%s\t%s\n' "$src" ".prdkit/scripts/bash/$base"
     done
     for src in "$PK_ROOT"/templates/*.md; do
         [ -e "$src" ] || continue
+        kit_file_wanted "templates/$(basename "$src")" || continue
         printf '%s\t%s\n' "$src" ".prdkit/templates/$(basename "$src")"
     done
     # Memory files are seeded from these templates.
@@ -380,8 +456,8 @@ list_retired_commands() {
 }
 
 # Kit-owned scripts/workflows, templates and RETIRED_MEMORY files that the previous manifest
-# recorded but the current kit no longer ships (for example a retired helper, or the memory file
-# of a removed subsystem). Emits "<rel>\t<remove|keep>": kit-owned files, and templates and
+# recorded but the current kit no longer ships or installs (for example a retired helper, the
+# memory file of a removed subsystem, or a file of an optional subsystem not selected). Emits "<rel>\t<remove|keep>": kit-owned files, and templates and
 # memory files still matching their recorded hash, are removed; an edited template or memory
 # file is project-owned content and is kept with a warning, as is a symlinked one. A manifest
 # path outside the installed layout is ignored with a warning, never touched.
@@ -389,7 +465,7 @@ list_retired_kit_files() {
     local line rel src
     [ -f "$MANIFEST" ] || return 0
     while IFS= read -r line; do
-        case "$line" in version:*|harnesses:*|mode:*|agents-section:*|'') continue ;; esac
+        case "$line" in version:*|harnesses:*|mode:*|options:*|agents-section:*|'') continue ;; esac
         rel="${line#*  }"
         if [[ $rel =~ $MEMORY_FILE_RE ]]; then
             case " $RETIRED_MEMORY " in *" ${rel##*/} "*) src="" ;; *) continue ;; esac
@@ -404,7 +480,7 @@ list_retired_kit_files() {
                 *) src="$PK_ROOT/templates/${rel##*/}" ;;
             esac
         fi
-        { { [ -z "$src" ] || [ ! -e "$src" ]; } && [ -f "$TARGET/$rel" ]; } || continue
+        { { [ -z "$src" ] || [ ! -e "$src" ] || ! kit_file_wanted "${src#"$PK_ROOT"/}"; } && [ -f "$TARGET/$rel" ]; } || continue
         case "$rel" in
             .prdkit/templates/*|.prdkit/memory/*)
                 if [ ! -L "$TARGET/$rel" ] && [ "$(hash_file "$TARGET/$rel")" = "${line%%  *}" ]; then printf '%s\tremove\n' "$rel"
@@ -427,11 +503,13 @@ check-prerequisites.sh check-signoff.sh cleanup-feature.sh create-new-feature.sh
 evidence-fingerprint.sh evidence-lib.sh parts-lib.sh record-analysis.sh resolve-context.sh
 review-scope-lib.sh review-scope.sh setup-plan.sh status-lib.sh update-agent-context.sh
 ledger-emit.sh ledger-spool-adapter.sh json-lib.sh retrospective.sh'
-kit_file_retired() { # installed or kit path -> 0 when the kit does not ship it and it is the kit's
+kit_file_retired() { # installed or kit path -> 0 when the kit does not ship or install it and it is the kit's
     local kit="${1#.prdkit/}"
     kit="${kit#.product-kit/}"; kit="${kit/#scripts\/bash\//scripts/}"
-    [ -e "$PK_ROOT/$kit" ] && return 1
-    case "$1" in .product-kit/*) return 0 ;; esac
+    case "$1" in
+        .product-kit/*) [ -e "$PK_ROOT/$kit" ] && return 1; return 0 ;;
+    esac
+    [ -e "$PK_ROOT/$kit" ] && kit_file_wanted "$kit" && return 1
     [ ! -e "$TARGET/$1" ] && return 0
     [ -f "$MANIFEST" ] && awk -v rel="$1" 'substr($0, index($0, "  ") + 2) == rel { found = 1 } END { exit !found }' "$MANIFEST"
 }
@@ -586,7 +664,7 @@ if $CHECK; then
     fi
     if [ ${#RETIRED_FILES[@]} -gt 0 ]; then
         drift=1
-        echo "RETIRED — installed kit files the kit no longer ships (--upgrade removes kit-owned and unmodified ones):"
+        echo "RETIRED — installed kit files the kit no longer ships or installs (--upgrade removes kit-owned and unmodified ones):"
         for entry in "${RETIRED_FILES[@]}"; do
             if [ "${entry#*|}" = remove ]; then echo "  ${entry%%|*}"
             else echo "  ${entry%%|*} (edited since install; kept — fold or delete it by hand)"; fi
@@ -596,7 +674,7 @@ if $CHECK; then
     manual=0
     if [ ${#RETIRED_CI[@]} -gt 0 ]; then
         manual=1
-        echo "RETIRED — CI workflows and project files that reference kit files the kit no longer ships"
+        echo "RETIRED — CI workflows and project files that reference kit files the kit no longer ships or installs"
         echo "(--upgrade never edits them; replace or remove each reference, see the kit's docs/migrating-to-1.0.md):"
         for entry in "${RETIRED_CI[@]}"; do echo "  $entry"; done
         echo
@@ -951,11 +1029,15 @@ if [ ${#RETIRED_KEPT[@]} -gt 0 ]; then
     for rel in "${RETIRED_KEPT[@]}"; do echo "    $rel"; done
 fi
 if [ ${#RETIRED_FILES_REMOVED[@]} -gt 0 ]; then
-    echo "✓ Removed ${#RETIRED_FILES_REMOVED[@]} retired kit file(s) no longer shipped:"
+    echo "✓ Removed ${#RETIRED_FILES_REMOVED[@]} retired kit file(s) no longer shipped or installed:"
     for rel in "${RETIRED_FILES_REMOVED[@]}"; do echo "    $rel"; done
+    case " ${RETIRED_FILES_REMOVED[*]} " in *" .prdkit/scripts/bash/render-agents.sh "*)
+        echo "  Agent tiers are optional from 2.0 and this project has no agent definitions; install them"
+        echo "  again with --with agent-tiers." ;;
+    esac
 fi
 if [ ${#RETIRED_FILES_KEPT[@]} -gt 0 ]; then
-    echo "⚠ Kept ${#RETIRED_FILES_KEPT[@]} edited template or memory file(s) the kit no longer ships; fold or delete them by hand:"
+    echo "⚠ Kept ${#RETIRED_FILES_KEPT[@]} edited template or memory file(s) the kit no longer ships or installs; fold or delete them by hand:"
     for rel in "${RETIRED_FILES_KEPT[@]}"; do echo "    $rel"; done
 fi
 if [ ${#KIT_OVERWRITTEN[@]} -gt 0 ]; then
@@ -1001,6 +1083,7 @@ rm -f "$manifest_tmp"
     echo "version: $PK_VERSION"
     echo "harnesses: $HARNESSES"
     echo "mode: $([ "$MODE_COPY" = true ] && echo copy || echo symlink)"
+    echo "options: ${OPTIONS:-none}"
     if has_harness agents; then
         printf 'agents-section: %s\n' "$(render_agents_section | install_hash_stream)"
     fi
@@ -1039,9 +1122,12 @@ esac
 RETIRED_CI_CALLS="$(list_retired_ci_calls)"
 if [ -n "$RETIRED_CI_CALLS" ]; then
     echo
-    echo "⚠ CI workflows or project files reference kit files this kit no longer ships; those calls"
+    echo "⚠ CI workflows or project files reference kit files this kit no longer ships or installs; those calls"
     echo "  now fail. Replace or remove them (the kit's docs/migrating-to-1.0.md lists the replacements):"
     printf '%s\n' "$RETIRED_CI_CALLS" | while IFS=$'\t' read -r rel name; do echo "    $rel: $name"; done
+    has_option agent-tiers || case "$RETIRED_CI_CALLS" in *render-agents.sh*|*agent-definition-template.md*)
+        echo "  render-agents.sh and the agent-definition template install with --with agent-tiers." ;;
+    esac
 fi
 if [ -f "$MEM_DIR/signoff-requirements.md" ] && grep -qE '^[-*][[:space:]]*gated-paths:' "$MEM_DIR/signoff-requirements.md" 2>/dev/null; then
     echo

@@ -85,7 +85,7 @@ install_findings() {
     mode="$(install_manifest_value "$manifest" mode || true)"; mode="${mode:-symlink}"
     case "$mode" in copy|symlink) ;; *) printf 'Invalid manifest install mode: %s\n' "$mode" ;; esac
     while IFS= read -r line; do
-        case "$line" in version:*|harnesses:*|mode:*|agents-section:*|'') continue ;; esac
+        case "$line" in version:*|harnesses:*|mode:*|options:*|agents-section:*|'') continue ;; esac
         hash="${line%%  *}"; path="${line#*  }"
         if ! [[ "$hash" =~ ^[0-9a-f]{64}$ ]]; then printf 'Invalid manifest hash entry: %s\n' "$line"; continue; fi
         case "$path" in
