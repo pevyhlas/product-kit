@@ -79,15 +79,17 @@ verdict, with the commit hashes the review package printed, to the change record
 
 ### Policy from the trusted base
 
-The check never takes its policy from the change or the caller. The base is `origin/HEAD`'s
-target, or a `--base` naming it or one of the `review-integration-branches` in that target's
-committed `.prdkit/memory/config.md`; any other `--base` (a local branch, a raw commit hash, an
-unlisted remote branch) fails, and so does a repository without `origin/HEAD`. At that base's
-current tip (`policy_at` in `--json`) it reads:
+The check never takes its policy from the change or the caller. Its policy snapshot is the
+current tip of `origin/HEAD`'s target, the default branch (`policy_at` in `--json`), whatever
+`--base` says; without `origin/HEAD` the check fails. `--base` only locates the change's start: it
+must be `origin/HEAD`'s target or one of the `review-integration-branches` in its committed
+`.prdkit/memory/config.md`, and any other `--base` (a local branch, a raw commit hash, an unlisted
+remote branch) fails. At the policy snapshot it reads:
 
-- **Rigor** from `.prdkit/memory/constitution.md`. A branch that edits its own Rigor is still
-  checked under the trusted one, with a note; the edit applies once it merges. No single light or
-  full value reads as unknown, which blocks medium findings.
+- **Rigor** from `.prdkit/memory/constitution.md`: exactly one Rigor line whose value is `light`
+  or `full`, alone or followed by a space and a note. Anything else (none, two, `light/full`)
+  fails the check and blocks medium findings. A branch that edits its own Rigor is still checked
+  under the trusted one, with a note; the edit applies once it merges.
 - **The reviewer registry** from `.prdkit/memory/agents.md` (below). A reviewer revoked there no
   longer counts, whatever the branch's merge base said.
 - **`review-t0-paths`** from `.prdkit/memory/config.md`: literal paths, a trailing `/` naming a
@@ -96,11 +98,15 @@ current tip (`policy_at` in `--json`) it reads:
   non-executable file under one of them, and none is under `.prdkit/`, `.product-kit`, another
   change record or the L0/L1 spec. Unset, T0 covers only the record and the log.
 
-The tier is the record's one `**Tier**:` field (a second one, even in a comment, fails). It may
-rise, never fall: it is checked against the highest tier the record names on the trusted base and
-at every commit of the branch since it left the base, so a record-only commit that lowers T3 to T1
-after review fails and the owner's verdict is still required. To land a policy change, merge it
-first in its own pull request, checked under the policy it replaces.
+The tier is the record's one `**Tier**:` field, whose value is exactly one of T0–T3 (`T1/T3`,
+`T1-T3` or a second field, even in a comment, fails). It may rise, never fall. Its floor is the
+highest tier the record names on the default branch, on `--base`, where the change left the base
+and at every commit of the branch since, and T3 when the change edits L0 (`specs/product.md` or
+`specs/product/`, as `protocol.md` tiers it). A record-only commit that lowers T3 to T1 after
+review fails and the owner's verdict is still required. The record and `specs/log.md` stay exempt
+from coverage only as regular, non-executable files, and a submodule's `ignore` setting never
+hides a gitlink change. To land a policy change, merge it first in its own pull request, checked
+under the policy it replaces.
 
 ### Reviewer eligibility and report links
 

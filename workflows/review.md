@@ -95,7 +95,8 @@ resolutions (choosing the old reviewed content included), extra edits and unveri
 still need coverage, and integration tests and baseline/contract revalidation still apply. This
 exemption and record-only closure trust only `origin/HEAD` or `review-integration-branches` read
 from that default branch's committed config, never an arbitrary `--base` or a change-local config
-edit. Without `origin/HEAD`, full review coverage applies; establish the remote default first.
+edit. Without `origin/HEAD` the check fails: it has no policy to read, so establish the remote
+default first.
 
 ## Closing
 
