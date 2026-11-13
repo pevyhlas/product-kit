@@ -12,8 +12,9 @@
 #
 # Usage: ./build-review-package.sh CHANGE_ID BASE_SHA [HEAD_SHA] [options]
 #   --since REV       Add a focused delta of what the branch changed since REV, an earlier
-#                     reviewed head in HEAD's history; retain the full BASE..HEAD diff. BASE must
-#                     be the change's current merge base with a trusted integration branch
+#                     reviewed head (any commit here but HEAD: after a rebase or squash it is no
+#                     longer in HEAD's history); retain the full BASE..HEAD diff. BASE must be
+#                     the change's current merge base with a trusted integration branch
 #                     (origin/HEAD, or one named by review-integration-branches in its committed
 #                     config); anything else is refused. After a base merge, pass the new merge
 #                     base as BASE to leave the base out
@@ -37,7 +38,11 @@
 # The reviewer writes its report (report.md) into the same directory.
 #
 # STDOUT: {"ROUND":N,"BASE_SHA":"<hash>","HEAD_SHA":"<hash>","PACKAGE_DIR":"/abs/cache/round-N",
-#          "REPORT_PATH":"/abs/cache/round-N/report.md"}; the State Review line records the two hashes.
+#          "REPORT_PATH":"/abs/cache/round-N/report.md","INDEX_PATH":"…","SINCE_SHA":"<hash>",
+#          "FINGERPRINT":"fp1:…","SINCE_FINGERPRINT":"fp1:…"}: the content fingerprints of HEAD and
+#          SINCE (review-fingerprint-lib.sh), empty when BASE is not the merge base with a trusted
+#          integration branch. Record the verdict with record-review.sh, which computes the same
+#          fingerprints; never type them.
 #
 # Exit status: 0 on success, 1 on usage or revision errors.
 
@@ -47,6 +52,7 @@ set -e
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 source "$SCRIPT_DIR/spec-lib.sh"
+source "$SCRIPT_DIR/review-fingerprint-lib.sh"
 
 case "${1:-}" in
     --help|-h)
@@ -105,28 +111,31 @@ if ! git -C "$REPO_ROOT" merge-base --is-ancestor "$BASE_SHA" "$HEAD_SHA"; then
 fi
 if [ -n "$SINCE" ]; then
     SINCE="$(git -C "$REPO_ROOT" rev-parse --verify "${SINCE}^{commit}")" || exit 1
-    # Any earlier head in HEAD's history: after the base is merged into the branch, the new BASE
-    # (the merge base) is newer than the previous reviewed head, and that head still counts.
-    if ! git -C "$REPO_ROOT" merge-base --is-ancestor "$SINCE" "$HEAD_SHA" || [ "$SINCE" = "$HEAD_SHA" ]; then
-        echo "ERROR: --since must be a commit in HEAD's history, before HEAD" >&2; exit 1
+    # Any earlier reviewed head, in HEAD's history or not: after a base merge the new BASE (the
+    # merge base) is newer than it, and after a rebase or squash it is on no branch any more.
+    if [ "$SINCE" = "$HEAD_SHA" ]; then
+        echo "ERROR: --since must be an earlier reviewed head, not HEAD" >&2; exit 1
     fi
-    # BASE decides what the focused delta leaves out, so it must be where the change leaves the
-    # integration branch. Any other commit on the branch would drop the commits between SINCE and
-    # BASE from both patches while the package still looked complete.
-    trusted_refs="$(spec_trusted_refs "$REPO_ROOT")"
+fi
+# BASE decides what the focused delta leaves out, so with --since it must be where the change
+# leaves the integration branch. Any other commit on the branch would drop the commits between
+# SINCE and BASE from both patches while the package still looked complete. The same trusted ref
+# gives the fingerprints; without --since a missing one only leaves them empty.
+trusted_refs="$(spec_trusted_refs "$REPO_ROOT")"
+base_is_merge_base=false; merge_bases=""; FP_REF=""
+while IFS= read -r trusted; do
+    [ -n "$trusted" ] || continue
+    git -C "$REPO_ROOT" rev-parse --verify --quiet "$trusted^{commit}" >/dev/null 2>&1 || continue
+    git -C "$REPO_ROOT" merge-base --is-ancestor "$BASE_SHA" "$trusted" || continue
+    mb="$(git -C "$REPO_ROOT" merge-base "$trusted" "$HEAD_SHA" 2>/dev/null || true)"
+    [ -z "$mb" ] || merge_bases="$merge_bases ${trusted#refs/remotes/}=${mb}"
+    if [ "$mb" = "$BASE_SHA" ]; then base_is_merge_base=true; FP_REF="$trusted"; break; fi
+done <<<"$trusted_refs"
+if [ -n "$SINCE" ]; then
     if [ -z "$trusted_refs" ]; then
         echo "ERROR: --since needs a trusted integration branch to check BASE against: set origin/HEAD (git remote set-head origin --auto) and fetch it, or build the full package without --since" >&2
         exit 1
     fi
-    base_is_merge_base=false; merge_bases=""
-    while IFS= read -r trusted; do
-        [ -n "$trusted" ] || continue
-        git -C "$REPO_ROOT" rev-parse --verify --quiet "$trusted^{commit}" >/dev/null 2>&1 || continue
-        git -C "$REPO_ROOT" merge-base --is-ancestor "$BASE_SHA" "$trusted" || continue
-        mb="$(git -C "$REPO_ROOT" merge-base "$trusted" "$HEAD_SHA" 2>/dev/null || true)"
-        [ -z "$mb" ] || merge_bases="$merge_bases ${trusted#refs/remotes/}=${mb}"
-        if [ "$mb" = "$BASE_SHA" ]; then base_is_merge_base=true; break; fi
-    done <<<"$trusted_refs"
     if ! $base_is_merge_base; then
         echo "ERROR: with --since, BASE must be the change's current merge base with a trusted integration branch ($(printf '%s' "$trusted_refs" | sed 's#^refs/remotes/##' | tr '\n' ' ' | sed 's/ $//')), and is not: $BASE_SHA${merge_bases:+; merge base(s) found:$merge_bases}. Pass the current merge base as BASE, or build the full package without --since" >&2
         exit 1
@@ -244,6 +253,8 @@ if [ -n "$SINCE" ]; then
             "$HEAD_SHA" --not "$SINCE" "$BASE_SHA" > "$PACKAGE_DIR/delta.patch"
         merges="$(git -C "$REPO_ROOT" rev-list --min-parents=2 "$HEAD_SHA" --not "$SINCE" "$BASE_SHA" | tr '\n' ' ' | sed 's/ $//')"
         DELTA="$SINCE..$HEAD_SHA without what the base brought: the patches of the non-merge commits since $SINCE that $BASE_SHA does not contain, oldest first, as the automatic merge was unavailable (merge-tree --write-tree needs Git 2.38+ and full history)."
+        git -C "$REPO_ROOT" merge-base --is-ancestor "$SINCE" "$HEAD_SHA" ||
+            DELTA="$DELTA $SINCE is not in HEAD's history (a rebase or squash), so these are all of the change's commits, not only those since the earlier review."
         [ -z "$merges" ] || DELTA="$DELTA Merge resolutions are not in it: check merge $merges in the full diff."
     fi
     inventory delta.patch "$source_label"
@@ -264,11 +275,30 @@ for p in ${EVIDENCE[@]+"${EVIDENCE[@]}"}; do
     fi
     inventory "evidence/$p" "caller-supplied:$p (verify producer revision/result)"
 done
+# The content fingerprints the verdict binds, against the trusted ref BASE is the merge base with.
+FINGERPRINT=""; SINCE_FINGERPRINT=""
+if [ -z "$FP_REF" ]; then
+    FP_TEXT="none: BASE is not the change's merge base with a trusted integration branch, so record-review.sh computes them when the verdict is recorded"
+elif review_fingerprint "$REPO_ROOT" "$CHANGE_ID" "$FP_REF" "$HEAD_SHA" >/dev/null; then
+    FINGERPRINT="$REVIEW_FP"; FP_TEXT="$FINGERPRINT (HEAD, against ${FP_REF#refs/remotes/})"
+    if [ -n "$SINCE" ]; then
+        if review_fingerprint "$REPO_ROOT" "$CHANGE_ID" "$FP_REF" "$SINCE" >/dev/null; then
+            SINCE_FINGERPRINT="$REVIEW_FP"; FP_TEXT="$FP_TEXT; $SINCE_FINGERPRINT (SINCE)"
+        else
+            FP_TEXT="$FP_TEXT; none for SINCE: $REVIEW_FP_ERROR"
+        fi
+    fi
+else
+    FP_TEXT="none: $REVIEW_FP_ERROR"
+fi
+
 cat > "$PACKAGE_DIR/index.md" <<EOF
 # Review package: $CHANGE_ID
 
 - Full range: $BASE_SHA..$HEAD_SHA
 - Focused delta (delta.patch): $DELTA
+- Content fingerprint: $FP_TEXT. Record the verdict with record-review.sh, which binds it to the
+  reviewed content, not to these commits.
 - Inventory: manifest.tsv (bytes and Git blob object IDs of exact packaged content).
 - Tracked context is read from the named HEAD, never the working copy.
 - Evidence is a stable copy, not proof of completion or applicability to HEAD.
@@ -286,4 +316,4 @@ reviewer consumes captured bounds/results and returns its report as text when it
 Full diff remains available; use the focused delta and affected obligations for a re-review.
 EOF
 
-printf '{"ROUND":%d,"BASE_SHA":"%s","HEAD_SHA":"%s","PACKAGE_DIR":"%s","REPORT_PATH":"%s","INDEX_PATH":"%s","SINCE_SHA":"%s"}\n' "$ROUND" "$BASE_SHA" "$HEAD_SHA" "$(json_escape "$PACKAGE_DIR")" "$(json_escape "$PACKAGE_DIR/report.md")" "$(json_escape "$PACKAGE_DIR/index.md")" "$SINCE"
+printf '{"ROUND":%d,"BASE_SHA":"%s","HEAD_SHA":"%s","PACKAGE_DIR":"%s","REPORT_PATH":"%s","INDEX_PATH":"%s","SINCE_SHA":"%s","FINGERPRINT":"%s","SINCE_FINGERPRINT":"%s"}\n' "$ROUND" "$BASE_SHA" "$HEAD_SHA" "$(json_escape "$PACKAGE_DIR")" "$(json_escape "$PACKAGE_DIR/report.md")" "$(json_escape "$PACKAGE_DIR/index.md")" "$SINCE" "$FINGERPRINT" "$SINCE_FINGERPRINT"

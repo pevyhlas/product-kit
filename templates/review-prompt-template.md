@@ -25,17 +25,18 @@ Return:
   terms (never a required input). A copy the diff adds or edits is medium; a contradiction it creates (an old copy
   of a changed fact) is high; untouched older duplication is low, with a pointer.
 - Anything not verifiable from the package; never guess a pass.
-- Identify the eligible registered reviewer context `{REVIEWER_ID}`. Include the following receipt
-  with actual full hashes, verdict and counts when the project uses online report verification;
-  the coordinator preserves it with the verbatim report on the PR:
+- Identify the eligible registered reviewer context `{REVIEWER_ID}` and give the verdict and
+  counts. When the project uses online report verification, the coordinator records them with
+  `record-review.sh` and pastes the receipt it prints, which binds the reviewed content, under the
+  verbatim report on the PR:
 
 ```text
 <!-- prdkit-review
-{"schema":"prdkit.review.v1","reviewer":"{REVIEWER_ID}","base":"{BASE_SHA}","head":"{HEAD_SHA}","verdict":"{PASS_OR_FAIL}","critical":0,"high":0,"medium":0,"low":0}
+{"schema":"prdkit.review.v2","reviewer":"{REVIEWER_ID}","from":"start","to":"fp1:<64 hex>","head":"{HEAD_SHA}","verdict":"{PASS_OR_FAIL}","critical":0,"high":0,"medium":0,"low":0}
 -->
 ```
 
-Replace all counts with the actual findings; the receipt is metadata, not evidence of independence.
+The receipt is metadata, not evidence of independence.
 
 - Check the upstream intent/design references, dependency outcomes and required PR gates. Reject
   requirements invented from implementation convenience, demoted failing checks, or unknown runtime

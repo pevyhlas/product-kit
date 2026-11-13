@@ -7,7 +7,9 @@
 #   - JSON output shape: {"ROUND":N,"BASE_SHA":"...","HEAD_SHA":"...","PACKAGE_DIR":"...","REPORT_PATH":"..."}
 #   - raw packages go to the gitignored .prdkit/cache/evidence/, never specs/
 #   - revision and usage errors exit non-zero
-#   - --since needs BASE to be the change's current merge base with a trusted integration branch
+#   - --since needs BASE to be the change's current merge base with a trusted integration branch,
+#     accepts an earlier head a squash or rebase left out of HEAD's history, and the JSON carries
+#     the content fingerprints record-review.sh binds
 
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -214,13 +216,57 @@ assert_not_contains "$(cat "$pkg/delta.patch")" 'more from the base' "and nothin
 assert_not_contains "$(cat "$pkg/delta.patch")" "commit $MERGE2" "the resolving merge stays out of the delta"
 assert_contains "$(cat "$pkg/index.md")" "check merge $MERGE2 in the full diff" "index names the resolving merge"
 
-it "A --since outside HEAD's history is refused"
-g checkout -q "$MAIN"; echo later > "$mr/later.txt"; g add -A; g commit -q -m 'base later'; UNMERGED="$(g rev-parse HEAD)"
-trust "$mr" "$MAIN"
-g checkout -q 007-merged
-run bash -c 'cd "$1" && bash "$2" 008-invalid "$3" --since "$4"' _ "$mr" "$SCRIPT" "$MERGED_BASE2" "$UNMERGED"
-assert_eq 1 "$STATUS" 'a base commit not merged into HEAD is refused'
-assert_contains "$OUTPUT" "must be a commit in HEAD's history" 'refusal explained'
+it "A blob that cannot be read leaves the fingerprint empty, never a valid-looking one"
+fb="$(setup_fixture_repo)"; track_tmp "$fb"
+FBMAIN="$(git -C "$fb" symbolic-ref --short HEAD)"; FBBASE="$(git -C "$fb" rev-parse HEAD)"
+git -C "$fb" checkout -q -b 010-blob
+echo more >> "$fb/seed.txt"; git -C "$fb" commit -q -am more; FBHEAD="$(git -C "$fb" rev-parse HEAD)"
+trust_at "$fb" "$FBMAIN" "$FBBASE"
+out="$(cd "$fb" && bash "$SCRIPT" 010-blob "$FBBASE")"
+assert_contains "$out" '"FINGERPRINT":"fp1:' "control: the fingerprint is computed"
+BLOBFAKE="$(mktemp -d)"; track_tmp "$BLOBFAKE"
+# shellcheck disable=SC2016  # the stub's own variables, expanded when it runs
+printf '#!/bin/sh\nc=\nfor a in "$@"; do [ "$a" = cat-file ] && c=1; [ -n "$c" ] && [ "$a" = blob ] && exit 128; done\nexec "%s" "$@"\n' "$(command -v git)" > "$BLOBFAKE/git"
+chmod +x "$BLOBFAKE/git"
+out="$(cd "$fb" && PATH="$BLOBFAKE:$PATH" bash "$SCRIPT" 010-blob "$FBBASE")"
+assert_contains "$out" '"FINGERPRINT":""' "a failed blob read prints no fingerprint"
+assert_contains "$(cat "$(pkg_of "$out")/index.md")" "Content fingerprint: none: a changed file's content cannot be read between ${FBBASE:0:12} and $FBHEAD." "index.md says why"
+
+it "A --since outside HEAD's history is accepted: a squash or rebase leaves the reviewed head behind"
+# Formerly refused. Content fingerprints keep a verdict across a squash or rebase, so the narrow
+# delta must start at the reviewed head even when HEAD no longer descends from it.
+sq="$(setup_fixture_repo)"; track_tmp "$sq"
+q() { git -C "$sq" "$@"; }
+SQMAIN="$(q symbolic-ref --short HEAD)"
+printf '1\n2\n3\n4\n5\n6\n7\n8\n9\n' > "$sq/shared.txt"; q add -A; q commit -q -m shared; SQSTART="$(q rev-parse HEAD)"
+q checkout -q -b 009-squash
+echo one > "$sq/a.txt"; q add -A; q commit -q -m one
+echo two > "$sq/b.txt"; q add -A; q commit -q -m two; REVIEWED_HEAD="$(q rev-parse HEAD)"
+q reset -q --soft "$SQSTART"; q commit -q -m squashed
+echo fix >> "$sq/b.txt"; q commit -q -am fix
+trust "$sq" "$SQMAIN"
+out="$(cd "$sq" && bash "$SCRIPT" 009-squash "$SQSTART" --since "$REVIEWED_HEAD")"
+pkg="$(pkg_of "$out")"
+assert_contains "$out" "\"SINCE_SHA\":\"$REVIEWED_HEAD\"" "the pre-squash head is accepted"
+assert_contains "$(cat "$pkg/delta.patch")" '+fix' "squash: the delta holds the fix"
+assert_not_contains "$(cat "$pkg/delta.patch")" '+one' "squash: and nothing reviewed before"
+q checkout -q "$SQMAIN"; printf '1\n2\n3\n4\n5\n6\n7\n8\nbase nine\n' > "$sq/shared.txt"; q commit -q -am 'base moves'
+trust "$sq" "$SQMAIN"
+q checkout -q 009-squash; SQUASHED="$(q rev-parse HEAD)"
+q rebase -q "$SQMAIN" >/dev/null 2>&1
+echo again >> "$sq/a.txt"; q commit -q -am 'fix after rebase'
+out="$(cd "$sq" && bash "$SCRIPT" 009-squash "$(q merge-base "$SQMAIN" HEAD)" --since "$SQUASHED")"
+pkg="$(pkg_of "$out")"
+assert_contains "$(cat "$pkg/delta.patch")" '+again' "rebase: the delta holds the fix"
+assert_not_contains "$(cat "$pkg/delta.patch")" '+fix' "rebase: and not what was reviewed before it"
+assert_not_contains "$(cat "$pkg/delta.patch")" 'base nine' "rebase: nor what the new base brought"
+assert_contains "$(cat "$pkg/index.md")" "the automatic merge of" "rebase: the delta is against the automatic merge"
+assert_contains "$out" '"FINGERPRINT":"fp1:' "the head's content fingerprint is printed"
+assert_contains "$out" '"SINCE_FINGERPRINT":"fp1:' "and the earlier head's"
+assert_contains "$(cat "$pkg/index.md")" "Content fingerprint: fp1:" "index.md names them"
+run bash -c 'cd "$1" && bash "$2" 009-squash HEAD~1 --since HEAD' _ "$sq" "$SCRIPT"
+assert_eq 1 "$STATUS" 'HEAD itself is no earlier head'
+assert_contains "$OUTPUT" "--since must be an earlier reviewed head, not HEAD" 'refusal explained'
 
 # The scenario behind the --since BASE check: R is reviewed, X is not, then the base is merged in.
 #   main0 --- M ---------+

@@ -32,34 +32,35 @@ trustworthy package, review is pending.
 Critical and high findings block, medium blocks under `Rigor: full`, low is advisory. A failed
 tool run is not a product FAIL and an absent reviewer is not approval. Post each report on the PR
 once one exists: it is the durable review record, since the record is deleted on close and the
-cache is local. Append one State line per verdict, using an eligible identity registered in
-`.prdkit/memory/agents.md`, never editing an earlier one except to correct a range to the printed
-hashes; a later line supersedes the same reviewer's earlier one, whatever its round. The range
-uses the package's resolved hashes (`BASE_SHA..HEAD_SHA`, or `SINCE_SHA..HEAD_SHA` for a scoped
-verdict), never a name that moves (`HEAD`, a branch); the first round's base is where the change
-leaves the default branch:
+cache is local. Record each verdict with `.prdkit/scripts/bash/record-review.sh <change-id>
+--reviewer <id> --verdict PASS|FAIL --counts <c>,<h>,<m>,<l> --link <report> --head <reviewed sha>`,
+using an eligible identity registered in `.prdkit/memory/agents.md`. It appends one State line,
+bound to content fingerprints it computes (never typed, never edited), and prints the receipt
+for the report comment. A later line supersedes the same reviewer's earlier one, whatever its
+round:
 
 ```text
-**Review**: round 2 · <base sha>..<reviewed head sha> · <registered reviewer identity> · PASS · 0 critical, 0 high, 1 medium, 0 low · <report link>
+**Review**: round 2 · start..fp1:<64 hex> · <registered reviewer identity> · PASS · 0 critical, 0 high, 1 medium, 0 low · <report link>
 ```
 
-Re-review only changed source, scoped to the fix: `--since <previous-reviewed-head>` keeps a
-focused delta alongside the full diff. BASE must be the change's current merge base with a
-trusted integration branch (`origin/HEAD`, or one named by `review-integration-branches` in its
-committed config, as `check-review.sh` reads them), or the script refuses; there must be one to
-use `--since`. After a base merge, pass the new merge base: the delta then leaves out what the
-base brought, and the package index says what it covers. Never dispatch a
-round when no source changed since the last verdict. Map findings to fixes and affected
-obligations, preserving unaffected approvals and evidence; re-open a concern only when its source,
-bounds or evidence applicability changed. The recorded range is the range actually inspected,
-starting at or before that reviewer's prior head so the rounds chain; the full package range
-alone is not a new full-review claim. Required reviewers and the final-head check still apply. A
-T3 change also records the owner's verdict, reviewer `owner`, over the head the owner approved,
-ending with a link to their words; counts may precede the link and are not read. A later L0 or
-L1 edit needs the owner again:
+`start` is the empty change; `fp1:` names the change's content (its delta from where it leaves the
+trusted base, outside the record and the log). Re-review only changed source, scoped to the fix:
+the package's `--since <previous reviewed head>` keeps a focused delta alongside the full diff, and
+`record-review.sh --since <previous reviewed head>` records the narrow range. Any commit with that
+content works, also one a rebase or squash left behind. BASE must be the change's current merge
+base with a trusted integration branch (`origin/HEAD`, or one named by
+`review-integration-branches` in its committed config, as `check-review.sh` reads them), or the
+package script refuses `--since`; after a base merge, pass the new merge base. Never dispatch a
+round when no source changed since the last verdict (`record-review.sh` refuses an empty range).
+Map findings to fixes and affected obligations, preserving unaffected approvals and evidence;
+re-open a concern only when its source, bounds or evidence applicability changed. The recorded
+range is the range actually inspected. Required reviewers and the final-head check still apply.
+A T3 change also records the owner's verdict, `--reviewer owner` without `--since` (counts
+optional, not read), linking their words; it binds the L0/L1 spec only, so a code fix or a rebase
+keeps it and any later L0 or L1 edit needs the owner again:
 
 ```text
-**Review**: round 1 · <base sha>..<approved head sha> · owner · PASS · <link to the owner's words>
+**Review**: round 1 · start..fp1:<64 hex> · owner · PASS · <link to the owner's words>
 ```
 
 Register identities on the trusted integration branch before using them (the check reads its
@@ -69,34 +70,43 @@ while reconciling older records. Registry eligibility is not proof that a fresh 
 offline gate leaves report links unverified; `check-review.sh --verify-reports --pr <GitHub PR
 URL> <change-id>` optionally compares them with the recorded metadata and needs `gh`, `jq` and
 readable reports on that exact PR head. Each linked comment, the owner's included, then carries
-one receipt with the line's full hashes (`review-prompt-template.md`); the owner's needs no counts:
+the one receipt `record-review.sh` printed for that line; the owner's has no counts:
 
 ```text
 <!-- prdkit-review
-{"schema":"prdkit.review.v1","reviewer":"owner","base":"<full base sha>","head":"<full approved head sha>","verdict":"PASS"}
+{"schema":"prdkit.review.v2","reviewer":"owner","from":"start","to":"fp1:<64 hex>","head":"<full approved head sha>","verdict":"PASS"}
 -->
 ```
+
+Lines recorded before fingerprints (`<base sha>..<head sha>`, v1 receipts) stay readable while
+their commits are here: each end reads as that commit's content.
 
 ## Merge
 
 Merge only when the required checks pass and `.prdkit/scripts/bash/check-review.sh --head <sha>
 <change-id>` passes on the exact head being merged, then merge that head (`gh pr merge
 --match-head-commit <sha>` on GitHub). It passes when every reviewer's latest verdict is PASS with
-nothing blocking (a FAIL stands until a later clean PASS from the same reviewer reaches its head),
-the recorded ranges chain from the change's start and from each reviewer's head to the merged
-head, and the tier's minimum is recorded: one independent verdict from T1, the owner's for T3. It
-does not know which concerns a T2 change needed; the reviewer list is the worker's call. It checks
-recorded verdicts, never grants merge authority, and is the gate where the plan has no branch
-protection.
+nothing blocking, the recorded verdicts chain by content from `start` and from each reviewer's
+reviewed content to this head's content, and the tier's minimum is recorded: one independent
+verdict from T1, the owner's for T3. A FAIL stands until a later clean PASS from the same
+reviewer either re-reviews from `start` or continues from the failed content through that
+reviewer's own later rounds; returning to earlier content or rewriting history never clears it.
+It does not know which concerns a T2 change needed; the reviewer list is the worker's call. It
+checks recorded verdicts, never grants merge authority, and is the gate where the plan has no
+branch protection.
 
-An update from the trusted integration base keeps review coverage only when the checker proves
-the exact branch delta unchanged outside the record and log. Overlapping source changes, conflict
-resolutions (choosing the old reviewed content included), extra edits and unverifiable ancestry
-still need coverage, and integration tests and baseline/contract revalidation still apply. This
-exemption and record-only closure trust only `origin/HEAD` or `review-integration-branches` read
-from that default branch's committed config, never an arbitrary `--base` or a change-local config
-edit. Without `origin/HEAD` the check fails: it has no policy to read, so establish the remote
-default first.
+A verdict holds while the reviewed content is unchanged: record and log commits, an edit later
+reverted, a rebase, a squash and a base merge that does not overlap keep it. A real fix or an
+overlapping base merge voids it. Overlapping means the base's own changes touch a line the change
+adds or removes, or one of the 3 unchanged context lines around it the reviewer saw (a clean
+merge more than 3 lines away keeps it), or base and change both touch a binary file, a symlink, a
+submodule, a file the change adds or deletes, or a mode; where the edited lines' surroundings
+repeat in the file, the file is bound to its exact objects. A conflict resolved by keeping the
+reviewed lines still voids it: those lines now replace the base's. Integration tests and
+baseline/contract revalidation still apply. Coverage and record-only closure trust only
+`origin/HEAD` or `review-integration-branches` read from that default branch's committed config,
+never an arbitrary `--base` or a change-local config edit. Without `origin/HEAD` the check fails:
+it has no policy to read, so establish the remote default first.
 
 ## Closing
 

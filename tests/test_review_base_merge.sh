@@ -124,7 +124,7 @@ git add src/owned.txt; git commit -qm 'resolve by keeping reviewed bytes'
 assert_eq '' "$(git diff --name-only "$REVIEWED" HEAD -- src)" 'source bytes equal reviewed head'
 check
 assert_eq 1 "$STATUS" 'resolution still requires coverage'
-assert_contains "$OUTPUT" 'merge integration is not covered' 'explains unchanged-tree integration gap'
+assert_contains "$OUTPUT" "code (round 1): changed since the reviewed head $REVIEWED: src/owned.txt" 'the resolution changed the reviewed hunk against the new base'
 MERGED="$(git rev-parse HEAD)"
 printf '\n**Review**: round 2 · %s..%s · code · PASS · %s · https://example.invalid/review/6\n' "$REVIEWED" "$MERGED" "$CLEAN" >> "$RECORD"
 git add "$RECORD"; git commit -qm 'review integration decision'

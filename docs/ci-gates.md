@@ -51,29 +51,38 @@ cross-checked as well. `--json` emits `{result, checks, findings}`.
 bash .prdkit/scripts/bash/check-review.sh [--json] [--head <rev>] [--base <rev>] [<change-id>]
 ```
 
+```
+bash .prdkit/scripts/bash/record-review.sh <change-id> --reviewer <id> --verdict PASS|FAIL --link <url> --head <rev> [--since <rev>] [--counts <c>,<h>,<m>,<l>] [--round <n>] [--base <ref>]
+```
+
 Reviews are run by the worker, never by CI: the worker dispatches the tier's independent
-reviewers (`protocol.md`), posts each report on the PR and appends one `**Review**:` line per
-verdict, with the commit hashes the review package printed, to the change record's State
-(`review.md`). Before merging, the merging agent runs the check on the exact head it merges
-(`--head <sha>`, then `gh pr merge --match-head-commit <sha>`). It passes when:
+reviewers (`protocol.md`), posts each report on the PR and records one `**Review**:` line per
+verdict in the change record's State with `record-review.sh` (`review.md`), which binds it to
+content fingerprints. Before merging, the merging agent runs the check on the exact head it
+merges (`--head <sha>`, then `gh pr merge --match-head-commit <sha>`). It passes when:
 
 - every recorded verdict, in any tier, is PASS with no critical or high finding (no medium
   either under `Rigor: full`, or when the trusted constitution names no single Rigor); a
   reviewer's later line supersedes its earlier one;
 - no blocking line stands: a blocking line (a FAIL, or counts that block for the Rigor or
-  cannot be read) stands until a later non-blocking PASS from the same reviewer, over a
-  non-empty range, reaches its head; only then does its range link. A blocking head that is not
-  a commit hash always stands (correct that line to the printed hash);
-- the reviews cover the change: every non-blocking PASS range, superseded rounds included, is a
-  link, and so is a resolved blocking range; a point is covered when links chain from it (each
-  starting at or before a head already reached) to a head after which only the record and
-  its log entry (`specs/log/<id>.md`, or `specs/log.md`) changed. Each
-  reviewer's head, a commit hash in the merged head's history, must be covered, and for T1–T3
-  so must the change's start (its merge base with `--base`), so scoped re-reviews of fixes
-  chain while a gap fails. No range may be empty; `--base` selects the comparison branch; a
-  head already inside `--base` fails;
+  cannot be read) by a reviewer at some content stands until a later clean PASS from the same
+  reviewer, over a non-empty range, starts at `start` (a full re-review) or at content reachable
+  from the failed content through that reviewer's own later lines; only the latter makes its
+  range link. A blocking end that names no content here stands unless a later clean full
+  re-review follows. Returning to earlier content or rewriting history never clears it;
+- the reviews cover the change: each range end is `start` (no change), `fp1:<sha256>` (the
+  change's content: its delta from where it leaves `--base`, outside the record and its log
+  entry), or, on a line recorded before fingerprints, a commit hash present here, read as that
+  commit's content. Every non-blocking PASS range, superseded rounds included, links its two
+  contents, and so does a blocking range resolved through the reviewer's own later lines. Each
+  reviewer's reviewed content must link to this head's content (`fingerprint` in `--json`), and
+  for T1–T3 so must `start`, so narrow re-reviews of fixes chain while a gap fails. A rebase, a
+  squash, a reverted edit and a base merge that does not overlap keep the content; a fix or an
+  overlapping base merge (`review.md`, Merge) changes it. No range may be empty; a head already
+  inside `--base` fails;
 - the tier's minimum is recorded: one independent verdict for T1–T3, plus the owner's for T3,
-  and no L0 or L1 spec edit since the head the owner approved. Which concerns a T2 change
+  whose fingerprint covers only the L0/L1 spec and must equal this head's: a code fix or a
+  rebase keeps it, an L0 or L1 edit voids it. Which concerns a T2 change
   needed is the worker's call; the check sees only what is recorded;
 - the tier holds (see Policy from the trusted base below).
 
@@ -139,15 +148,18 @@ bash .prdkit/scripts/bash/check-review.sh --verify-reports --pr https://github.c
 ```
 
 This mode needs `gh` and `jq`. It verifies the PR head, each `#issuecomment-N` link's actual PR
-membership, and one structured receipt per report with matching reviewer, full commit hashes,
-verdict and finding counts. Append this receipt to the report comment, filling actual values:
+membership, and one structured receipt per report with matching reviewer, range, verdict and
+finding counts. Append the receipt `record-review.sh` printed for the line to the report comment:
 
 ```text
 <!-- prdkit-review
-{"schema":"prdkit.review.v1","reviewer":"code-review","base":"<full base SHA>","head":"<full reviewed SHA>","verdict":"PASS","critical":0,"high":0,"medium":0,"low":0}
+{"schema":"prdkit.review.v2","reviewer":"code-review","from":"start","to":"fp1:<64 hex>","head":"<full reviewed SHA>","verdict":"PASS","critical":0,"high":0,"medium":0,"low":0}
 -->
 ```
 
+`from` and `to` must be exactly the line's recorded ends; `head` is provenance and not compared.
+A line recorded before fingerprints keeps its v1 receipt (`"schema":"prdkit.review.v1"` with
+`base` and `head` as the two commits' full hashes), checked while those commits are here.
 The owner's linked comment needs one too, with reviewer `owner` and verdict PASS; counts are
 optional there and in the owner's line, whose link is its last field. Historical reports also
 need receipts when this mode is used. Missing tools, unavailable/offline API access, missing
@@ -173,8 +185,8 @@ the combined final review, then finalize only the carrier after PASS. Check the 
 helper does not automatically transfer obligations or exempt sibling record deletions.
 
 For compatibility, a pull request that carries only the record and the log since a trusted base,
-including an old change's explicit disposition, skips coverage. Clean base imports can also retain
-coverage when the exact branch delta is preserved. Both exemptions trust only the remote default
+including an old change's explicit disposition, skips coverage. Fingerprints, like that
+exemption, are computed only against a trusted base; both trust only the remote default
 identified by `origin/HEAD`, plus `review-integration-branches` in `.prdkit/memory/config.md` read
 from that default's committed snapshot (for example `- review-integration-branches: origin/develop`).
 A change cannot whitelist itself through its own config. Missing/duplicate settings grant no
@@ -184,7 +196,8 @@ Without `--base` the check uses `origin/HEAD`; it no longer falls back to `origi
 `origin/master`, `main` or `master`, and an explicit base must be trusted as above. JSON exposes
 `base_trusted` and `policy_at`. Name the actual PR target; a stacked branch whose target is not a
 configured integration branch cannot pass until that target is configured. Each range is still
-trusted as recorded, not authenticated. The change id defaults to the current branch.
+trusted as recorded, not authenticated; a verdict carried from an earlier delivery of the same
+change to identical content still counts until verdicts are bound to their pull request. The change id defaults to the current branch.
 
 It checks recorded verdicts; it does not review, and it never grants merge authority. Where the
 plan offers no branch protection, the merging agent's run is the gate. CI can run it as a

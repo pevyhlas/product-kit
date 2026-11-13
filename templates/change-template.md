@@ -52,4 +52,4 @@
 **Progress limit**: 3
 **Selection**: <next task, milestone contribution, why now; temporary-work disposition>
 -->
-<!-- One **Review** line per verdict (workflows/review.md). -->
+<!-- One **Review** line per verdict, written by .prdkit/scripts/bash/record-review.sh (workflows/review.md). -->
