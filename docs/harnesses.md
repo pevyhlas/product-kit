@@ -44,7 +44,8 @@ current harness feature was tested. Behavioral eval reports should record driver
 
 Independent review requires a distinct reviewer/context. If the harness cannot dispatch one,
 arrange an available reviewer or report the requirement pending. Optional neutral agent
-definitions are projected by `render-agents.sh` (see [agent lifecycle](agent-lifecycle.md)):
+definitions are projected by `render-agents.sh`, installed with `init.sh --with agent-tiers`
+(see [agent lifecycle](agent-lifecycle.md)):
 Claude Code receives `model`, OpenCode `model` + `variant` (the official effort field;
 `reasoningEffort` would become a model option). OpenCode also passes unknown frontmatter keys
 to the model, so neutral/provenance keys (`tier`, `source`, `library-ref`, …) are removed from

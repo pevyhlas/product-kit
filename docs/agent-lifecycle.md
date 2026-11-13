@@ -5,7 +5,11 @@ needs a distinct context/reviewer where applicable. Add reusable specialist defi
 recurring needs justify them, rather than automatically creating an agent for each domain.
 
 The project owns `.prdkit/memory/agents.md` and optional `.prdkit/agents/<name>.md`
-definitions using the [neutral template](../templates/agent-definition-template.md).
+definitions using the [neutral template](../templates/agent-definition-template.md). The
+template and the renderer are the optional `agent-tiers` subsystem: install them with
+`init.sh --with agent-tiers` (an upgrade keeps them while the manifest records the choice or
+the project has definitions or a vendored baseline). Doctor reports definitions or a baseline
+without the renderer.
 Definitions name a tier, never a model. Validate the actual harness format/loader after a
 render; unavailable validation stays unknown.
 

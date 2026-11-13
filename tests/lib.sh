@@ -81,7 +81,7 @@ make_project() {
 # Build a project AND run init.sh into it. Echoes the project dir.
 make_inited_project() {
     local d; d="$(make_project)" || return 1
-    ( cd "$d" && bash .product-kit/scripts/init.sh ) >/dev/null 2>&1
+    ( cd "$d" && bash .product-kit/scripts/init.sh "$@" ) >/dev/null 2>&1
     echo "$d"
 }
 

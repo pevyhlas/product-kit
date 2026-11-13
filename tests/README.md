@@ -27,6 +27,7 @@ reproduce the duplicate number; synchronization markers avoid a scheduler-depend
 | Partial copy/storage/managed-block/retirement/manifest failures, TERM/KILL, overlapping writes and coherent retry | upgrade_recovery |
 | 0.17 to 1.0 upgrade: retired files, untouched `specs/`, cutover message, gate warning, leftover features, a cutover that removes every 0.x folder, ignored leftovers, stale agent context | upgrade_1_0 |
 | Upgrade to 2.0 removes the ledger and retrospective files, keeps an edited ledger policy | upgrade_2_0 |
+| Optional subsystems: agent tiers only on request, recorded choice, kept when used, `--without`, pre-2.0 upgrades | optional_subsystems |
 | Source-less adoption integrity, managed harness entries, kit pins | adoption_gate |
 | Agent tier resolution, shared baseline/overrides, projection rendering and drift | agent_tiers |
 | Change numbering across checkouts, worktrees, `planned:` markers and retired 0.x numbers (folders, `specs/archive.md`, git history, shallow clones), never overwriting, dirty-tree refusal | new_change |

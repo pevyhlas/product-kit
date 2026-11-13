@@ -682,8 +682,11 @@ for name in $CONTEXT_AGENT_FILES; do
 done
 [ -z "$stale_paths" ] || advisories+=("Agent context names removed 0.x paths ($stale_paths); point it at the current spec, and history questions at specs/archive.md; qualify paths in other repositories as owner/repo:path (.prdkit/workflows/compact.md)")
 roster="$root/.prdkit/memory/agents.md"
+tiers_used=false
+[ ! -d "$root/.prdkit/agent-library" ] || tiers_used=true
 for def in "$root"/.prdkit/agents/*.md; do
     [ -f "$def" ] || continue
+    tiers_used=true
     name="$(basename "$def" .md)"
     if [ ! -f "$roster" ] || ! grep -qF -- "$name" "$roster"; then
         findings+=("Agent '$name': neutral definition has no entry in .prdkit/memory/agents.md")
@@ -692,6 +695,9 @@ for def in "$root"/.prdkit/agents/*.md; do
         [ -f "$root/.$harness/agents/$name.md" ] || findings+=("Agent '$name': no projection in .$harness/agents/ (render-agents.sh, or /prdkit-configure)")
     done
 done
+if $tiers_used && [ ! -f "$root/.prdkit/scripts/bash/render-agents.sh" ]; then
+    findings+=("Agent tiers are in use (.prdkit/agents/ or .prdkit/agent-library/) but render-agents.sh is not installed: run init.sh --upgrade --with agent-tiers")
+fi
 while IFS= read -r finding; do [ -z "$finding" ] || findings+=("$finding"); done < <(agent_tier_findings "$root")
 # A worktree directory removed without `git worktree remove` leaves a prunable registration
 # that a resuming session cannot re-enter. Detect only; pruning is cleanup-change.sh's job.

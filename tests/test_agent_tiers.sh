@@ -4,7 +4,7 @@
 # adoption-gate findings. Model ids are synthetic: the kit names no real model.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-PROJ="$(make_inited_project)"; track_tmp "$PROJ"
+PROJ="$(make_inited_project --with agent-tiers)"; track_tmp "$PROJ"
 SCRIPTS="$PROJ/.prdkit/scripts/bash"
 RENDER="$SCRIPTS/render-agents.sh"
 MAP="$PROJ/.prdkit/memory/agents.md"
@@ -381,7 +381,7 @@ run bash "$RENDER" --check
 assert_eq 0 "$STATUS" "clean at the end"
 
 # --- fail-closed definitions and projection ownership ------------------------------------
-P2="$(make_inited_project)"; track_tmp "$P2"
+P2="$(make_inited_project --with agent-tiers)"; track_tmp "$P2"
 R2="$P2/.prdkit/scripts/bash/render-agents.sh"
 MAP2="$P2/.prdkit/memory/agents.md"
 cd "$P2" || exit 1

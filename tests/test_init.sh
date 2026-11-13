@@ -73,9 +73,12 @@ it "manifest covers every installed file and includes workflow hashes"
 assert_contains "$(cat "$PROJ/.prdkit/.manifest")" "version: $(cat "$PK_ROOT/VERSION")" "version recorded"
 expected=0
 for file in "$PROJ"/.product-kit/commands/*.md "$PROJ"/.product-kit/workflows/*.md "$PROJ"/.product-kit/templates/*.md "$PROJ"/.product-kit/scripts/*.sh; do
-    [ "$(basename "$file")" = init.sh ] || expected=$((expected + 1))
+    case "$(basename "$file")" in
+        init.sh|render-agents.sh|agent-definition-template.md) ;;   # bootstrap; optional agent tiers
+        *) expected=$((expected + 1)) ;;
+    esac
 done
-assert_eq "$((expected + 3))" "$(grep -Ec '^[0-9a-f]{64}  ' "$PROJ/.prdkit/.manifest")" "manifest covers sources plus three policy seeds"
+assert_eq "$((expected + 3))" "$(grep -Ec '^[0-9a-f]{64}  ' "$PROJ/.prdkit/.manifest")" "manifest covers the core sources plus three policy seeds"
 assert_contains "$(cat "$PROJ/.prdkit/.manifest")" '.prdkit/workflows/change.md' "workflows tracked"
 it "pristine check is read-only and clean"
 run bash .product-kit/scripts/init.sh --check
