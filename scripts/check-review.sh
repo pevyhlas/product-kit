@@ -186,9 +186,15 @@ else
     while read -r log_mode log_type log_sha log_path; do
         case "$log_mode $log_type" in
             "100644 blob"|"100755 blob")
-                { [ "$log_path" != specs/log.md ] && spec_objects_local "$root"; } || continue
-                entry_text="$(GIT_NO_LAZY_FETCH=1 git -C "$root" cat-file blob "$log_sha" 2>/dev/null)" || entry_text=""
-                if [ "$(printf '%s\n' "$entry_text" | awk 'END { print NR }')" != 1 ] ||
+                [ "$log_path" != specs/log.md ] || continue
+                if ! spec_objects_local "$root"; then
+                    problems+=("$log_path at $head cannot be checked without fetching from the promisor remote (a partial clone with Git older than 2.45): fetch the branch's blobs or use Git 2.45+")
+                    continue
+                fi
+                # Read to a sentinel, so trailing blank lines count; a missing object reads as empty.
+                entry_text="$(GIT_NO_LAZY_FETCH=1 git -C "$root" cat-file blob "$log_sha" 2>/dev/null; echo .)"
+                entry_text="${entry_text%.}"
+                if [ "$(printf '%s' "$entry_text" | awk 'END { print NR }')" != 1 ] ||
                     ! grep -q "^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] $id: ." <<< "$entry_text"; then
                     problems+=("$log_path at $head must hold one line, '- <date> $id: <what changed>'")
                 fi ;;

@@ -93,6 +93,12 @@ run bash "$B/check-review.sh" 001-greet
 assert_eq 1 "$STATUS" "the entry is one line"
 assert_contains "$OUTPUT" "specs/log/001-greet.md at $(git rev-parse HEAD) must hold one line" "says why"
 git reset -q --hard HEAD~1
+printf -- '- 2026-11-09 001-greet: warmer greeting — R-01 — #1\n\n\n' > specs/log/001-greet.md
+git commit -qam "trailing blank lines in the entry" >/dev/null
+run bash "$B/check-review.sh" 001-greet
+assert_eq 1 "$STATUS" "trailing blank lines are lines too"
+assert_contains "$OUTPUT" "must hold one line" "says why"
+git reset -q --hard HEAD~1
 # A Git without GIT_NO_LAZY_FETCH would fetch a missing object in a partial clone: the log stays unread.
 FAKE="$(mktemp -d)"; track_tmp "$FAKE"
 # shellcheck disable=SC2016  # the stub's own $1 and $@, expanded when it runs
@@ -104,6 +110,19 @@ assert_eq 1 "$STATUS" "an older Git in a partial clone fails closed"
 assert_contains "$OUTPUT" "cannot be read without fetching from the promisor remote" "says why"
 run bash "$B/check-review.sh" 001-greet
 assert_eq 0 "$STATUS" "the closed head passes again: $OUTPUT"
+# The same Git with the record still open: an entry it cannot read is never exempt unread.
+git checkout -q -b 001-unread HEAD~1
+mkdir -p specs/log; printf 'not a log entry\necho unreviewed\n' > specs/log/001-greet.md
+git add specs/log; git commit -qm "an entry beside the open record" >/dev/null
+git config remote.origin.promisor true
+run env PATH="$FAKE:$PATH" bash "$B/check-review.sh" 001-greet
+git config --unset remote.origin.promisor
+assert_eq 1 "$STATUS" "an entry that cannot be checked fails closed"
+assert_contains "$OUTPUT" "specs/log/001-greet.md at $(git rev-parse HEAD) cannot be checked without fetching" "says why"
+run bash "$B/check-review.sh" 001-greet
+assert_eq 1 "$STATUS" "with every object at hand it fails on the content"
+assert_contains "$OUTPUT" "must hold one line" "says why"
+git checkout -q 001-greet; git branch -q -D 001-unread
 
 it "a newest-first log is left as it is; the entry is its own file"
 git checkout -q "$DEFAULT"; mkdir -p specs
