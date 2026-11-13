@@ -67,7 +67,7 @@ verdict, with the commit hashes the review package printed, to the change record
 - the reviews cover the change: every non-blocking PASS range, superseded rounds included, is a
   link, and so is a resolved blocking range; a point is covered when links chain from it (each
   starting at or before a head already reached) to a head after which only the record and
-  `specs/log.md` changed. Each
+  its log entry (`specs/log/<id>.md`, or `specs/log.md`) changed. Each
   reviewer's head, a commit hash in the merged head's history, must be covered, and for T1–T3
   so must the change's start (its merge base with `--base`), so scoped re-reviews of fixes
   chain while a gap fails. No range may be empty; `--base` selects the comparison branch; a
@@ -223,8 +223,8 @@ bash .prdkit/scripts/bash/doctor.sh --strict
 ```
 
 Doctor always fails on malformed or duplicate IDs, malformed records, installation drift,
-agent definition or tier-map findings, and a change record deleted in history without its
-`specs/log.md` line (`check-review.sh` fails the same at close).
+agent definition or tier-map findings, a malformed `specs/log/<id>.md`, and a change record
+deleted in history without its log entry (`check-review.sh` fails the same at close).
 It reports, as advisories: a 0.x layout or two canons, a `specs/archive/` folder on main, a
 `specs/archive.md` whose base commit or last 0.x feature cannot be read, agent context naming
 removed 0.x paths, spec files over their reading budgets,

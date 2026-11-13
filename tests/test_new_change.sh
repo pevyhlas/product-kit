@@ -126,6 +126,12 @@ printf '%s\n' '- 2026-10-01 012-old-change: did a thing — R-01 — https://exa
 run bash "$SCRIPT2" --json --no-worktree --short-name "after-log" "desc"
 assert_contains "$OUTPUT" '"CHANGE_ID":"013-after-log"' "log entry 012 forces 013"
 git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; rm -rf "$PROJ2/specs/changes"
+mkdir -p "$PROJ2/specs/log"
+printf '%s\n' '- 2026-10-02 020-entry-closed: did another — R-01 — #2' > "$PROJ2/specs/log/020-entry-closed.md"
+run bash "$SCRIPT2" --json --no-worktree --short-name "after-entry" "desc"
+assert_contains "$OUTPUT" '"CHANGE_ID":"021-after-entry"' "an entry file in specs/log/ reserves 020 too"
+git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; git -C "$PROJ2" branch -q -D 021-after-entry
+rm -rf "$PROJ2/specs/changes" "$PROJ2/specs/log"
 
 it "a log condensed into specs/archive.md keeps its numbers reserved"
 # shellcheck disable=SC2016 # backticks are Markdown code spans, not command substitution

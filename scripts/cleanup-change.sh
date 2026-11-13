@@ -53,7 +53,7 @@ Options:
   --closed      Remove the worktree of every change that is closed on the trusted
                 integration branch (origin/HEAD, plus any review-integration-branches
                 in its committed config): its record specs/changes/<id>.md is gone
-                and specs/log.md has its line. Only a worktree laid out as new-change.sh
+                and the log has its entry. Only a worktree laid out as new-change.sh
                 creates it matches: the directory .worktrees/<id> of this checkout, on
                 the branch <id>; a detached HEAD, another branch or another directory
                 is left alone. Each worktree goes through the same safe
@@ -532,8 +532,9 @@ remove_worktree() { # path label locked
 # --- Remove every closed change's worktree ---------------------------------
 
 # Whether <id> is closed on a trusted ref: its record specs/changes/<id>.md is gone there and
-# specs/log.md has its line, as close-change.sh writes it ("- <date> <id>: ..."). Both facts are
-# read from the trusted ref, never from the worktree's own branch.
+# the log has its entry, specs/log/<id>.md as close-change.sh writes it or a line in specs/log.md
+# ("- <date> <id>: ..."). Both facts are read from the trusted ref, never from the worktree's own
+# branch.
 CLOSED_REFS=""
 closed_on_trusted() { # id
     local id="$1" ref
@@ -541,7 +542,7 @@ closed_on_trusted() { # id
         [ -n "$ref" ] || continue
         GIT_NO_LAZY_FETCH=1 git -C "$ROOT" rev-parse --verify --quiet "$ref^{commit}" >/dev/null 2>&1 || continue
         if GIT_NO_LAZY_FETCH=1 git -C "$ROOT" cat-file -e "$ref:specs/changes/$id.md" 2>/dev/null; then continue; fi
-        if GIT_NO_LAZY_FETCH=1 git -C "$ROOT" show "$ref:specs/log.md" 2>/dev/null |
+        if spec_log_entries_at "$ROOT" "$ref" |
             sed -n 's/^- [0-9-]* \([^ :]*\):.*/\1/p' | grep -Fqx -- "$id"; then
             return 0
         fi

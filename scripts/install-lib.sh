@@ -22,7 +22,7 @@ actual repository state, not chat memory.
   `specs/architecture.md` (L1) — why the system is shaped as it is; `specs/parts/` (L2) — what
   each part guarantees. `specs/product/lifecycle.md` names the current stage: build for it, and
   build an item marked `from:` a later stage only on owner direction.
-- `specs/changes/<id>.md` — open changes with acceptance and State; `specs/log.md` — closed ones.
+- `specs/changes/<id>.md` — open changes with acceptance and State; `specs/log.md` and `specs/log/` — closed ones.
   Constraints, non-goals and qualities bind every change: `.prdkit/scripts/bash/bounds.sh <id>`
   lists those in its scope. Never build past a conflict; it goes to the owner.
 - `specs/inbox.md` — unresolved owner questions and temporary answer processing; on resume,

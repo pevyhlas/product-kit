@@ -3,7 +3,7 @@
 **Inputs**: a built change with its acceptance results, its record, PR and diff, the spec it
 touches, the reviewers registered in `.prdkit/memory/agents.md`, and project policy.
 **Writes**: the review package, reports on the PR, `**Review**:` lines in State, the final PR
-context, the `specs/log.md` line and the record's deletion.
+context, the log entry (`specs/log/<id>.md`) and the record's deletion.
 **Result**: a closed change whose exact head may merge, or review pending or a recorded blocker.
 
 Read this before dispatching review, merging or closing. [change.md](change.md) opens and builds
@@ -102,7 +102,7 @@ default first.
 
 A PR-scoped change closes in that same PR when its required acceptance and review pass, or by
 explicit owner disposition. Whatever deletes a record, an owner-disposed cancellation included,
-adds its `specs/log.md` line in the same PR. Required live gates still block. Non-gating runtime
+adds its log entry in the same PR. Required live gates still block. Non-gating runtime
 observations need no cleanup PR, and no permanent task archive is required.
 
 Before final review: reconcile the approved spec delta with actual behavior. Remove only built
@@ -118,9 +118,12 @@ its parent, and never copies its plan, findings or evidence there.
 
 After PASS, only verdict metadata, record deletion and the log change: commit the final Review
 line, then run `.prdkit/scripts/bash/close-change.sh <id> "<intent> — <IDs> — <disposition;
-runtime unknown if relevant> — <PR>"`, which adds the `specs/log.md` line and deletes the record
-once `check-review.sh` passes. Push both commits together, so required checks run once on the
-closed head; the PR, not the record, carries any handoff to whoever merges. Do not change scope,
+runtime unknown if relevant> — <PR>"`, which writes the log entry `specs/log/<id>.md` and deletes
+the record once `check-review.sh` passes. The text is at most 300 characters: carried findings and
+follow-ups go to the parent's row or the spec, evidence stays on the PR. One file per closed
+change means two branches that each close a change never conflict in the log; compaction folds
+the entries into `specs/log.md` ([compact.md](compact.md)). Push both commits together, so
+required checks run once on the closed head; the PR, not the record, carries any handoff to whoever merges. Do not change scope,
 acceptance or policy after review without reviewing the affected changes. Later defects use
 ordinary linked fix changes, which inherit the failing outcome's attempts, limits and holds
 ([protocol.md](protocol.md)); they never retroactively turn an unknown into a PASS or erase a
@@ -132,7 +135,7 @@ evidence, retrospectives and ledger events before removing the worktree. A repos
 submodules needs no `--force`: the script retries a clean worktree that git refuses only for its
 submodules, and refuses any removal that would delete a submodule commit nothing else holds.
 `cleanup-change.sh --closed` sweeps every `.worktrees/<id>` on branch `<id>` whose change is closed
-on the trusted integration branch (record gone, log line present), skipping dirty or locked ones
+on the trusted integration branch (record gone, log entry present), skipping dirty or locked ones
 and leaving branches alone; run it after merges so finished worktrees do not pile up.
 
 A `--no-branch` record closes the same way, through the project's authorized delivery route; its

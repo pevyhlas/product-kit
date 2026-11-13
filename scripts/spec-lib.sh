@@ -205,7 +205,37 @@ spec_archive_log_through() { # root
     return 0
 }
 
-# specs/log.md order, as close-change.sh writes it: newest first, unless its first dated entry
+# The closed-change log: the lines of specs/log.md, then each entry file specs/log/<id>.md, one
+# "- <date> <id>: <text>" line that close-change.sh writes, so two branches that each close a
+# change touch different files and never conflict. Compaction folds the entry files into
+# specs/log.md (compact.md). Callers match the dated lines they need; awk ends every line.
+spec_log_entries() { # root
+    [ ! -f "$1/specs/log.md" ] || awk 1 "$1/specs/log.md"
+    spec_log_files "$1"
+    return 0
+}
+spec_log_files() { # root -> the entry files' lines only; a symlink is never an entry
+    local file
+    for file in "$1"/specs/log/[0-9]*.md; do [ ! -f "$file" ] || [ -L "$file" ] || awk 1 "$file"; done
+    return 0
+}
+# The same at a commit, for a gate that reads a ref and never the checkout. Only regular files
+# count (a blob of mode 100644 or 100755): a tree, symlink or submodule at specs/log.md or
+# specs/log/<id>.md is no entry. Fails, reading nothing, where an object read could fetch from a
+# promisor remote (spec_objects_local); a missing object reads as nothing.
+spec_log_entries_at() { # root rev
+    local mode type sha path
+    spec_objects_local "$1" || return 1
+    { GIT_NO_LAZY_FETCH=1 git -C "$1" ls-tree "$2" -- specs/log.md specs/log/ 2>/dev/null || true; } |
+        while read -r mode type sha path; do
+            case "$mode $type" in "100644 blob"|"100755 blob") ;; *) continue ;; esac
+            case "$path" in specs/log.md|specs/log/[0-9]*.md) ;; *) continue ;; esac
+            GIT_NO_LAZY_FETCH=1 git -C "$1" cat-file blob "$sha" 2>/dev/null | awk 1 || true
+        done
+    return 0
+}
+
+# specs/log.md order, as compaction folds entries into it: newest first, unless its first dated entry
 # (`- YYYY-MM-DD `) is older than its last. Equal dates read as newest first. Succeeds for a
 # newest-first log; fails for an oldest-first one, a log with no dated entry and a missing file.
 spec_log_newest_first() { # log file
@@ -819,8 +849,7 @@ spec_checkouts() { # root
 spec_open_changes() { # root
     local root="$1" path branch loc row closed
     # A worktree branched before a close still carries the record: the root's log has the final word.
-    closed=" "
-    [ ! -f "$root/specs/log.md" ] || closed=" $(sed -n 's/^- [0-9-]* \([^ :]*\):.*/\1/p' "$root/specs/log.md" | tr '\n' ' ')"
+    closed=" $(spec_log_entries "$root" | sed -n 's/^- [0-9-]* \([^ :]*\):.*/\1/p' | tr '\n' ' ')"
     while IFS="$SPEC_SEP" read -r path branch loc; do
         [ -n "$path" ] || continue
         while IFS= read -r row; do

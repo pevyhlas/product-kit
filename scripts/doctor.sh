@@ -383,7 +383,7 @@ trace code-path "Code path not in the repository" "name repo-relative paths that
 # planned: <change> names an open change record (here, or in a worktree unless the log closed
 # it), else a closed or unknown one. A live item's marker naming no change number (M1, 12) is
 # unknown too; org/repo#n names another repository's change.
-closed_ids=" $( [ ! -f "$root/specs/log.md" ] || sed -n 's/^- [0-9-]* \([^ :]*\):.*/\1/p' "$root/specs/log.md" | tr '\n' ' ')"
+closed_ids=" $(spec_log_entries "$root" | sed -n 's/^- [0-9-]* \([^ :]*\):.*/\1/p' | tr '\n' ' ')"
 open_ids=" "
 while IFS="$SEP" read -r path _ loc; do
     for file in "$path"/specs/changes/*.md; do
@@ -591,17 +591,26 @@ if [ "${#path_files[@]}" -gt 0 ]; then
     [ -z "$local_paths" ] || advisories+=("Local machine path at $local_paths: write paths relative to the repository, and org/repo plus a path for another repository")
 fi
 
-# --- Closed changes reach the log: a deleted change record needs its specs/log.md line ------------
+# --- Closed changes reach the log: a deleted change record needs its log entry ---------------------
+# An entry file holds exactly its own change's one dated line, so folding it at compaction is safe.
+for entry_file in "$root"/specs/log/* "$root"/specs/log/.[!.]* "$root"/specs/log/..?*; do
+    [ -e "$entry_file" ] || [ -L "$entry_file" ] || continue
+    entry_id="${entry_file##*/}"; entry_id="${entry_id%.md}"
+    if [ "${entry_file##*/}" = "$entry_id.md" ] && is_change_id "$entry_id" && [ -f "$entry_file" ] && [ ! -L "$entry_file" ] &&
+        [ "$(awk 'END { print NR }' "$entry_file")" = 1 ] &&
+        grep -q "^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] $entry_id: ." "$entry_file"; then continue; fi
+    findings+=("Malformed log entry specs/log/${entry_file##*/}: a plain file <id>.md holding one line, '- <date> <id>: <what changed>', for the change its name gives (close-change.sh writes it)")
+done
 if git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    unlogged=""; through="$(spec_archive_log_through "$root")"
+    unlogged=""; through="$(spec_archive_log_through "$root")"; entries="$(spec_log_entries "$root")"
     while IFS= read -r id; do
         [ -n "$id" ] && [ ! -f "$root/specs/changes/$id.md" ] || continue
         # Entries condensed into specs/archive.md (compact.md) left the log on purpose.
         case "${id%%-*}" in ''|*[!0-9]*) ;; *) [ "$((10#${id%%-*}))" -gt "${through:-0}" ] || continue ;; esac
-        grep -q "^- [0-9-]* $id:" "$root/specs/log.md" 2>/dev/null || unlogged="${unlogged:+$unlogged, }$id"
+        grep -q "^- [0-9-]* $id:" <<< "$entries" || unlogged="${unlogged:+$unlogged, }$id"
     done < <(git -C "$root" log -M --diff-filter=D --name-only --format= -- 'specs/changes/*.md' 2>/dev/null |
         sed -n 's|^specs/changes/\(.*\)\.md$|\1|p' | sort -u)
-    [ -z "$unlogged" ] || findings+=("Closed without a specs/log.md line: $unlogged; the change that deletes its record adds '- <date> <id>: <what changed>' to specs/log.md")
+    [ -z "$unlogged" ] || findings+=("Closed without a log entry: $unlogged; the change that deletes its record adds specs/log/<id>.md, '- <date> <id>: <what changed>' (close-change.sh)")
     # A reviewed record still on the default branch and in this checkout: its change merged
     # without closing. A branch that closes it (record deleted, log line added) is not flagged.
     base="$(spec_default_branch "$root")"

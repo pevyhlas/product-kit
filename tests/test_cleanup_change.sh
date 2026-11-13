@@ -654,8 +654,9 @@ run test ! -d "$PROJ2/.worktrees/079-sub-overlap"
 assert_eq 0 "$STATUS" "worktree gone"
 
 # --- --closed: sweep every closed change's worktree ----------------------------------------------
-# Closed means the record specs/changes/<id>.md is gone from, and specs/log.md has the line on, the
-# trusted integration branch (origin/HEAD), never the worktree's own branch.
+# Closed means the record specs/changes/<id>.md is gone from, and the log (specs/log.md or the entry
+# file specs/log/<id>.md) has the line on, the trusted integration branch (origin/HEAD), never the
+# worktree's own branch.
 BRANCH="$(git -C "$PROJ" symbolic-ref --short HEAD)"
 for id in 060-closed-clean 061-open 062-closed-dirty 063-closed-locked 064-self-claimed 065-logged-record 066-never-logged; do
     git -C "$PROJ" worktree add -qb "$id" "$PROJ/.worktrees/$id" >/dev/null 2>&1
@@ -669,9 +670,10 @@ git -C "$PROJ" worktree lock --reason "held" "$PROJ/.worktrees/063-closed-locked
 # 064 closes itself on its own branch only; the trusted branch never hears of it.
 (
     cd "$PROJ/.worktrees/064-self-claimed" || exit 1
-    mkdir -p specs
+    mkdir -p specs/log
     printf -- '- 2026-11-10 064-self-claimed: done\n' > specs/log.md
-    git add specs/log.md && git commit -qm 'claim closed'
+    printf -- '- 2026-11-10 064-self-claimed: done\n' > specs/log/064-self-claimed.md
+    git add specs && git commit -qm 'claim closed'
 )
 
 it "--closed refuses outright when no trusted integration branch resolves"
@@ -684,12 +686,14 @@ assert_contains "$OUTPUT" '"result":"refused"' "JSON result"
 run test -d "$PROJ/.worktrees/060-closed-clean"
 assert_eq 0 "$STATUS" "nothing was removed"
 
-# The trusted branch records 060, 062, 063, 065, 067 as closed, 065 with its record still present.
-mkdir -p "$PROJ/specs/changes"
+# The trusted branch records 060, 062, 063, 065, 067 as closed, 065 with its record still present,
+# 060 in its entry file.
+mkdir -p "$PROJ/specs/changes" "$PROJ/specs/log"
 {
     printf -- '- 2026-11-10 067-closed-here: x\n- 2026-11-09 065-logged-record: x\n- 2026-11-08 063-closed-locked: x\n'
-    printf -- '- 2026-11-07 062-closed-dirty: x\n- 2026-11-06 060-closed-clean: x\n'
+    printf -- '- 2026-11-07 062-closed-dirty: x\n'
 } > "$PROJ/specs/log.md"
+printf -- '- 2026-11-06 060-closed-clean: x\n' > "$PROJ/specs/log/060-closed-clean.md"
 printf '# 061-open\n' > "$PROJ/specs/changes/061-open.md"
 printf '# 065-logged-record\n' > "$PROJ/specs/changes/065-logged-record.md"
 git -C "$PROJ" add specs >/dev/null 2>&1; git -C "$PROJ" commit -qm 'close changes' >/dev/null 2>&1
@@ -707,7 +711,7 @@ run bash "$CLEAN" --json --closed
 assert_eq 1 "$STATUS" "the dirty and the locked worktree were refused"
 assert_contains "$OUTPUT" '"action":"closed"' "closed action"
 assert_contains "$OUTPUT" '"result":"refused"' "result is refused"
-assert_contains "$OUTPUT" "060-closed-clean" "the clean closed worktree is listed as removed"
+assert_contains "$OUTPUT" "060-closed-clean" "the clean worktree closed by its entry file is listed as removed"
 assert_contains "$OUTPUT" '"skipped":[' "skipped list"
 assert_contains "$OUTPUT" "062-closed-dirty\",\"reason\":\"uncommitted or untracked changes" "dirty one skipped as dirty"
 assert_contains "$OUTPUT" "063-closed-locked\",\"reason\":\"git refused the removal: cannot remove a locked working tree" "locked one skipped with git's reason"

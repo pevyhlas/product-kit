@@ -21,7 +21,7 @@ Return:
   record names. Missing/stale bounds output leaves that obligation unverified. A violated
   constraint or non-goal is high; a quality the change weakens without its check is medium.
 - **One home** (`.prdkit/workflows/spec.md`, Organizing): if `specs/` is readable at {HEAD_SHA},
-  search it, except `archive.md`, `log.md`, `inbox.md` and `changes/`, for the touched IDs and
+  search it, except `archive.md`, `log.md`, `log/`, `inbox.md` and `changes/`, for the touched IDs and
   terms (never a required input). A copy the diff adds or edits is medium; a contradiction it creates (an old copy
   of a changed fact) is high; untouched older duplication is low, with a pointer.
 - Anything not verifiable from the package; never guess a pass.

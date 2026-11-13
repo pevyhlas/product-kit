@@ -99,7 +99,7 @@ until then.
 | `specs/product-spec/` and its domain documents | `product.md` (L0), `architecture.md` (L1), `parts/` (L2) |
 | `FR-`, `AC-`, domain IDs | `R-`, `Q-`, `C-`, `D-`, `P<n>`, `P<n>.B-`, `P<n>.I-`; acceptance items `A1`… per change |
 | `specs/targets/<id>/target.md` | a parent change (`/prdkit-target`), or journeys and thesis in L0 |
-| `specs/features/<id>/` (`spec.md`, `tasks.md`, `acceptance.md`, `readiness.md`) | `specs/changes/<id>.md`, deleted on close, plus one line in `specs/log.md` |
+| `specs/features/<id>/` (`spec.md`, `tasks.md`, `acceptance.md`, `readiness.md`) | `specs/changes/<id>.md`, deleted on close, plus one line in the log (`specs/log/<id>.md`, folded into `specs/log.md`) |
 | Closed features, superseded canon and targets | what binds in the spec; directions tried and lessons in `specs/archive.md`; the files in git only |
 | Holds, owner gates and approvals in task State or targets | `HOLD`, `WAIVER`, `ATTEST`, `DEPLOY` lines in `specs/records.md` |
 | Opportunities and later horizons | Decided deferrals with a revisit trigger in L0; unresolved questions in the inbox |

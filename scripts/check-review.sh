@@ -19,8 +19,8 @@
 # then does its range link. A blocking head that is not a commit hash always stands; one gone
 # from the history (rebased or squashed away) is ignored. Every non-blocking PASS range,
 # superseded rounds included, links. A point is covered when links chain from it (each starting
-# at or before a head already reached) to a head after which only the record and specs/log.md
-# changed, or through verified imports from the trusted base that preserve the exact branch
+# at or before a head already reached) to a head after which only the record and the log (specs/log.md,
+# specs/log/<id>.md) changed, or through verified imports from the trusted base that preserve the exact branch
 # delta (modes, blob IDs and paths). Overlapping source edits/resolutions remain uncovered.
 # Each reviewer's head must be covered, and for
 # T1-T3 so must the change's start (its merge base with --base). A merge carrying only the record
@@ -161,7 +161,7 @@ t0_paths() { # rev -> configured entries, one per line
 }
 metadata_mode_problems() { # rev -> the record or log path when it is there but not a regular file
     local file entry
-    for file in "$path" specs/log.md; do
+    for file in "$path" specs/log.md "specs/log/$id.md"; do
         entry="$(GIT_NO_REPLACE_OBJECTS=1 git -C "$root" ls-tree "$1" -- "$file")" || return 1
         case "$entry" in ""|"100644 blob "*) ;; *) printf '%s\n' "$file" ;; esac
     done
@@ -171,7 +171,8 @@ t0_violations() { # from to
     allowed="$(t0_paths "$policy_at")"
     raw="$(LC_ALL=C GIT_NO_REPLACE_OBJECTS=1 git -C "$root" -c core.quotepath=true diff --raw --no-abbrev \
         --no-renames --no-ext-diff --no-textconv --no-color --no-relative --ignore-submodules=none "$1" "$2" -- . \
-        ":(top,literal,exclude)$path" ":(top,literal,exclude)specs/log.md")" || return 1
+        ":(top,literal,exclude)$path" ":(top,literal,exclude)specs/log.md" \
+        ":(top,literal,exclude)specs/log/$id.md")" || return 1
     while IFS="$(printf '\t')" read -r meta file; do
         [ -n "$meta" ] || continue
         old="${meta%% *}"; old="${old#:}"; new="${meta#* }"; new="${new%% *}"
@@ -199,7 +200,7 @@ path="specs/changes/$id.md"
 spec_l01=(specs/product.md specs/product specs/architecture.md specs/architecture specs/SPEC.md specs/decisions)
 changed_since() { # sha [pathspec...] -> paths changed from sha to head, outside the record and the log
     local sha="$1"; shift
-    [ "$#" -gt 0 ] || set -- . ":(exclude)$path" ":(exclude)specs/log.md"
+    [ "$#" -gt 0 ] || set -- . ":(exclude)$path" ":(exclude)specs/log.md" ":(exclude)specs/log/$id.md"
     git -C "$root" diff --name-only --no-renames --ignore-submodules=none "$sha" "$head" -- "$@" | tr '\n' ' ' | sed 's/ $//'
 }
 # Exact tree-entry deltas, without rename heuristics, external diff drivers, textconv or
@@ -212,7 +213,7 @@ delta_signature() { # from to pathspec...
 unchanged_since() { # sha [pathspec...] -> covered without another review of this delta
     local sha="$1" delta merges cursor parents first second extra common before after
     shift
-    [ "$#" -gt 0 ] || set -- . ":(exclude)$path" ":(exclude)specs/log.md"
+    [ "$#" -gt 0 ] || set -- . ":(exclude)$path" ":(exclude)specs/log.md" ":(exclude)specs/log/$id.md"
     delta="$(delta_signature "$sha" "$head" "$@")" || return 1
     merges="$(git -C "$root" rev-list --first-parent --min-parents=2 "$sha..$head")" || return 1
     # Inspect merges even if the resulting tree equals the reviewed tree: resolving an
@@ -273,11 +274,33 @@ if [ -z "$record_at" ]; then
         hint=" (a 0.x feature the owner keeps open becomes a change record at the cutover or restructure; see .prdkit/workflows/compact.md)"
     problems+=("No change record $path at $head or in its history$hint")
 else
-    # Closing a change deletes its record; the same history must add its log line.
-    log="$(git -C "$root" show "$head:specs/log.md" 2>/dev/null)" || log=""
-    if [ "$record_at" != "$head" ] && ! grep -q "^- [0-9-]* $id:" <<< "$log"; then
-        problems+=("$id is closed (its record is deleted) but specs/log.md at $head has no '- <date> $id: <what changed>' line")
+    # Closing a change deletes its record; the same history must add its log entry.
+    if [ "$record_at" = "$head" ]; then :
+    elif ! log="$(spec_log_entries_at "$root" "$head")"; then
+        problems+=("$id is closed (its record is deleted), but the log at $head cannot be read without fetching from the promisor remote (a partial clone with Git older than 2.45): fetch the branch's blobs or use Git 2.45+")
+    elif ! grep -q "^- [0-9-]* $id:" <<< "$log"; then
+        problems+=("$id is closed (its record is deleted) but the log at $head has no '- <date> $id: <what changed>' entry (specs/log/$id.md, as close-change.sh writes it, or a line in specs/log.md)")
     fi
+    # The log paths leave review coverage, so each must be a plain file at the head: a pathspec
+    # also excludes whatever lies under a directory of that name. The entry is its own one line.
+    while read -r log_mode log_type log_sha log_path; do
+        case "$log_mode $log_type" in
+            "100644 blob"|"100755 blob")
+                [ "$log_path" != specs/log.md ] || continue
+                if ! spec_objects_local "$root"; then
+                    problems+=("$log_path at $head cannot be checked without fetching from the promisor remote (a partial clone with Git older than 2.45): fetch the branch's blobs or use Git 2.45+")
+                    continue
+                fi
+                # Read to a sentinel, so trailing blank lines count; a missing object reads as empty.
+                entry_text="$(GIT_NO_LAZY_FETCH=1 git -C "$root" cat-file blob "$log_sha" 2>/dev/null; echo .)"
+                entry_text="${entry_text%.}"
+                if [ "$(printf '%s' "$entry_text" | awk 'END { print NR }')" != 1 ] ||
+                    ! grep -q "^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] $id: ." <<< "$entry_text"; then
+                    problems+=("$log_path at $head must hold one line, '- <date> $id: <what changed>'")
+                fi ;;
+            *) problems+=("$log_path at $head is not a regular file; the log and the change's entry are plain files") ;;
+        esac
+    done < <(GIT_NO_LAZY_FETCH=1 git -C "$root" ls-tree "$head" -- specs/log.md "specs/log/$id.md" 2>/dev/null)
     record="$(git -C "$root" show "$record_at:$path")"
     # The tier is the record's single **Tier** field; a second one, even in a comment, is refused.
     claims="$(printf '%s\n' "$record" | record_tiers)"

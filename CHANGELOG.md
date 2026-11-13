@@ -46,6 +46,31 @@ change by change.
   - This is the first of three steps toward binding review to content: it changes no Review-line
     or receipt format. Coverage across merges, rebases and record-only commits (#66, #86) and
     native owner approval (#69) are not addressed here.
+- **Breaking: a closed change's log entry is its own file.** `close-change.sh` writes
+  `specs/log/<id>.md`, one line `- <date> <id>: <text>`, instead of inserting that line at the
+  top of `specs/log.md`. Two branches that each closed a change used to conflict in
+  `specs/log.md`, so every merge forced the other open branches into a hand-resolved merge (a
+  consumer project counted 19 such conflicts in 48 hours). Entry files never conflict, in a local
+  merge, a squash or a host's server-side merge. Compaction folds them into `specs/log.md` in the
+  log's order and deletes them (`compact.md`). Every reader takes both: `check-review.sh`,
+  `cleanup-change.sh --closed`, `doctor.sh`, `new-change.sh` numbering and `status.sh`, whose
+  compaction count includes the entry files. Lines already in `specs/log.md` stay valid; nothing
+  needs migrating. `check-review.sh` exempts only the change's own entry file from review
+  coverage, beside `specs/log.md` as before, and fails when either is not a plain file at the
+  head (a path exclusion also covers everything under a directory of that name, so a directory
+  there could carry unreviewed files) or the entry is not one line for the change. Committed
+  readers take only regular files, and in a partial clone whose Git is older than 2.45 they read
+  nothing rather than fetch: `check-review.sh` then fails closed and `cleanup-change.sh --closed`
+  keeps the worktree.
+- `close-change.sh` refuses a log text over 300 characters (counted as characters, not bytes),
+  three reading lines by the spec's budget rule; the kit's own example entries are under 50. The
+  refusal says that carried findings and follow-ups go to the parent's row or the spec, and
+  evidence stays in the PR. A consumer project's entries had grown to 734 characters on average.
+
+### Added
+
+- `doctor.sh` fails on a malformed log entry file: anything under `specs/log/` that is not
+  `<id>.md` holding exactly one dated line for that change.
 
 ### Removed (breaking)
 

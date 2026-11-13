@@ -128,9 +128,8 @@ list_spec_claims() {
         for path in "$checkout"/specs/changes/[0-9]*.md; do
             [ -f "$path" ] && { name="${path##*/}"; echo "change record ${name%.md}"; }
         done
-        if [ -f "$checkout/specs/log.md" ]; then
-            sed -n 's/^- [0-9-]* \([0-9][0-9][0-9]*-[a-z0-9-]*\):.*/closed change \1/p' "$checkout/specs/log.md"
-        fi
+        spec_log_entries "$checkout" |
+            sed -n 's/^- [0-9-]* \([0-9][0-9][0-9]*-[a-z0-9-]*\):.*/closed change \1/p'
         spec_planned_changes "$checkout" | sed 's/^/planned in the spec /'
         if [ -f "$checkout/specs/archive.md" ]; then
             last="$(spec_archive_last "$checkout")"
