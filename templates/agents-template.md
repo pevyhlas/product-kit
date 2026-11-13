@@ -25,7 +25,8 @@ Implementation/Maker; use one form per identity, since duplicate registrations a
 ## Optional tier map
 
 Neutral definitions in `.prdkit/agents/<name>.md` name a tier, never a model;
-`.prdkit/scripts/bash/render-agents.sh` resolves it here. Opt in to the shared baseline with
+`.prdkit/scripts/bash/render-agents.sh` (installed with `init.sh --with agent-tiers`) resolves it
+here. Opt in to the shared baseline with
 `render-agents.sh --refresh-baseline <agent-library checkout>`, then write these lines outside
 the code block:
 

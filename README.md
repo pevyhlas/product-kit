@@ -177,6 +177,8 @@ bash .product-kit/scripts/init.sh --harness claude,opencode
 
 A fresh install defaults to `claude` + `agents`, and adds `opencode` or `codex` when the project already uses them. With no slash commands at all, ask the agent to read `.prdkit/workflows/protocol.md`. See [harness support](docs/harnesses.md) for what is tested.
 
+Optional subsystems install only on request. `--with agent-tiers` adds tier-based agent definitions and their renderer ([agent lifecycle](docs/agent-lifecycle.md)); later upgrades keep the choice, and a project that already has agent definitions keeps them without the flag. `--without agent-tiers` drops them.
+
 </details>
 
 <details>
@@ -191,7 +193,7 @@ A fresh install defaults to `claude` + `agents`, and adds `opencode` or `codex` 
 | `.prdkit/workflows/` | Neutral playbooks every agent can follow |
 | `.prdkit/templates/`, `.prdkit/scripts/bash/` | Spec templates and helper scripts |
 | `.prdkit/memory/` | Your settings: `constitution.md`, `agents.md`, `config.md` |
-| `.prdkit/.manifest` | Version, harnesses and file hashes, so upgrades know what you edited |
+| `.prdkit/.manifest` | Version, harnesses, optional subsystems and file hashes, so upgrades know what you edited |
 | `.gitignore` | `.prdkit/cache/`, `.worktrees/`, and `.prdkit/ledger/` and `.prdkit/retrospective/` for local data from kits before 2.0 |
 
 `specs/` is yours. The installer never creates or edits anything there.

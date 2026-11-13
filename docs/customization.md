@@ -23,6 +23,8 @@ linked from `architecture.md` (`Inherits`), naming the rules used, never copied.
 ## Agent tier map
 
 `.prdkit/memory/agents.md` resolves each neutral definition's tier to a model per harness.
+Definitions and `render-agents.sh` are the optional `agent-tiers` subsystem, installed with
+`init.sh --with agent-tiers`; the tier-map checks in doctor and the adoption gate always run.
 Several projects can share one optional tier map: a `tiers.json` committed at the root of a
 git repository of your own, vendored from a local checkout with
 `render-agents.sh --refresh-baseline <agent-library checkout>`. The file is one JSON object,
@@ -80,7 +82,9 @@ Commands the kit no longer ships (retired, disabled or unsupported entry points)
 reported by `--check` as RETIRED and removed by `--upgrade` when the previous manifest
 recorded them or they are symlinks into the kit's `commands/`; retired workflows and helpers
 are removed, and a retired template, or the seeded memory file of a removed subsystem
-(`task-ledger.md` in 2.0), is removed unless you edited it; other memory files are never removed; an unrecorded hand-made `prdkit*.md` file or a user's own symlink is kept and
+(`task-ledger.md` in 2.0), is removed unless you edited it; other memory files are never removed.
+The files of an optional subsystem that is no longer selected (`--without`, or a pre-2.0 install
+that never used agent tiers) are removed the same way; an unrecorded hand-made `prdkit*.md` file or a user's own symlink is kept and
 named in a warning, since it would otherwise keep loading into every session.
 An explicit `--harness` list may not drop a recorded harness (see
 [removing a harness](harnesses.md#removing-a-harness)). Doctor and the adoption gate report

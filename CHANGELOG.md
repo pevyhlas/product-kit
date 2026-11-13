@@ -70,6 +70,19 @@ change by change.
   were read by no file in 1.5.0; outside this changelog the kit no longer mentions them. Delete
   the lines from your `config.md` if it still has them; they have no effect either way.
 
+### Changed (breaking)
+
+- **Agent tiers are optional.** A fresh install no longer installs `render-agents.sh` or the
+  neutral `agent-definition-template.md`; pass `--with agent-tiers` to add them. The manifest
+  records the choice (`options: agent-tiers`, or `options: none`) and later runs keep it. A
+  project that uses agent tiers (`.prdkit/agents/*.md` or a vendored `.prdkit/agent-library/`)
+  keeps them on upgrade without the flag. A pre-2.0 install that never used them loses both files
+  on upgrade (an edited template is kept), and the upgrade says how to get them back.
+  `--without agent-tiers` removes them and is refused while the project uses them. Doctor reports
+  definitions or a vendored baseline without the renderer, and a CI call to the renderer of a
+  deselected subsystem is flagged like a call to a removed helper. `agent-tiers-lib.sh` stays
+  core: doctor and the adoption gate check the tier map in `agents.md` either way.
+
 ### Fixed
 
 - `cleanup-change.sh` could delete a submodule commit that existed nowhere else (#85). A linked

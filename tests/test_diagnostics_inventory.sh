@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installed diagnostics are local observations, not claims about a running agent.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
-PROJ="$(make_inited_project)"; track_tmp "$PROJ"
+PROJ="$(make_inited_project --with agent-tiers)"; track_tmp "$PROJ"
 cd "$PROJ" || exit 1
 mkdir -p .prdkit/agents .opencode/agents
 cat > .prdkit/agents/reviewer.md <<'EOF'
