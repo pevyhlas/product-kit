@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # check-review.sh passes a change only when its recorded independent review covers the head being
-# merged: PASS verdicts, nothing blocking for the rigor, only the record and the log changed since,
-# the tier's reviewers present. It reads committed state, so a closing commit that deletes the
+# merged: PASS verdicts, nothing blocking for the rigor, the reviewed content unchanged outside
+# the record and the log, the tier's reviewers present. These fixtures record commit ranges, the
+# format before content fingerprints, which the check still reads (test_review_fingerprint.sh
+# covers the fingerprint lines record-review.sh writes). It reads committed state, so a closing commit that deletes the
 # record still checks against the record's last version. Its policy (Rigor, registry, T0 paths)
 # comes from the trusted integration base, and a branch cannot lower its own tier.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -74,13 +76,13 @@ run bash "$CHECK"
 assert_eq 0 "$STATUS" "review after removing tracked detail covers the final PR diff"
 git reset -q --hard "$BEFORE_PLAN"
 
-it "the reviewed head must be a commit hash, never a name that moves"
+it "the reviewed end must be a content fingerprint or a commit hash, never a name that moves"
 for range in "$BASE..HEAD" "$BASE..001-greet" "$BASE..HEAD~1" "$BASE..@" "$REVIEWED"; do
     record T1 "$(verdict code PASS "$CLEAN" "$range")"
     run bash "$CHECK"
     assert_eq 1 "$STATUS" "range $range refused"
 done
-assert_contains "$OUTPUT" "is not a commit hash" "says why"
+assert_contains "$OUTPUT" "is not a content fingerprint (fp1:…) or a commit hash; record verdicts with record-review.sh, never a name that moves" "says why"
 
 it "a three-dot range reads as two-dot; an empty range or one that skips the change's start fails"
 record T1 "$(verdict code PASS "$CLEAN" "$BASE...$REVIEWED")"
@@ -482,8 +484,10 @@ assert_eq 1 "$STATUS" "another reviewer's FAIL range covers nothing either"
 record T2 "$(verdict code PASS "$CLEAN" "$BASE..$FIX2")" "$(verdict security FAIL '1 critical, 0 high, 0 medium, 0 low' "$REVIEWED..$FIX2")" \
     "$(verdict security PASS "$CLEAN")"
 run bash "$CHECK"
-assert_eq 1 "$STATUS" "a FAIL stands though another reviewer's PASS covers its head"
-assert_contains "$OUTPUT" "security (round 1): its FAIL at" "the standing FAIL is named"
+assert_eq 1 "$STATUS" "a FAIL is not carried to the head by another reviewer's PASS"
+# A full re-review clears the FAIL, but of older content: it carries security nowhere near this head.
+assert_contains "$OUTPUT" "security (round 1): changed since the reviewed head $REVIEWED: src/fix.txt" "security's re-reviewed content is not this head's"
+assert_not_contains "$OUTPUT" "PASS 001-greet" "the failed step never links"
 record T1 "$(verdict code PASS "$CLEAN" "$BASE..$FIX2")" "$(verdict code FAIL '1 critical, 0 high, 0 medium, 0 low' "$BASE..$FIX2")" \
     "$(verdict code PASS "$CLEAN")"
 run bash "$CHECK"
@@ -629,13 +633,13 @@ run bash "$CHECK" 001-greet
 assert_not_contains "$OUTPUT" "has no '- <date> 001-greet" "its entry file is the log entry"
 git checkout -q "$DEFAULT"; git branch -q -D 001-close-nolog
 
-it "a reviewed head outside the history fails"
+it "a reviewed head outside the history is read by its content, which is not this head's"
 git checkout -q 001-greet
 git checkout -q -b side HEAD~3; echo other > other.txt; git add other.txt; git commit -qm other >/dev/null
 REVIEWED="$(git rev-parse --short HEAD)"; git checkout -q 001-greet
 record T1 "$(verdict code PASS "$CLEAN")"
 run bash "$CHECK"
-assert_contains "$OUTPUT" "commit $REVIEWED is not in the history" "foreign head refused"
+assert_contains "$OUTPUT" "code (round 1): changed since the reviewed head $REVIEWED: other.txt" "foreign content refused"
 
 it "a 0.x feature without a record is told it becomes one at the cutover"
 mkdir -p specs/features/002-legacy; echo '# Legacy' > specs/features/002-legacy/spec.md

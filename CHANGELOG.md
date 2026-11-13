@@ -10,6 +10,40 @@ change by change.
 
 ### Changed
 
+- **Review verdicts bind content fingerprints, not commit ranges (breaking; closes #66 and #86).**
+  A verdict used to name a hand-typed `<base sha>..<head sha>` range and coverage was proven from
+  commit ancestry, so a base merge, an edit reverted before a base merge (#86), a narrow range
+  starting at a record-only commit (#66), a rebase and a squash all voided reviews of unchanged
+  work.
+  - New `record-review.sh` is the only writer of `**Review**:` lines: `round <n> ·
+    <from>..<to> · <reviewer> · PASS|FAIL · <counts> · <link>`, where each end is `start` (no
+    change) or `fp1:<sha256>`, the change's content: its delta from where it leaves the trusted
+    base, outside the record and the log, canonicalized by the new `review-fingerprint-lib.sh`.
+    Nobody types a fingerprint. It refuses an untrusted `--base`, an empty range and a record
+    without a `## State` section, and prints the line plus a `prdkit.review.v2` receipt
+    (`reviewer`, `from`, `to`, `head`, `verdict`, counts) for the report comment, which
+    `--verify-reports` matches on `from` and `to`.
+  - `check-review.sh` links verdicts by content and replaces ancestry chaining: a verdict holds
+    across record-only commits, a reverted edit, a rebase, a squash and a non-overlapping base
+    merge, and lapses on a real fix or an overlapping base merge. Overlapping means the base's own
+    changes touch a line the change adds or removes, or one of the 3 context lines around it, or
+    base and change both touch a binary file, a symlink, a submodule, a file the change adds or
+    deletes, or a mode; a conflict resolved by keeping the reviewed lines overlaps too. A failing
+    reviewer's narrow re-review of the fix carries the other approvals forward. The owner's T3
+    verdict binds only the L0/L1 spec, so it survives code fixes and rebases and lapses on an L0
+    or L1 edit. `--json` adds `fingerprint`. A criss-cross history (two merge bases) fails closed.
+  - Lines recorded before fingerprints stay readable, without a rewrite, while their commits are
+    present here (no longer only in the head's history): each end reads as that commit's content,
+    and a missing commit fails closed. v1 receipts still verify those lines. A migration
+    (`init.sh --upgrade --migrate-reviews`) arrives with verdicts bound to their pull request.
+  - A blocking line whose end is a commit gone from the history now stands (it used to be
+    ignored) until a later clean PASS from the same reviewer re-reviews from `start`; returning to
+    earlier content or rewriting history never clears a FAIL.
+  - `build-review-package.sh --since` accepts any earlier reviewed head except HEAD, also one a
+    rebase or squash left out of HEAD's history, and prints `FINGERPRINT` and `SINCE_FINGERPRINT`
+    in its JSON and index. The offline gate now also uses `mktemp`, `wc`, `sort` and a SHA-256
+    tool (`sha256sum`, `shasum` or `openssl`).
+
 - **`check-review.sh` reads its policy from the trusted integration base, never from the change
   or the caller (breaking; #88).** Local probes showed three ways a branch could pass unreviewed or
   under-reviewed work: a record that claimed T0 while changing code passed as "the record's claim";

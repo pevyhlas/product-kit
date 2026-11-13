@@ -41,7 +41,8 @@ Handoffs preserve cumulative accounting; temporary repairs explain their contrib
 Review is proportional to the tier in the protocol and runs per
 [review.md](../workflows/review.md), which also covers merge and closing; the reviewer is a fresh
 context that did not implement the change and receives the full diff, never only a summary.
-`build-review-package.sh` captures committed work into `.prdkit/cache/evidence/`.
+`build-review-package.sh` captures committed work into `.prdkit/cache/evidence/`, and
+`record-review.sh` records each verdict, bound to the reviewed content, in the record's State.
 
 ## Delivery and closing
 

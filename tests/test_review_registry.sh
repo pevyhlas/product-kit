@@ -122,7 +122,9 @@ assert_eq no "$([ -f .git/requests ] && echo yes || echo no)" 'no GitHub invocat
 run bash "$CHECK" 001-reviewed
 assert_contains "$OUTPUT" 'Report links unverified' 'human output has the same limitation'
 mkdir .git/no-network-tools
-for cmd in bash dirname git sed awk tr head grep cat; do
+# Standard utilities only; content fingerprints add mktemp, rm, wc, sort and one SHA-256 tool.
+sha_tool=sha256sum; command -v sha256sum >/dev/null 2>&1 || sha_tool=shasum
+for cmd in bash dirname git sed awk tr head grep cat mktemp rm wc sort "$sha_tool"; do
     ln -s "$(command -v "$cmd")" ".git/no-network-tools/$cmd"
 done
 run env PATH="$PROJ/.git/no-network-tools" bash "$CHECK" --json 001-reviewed
@@ -200,6 +202,31 @@ make_receipt | publish_fixture
 online
 assert_eq 1 "$STATUS" 'superseded invalid report still needs verification'
 assert_contains "$OUTPUT" "$RECORD:4: report link" 'earlier offending line named'
+record code
+
+it "a fingerprint line verifies against the v2 receipt record-review.sh printed"
+printf '# Change: Fixture\n**Tier**: T1\n## State\n' > "$RECORD"
+git add "$RECORD"; git commit -qm 'record without verdicts'
+run bash "$PROJ/.prdkit/scripts/bash/record-review.sh" 001-reviewed --reviewer code --verdict PASS --counts 0,0,0,0 --head HEAD --link "$LINK"
+assert_eq 0 "$STATUS" "recorded: $OUTPUT"
+v2="$(printf '%s\n' "$OUTPUT" | sed -n 3p)"
+git commit -qam 'record review'
+printf '%s\n' "$v2" | publish_fixture
+online
+assert_eq 0 "$STATUS" "the printed receipt matches: $OUTPUT"
+assert_contains "$OUTPUT" '"report_verification":"matched"' 'matched'
+printf '%s\n' "$v2" | jq '.head="provenance only"' | publish_fixture
+online
+assert_eq 0 "$STATUS" "head is provenance, not compared"
+for edit in '.to="start"' '.from="fp1:0000000000000000000000000000000000000000000000000000000000000000"' '.schema="prdkit.review.v1"' '.low=1'; do
+    printf '%s\n' "$v2" | jq -c "$edit" | publish_fixture
+    online
+    assert_eq 1 "$STATUS" "mismatching v2 receipt rejected: $edit"
+    assert_contains "$OUTPUT" "$RECORD:5: report receipt" "names the line (after the blank line record-review.sh adds under an empty State): $edit"
+done
+make_receipt | publish_fixture
+online
+assert_eq 1 "$STATUS" "a v1 receipt does not verify a fingerprint line"
 record code
 
 it "an owner line passes report verification with or without counts; its comment needs an owner receipt"

@@ -6,26 +6,26 @@
 # credentials, so the merging agent and CI can both run it. It checks recorded verdicts; it does
 # not review, and it never grants merge authority.
 #
-# A record line, one per verdict, appended in order; a later line supersedes the same reviewer's
-# earlier one whatever its round number. Both ends of the range are commit hashes:
-#   **Review**: round <n> · <base sha>..<head sha> · <reviewer> · PASS|FAIL · <c> critical, <h> high, <m> medium, <l> low · <link>
-# The owner's line (reviewer `owner`, T3) needs PASS and the head the owner approved; it may omit
-# the counts, which are not read. The link is always the last field. The record is read at the
-# head, or, when the closing commit deleted it, from the last commit that still had it.
+# A record line, one per verdict, written by record-review.sh and appended in order; a later line
+# supersedes the same reviewer's earlier one whatever its round number:
+#   **Review**: round <n> · <from>..<to> · <reviewer> · PASS|FAIL · <c> critical, <h> high, <m> medium, <l> low · <link>
+# Each end is `start` (no change) or fp1:<sha256>, the change's content: its delta from where it
+# leaves --base to a revision, outside the record and the log (review-fingerprint-lib.sh). A line
+# recorded before fingerprints names commit hashes, read as those commits' content while they are
+# here. The owner's line (reviewer `owner`, T3) binds the L0/L1 spec's content only; it needs PASS,
+# may omit the counts, which are not read, and its link is the last field. The record is read at
+# the head, or, when the closing commit deleted it, from the last commit that still had it.
 #
-# Every reviewer's latest verdict, in any tier, must be PASS with nothing blocking for the Rigor.
-# A blocking line (a FAIL, or counts that block for the Rigor or cannot be read) stands until a
-# later non-blocking PASS from the same reviewer, over a non-empty range, reaches its head; only
-# then does its range link. A blocking head that is not a commit hash always stands; one gone
-# from the history (rebased or squashed away) is ignored. Every non-blocking PASS range,
-# superseded rounds included, links. A point is covered when links chain from it (each starting
-# at or before a head already reached) to a head after which only the record and the log (specs/log.md,
-# specs/log/<id>.md) changed, or through verified imports from the trusted base that preserve the exact branch
-# delta (modes, blob IDs and paths). Overlapping source edits/resolutions remain uncovered.
-# Each reviewer's head must be covered, and for
-# T1-T3 so must the change's start (its merge base with --base). A merge carrying only the record
-# and the log from a trusted start (a change closed after its code merged) skips coverage. T1-T3
-# need one independent verdict, T3 the owner's too, and no L0/L1 spec edit since the owner's head.
+# Coverage is by content, never ancestry. Every non-blocking PASS links its two contents. A
+# blocking line (a FAIL, or counts that block for the Rigor or cannot be read) stands until a later
+# clean PASS from the same reviewer over a non-empty range starts at `start` or at content
+# reachable from the failed content through that reviewer's own later lines; only then (the
+# latter) does it link. A content is covered when links lead from it to the head's content: so a
+# verdict survives record-only commits, reverts, rebases, squashes and base merges that leave the
+# reviewed hunks and their 3 context lines alone. Each reviewer's latest content must be covered,
+# and for T1-T3 so must `start`. A merge carrying only the record and the log from a trusted start
+# (a change closed after its code merged) skips coverage. T1-T3 need one independent verdict, T3
+# the owner's too, whose L0/L1 content must equal the head's.
 # The tier is the record's one **Tier** field and never lower than any tier the record named on
 # the trusted branches, at the change's start or at a commit of the branch, nor below T3 for an L0
 # edit; T0 holds only when every changed path outside the record and the log is a regular file
@@ -44,6 +44,7 @@ SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 source "$SCRIPT_DIR/spec-lib.sh"
 source "$SCRIPT_DIR/review-policy-lib.sh"
+source "$SCRIPT_DIR/review-fingerprint-lib.sh"
 json=false; head_ref=HEAD; base_ref=""; repo=.; id=""
 verify_reports=false; pr_url=""; report_verification=not-requested
 usage='Usage: check-review.sh [--json] [--head <rev>] [--base <rev>] [--repo <dir>] [--verify-reports --pr <url>] [<change-id>]'
@@ -90,7 +91,18 @@ policy_at=""
 [ -z "$trusted_default" ] || policy_at="$(git -C "$root" rev-parse --verify --quiet "$trusted_default^{commit}" || true)"
 $base_trusted || import_base=""
 
-problems=(); rows=(); links=(); all_reviews=(); tier=""; rigor=""; record_at=""; record_only=false; start=""; notes=()
+problems=(); rows=(); tier=""; rigor=""; record_at=""; record_only=false; start=""; notes=()
+sep37="$(printf '\037')"; head_fp=""; fp_ready=false
+v_line=(); v_rev=(); v_round=(); v_from=(); v_to=(); v_verdict=(); v_c=(); v_h=(); v_m=(); v_l=(); v_link=()
+# Fingerprints are computed against the trusted base: --base, or, only to word the problems of a
+# refused --base, the trusted default branch.
+fp_base=""
+if $base_trusted; then fp_base="$base_canonical"
+elif [ -n "$policy_at" ]; then fp_base="$trusted_default"; fi
+shallow_hint=""
+[ "$(git -C "$root" rev-parse --is-shallow-repository 2>/dev/null)" != true ] || shallow_hint=" (a shallow clone needs the branch history: fetch-depth 0)"
+fp_cache="$(mktemp -d)" || { echo "check-review.sh: no temporary directory for content fingerprints" >&2; exit 2; }
+trap 'rm -rf "$fp_cache"' EXIT
 if [ -z "$policy_at" ]; then
     problems+=("No trusted integration base: origin/HEAD does not resolve here, so there is no policy to check against; establish it (git remote set-head origin --auto) with its history fetched")
 elif [ -z "$base_ref" ]; then
@@ -203,63 +215,70 @@ changed_since() { # sha [pathspec...] -> paths changed from sha to head, outside
     [ "$#" -gt 0 ] || set -- . ":(exclude)$path" ":(exclude)specs/log.md" ":(exclude)specs/log/$id.md"
     git -C "$root" diff --name-only --no-renames --ignore-submodules=none "$sha" "$head" -- "$@" | tr '\n' ' ' | sed 's/ $//'
 }
-# Exact tree-entry deltas, without rename heuristics, external diff drivers, textconv or
-# whitespace normalization. Git quotes control characters in paths; no NUL data enters Bash.
-delta_signature() { # from to pathspec...
-    local from="$1" to="$2"; shift 2
-    git -C "$root" -c core.quotepath=true diff --no-ext-diff --no-textconv --no-renames \
-        --ignore-submodules=none --raw --no-abbrev "$from" "$to" -- "$@"
-}
-unchanged_since() { # sha [pathspec...] -> covered without another review of this delta
-    local sha="$1" delta merges cursor parents first second extra common before after
-    shift
-    [ "$#" -gt 0 ] || set -- . ":(exclude)$path" ":(exclude)specs/log.md" ":(exclude)specs/log/$id.md"
-    delta="$(delta_signature "$sha" "$head" "$@")" || return 1
-    merges="$(git -C "$root" rev-list --first-parent --min-parents=2 "$sha..$head")" || return 1
-    # Inspect merges even if the resulting tree equals the reviewed tree: resolving an
-    # upstream conflict by choosing the reviewed version is still a new integration decision.
-    [ -n "$delta" ] || [ -n "$merges" ] || return 0
-    [ -n "$import_base" ] || return 1
-    cursor="$head"
-    while [ "$cursor" != "$sha" ]; do
-        parents="$(git -C "$root" rev-list --parents -n 1 "$cursor")" || return 1
-        read -r _ first second extra <<< "$parents"
-        [ -n "$first" ] && [ -z "$extra" ] || return 1
-        git -C "$root" merge-base --is-ancestor "$sha" "$first" || return 1
-        if [ -z "$second" ]; then
-            delta="$(delta_signature "$first" "$cursor" "$@")" || return 1
-            [ -z "$delta" ] || return 1
-        else
-            git -C "$root" merge-base --is-ancestor "$second" "$import_base" || return 1
-            common="$(git -C "$root" merge-base --all "$first" "$second")" || return 1
-            case "$common" in ''|*$'\n'*) return 1 ;; esac
-            before="$(delta_signature "$common" "$first" "$@")" || return 1
-            after="$(delta_signature "$second" "$cursor" "$@")" || return 1
-            [ "$before" = "$after" ] || return 1
-        fi
-        cursor="$first"
-    done
-    return 0
-}
 is_sha() { case "$1" in ""|*[!0-9a-f]*) return 1 ;; esac; [ "${#1}" -ge 7 ] && [ "${#1}" -le 40 ]; }
-here() { # end -> its full hash when it is a commit hash in the head's history; no problem recorded
-    local sha
-    is_sha "$1" && sha="$(git -C "$root" rev-parse --verify --quiet "$1^{commit}")" &&
-        git -C "$root" merge-base --is-ancestor "$sha" "$head" && printf '%s\n' "$sha"
+# The content a revision carries, as review-fingerprint-lib.sh computes it against fp_base: the
+# whole change ("full") or its L0/L1 spec slice ("l01"). Cached per commit; sets content_fp and
+# content_stream (a file), or content_err and returns 1.
+content_of() { # commit full|l01
+    local file="$fp_cache/$1.$2" digest
+    content_fp=""; content_err=""; content_stream="$file.stream"
+    if [ ! -f "$file.done" ]; then
+        if [ "$2" = l01 ]; then
+            review_delta_stream "$root" "$id" "$fp_base" "$1" "${REVIEW_L01_PATHSPECS[@]}" > "$file.stream" || content_err="$REVIEW_FP_ERROR"
+        else
+            review_delta_stream "$root" "$id" "$fp_base" "$1" > "$file.stream" || content_err="$REVIEW_FP_ERROR"
+        fi
+        if [ -z "$content_err" ]; then
+            if digest="$(review_sha256 < "$file.stream")"; then printf 'fp1:%s\n' "$digest" > "$file.fp"
+            else content_err="${REVIEW_FP_ERROR:-SHA-256 failed}"; fi
+        fi
+        printf '%s\n' "$content_err" > "$file.err"; : > "$file.done"
+    fi
+    content_err="$(cat "$file.err")"
+    [ -z "$content_err" ] || return 1
+    content_fp="$(cat "$file.fp")"
 }
-# A recorded end must be a commit hash present here and in the head's history; sets resolved to
-# its full hash, or records the problem and returns 1.
-resolve_end() { # label end
-    resolved=""
-    if ! is_sha "$2"; then
-        problems+=("$1: '${2:-}' is not a commit hash; record the resolved hashes build-review-package.sh prints"); return 1
+# A recorded range end: `start`, a content fingerprint, or (a line recorded before fingerprints)
+# a commit hash present here, read as that commit's content, whether or not it is still in the
+# head's history. Sets tok_fp, or tok_err and returns 1.
+# With no content to compare (no trusted base, or the head cannot be fingerprinted) only the
+# form and presence are checked, so the problems still name a missing commit (none = form only).
+resolve_token() { # token full|l01|none
+    tok_fp=""; tok_err=""; tok_commit=""
+    if [ "$1" = start ]; then tok_fp="$REVIEW_FP_EMPTY"; return 0; fi
+    if review_is_fp "$1"; then tok_fp="$1"; return 0; fi
+    if ! is_sha "$1"; then
+        tok_err="'$1' is not a content fingerprint (fp1:…) or a commit hash; record verdicts with record-review.sh, never a name that moves"; return 1
     fi
-    if ! resolved="$(git -C "$root" rev-parse --verify --quiet "$2^{commit}")"; then
-        problems+=("$1: commit $2 is not here (a shallow clone needs the branch history: fetch-depth 0)"); return 1
+    if ! tok_commit="$(git -C "$root" rev-parse --verify --quiet "$1^{commit}")"; then
+        tok_commit=""
+        tok_err="commit $1 is not here: a range recorded before content fingerprints needs its commits; fetch them or record a new verdict with record-review.sh$shallow_hint"; return 1
     fi
-    if ! git -C "$root" merge-base --is-ancestor "$resolved" "$head"; then
-        problems+=("$1: commit $2 is not in the history of $head"); resolved=""; return 1
-    fi
+    [ "$2" != none ] || return 0
+    if ! content_of "$tok_commit" "$2"; then tok_err="the content of $1 cannot be read: $content_err"; return 1; fi
+    tok_fp="$content_fp"
+}
+shown_fp() { # fingerprint -> its first 12 hex digits and an ellipsis
+    local hex="${1#fp1:}"; printf '%s…' "${hex:0:12}"
+}
+# Whether the edges in g_from/g_to (parallel arrays of fingerprints) lead from $1 to $2.
+leads_to() { # from to
+    local reached used k grew=true r
+    reached=("$1"); used=()
+    [ "$1" != "$2" ] || return 0
+    while $grew; do
+        grew=false
+        for k in ${g_from[@]+"${!g_from[@]}"}; do
+            [ -z "${used[k]:-}" ] || continue
+            for r in "${reached[@]}"; do
+                if [ "${g_from[k]}" = "$r" ]; then
+                    [ "${g_to[k]}" != "$2" ] || return 0
+                    reached+=("${g_to[k]}"); used[k]=1; grew=true; break
+                fi
+            done
+        done
+    done
+    return 1
 }
 
 if git -C "$root" cat-file -e "$head:$path" 2>/dev/null; then
@@ -366,18 +385,13 @@ else
     if $base_trusted && [ -n "$start" ] && [ "$start" != "$head" ] && [ -z "$(changed_since "$start")" ]; then
         record_only=true
     fi
-    # Latest verdict per reviewer from State: reviewer, round, range base, range head, verdict,
-    # critical, high, medium, low. Every independent PASS or FAIL line, superseded ones included,
-    # is also a link (marked \036): the range it reviewed, which coverage chains through.
-    sep36="$(printf '\036')"
-    sep35="$(printf '\035')"
-    while IFS= read -r row; do
-        case "$row" in
-            "") ;;
-            "$sep35"*) all_reviews+=("${row#"$sep35"}") ;;
-            "$sep36"*) links+=("${row#"$sep36"}") ;;
-            *) rows+=("$row") ;;
-        esac
+    # The verdict list, parsed once from State in record order: line, reviewer, round, from, to,
+    # verdict, critical, high, medium, low, link. Coverage consumes only this list.
+    v_line=(); v_rev=(); v_round=(); v_from=(); v_to=(); v_verdict=(); v_c=(); v_h=(); v_m=(); v_l=(); v_link=()
+    while IFS="$(printf '\037')" read -r line reviewer round from to verdict critical high medium low link; do
+        [ -n "$line" ] || continue
+        v_line+=("$line"); v_rev+=("$reviewer"); v_round+=("$round"); v_from+=("$from"); v_to+=("$to")
+        v_verdict+=("$verdict"); v_c+=("$critical"); v_h+=("$high"); v_m+=("$medium"); v_l+=("$low"); v_link+=("$link")
     done < <(printf '%s\n' "$record" | awk "$SPEC_SKIP_AWK"'
         { gsub(/[\035-\037]/, " "); if (spec_skip($0)) next }
         function trim(s) { gsub(/`/, "", s); gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
@@ -394,101 +408,132 @@ else
             verdict = toupper(trim(f[4]))
             # The link is the last field: after the counts, or after the verdict on an owner line.
             link = (n > (reviewer == "owner" ? 4 : 5)) ? trim(f[n]) : ""
-            print "\035" NR "\037" reviewer "\037" from "\037" to "\037" verdict "\037" count(f[5], "critical") "\037" count(f[5], "high") "\037" count(f[5], "medium") "\037" count(f[5], "low") "\037" link
-            if (reviewer != "owner" && (verdict == "PASS" || verdict == "FAIL")) print "\036" reviewer "\037" trim(f[1]) "\037" verdict "\037" from "\037" to "\037" count(f[5], "critical") "\037" count(f[5], "high") "\037" count(f[5], "medium")
-            if (!(reviewer in row)) order[++k] = reviewer
-            row[reviewer] = reviewer "\037" trim(f[1]) "\037" from "\037" to "\037" verdict "\037" count(f[5], "critical") "\037" count(f[5], "high") "\037" count(f[5], "medium") "\037" count(f[5], "low")
-        }
-        END { for (i = 1; i <= k; i++) print row[order[i]] }')
+            print NR "\037" reviewer "\037" trim(f[1]) "\037" from "\037" to "\037" verdict "\037" count(f[5], "critical") "\037" count(f[5], "high") "\037" count(f[5], "medium") "\037" count(f[5], "low") "\037" link
+        }')
+    # Each reviewer's latest line, in order of first appearance.
+    order=(); latest=()
+    for i in ${v_rev[@]+"${!v_rev[@]}"}; do
+        found=""
+        for k in ${order[@]+"${!order[@]}"}; do [ "${order[k]}" != "${v_rev[i]}" ] || found="$k"; done
+        if [ -z "$found" ]; then order+=("${v_rev[i]}"); latest+=("$i"); else latest[found]="$i"; fi
+    done
+    for i in ${latest[@]+"${latest[@]}"}; do
+        rows+=("${v_rev[i]}$sep37${v_round[i]}$sep37${v_from[i]}$sep37${v_to[i]}$sep37${v_verdict[i]}$sep37${v_c[i]}$sep37${v_h[i]}$sep37${v_m[i]}$sep37${v_l[i]}")
+    done
     case "$claims" in *$'\n'*) ;; *) [ -n "$tier" ] || problems+=("The record names no review tier (**Tier**: T0–T3)") ;; esac
-    for review in ${all_reviews[@]+"${all_reviews[@]}"}; do
-        IFS="$(printf '\037')" read -r line reviewer _ <<< "$review"
-        [ "$reviewer" != owner ] || continue
+    for i in ${v_rev[@]+"${!v_rev[@]}"}; do
+        [ "${v_rev[i]}" != owner ] || continue
         if [ -z "$registry_at" ]; then
-            problems+=("$path:$line: No trusted integration-baseline registry: establish origin/HEAD and fetch its shared history before checking reviewer eligibility")
+            problems+=("$path:${v_line[i]}: No trusted integration-baseline registry: establish origin/HEAD and fetch its shared history before checking reviewer eligibility")
         fi
-        eligibility="$(review_eligibility "$registry" "$reviewer")"
-        [ "$eligibility" = reviewer ] || problems+=("$path:$line: reviewer '$reviewer' is $eligibility in the integration-baseline registry; register an eligible identity in agents.md before using it")
+        eligibility="$(review_eligibility "$registry" "${v_rev[i]}")"
+        [ "$eligibility" = reviewer ] || problems+=("$path:${v_line[i]}: reviewer '${v_rev[i]}' is $eligibility in the integration-baseline registry; register an eligible identity in agents.md before using it")
     done
 
-    # Every PASS or FAIL line, in record order, with its ends resolved where they are hashes in the
-    # head's history. A blocking line (a FAIL, or counts that block for the Rigor or cannot be
-    # read) stands until a later non-blocking PASS from the same reviewer, over a non-empty range,
-    # reaches its head. A standing line is a problem in any tier and links nothing; one whose head
-    # is a well-formed hash gone from this history (rebased or squashed away) is ignored.
-    l_rev=(); l_round=(); l_block=(); l_text=(); l_verdict=(); l_from=(); l_to=(); link_from=(); link_to=()
-    for link in ${links[@]+"${links[@]}"}; do
-        IFS="$(printf '\037')" read -r reviewer round verdict from to critical high medium <<< "$link"
-        block=false
-        [ "$verdict" = PASS ] && [ "$critical" = 0 ] && [ "$high" = 0 ] && { [ "$rigor" = light ] || [ "$medium" = 0 ]; } || block=true
-        l_rev+=("$reviewer"); l_round+=("$round"); l_verdict+=("$verdict"); l_block+=("$block"); l_text+=("$to")
-        l_from+=("$(here "$from" || true)"); l_to+=("$(here "$to" || true)")
-    done
-    for k in ${l_rev[@]+"${!l_rev[@]}"}; do
-        what="its ${l_verdict[k]}"; [ "${l_verdict[k]}" = FAIL ] || what="its PASS with blocking findings"
+    # Content: the head's fingerprint against the trusted base (the check's --base, or for
+    # diagnostics only, when that base is refused, the trusted default branch). Every recorded
+    # range end resolves to a fingerprint; verdicts link fingerprints, never commits.
+    head_fp=""; head_l01=""; fp_ready=false
+    if ! $record_only && [ -n "$fp_base" ] && [ -n "$start" ]; then
+        if content_of "$head" full; then
+            head_fp="$content_fp"; head_stream="$content_stream"; fp_ready=true
+        else
+            problems+=("This head's content cannot be fingerprinted against ${fp_base#refs/remotes/}: $content_err; nothing can be covered")
+        fi
+    fi
+    # Every non-owner PASS or FAIL line, in record order, with its ends resolved. A blocking line
+    # (a FAIL, or counts that block for the Rigor or cannot be read) by reviewer R at content X
+    # stands until a later clean PASS from R over a non-empty range whose start is `start` (a full
+    # re-review) or is reachable from X through R's own lines recorded after the blocking one.
+    # Only a line resolved through that reachability links: a full re-review of other content
+    # clears the FAIL but never vouches for the step it failed. A standing line is a problem in
+    # any tier and links nothing.
+    l_idx=(); l_block=(); l_fromfp=(); l_tofp=(); e_from=(); e_to=()
+    if $fp_ready; then
+        for i in ${v_rev[@]+"${!v_rev[@]}"}; do
+            [ "${v_rev[i]}" != owner ] || continue
+            case "${v_verdict[i]}" in PASS|FAIL) ;; *) continue ;; esac
+            block=false
+            [ "${v_verdict[i]}" = PASS ] && [ "${v_c[i]}" = 0 ] && [ "${v_h[i]}" = 0 ] && { [ "$rigor" = light ] || [ "${v_m[i]}" = 0 ]; } || block=true
+            l_idx+=("$i"); l_block+=("$block")
+            if resolve_token "${v_from[i]}" full; then l_fromfp+=("$tok_fp"); else l_fromfp+=(""); fi
+            if resolve_token "${v_to[i]}" full; then l_tofp+=("$tok_fp"); else l_tofp+=(""); fi
+        done
+    fi
+    for k in ${l_idx[@]+"${!l_idx[@]}"}; do
+        i="${l_idx[k]}"; reviewer="${v_rev[i]}"; x="${l_tofp[k]}"
         if ${l_block[k]}; then
-            if [ -z "${l_to[k]}" ]; then
-                is_sha "${l_text[k]}" || problems+=("${l_rev[k]} (${l_round[k]}): $what at '${l_text[k]}' stands: that is not a commit hash")
-                continue
-            fi
-            resolved_block=false; m=$((k + 1))
-            while [ "$m" -lt "${#l_rev[@]}" ]; do
-                if [ "${l_rev[m]}" = "${l_rev[k]}" ] && ! ${l_block[m]} && [ -n "${l_to[m]}" ] && [ -n "${l_from[m]}" ] &&
-                    [ "${l_from[m]}" != "${l_to[m]}" ] && git -C "$root" merge-base --is-ancestor "${l_to[k]}" "${l_to[m]}"; then
-                    if eligible "${l_rev[m]}"; then resolved_block=true; break; fi
+            what="its ${v_verdict[i]}"; [ "${v_verdict[i]}" = FAIL ] || what="its PASS with blocking findings"
+            resolved_by=""; m=$((k + 1))
+            while [ "$m" -lt "${#l_idx[@]}" ] && [ -z "$resolved_by" ]; do
+                j="${l_idx[m]}"
+                if [ "${v_rev[j]}" = "$reviewer" ] && ! ${l_block[m]} && [ -n "${l_fromfp[m]}" ] && [ -n "${l_tofp[m]}" ] &&
+                    [ "${l_fromfp[m]}" != "${l_tofp[m]}" ] && eligible "$reviewer"; then
+                    if [ -n "$x" ]; then
+                        # R's own steps after the blocking line, any verdict: R inspected them.
+                        g_from=(); g_to=(); n=$((k + 1))
+                        while [ "$n" -lt "${#l_idx[@]}" ]; do
+                            if [ "$n" != "$m" ] && [ "${v_rev[${l_idx[n]}]}" = "$reviewer" ] && [ -n "${l_fromfp[n]}" ] &&
+                                [ -n "${l_tofp[n]}" ] && [ "${l_fromfp[n]}" != "${l_tofp[n]}" ]; then
+                                g_from+=("${l_fromfp[n]}"); g_to+=("${l_tofp[n]}")
+                            fi
+                            n=$((n + 1))
+                        done
+                        if leads_to "$x" "${l_fromfp[m]}"; then resolved_by=reach
+                        elif [ "${l_fromfp[m]}" = "$REVIEW_FP_EMPTY" ]; then resolved_by=start; fi
+                    elif [ "${l_fromfp[m]}" = "$REVIEW_FP_EMPTY" ]; then
+                        resolved_by=start
+                    fi
                 fi
                 m=$((m + 1))
             done
-            if ! $resolved_block; then
-                problems+=("${l_rev[k]} (${l_round[k]}): $what at ${l_to[k]:0:12} stands: no later clean PASS from ${l_rev[k]} reaches that head")
+            if [ -z "$resolved_by" ]; then
+                if [ -n "$x" ]; then
+                    where="${v_to[i]}"; review_is_fp "$where" && where="$(shown_fp "$where")"; is_sha "$where" && where="${where:0:12}"
+                    problems+=("$reviewer (${v_round[i]}): $what at $where stands: no later clean PASS from $reviewer reaches that content")
+                else
+                    problems+=("$reviewer (${v_round[i]}): $what at '${v_to[i]}' stands: that names no content here, and no later clean PASS from $reviewer reviews the change from start")
+                fi
                 continue
             fi
+            [ "$resolved_by" = reach ] || continue
         fi
-        [ -n "${l_to[k]}" ] && [ -n "${l_from[k]}" ] && [ "${l_from[k]}" != "${l_to[k]}" ] || continue
-        eligible "${l_rev[k]}" || continue
-        link_from+=("${l_from[k]}"); link_to+=("${l_to[k]}")
+        [ -n "${l_fromfp[k]}" ] && [ -n "$x" ] && [ "${l_fromfp[k]}" != "$x" ] || continue
+        eligible "$reviewer" || continue
+        e_from+=("${l_fromfp[k]}"); e_to+=("$x")
     done
-    # A point is covered when recorded ranges chain from it to a head after which only the record
-    # and the log changed: each range must start at or before a head already reached.
-    covered() { # sha
-        local reached used grew r k n=0
-        reached=("$1"); used=(); grew=true
-        while $grew; do
-            grew=false
-            while [ "$n" -lt "${#reached[@]}" ]; do
-                unchanged_since "${reached[n]}" && return 0
-                n=$((n + 1))
-            done
-            for k in ${link_from[@]+"${!link_from[@]}"}; do
-                [ -z "${used[k]:-}" ] || continue
-                for r in "${reached[@]}"; do
-                    if git -C "$root" merge-base --is-ancestor "${link_from[k]}" "$r"; then
-                        reached+=("${link_to[k]}"); used[k]=1; grew=true; break
-                    fi
-                done
-            done
-        done
-        return 1
+    covered() { # fingerprint: edges lead from it to this head's content
+        g_from=(${e_from[@]+"${e_from[@]}"}); g_to=(${e_to[@]+"${e_to[@]}"})
+        leads_to "$1" "$head_fp"
     }
 
-    # Verdicts and blocking counts, every tier; then each reviewer's head must be covered.
+    # Verdicts and blocking counts, every tier; then each reviewer's content must be covered.
     independent=0; owner=false
-    for row in ${rows[@]+"${rows[@]}"}; do
-        IFS="$(printf '\037')" read -r reviewer round from to verdict critical high medium low <<< "$row"
-        label="$reviewer ($round)"
+    for i in ${latest[@]+"${latest[@]}"}; do
+        reviewer="${v_rev[i]}"; from="${v_from[i]}"; to="${v_to[i]}"; verdict="${v_verdict[i]}"
+        label="$reviewer (${v_round[i]})"
         [ "$verdict" = PASS ] || problems+=("$label: verdict ${verdict:-missing}, not PASS")
         if [ "$reviewer" = owner ]; then
-            owner=true; $record_only && continue
-            resolve_end "$label" "$to" || continue
-            if ! unchanged_since "$resolved" "${spec_l01[@]}"; then
-                later="$(changed_since "$resolved" "${spec_l01[@]}")"
-                problems+=("$label: the L0/L1 spec changed since the owner's head $to: ${later:-merge integration is not covered}")
+            owner=true; ! $record_only || continue
+            if ! $fp_ready; then resolve_token "$to" none || problems+=("$label: $tok_err"); continue; fi
+            # The owner approves the L0/L1 spec: their verdict holds while that slice is unchanged.
+            if [ -z "$head_l01" ]; then
+                if content_of "$head" l01; then head_l01="$content_fp"; head_l01_stream="$content_stream"
+                else problems+=("$label: this head's L0/L1 spec cannot be fingerprinted: $content_err"); continue; fi
+            fi
+            if ! resolve_token "$to" l01; then problems+=("$label: $tok_err"); continue; fi
+            [ "$tok_fp" != "$head_l01" ] || continue
+            if [ -n "$tok_commit" ]; then
+                later="$(review_stream_paths "$fp_cache/$tok_commit.l01.stream" "$head_l01_stream" | tr '\n' ' ' | sed 's/ $//')"
+                problems+=("$label: the L0/L1 spec changed since the owner's head $to: ${later:-its content differs}")
+            else
+                problems+=("$label: the L0/L1 spec changed since the owner's approval ($(shown_fp "$tok_fp"))")
             fi
             continue
         fi
         if eligible "$reviewer"; then independent=$((independent + 1)); fi
         for kind in critical high medium; do
-            case "$kind" in critical) n="$critical" ;; high) n="$high" ;; medium) n="$medium" ;; esac
+            case "$kind" in critical) n="${v_c[i]}" ;; high) n="${v_h[i]}" ;; medium) n="${v_m[i]}" ;; esac
             [ "$kind" != medium ] || [ "$rigor" != light ] || continue
             [ "$n" = 0 ] && continue
             if [ "$rigor" = unknown ]; then
@@ -497,14 +542,21 @@ else
                 problems+=("$label: $n $kind finding(s) block under Rigor: $rigor")
             fi
         done
-        $record_only && continue
-        resolve_end "$label" "$from" || true
-        from_resolved="$resolved"
-        resolve_end "$label" "$to" || continue
-        if [ "$from_resolved" = "$resolved" ]; then problems+=("$label: the range $from..$to is empty"); continue; fi
-        if ! covered "$resolved"; then
-            later="$(changed_since "$resolved")"
-            problems+=("$label: changed since the reviewed head $to: ${later:-merge integration is not covered}")
+        ! $record_only || continue
+        if ! $fp_ready; then
+            for end in "$from" "$to"; do resolve_token "$end" none || problems+=("$label: $tok_err"); done
+            continue
+        fi
+        from_fp=""
+        if resolve_token "$from" full; then from_fp="$tok_fp"; else problems+=("$label: $tok_err"); fi
+        if ! resolve_token "$to" full; then problems+=("$label: $tok_err"); continue; fi
+        if [ "$from_fp" = "$tok_fp" ]; then problems+=("$label: the range $from..$to is empty"); continue; fi
+        covered "$tok_fp" && continue
+        if [ -n "$tok_commit" ]; then
+            later="$(review_stream_paths "$fp_cache/$tok_commit.full.stream" "$head_stream" | tr '\n' ' ' | sed 's/ $//')"
+            problems+=("$label: changed since the reviewed head $to: ${later:-its content differs}")
+        else
+            problems+=("$label: changed since the reviewed content $(shown_fp "$tok_fp"): no recorded verdict carries it to this head's content ($(shown_fp "$head_fp"))")
         fi
     done
     if [ "$tier" = T0 ] && ! $record_only && [ -n "$policy_at" ]; then
@@ -531,8 +583,8 @@ else
             [ -z "$policy_at" ] || problems+=("$tier: $head shares no history with $base_ref, so the change's start cannot be found; fetch the branch history")
         elif [ "$start" = "$head" ]; then
             problems+=("$tier: $head is already in $base_ref; pass --base <the branch it merges into>")
-        elif [ "$independent" -gt 0 ] && ! covered "$start"; then
-            problems+=("$tier: the recorded ranges do not chain from the change's start ${start:0:12} (where it leaves $base_ref) to this head; review the whole change")
+        elif [ "$independent" -gt 0 ] && $fp_ready && ! covered "$REVIEW_FP_EMPTY"; then
+            problems+=("$tier: the recorded ranges do not chain from the change's start ${start:0:12} (where it leaves $base_ref) to this head's content; review the whole change")
         fi
         [ "$tier" != T3 ] || $owner || problems+=("T3 needs the owner's verdict too (a **Review** line with reviewer owner)")
     fi
@@ -544,15 +596,23 @@ if $verify_reports; then
         source "$SCRIPT_DIR/review-reports-lib.sh"
         if review_reports_context "$pr_url" "$head"; then
             report_verification=matched
-            for review in ${all_reviews[@]+"${all_reviews[@]}"}; do
-                IFS="$(printf '\037')" read -r line reviewer from to verdict critical high medium low link <<< "$review"
-                from="$(here "$from" || true)"; to="$(here "$to" || true)"
-                # Superseded verdicts whose history is unavailable still cannot be authenticated.
-                if [ -z "$from" ] || [ -z "$to" ]; then
-                    problems+=("$path:$line: report range is unavailable for verification"); report_verification=failed; continue
+            for i in ${v_rev[@]+"${!v_rev[@]}"}; do
+                from="${v_from[i]}"; to="${v_to[i]}"; at="$path:${v_line[i]}"
+                # A fingerprint line matches a v2 receipt with exactly the recorded ends; a line
+                # recorded before fingerprints, a v1 receipt with both commits' full hashes.
+                if { [ "$from" = start ] || review_is_fp "$from"; } && review_is_fp "$to"; then
+                    review_report_match_v2 "${v_link[i]}" "${v_rev[i]}" "$from" "$to" "${v_verdict[i]}" "${v_c[i]}" "${v_h[i]}" "${v_m[i]}" "${v_l[i]}" ||
+                        { problems+=("$at: $RR_ERROR"); report_verification="$RR_STATE"; }
+                    continue
                 fi
-                if ! review_report_match "$link" "$reviewer" "$from" "$to" "$verdict" "$critical" "$high" "$medium" "$low"; then
-                    problems+=("$path:$line: $RR_ERROR"); report_verification="$RR_STATE"
+                from="$( { is_sha "$from" && git -C "$root" rev-parse --verify --quiet "$from^{commit}"; } || true)"
+                to="$( { is_sha "$to" && git -C "$root" rev-parse --verify --quiet "$to^{commit}"; } || true)"
+                # Superseded verdicts whose commits are unavailable still cannot be authenticated.
+                if [ -z "$from" ] || [ -z "$to" ]; then
+                    problems+=("$at: report range is unavailable for verification"); report_verification=failed; continue
+                fi
+                if ! review_report_match "${v_link[i]}" "${v_rev[i]}" "$from" "$to" "${v_verdict[i]}" "${v_c[i]}" "${v_h[i]}" "${v_m[i]}" "${v_l[i]}"; then
+                    problems+=("$at: $RR_ERROR"); report_verification="$RR_STATE"
                 fi
             done
         else
@@ -567,8 +627,8 @@ if [ "$result" = pass ] && [ "$record_at" = "$head" ]; then
     case $'\n'"$(spec_unclosed_changes "$root" "$head")"$'\n' in *$'\n'"$id"$'\n'*) record_open=true ;; esac
 fi
 if $json; then
-    printf '{"result":"%s","change":"%s","head":"%s","base":"%s","base_trusted":%s,"policy_at":"%s","record_only":%s,"record_open":%s,"tier":"%s","rigor":"%s","record_at":"%s","reviews":[' \
-        "$result" "$id" "$head" "$(json_escape "$base_ref")" "$base_trusted" "$policy_at" "$record_only" "$record_open" "$tier" "$rigor" "$(json_escape "$record_at")"
+    printf '{"result":"%s","change":"%s","head":"%s","fingerprint":"%s","base":"%s","base_trusted":%s,"policy_at":"%s","record_only":%s,"record_open":%s,"tier":"%s","rigor":"%s","record_at":"%s","reviews":[' \
+        "$result" "$id" "$head" "$head_fp" "$(json_escape "$base_ref")" "$base_trusted" "$policy_at" "$record_only" "$record_open" "$tier" "$rigor" "$(json_escape "$record_at")"
     sep=""
     for row in ${rows[@]+"${rows[@]}"}; do
         IFS="$(printf '\037')" read -r reviewer round from to verdict critical high medium low <<< "$row"
