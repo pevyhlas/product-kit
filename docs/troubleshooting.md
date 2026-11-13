@@ -27,7 +27,6 @@
 | Independent reviewer unavailable | Arrange a distinct context or human; review stays pending |
 | Tests pass but the change cannot close | Live acceptance items need a real run; a green PR does not pass an acceptance item |
 | Merged but not live | Deployment is a separate claim: look for a `DEPLOY` record in status |
-| Missing usage numbers | Provide optional documented enrichment, or accept unknown usage |
 | `new-change.sh`: branch already exists | Continue it (`git checkout <id>`) or choose another short name |
 | Harness cannot enter or resume a worktree | A worktree directory was removed without `git worktree remove`; run `.prdkit/scripts/bash/cleanup-change.sh --prune` |
 | Finished change worktree lingers | From the main checkout, run `.prdkit/scripts/bash/cleanup-change.sh <change-id>`, or `cleanup-change.sh --closed` for every closed change's worktree (needs `origin/HEAD`: `git remote set-head origin --auto`) |

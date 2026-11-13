@@ -218,6 +218,12 @@ hash_file() {
     fi
 }
 
+# Memory files and the templates that seed them ("<template>:<memory file>").
+MEMORY_SEEDS="constitution-template.md:constitution.md agents-template.md:agents.md config-template.md:config.md"
+# Seeded memory files of removed subsystems (2.0: the execution ledger). Upgrade retires them like
+# a template, removing an unedited copy; any other memory file is project-owned and never deleted.
+RETIRED_MEMORY="task-ledger.md"
+
 # Emit every file the kit installs as "<kit-source><TAB><path-relative-to-target>".
 # This single list drives installation, the manifest, and --check, so the three
 # can never disagree about what "installed" means.
@@ -247,12 +253,7 @@ list_kit_files() {
         printf '%s\t%s\n' "$src" ".prdkit/templates/$(basename "$src")"
     done
     # Memory files are seeded from these templates.
-    for pair in \
-        "constitution-template.md:constitution.md" \
-        "agents-template.md:agents.md" \
-        "task-ledger-template.md:task-ledger.md" \
-        "config-template.md:config.md"
-    do
+    for pair in $MEMORY_SEEDS; do
         src="$PK_ROOT/templates/${pair%%:*}"
         [ -e "$src" ] || continue
         printf '%s\t%s\n' "$src" ".prdkit/memory/${pair##*:}"
@@ -313,6 +314,7 @@ is_kit_command_link() {
 NAME_RE='[A-Za-z0-9_][A-Za-z0-9_.-]*'
 KIT_FILE_RE="^\\.prdkit/(scripts/bash/$NAME_RE\\.sh|workflows/$NAME_RE\\.md|templates/$NAME_RE\\.md)\$"
 INSTALLED_RE="^(\\.(claude|opencode)/commands/$NAME_RE\\.md|\\.prdkit/memory/$NAME_RE\\.md)\$"
+MEMORY_FILE_RE="^\\.prdkit/memory/$NAME_RE\\.md\$"
 
 # Physical path of a file, following a chain of symlinks (no readlink -f or realpath, which
 # macOS lacks). Fails for an unresolvable directory or a chain longer than 40 links.
@@ -377,30 +379,34 @@ list_retired_commands() {
     done
 }
 
-# Kit-owned scripts/workflows and templates that the previous manifest recorded but the
-# current kit no longer ships (for example a retired helper). Emits "<rel>\t<remove|keep>":
-# kit-owned files and templates still matching their recorded hash are removed; an edited
-# template is project-owned content and is kept with a warning, as is a symlinked one. A
-# manifest path outside the installed layout is ignored with a warning, never touched.
+# Kit-owned scripts/workflows, templates and RETIRED_MEMORY files that the previous manifest
+# recorded but the current kit no longer ships (for example a retired helper, or the memory file
+# of a removed subsystem). Emits "<rel>\t<remove|keep>": kit-owned files, and templates and
+# memory files still matching their recorded hash, are removed; an edited template or memory
+# file is project-owned content and is kept with a warning, as is a symlinked one. A manifest
+# path outside the installed layout is ignored with a warning, never touched.
 list_retired_kit_files() {
     local line rel src
     [ -f "$MANIFEST" ] || return 0
     while IFS= read -r line; do
         case "$line" in version:*|harnesses:*|mode:*|agents-section:*|'') continue ;; esac
         rel="${line#*  }"
-        if ! [[ $rel =~ $KIT_FILE_RE ]]; then
+        if [[ $rel =~ $MEMORY_FILE_RE ]]; then
+            case " $RETIRED_MEMORY " in *" ${rel##*/} "*) src="" ;; *) continue ;; esac
+        elif ! [[ $rel =~ $KIT_FILE_RE ]]; then
             [[ $rel =~ $INSTALLED_RE ]] ||
                 printf 'Warning: ignoring a .prdkit/.manifest entry outside the installed layout: %s\n' "$rel" >&2
             continue
+        else
+            case "$rel" in
+                .prdkit/scripts/bash/*) src="$PK_ROOT/scripts/${rel##*/}" ;;
+                .prdkit/workflows/*) src="$PK_ROOT/workflows/${rel##*/}" ;;
+                *) src="$PK_ROOT/templates/${rel##*/}" ;;
+            esac
         fi
+        { { [ -z "$src" ] || [ ! -e "$src" ]; } && [ -f "$TARGET/$rel" ]; } || continue
         case "$rel" in
-            .prdkit/scripts/bash/*) src="$PK_ROOT/scripts/${rel##*/}" ;;
-            .prdkit/workflows/*) src="$PK_ROOT/workflows/${rel##*/}" ;;
-            *) src="$PK_ROOT/templates/${rel##*/}" ;;
-        esac
-        { [ ! -e "$src" ] && [ -f "$TARGET/$rel" ]; } || continue
-        case "$rel" in
-            .prdkit/templates/*)
+            .prdkit/templates/*|.prdkit/memory/*)
                 if [ ! -L "$TARGET/$rel" ] && [ "$(hash_file "$TARGET/$rel")" = "${line%%  *}" ]; then printf '%s\tremove\n' "$rel"
                 else printf '%s\tkeep\n' "$rel"; fi ;;
             *) printf '%s\tremove\n' "$rel" ;;
@@ -419,7 +425,8 @@ KIT_PATH_RE='(\.prdkit/(scripts/bash|templates|workflows)|\.product-kit/(scripts
 RETIRED_HELPERS='artifact-lib.sh check-artifacts.sh check-canon.sh check-implement-gates.sh
 check-prerequisites.sh check-signoff.sh cleanup-feature.sh create-new-feature.sh
 evidence-fingerprint.sh evidence-lib.sh parts-lib.sh record-analysis.sh resolve-context.sh
-review-scope-lib.sh review-scope.sh setup-plan.sh status-lib.sh update-agent-context.sh'
+review-scope-lib.sh review-scope.sh setup-plan.sh status-lib.sh update-agent-context.sh
+ledger-emit.sh ledger-spool-adapter.sh json-lib.sh retrospective.sh'
 kit_file_retired() { # installed or kit path -> 0 when the kit does not ship it and it is the kit's
     local kit="${1#.prdkit/}"
     kit="${kit#.product-kit/}"; kit="${kit/#scripts\/bash\//scripts/}"
@@ -948,7 +955,7 @@ if [ ${#RETIRED_FILES_REMOVED[@]} -gt 0 ]; then
     for rel in "${RETIRED_FILES_REMOVED[@]}"; do echo "    $rel"; done
 fi
 if [ ${#RETIRED_FILES_KEPT[@]} -gt 0 ]; then
-    echo "⚠ Kept ${#RETIRED_FILES_KEPT[@]} edited template(s) the kit no longer ships; fold or delete them by hand:"
+    echo "⚠ Kept ${#RETIRED_FILES_KEPT[@]} edited template or memory file(s) the kit no longer ships; fold or delete them by hand:"
     for rel in "${RETIRED_FILES_KEPT[@]}"; do echo "    $rel"; done
 fi
 if [ ${#KIT_OVERWRITTEN[@]} -gt 0 ]; then
@@ -959,11 +966,12 @@ if [ ${#KIT_OVERWRITTEN[@]} -gt 0 ]; then
 fi
 
 # --- Seed .gitignore entries for kit-managed local state ---------------------
-# .prdkit/ledger/ is the local event spool (unbounded working record, never
-# committed); .prdkit/cache/ holds raw evidence (review packages, test output),
-# which records link instead of committing; .prdkit/retrospective/ holds optional
-# usage-enrichment inputs (agent names, token counts, costs, notes); .worktrees/ is where
-# new-change.sh puts isolated change checkouts. Seeding them here means no later command has to mutate a tracked
+# .prdkit/cache/ holds raw evidence (review packages, test output), which records link instead
+# of committing; .worktrees/ is where new-change.sh puts isolated change checkouts.
+# .prdkit/ledger/ (event spool) and .prdkit/retrospective/ (usage-enrichment inputs: agent
+# names, token counts, costs, notes) hold local data written by kits before 2.0, which removed
+# the ledger and the retrospective; cleanup-change.sh still preserves that data, so it stays
+# ignored and never enters a routine add. Seeding them here means no later command has to mutate a tracked
 # .gitignore mid-run (which would dirty the tree it is about to check). A symlinked .gitignore is
 # edited at its target only while that stays inside the project.
 IGNORE_ENTRIES=".prdkit/ledger/ .prdkit/cache/ .prdkit/retrospective/ .worktrees/ .prdkit/.install-lock .prdkit/.install-state"

@@ -8,18 +8,18 @@ the docs, templates, and scripts *are* the product.
 ## Validate before any PR
 
 ```bash
-bash tests/run.sh                                                  # full suite; jq 1.6+ for enrichment tests
+bash tests/run.sh                                                  # full suite; requires jq 1.6+
 git diff --check 4b825dc642cb6eb9a060e54bf8d69288fbee4904 HEAD      # no whitespace errors in any tracked file
 find scripts tests -name '*.sh' -print0 | xargs -0 shellcheck --exclude=SC1091   # ShellCheck 0.11.0, as in CI
 ```
 
 CI runs exactly these three on a GitHub-hosted Ubuntu 24.04 runner, with a pinned,
-checksum-verified ShellCheck 0.11.0. CI also checks jq availability. Optional retrospective
-enrichment requires jq; opt-in GitHub report verification requires gh and jq. Ledger-only
-reports and offline review checks retain their Bash/standard-utilities contract.
+checksum-verified ShellCheck 0.11.0. CI also checks jq availability (the tests use it).
+Opt-in GitHub report verification requires gh and jq; offline review checks retain their
+Bash/standard-utilities contract.
 Linux CI additionally runs the adoption-gate and doctor suites with checksum-pinned Debian 12
 mawk (1.3.4 20200120), whose regex engine lacks interval-expression support.
-Installer, upgrade, change, status, doctor, retrospective, adoption-gate and spool-adapter suites
+Installer, upgrade, change, status, doctor and adoption-gate suites
 also run on macOS (system bash 3.2 + BSD userland — keep those scripts portable) in the
 separate `CI (macOS)` workflow, for every pull request and push to main. Both checks must pass
 before a merge; only `CI` gates releases (CONTRIBUTING.md, "CI and the merge rule").
