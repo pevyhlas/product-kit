@@ -58,8 +58,8 @@ verdict, with the commit hashes the review package printed, to the change record
 (`--head <sha>`, then `gh pr merge --match-head-commit <sha>`). It passes when:
 
 - every recorded verdict, in any tier, is PASS with no critical or high finding (no medium
-  either under `Rigor: full`, or when the constitution names no Rigor); a reviewer's later
-  line supersedes its earlier one;
+  either under `Rigor: full`, or when the trusted constitution names no single Rigor); a
+  reviewer's later line supersedes its earlier one;
 - no blocking line stands: a blocking line (a FAIL, or counts that block for the Rigor or
   cannot be read) stands until a later non-blocking PASS from the same reviewer, over a
   non-empty range, reaches its head; only then does its range link. A blocking head that is not
@@ -74,15 +74,49 @@ verdict, with the commit hashes the review package printed, to the change record
   head already inside `--base` fails;
 - the tier's minimum is recorded: one independent verdict for T1–T3, plus the owner's for T3,
   and no L0 or L1 spec edit since the head the owner approved. Which concerns a T2 change
-  needed is the worker's call; the check sees only what is recorded.
+  needed is the worker's call; the check sees only what is recorded;
+- the tier holds (see Policy from the trusted base below).
+
+### Policy from the trusted base
+
+The check never takes its policy from the change or the caller. Its policy snapshot is the
+current tip of `origin/HEAD`'s target, the default branch (`policy_at` in `--json`), whatever
+`--base` says; without `origin/HEAD` the check fails. `--base` only locates the change's start: it
+must be `origin/HEAD`'s target or one of the `review-integration-branches` in its committed
+`.prdkit/memory/config.md`, and any other `--base` (a local branch, a raw commit hash, an unlisted
+remote branch) fails. At the policy snapshot it reads:
+
+- **Rigor** from `.prdkit/memory/constitution.md`: exactly one Rigor line whose value is `light`
+  or `full`, alone or followed by a space and a note. Anything else (none, two, `light/full`)
+  fails the check and blocks medium findings. A branch that edits its own Rigor is still checked
+  under the trusted one, with a note; the edit applies once it merges.
+- **The reviewer registry** from `.prdkit/memory/agents.md` (below). A reviewer revoked there no
+  longer counts, whatever the branch's merge base said.
+- **`review-t0-paths`** from `.prdkit/memory/config.md`: literal paths, a trailing `/` naming a
+  directory (for example `- review-t0-paths: docs/, README.md`). A T0 change passes only when
+  every path it changes since its start, outside its record and `specs/log.md`, is a regular
+  non-executable file under one of them, and none is under `.prdkit/`, `.product-kit`, another
+  change record or the L0/L1 spec. Unset, T0 covers only the record and the log.
+
+The tier is the record's one `**Tier**:` field, whose whole value (up to the next `·`) is exactly
+one of T0–T3 (`T1/T3`, `T1-T3`, `T1, T3` or a second field, even in a comment, fails). It may
+rise, never fall. Its floor is the highest tier the record names on the default branch, on
+`--base`, where the change left the base and at every commit of the branch since, and T3 when the
+change edits L0 (`specs/product.md` or `specs/product/`, as `protocol.md` tiers it). A record on
+the default branch, on `--base` or at the change's start whose tier field is not exactly one tier
+fails the check. A record-only commit that lowers T3 to T1 after review fails and the owner's
+verdict is still required. The record and `specs/log.md` stay exempt from coverage only as
+regular, non-executable files (or absent) where the change starts and at the head (never a
+directory, link or submodule), and a submodule's `ignore` setting never hides a gitlink change.
+To land a policy change, merge it first in its own pull request, checked under the policy it
+replaces.
 
 ### Reviewer eligibility and report links
 
 Every non-owner Review line must name an eligible identity in `.prdkit/memory/agents.md` at the
-integration baseline (merge base with the remote default identified by `origin/HEAD`). Missing
-remote-default authority or shared history leaves identities unregistered; an arbitrary `--base`
-or local main/master cannot supply its own policy. A change cannot add its own maker to the
-registry and approve itself.
+trusted base's current tip (`registry_at`, the same as `policy_at`). Without `origin/HEAD` no
+identity is registered; an arbitrary `--base` or local main/master cannot supply its own policy.
+A change cannot add its own maker to the registry and approve itself.
 Use a `## Review registry` section with `| Identity | Role |` columns and exact roles `reviewer`
 or `maker`. Lowercase identifiers may contain letters, digits, dots, underscores and hyphens.
 A maker is denied even if also listed as a reviewer; duplicate or invalid roles are ambiguous.
@@ -146,11 +180,11 @@ from that default's committed snapshot (for example `- review-integration-branch
 A change cannot whitelist itself through its own config. Missing/duplicate settings grant no
 additional trust. Establish `origin/HEAD` before relying on an exemption; no network lookup runs here.
 
-Comparison-base discovery still tries `origin/HEAD`, `origin/main`, `origin/master`, `main`, `master`.
-Other explicit bases remain usable for ordinary full coverage, but neither a remote-tracking name
-alone nor a local main/master grants an exemption. JSON exposes `base_trusted`. Name the actual PR
-target; each range is still trusted as recorded, not authenticated. The change id defaults to the
-current branch.
+Without `--base` the check uses `origin/HEAD`; it no longer falls back to `origin/main`,
+`origin/master`, `main` or `master`, and an explicit base must be trusted as above. JSON exposes
+`base_trusted` and `policy_at`. Name the actual PR target; a stacked branch whose target is not a
+configured integration branch cannot pass until that target is configured. Each range is still
+trusted as recorded, not authenticated. The change id defaults to the current branch.
 
 It checks recorded verdicts; it does not review, and it never grants merge authority. Where the
 plan offers no branch protection, the merging agent's run is the gate. CI can run it as a

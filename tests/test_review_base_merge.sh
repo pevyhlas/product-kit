@@ -167,6 +167,7 @@ git checkout -q 001-reviewed
 git merge -q --no-edit untrusted-base
 run bash "$CHECK" --json --base untrusted-base 001-reviewed
 assert_eq 1 "$STATUS" 'local side branch is not a trusted import base'
+assert_contains "$OUTPUT" '--base untrusted-base is not a trusted integration branch' 'the untrusted base is refused outright'
 run bash "$CHECK" --json --base "origin/$DEFAULT" 001-reviewed
 assert_eq 1 "$STATUS" 'side branch is not in the actual declared base history'
 
