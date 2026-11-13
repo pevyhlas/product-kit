@@ -36,6 +36,31 @@ change by change.
 - `doctor.sh` fails on a malformed log entry file: anything under `specs/log/` that is not
   `<id>.md` holding exactly one dated line for that change.
 
+### Fixed
+
+- `cleanup-change.sh` could delete a submodule commit that existed nowhere else (#85). A linked
+  worktree keeps its own copy of each submodule repository, and removing the worktree deletes it.
+  A commit made there and recorded in the superproject branch, but never pushed, left the
+  worktree clean, so the forced retry for submodules (or `--force`) removed it and the branch
+  pointed at a commit that no longer existed. Every removal, `--force` included, now refuses while
+  that copy holds a commit (its HEAD, a local branch, tag or stash, any reflog entry of those, or a
+  gitlink the worktree records) that no remote-tracking ref there and no ref or HEAD in the main
+  checkout's copy of the submodule contains, and names the submodule and the commit. Push it, or
+  fetch it into the main checkout's submodule, then rerun. The removal is refused too when git
+  cannot list those commits, and when any file or directory in that copy cannot be read, since git
+  reads around such a file (`log -g` lists nothing, `cat-file` calls the object missing); that
+  refusal names the unreadable path.
+- The forced removal now runs under a mutex, the directory `prdkit-cleanup.lock` in the
+  worktree's git directory (created atomically with `mkdir`), and repeats its checks under it, so
+  two runs cannot remove the same worktree at once. A refused, failed or interrupted removal
+  releases it; a run killed outright leaves it, and later runs refuse and name it until it is
+  removed. A worktree locked with `git worktree lock` is still refused with git's reason.
+- `cleanup-change.sh --closed` matched a worktree by its branch or its directory name, so it could
+  remove a detached-HEAD worktree whose directory carried a closed change id (losing commits no
+  ref reaches), a worktree on an unrelated branch, or one outside `.worktrees/`. It now matches
+  only the layout `new-change.sh` creates: `.worktrees/<id>` in the main checkout, on the branch
+  `<id>`. Any other worktree is left for removal by id.
+
 ## [1.5.0] — 2026-11-10 — worktree cleanup
 
 `cleanup-change.sh` could never remove a worktree in a repository with a git submodule, which

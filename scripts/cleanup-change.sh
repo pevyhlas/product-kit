@@ -46,14 +46,17 @@ Remove a finished change's isolated worktree, or clear stale registrations.
 Options:
   --json        Output in JSON format
   --force       Remove even when the worktree has uncommitted or untracked
-                changes (git worktree remove --force). Discards those changes.
+                changes (git worktree remove --force). Discards those changes,
+                never a submodule commit that exists only in the worktree.
   --prune       Only clear stale ("prunable") worktree registrations left behind
                 when a worktree directory was deleted without this helper.
   --closed      Remove the worktree of every change that is closed on the trusted
                 integration branch (origin/HEAD, plus any review-integration-branches
                 in its committed config): its record specs/changes/<id>.md is gone
-                and the log has its entry. A change id matches a worktree's branch
-                name or directory name. Each worktree goes through the same safe
+                and the log has its entry. Only a worktree laid out as new-change.sh
+                creates it matches: the directory .worktrees/<id> of this checkout, on
+                the branch <id>; a detached HEAD, another branch or another directory
+                is left alone. Each worktree goes through the same safe
                 removal as a single change id; a dirty, locked or otherwise refused
                 worktree is reported and skipped, the run continues, and the exit
                 status is 1 if any was refused. Never forces. Skips the main checkout
@@ -73,8 +76,16 @@ copied to this checkout.
 
 Git refuses to remove any worktree that contains submodules, even a clean one.
 When the worktree is clean and that is the only reason, the removal is retried
-with --force after re-checking that it is still clean, so nothing is discarded.
-Any other git refusal, such as a locked worktree, is reported with git's reason.
+with --force, under a lock no second run can take, after re-checking that it is
+still clean, so nothing is discarded. Any other git refusal, such as a locked worktree, is reported with
+git's reason.
+
+A worktree keeps its own copy of each submodule repository, which the removal
+deletes. Every removal, --force included, is refused while such a copy holds a
+commit (its HEAD, a local branch, tag or stash, any reflog entry of those, or a
+gitlink the worktree records) that no remote-tracking ref there and no ref in the main checkout's
+copy of that submodule contains. Push it, or fetch it into the main checkout's
+submodule, then rerun.
 
 Examples:
   cleanup-change.sh 007-user-auth      # remove that change's worktree
@@ -282,6 +293,198 @@ refuse_git() { # git's reason
         "Refusing to remove $WT: git refused the removal, and the worktree itself is clean. Git's reason: $why"
 }
 
+# Each linked worktree keeps its own copy of every submodule repository under its git directory
+# (<git-dir>/modules/<name>), and removing the worktree deletes it. A commit made there, even one
+# the superproject branch records as a gitlink, then exists nowhere unless something outside the
+# worktree holds it. Every commit such a copy keeps for itself (HEAD, every ref outside
+# refs/remotes/, every entry in their reflogs, such as an older stash) and each gitlink in the
+# worktree's index and HEAD tree that it contains must be contained in a remote-tracking ref of
+# that copy, or in a ref or HEAD of the main checkout's copy of the same submodule.
+# submodule_commits_held sets UNSAFE_MODULE and UNSAFE_COMMIT and returns 1 for the first commit
+# that is not, and returns 2 when git cannot say: an inspection that fails never passes.
+UNSAFE_MODULE=""; UNSAFE_COMMIT=""
+held_outside() { # module git dir, main checkout's module git dir, commit
+    [ -n "$(git --git-dir="$1" for-each-ref --contains "$3" refs/remotes 2>/dev/null)" ] && return 0
+    [ -d "$2/objects" ] || return 1
+    git --git-dir="$2" cat-file -e "$3^{commit}" 2>/dev/null || return 1
+    git --git-dir="$2" merge-base --is-ancestor "$3" HEAD 2>/dev/null && return 0
+    [ -n "$(git --git-dir="$2" for-each-ref --contains "$3" 2>/dev/null)" ]
+}
+# HEAD of a repository (git options in "$@"): prints it and returns 0; returns 1 when it is unborn
+# (a symbolic ref to a branch with no commit yet) and 2 when git cannot say.
+head_of() {
+    local ref found
+    git "$@" rev-parse --verify -q HEAD 2>/dev/null && return 0
+    ref="$(git "$@" symbolic-ref -q HEAD 2>/dev/null)" || return 2
+    found="$(git "$@" for-each-ref --format='%(refname)' "$ref" 2>/dev/null)" || return 2
+    [ -z "$found" ] || return 2
+    return 1
+}
+# The commits a submodule copy keeps for itself, one per line: HEAD, every ref outside
+# refs/remotes/ and every entry in their reflogs. Fails when git cannot list them.
+module_commits() { # module git dir
+    local mod="$1" refs ref state=0
+    refs="$(git --git-dir="$mod" for-each-ref --format='%(refname)' 2>/dev/null)" || return 1
+    refs="$(printf '%s\n' "$refs" | awk 'NF && index($0, "refs/remotes/") != 1')"
+    head_of --git-dir="$mod" >/dev/null || state=$?
+    case "$state" in
+        0) refs="HEAD
+$refs" ;;
+        1) ;;
+        *) return 1 ;;
+    esac
+    while IFS= read -r ref; do
+        [ -n "$ref" ] || continue
+        git --git-dir="$mod" rev-parse --verify -q "$ref" 2>/dev/null || return 1
+        # A ref without a reflog lists nothing and succeeds.
+        git --git-dir="$mod" log -g --format=%H "$ref" -- 2>/dev/null || return 1
+    done <<EOF
+$refs
+EOF
+}
+# Checks every submodule copy whose HEAD file is listed, NUL-separated, in $2 (found under $1).
+scan_modules() { # modules dir, list file
+    local mods="$1" common head mod rel links own present c t state=0
+    common="$(git -C "$ROOT" rev-parse --git-common-dir 2>/dev/null)" || return 2
+    common="$(CDPATH="" cd "$ROOT" && CDPATH="" cd "$common" && pwd -P)" || return 2
+    links="$(git -C "$WT" ls-files -s 2>/dev/null)" || return 2
+    links="$(printf '%s\n' "$links" | awk '$1 == "160000" { print $2 }')"
+    head_of -C "$WT" >/dev/null || state=$?
+    case "$state" in
+        0) own="$(git -C "$WT" ls-tree -r HEAD 2>/dev/null)" || return 2
+           links="$links
+$(printf '%s\n' "$own" | awk '$2 == "commit" { print $3 }')" ;;
+        1) ;;
+        *) return 2 ;;
+    esac
+    links="$(printf '%s\n' "$links" | awk 'NF' | sort -u)"
+    # A submodule copy is a directory under modules/ with its own HEAD and objects; nested
+    # submodules sit under its own modules/ and are found the same way.
+    while IFS= read -r -d '' head; do
+        mod="${head%/HEAD}"
+        [ -d "$mod/objects" ] || continue
+        rel="${mod#"$mods"/}"
+        own="$(module_commits "$mod")" || return 2
+        while IFS= read -r c; do
+            [ -n "$c" ] || continue
+            c="$(git --git-dir="$mod" rev-parse --verify -q "$c^{}" 2>/dev/null)" || return 2
+            t="$(git --git-dir="$mod" cat-file -t "$c" 2>/dev/null)" || return 2
+            [ "$t" = commit ] || continue   # a tag of a tree or blob holds no commit
+            held_outside "$mod" "$common/modules/$rel" "$c" && continue
+            UNSAFE_MODULE="$rel"; UNSAFE_COMMIT="$c"
+            return 1
+        done <<EOF
+$(printf '%s\n' "$own" | sort -u)
+EOF
+        [ -n "$links" ] || continue
+        # "<id> commit <size>" for a gitlink this copy holds, "<id> missing" for another one's.
+        present="$(printf '%s\n' "$links" | git --git-dir="$mod" cat-file --batch-check 2>/dev/null)" || return 2
+        while IFS= read -r c; do
+            [ -n "$c" ] || continue
+            held_outside "$mod" "$common/modules/$rel" "$c" && continue
+            UNSAFE_MODULE="$rel"; UNSAFE_COMMIT="$c"
+            return 1
+        done <<EOF
+$(printf '%s\n' "$present" | awk '$2 == "commit" { print $1 }')
+EOF
+    done < "$2"
+    return 0
+}
+# Git reads around a file it cannot open: `log -g` lists nothing and `cat-file --batch-check` says
+# "missing", both with exit 0. So before git looks, every path under the submodule copies must be
+# a directory this run can read and search or a regular file it can open for reading. Sets
+# UNREADABLE to the first path that is not and returns 2; a traversal that fails returns 2 too.
+UNREADABLE=""
+modules_readable() { # modules dir
+    local list p state=0
+    list="$(mktemp 2>/dev/null)" || return 2
+    # A failed traversal refuses whatever it listed; what it listed still names the culprit.
+    find -L "$1" -print0 > "$list" 2>/dev/null || state=2
+    while IFS= read -r -d '' p; do
+        if [ -d "$p" ]; then
+            [ -r "$p" ] && [ -x "$p" ] && continue
+        elif [ -f "$p" ]; then
+            [ -r "$p" ] && true 2>/dev/null < "$p" && continue
+        fi
+        UNREADABLE="$p"; state=2
+        break
+    done < "$list"
+    rm -f "$list"
+    return "$state"
+}
+submodule_commits_held() {
+    local admin list state=0
+    UNSAFE_MODULE=""; UNSAFE_COMMIT=""; UNREADABLE=""
+    admin="$(git -C "$WT" rev-parse --absolute-git-dir 2>/dev/null)" || return 2
+    # A modules entry this run cannot see, or one that is not a directory, is not an absent one.
+    { [ -r "$admin" ] && [ -x "$admin" ]; } || { UNREADABLE="$admin"; return 2; }
+    if [ ! -e "$admin/modules" ]; then
+        [ -L "$admin/modules" ] && { UNREADABLE="$admin/modules"; return 2; }
+        return 0
+    fi
+    [ -d "$admin/modules" ] || { UNREADABLE="$admin/modules"; return 2; }
+    modules_readable "$admin/modules" || return 2
+    list="$(mktemp 2>/dev/null)" || return 2
+    if find "$admin/modules" -type f -name HEAD -print0 > "$list" 2>/dev/null; then
+        scan_modules "$admin/modules" "$list" || state=$?
+    else
+        state=2
+    fi
+    rm -f "$list"
+    return "$state"
+}
+# Refuses (and returns 1) unless every submodule commit is held outside the worktree.
+check_submodule_commits() {
+    local state=0
+    submodule_commits_held || state=$?
+    case "$state" in
+        0) return 0 ;;
+        1) refuse_with "unpushed submodule commit $UNSAFE_COMMIT in $UNSAFE_MODULE" \
+            "Refusing to remove $WT: its copy of submodule $UNSAFE_MODULE holds commit $UNSAFE_COMMIT, which no remote-tracking ref there and no ref in the main checkout's copy of that submodule contains, so removing the worktree would delete it. Push it from the submodule (or fetch it into the main checkout's submodule), then rerun." ;;
+        *) if [ -n "$UNREADABLE" ]; then
+               refuse_with "cannot read $UNREADABLE" \
+                   "Refusing to remove $WT: this run cannot read $UNREADABLE, so it cannot tell whether the worktree's copy of a submodule holds commits that exist nowhere else, and git would not say. Restore read access (and search access for a directory), then rerun."
+           else
+               refuse_git "git could not list the commits in the worktree's submodules"
+           fi ;;
+    esac
+    return 1
+}
+
+# A forced removal runs under a mutex: the directory prdkit-cleanup.lock in the worktree's git
+# directory, created atomically with mkdir, so two runs cannot remove the same worktree at once.
+# The checks are repeated under it. A successful removal deletes it with the git directory; a
+# refused or failed one, or an interrupted run, removes it again. A run killed outright leaves it,
+# and later runs refuse until it is removed.
+MUTEX=""
+release_mutex() {
+    [ -z "$MUTEX" ] || rmdir "$MUTEX" 2>/dev/null || true
+    MUTEX=""
+}
+trap release_mutex EXIT
+trap 'release_mutex; exit 130' INT
+trap 'release_mutex; exit 143' TERM
+forced_remove() { # recheck_clean (true for the submodule retry)
+    local admin err state
+    admin="$(git -C "$WT" rev-parse --absolute-git-dir 2>/dev/null)" || { refuse_git "git could not resolve the worktree's git directory"; return 1; }
+    if ! mkdir "$admin/prdkit-cleanup.lock" 2>/dev/null; then
+        refuse_with "another cleanup-change.sh run is removing it" \
+            "Refusing to remove $WT: another cleanup-change.sh run holds $admin/prdkit-cleanup.lock and is removing it. If no run is active, remove that directory, then rerun."
+        return 1
+    fi
+    MUTEX="$admin/prdkit-cleanup.lock"
+    if [ "$1" = true ]; then
+        state=0; wt_dirty || state=$?
+        case "$state" in
+            0) release_mutex; refuse_dirty; return 1 ;;
+            2) release_mutex; refuse_git "git status failed in the worktree"; return 1 ;;
+        esac
+    fi
+    check_submodule_commits || { release_mutex; return 1; }
+    err="$(LC_ALL=C git -C "$ROOT" worktree remove --force "$WT" 2>&1 >/dev/null)" || { release_mutex; refuse_git "$err"; return 1; }
+    MUTEX=""   # removed with the worktree's git directory
+}
+
 RESULT_REASON=""; RESULT_MSG=""; RETRIED=false
 remove_worktree() { # path label locked
     local label="$2" locked="$3" rm_err state
@@ -294,6 +497,8 @@ remove_worktree() { # path label locked
             2) refuse_git "git status failed in the worktree"; return 1 ;;
         esac
     fi
+    # --force discards uncommitted changes only, never a commit that exists nowhere else.
+    check_submodule_commits || return 1
 
     if ! preserve cache/evidence || ! preserve cache/retrospectives || ! preserve retrospective ||
         ! merge_events; then
@@ -303,28 +508,24 @@ remove_worktree() { # path label locked
     fi
 
     if [ "$FORCE" = true ]; then
-        rm_err="$(LC_ALL=C git -C "$ROOT" worktree remove --force "$WT" 2>&1 >/dev/null)" || { refuse_git "$rm_err"; return 1; }
+        forced_remove false || return 1
     elif ! rm_err="$(LC_ALL=C git -C "$ROOT" worktree remove "$WT" 2>&1 >/dev/null)"; then
         # Cleanliness was proven above, but a worktree with submodules is refused regardless.
-        # Re-check, then retry forced: with nothing uncommitted, --force discards nothing. A locked
-        # worktree stays refused, with git's reason.
+        # Retry forced under the mutex, after re-checking cleanliness and the submodule commits: with
+        # nothing uncommitted, --force discards nothing. A locked worktree stays refused, with
+        # git's reason.
         if [ "$locked" = true ] || ! submodule_refusal "$rm_err"; then
             refuse_git "$rm_err"; return 1
         fi
-        state=0; wt_dirty || state=$?
-        case "$state" in
-            0) refuse_dirty; return 1 ;;
-            2) refuse_git "git status failed in the worktree"; return 1 ;;
-        esac
         RETRIED=true
-        rm_err="$(LC_ALL=C git -C "$ROOT" worktree remove --force "$WT" 2>&1 >/dev/null)" || { refuse_git "$rm_err"; return 1; }
+        forced_remove true || return 1
     fi
     git -C "$ROOT" worktree prune >/dev/null 2>&1 || true
     RESULT_REASON="removed"
     RESULT_MSG="Removed worktree for '$label': $WT"
     [ "$PRESERVED" -eq 0 ] || RESULT_MSG="$RESULT_MSG; preserved $PRESERVED evidence file(s) in $ROOT/.prdkit/"
     [ "$EVENTS" -eq 0 ] || RESULT_MSG="$RESULT_MSG; appended $EVENTS ledger event(s) to $ROOT/.prdkit/ledger/events.jsonl"
-    [ "$RETRIED" = false ] || RESULT_MSG="$RESULT_MSG; the worktree contains submodules, which git refuses to remove without --force, so it was removed with --force after confirming it had no uncommitted or untracked changes"
+    [ "$RETRIED" = false ] || RESULT_MSG="$RESULT_MSG; the worktree contains submodules, which git refuses to remove without --force, so it was removed with --force after confirming it had no uncommitted or untracked changes and no submodule commit kept only there"
     return 0
 }
 
@@ -351,16 +552,19 @@ EOF
     return 1
 }
 
-# A worktree matches when it names a change id (its branch, its directory name) and every id it
-# names is closed.
-worktree_closed() { # branch basename
-    local name found=false
-    for name in "$1" "$2"; do
-        is_change_id "$name" || continue
-        found=true
-        closed_on_trusted "$name" || return 1
-    done
-    [ "$found" = true ]
+# A worktree matches only as new-change.sh lays it out: the directory .worktrees/<id> of this
+# checkout, on the branch <id>, and <id> is closed. Anything else is left alone: a detached HEAD
+# (it can hold commits no ref reaches, which removing the worktree would lose), another branch, or
+# a directory that merely carries a closed id's name somewhere else.
+WORKTREES_TOP=""
+worktree_closed() { # branch path
+    local branch="$1" path="$2" parent
+    [ -n "$WORKTREES_TOP" ] && [ -n "$branch" ] || return 1
+    is_change_id "$branch" || return 1
+    [ "${path##*/}" = "$branch" ] || return 1
+    parent="$(CDPATH="" cd "${path%/*}" 2>/dev/null && pwd -P)" || return 1
+    [ "$parent" = "$WORKTREES_TOP" ] || return 1
+    closed_on_trusted "$branch"
 }
 
 run_closed() {
@@ -372,6 +576,7 @@ run_closed() {
         if $JSON_MODE; then emit_json refused closed "$msg"; else >&2 echo "[prdkit] $msg"; fi
         exit 1
     fi
+    WORKTREES_TOP="$(CDPATH="" cd "$ROOT/.worktrees" 2>/dev/null && pwd -P)" || WORKTREES_TOP=""
 
     # Entry 0 is the main checkout.
     for ((i = 1; i < ${#ENT_PATH[@]}; i++)); do
@@ -380,7 +585,7 @@ run_closed() {
         if [ "${ENT_BARE[$i]}" = true ] || [ "${ENT_PRUNABLE[$i]}" = true ]; then continue; fi
         top="$(CDPATH="" cd "$path" 2>/dev/null && pwd -P)" || top="$path"
         [ "$top" != "$ROOT_TOP" ] || continue
-        if ! worktree_closed "$branch" "${path##*/}"; then
+        if ! worktree_closed "$branch" "$path"; then
             open_n=$((open_n + 1)); continue
         fi
         case "$CWD_PHYS/" in
