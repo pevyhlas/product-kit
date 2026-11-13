@@ -85,6 +85,20 @@ make_inited_project() {
     echo "$d"
 }
 
+# Commit stdin as <path> on top of a trusted remote-tracking ref and move the ref there, as a
+# policy change landing on the integration branch would, without touching the checkout or branch.
+trusted_edit() { # ref path < content
+    local idx blob tree commit
+    idx="$(mktemp)" || return 1; rm -f "$idx"
+    GIT_INDEX_FILE="$idx" git read-tree "$1" &&
+        blob="$(git hash-object -w --stdin)" &&
+        GIT_INDEX_FILE="$idx" git update-index --add --cacheinfo "100644,$blob,$2" &&
+        tree="$(GIT_INDEX_FILE="$idx" git write-tree)" &&
+        commit="$(git commit-tree "$tree" -p "$1" -m "trusted policy: $2")" &&
+        git update-ref "$1" "$commit"
+    local status=$?; rm -f "$idx"; return "$status"
+}
+
 # Register cleanup of temp dirs created during the run.
 _TMPDIRS=()
 track_tmp() { _TMPDIRS+=("$1"); }

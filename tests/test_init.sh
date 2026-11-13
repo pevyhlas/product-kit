@@ -8,7 +8,12 @@ run bash .product-kit/scripts/init.sh
 it "fresh install provides the public interface and neutral agent operations"
 assert_eq 0 "$STATUS" "install succeeds"
 assert_contains "$OUTPUT" 'Product-Kit initialized' "success banner"
-for file in constitution.md agents.md config.md task-ledger.md; do assert_file "$PROJ/.prdkit/memory/$file" "$file seeded"; done
+for file in constitution.md agents.md config.md; do assert_file "$PROJ/.prdkit/memory/$file" "$file seeded"; done
+memfiles=("$PROJ"/.prdkit/memory/*.md)
+assert_eq 3 "${#memfiles[@]}" "only the three memory files are seeded"
+for file in ledger-emit.sh ledger-spool-adapter.sh json-lib.sh retrospective.sh; do
+    if [ -e "$PROJ/.prdkit/scripts/bash/$file" ]; then _no "removed $file installed"; else _ok "removed $file not installed"; fi
+done
 assert_file "$PROJ/.prdkit/templates/spec-template.md"
 assert_file "$PROJ/.prdkit/workflows/change.md"
 assert_file "$PROJ/.prdkit/workflows/protocol.md"
@@ -70,7 +75,7 @@ expected=0
 for file in "$PROJ"/.product-kit/commands/*.md "$PROJ"/.product-kit/workflows/*.md "$PROJ"/.product-kit/templates/*.md "$PROJ"/.product-kit/scripts/*.sh; do
     [ "$(basename "$file")" = init.sh ] || expected=$((expected + 1))
 done
-assert_eq "$((expected + 4))" "$(grep -Ec '^[0-9a-f]{64}  ' "$PROJ/.prdkit/.manifest")" "manifest covers sources plus four policy seeds"
+assert_eq "$((expected + 3))" "$(grep -Ec '^[0-9a-f]{64}  ' "$PROJ/.prdkit/.manifest")" "manifest covers sources plus three policy seeds"
 assert_contains "$(cat "$PROJ/.prdkit/.manifest")" '.prdkit/workflows/change.md' "workflows tracked"
 it "pristine check is read-only and clean"
 run bash .product-kit/scripts/init.sh --check

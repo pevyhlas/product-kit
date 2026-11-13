@@ -7,7 +7,6 @@
 | `.prdkit/memory/agents.md` | Available capabilities and optional tier-to-model mappings |
 | `.prdkit/templates/` | Project-owned presentation of spec files and records |
 | `.prdkit/memory/config.md` | Optional settings: context budget, adoption-gate keys |
-| `.prdkit/memory/task-ledger.md` | Optional event delivery |
 
 Use `/prdkit-configure` for policy and capability changes. Product direction is authoritative in
 the spec, not duplicated in the constitution. Keep IDs, markers and record formats when
@@ -53,7 +52,8 @@ working.
 
 Light and full share truthful evidence and relevant verification. Review follows the tiers in
 the protocol (T0 docs only, T1 one part, T2 several parts or an interface, security or data, T3
-an L0 edit or L1 one-way door); the constitution may require more. Full also makes medium
+an L0 edit or L1 one-way door); the constitution may require more. T0 is checked against the
+`review-t0-paths` setting, and Rigor is read from the trusted integration branch. Full also makes medium
 findings block and requires independent review of every substantive change. Critical and high
 findings block under both. No universal persona or end-to-end test count applies.
 
@@ -79,7 +79,8 @@ safe ordinary upgrades, not automatic conversion of a 0.x spec ([migrating to 1.
 Commands the kit no longer ships (retired, disabled or unsupported entry points) are
 reported by `--check` as RETIRED and removed by `--upgrade` when the previous manifest
 recorded them or they are symlinks into the kit's `commands/`; retired workflows and helpers
-are removed, and a retired template is removed unless you edited it; an unrecorded hand-made `prdkit*.md` file or a user's own symlink is kept and
+are removed, and a retired template, or the seeded memory file of a removed subsystem
+(`task-ledger.md` in 2.0), is removed unless you edited it; other memory files are never removed; an unrecorded hand-made `prdkit*.md` file or a user's own symlink is kept and
 named in a warning, since it would otherwise keep loading into every session.
 An explicit `--harness` list may not drop a recorded harness (see
 [removing a harness](harnesses.md#removing-a-harness)). Doctor and the adoption gate report

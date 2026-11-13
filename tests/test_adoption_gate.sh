@@ -180,7 +180,7 @@ Documentation example (must NOT be parsed as config):
 
 ## Configuration
 
-- retrospective: off
+- context-budget-bytes: 16384
 - adoption-pin: $PINSHA
 
 ## Meaning
@@ -204,7 +204,7 @@ cat > "$PROJ/.prdkit/memory/config.md" <<EOF
 
 ## Configuration
 
-- retrospective: off
+- context-budget-bytes: 16384
 - adoption-pin: $PINSHA
 - adoption-manifest-sha256: $MSHA
 EOF

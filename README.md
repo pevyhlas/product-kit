@@ -190,9 +190,9 @@ A fresh install defaults to `claude` + `agents`, and adds `opencode` or `codex` 
 | `AGENTS.md` | A section between markers; your own text is never touched |
 | `.prdkit/workflows/` | Neutral playbooks every agent can follow |
 | `.prdkit/templates/`, `.prdkit/scripts/bash/` | Spec templates and helper scripts |
-| `.prdkit/memory/` | Your settings: `constitution.md`, `agents.md`, `config.md`, `task-ledger.md` |
+| `.prdkit/memory/` | Your settings: `constitution.md`, `agents.md`, `config.md` |
 | `.prdkit/.manifest` | Version, harnesses and file hashes, so upgrades know what you edited |
-| `.gitignore` | `.prdkit/ledger/`, `.prdkit/cache/`, `.prdkit/retrospective/`, `.worktrees/` |
+| `.gitignore` | `.prdkit/cache/`, `.worktrees/`, and `.prdkit/ledger/` and `.prdkit/retrospective/` for local data from kits before 2.0 |
 
 `specs/` is yours. The installer never creates or edits anything there.
 
@@ -212,7 +212,7 @@ bash .prdkit/scripts/bash/doctor.sh --strict   # spec integrity, reading budgets
 
 | Tier | When                                           | Independent reviewers        |
 | ---- | ---------------------------------------------- | ---------------------------- |
-| T0   | Docs only, no behavior change                  | None                         |
+| T0   | Docs only (trusted `review-t0-paths`)          | None                         |
 | T1   | Inside one part, no interface change           | 1                            |
 | T2   | Several parts, an interface, security or data  | 1 per applicable concern     |
 | T3   | Product (L0) edit or architecture one-way door | Design review plus the owner |
@@ -384,7 +384,7 @@ Upgrade, then run one cutover between changes with `/prdkit-init`. See [migratin
 bash tests/run.sh
 ```
 
-jq 1.6+ is needed for the optional-enrichment tests; CI adds ShellCheck. [Behavioral evals](tests/evals/README.md) run real agents locally.
+The tests need jq 1.6+; CI adds ShellCheck. [Behavioral evals](tests/evals/README.md) run real agents locally.
 
 Issues and draft pull requests are welcome; only the maintainer merges. See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md) and the [code of conduct](CODE_OF_CONDUCT.md).
 

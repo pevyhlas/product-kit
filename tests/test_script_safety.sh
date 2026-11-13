@@ -4,8 +4,6 @@
 #   - new-change.sh must not silently mutate a dirty main checkout when
 #     worktree creation fails, and must surface git's actual error
 #   - JSON emitters must escape quotes/backslashes in interpolated values
-#   - ledger-emit.sh must read config from the ## Configuration section, not
-#     the first "backend:"-shaped line anywhere in the policy file
 #   - build-review-package.sh must reject path-escaping change ids and claim
 #     round directories atomically
 #   - no awk program may run a regex over one byte of a multibyte character:
@@ -99,55 +97,6 @@ assert_eq 'unstaged tracked edit' "$(cat .gitkeep)" "unstaged content preserved"
 assert_eq 'staged edit' "$(cat staged.txt)" "staged content preserved"
 assert_eq 'untracked owner direction' "$(cat specs/inbox.md)" "untracked content preserved"
 assert_file specs/changes/094-explicit.md "new record created"
-
-# ---------------------------------------------------------------------------
-it "ledger-emit.sh reads config from ## Configuration, not the first match anywhere"
-LPROJ="$(mktemp -d)"; track_tmp "$LPROJ"
-mkdir -p "$LPROJ/.prdkit/memory" "$LPROJ/.prdkit/scripts/bash"
-cp "$PK_ROOT/scripts/ledger-emit.sh" "$PK_ROOT/scripts/common.sh" "$PK_ROOT/scripts/json-lib.sh" "$LPROJ/.prdkit/scripts/bash/"
-git -C "$LPROJ" init -q
-git -C "$LPROJ" config user.email t@example.com
-git -C "$LPROJ" config user.name test
-cat > "$LPROJ/adapter.sh" <<EOF
-#!/usr/bin/env bash
-cat > "$LPROJ/adapter-received.json"
-EOF
-chmod +x "$LPROJ/adapter.sh"
-cat > "$LPROJ/.prdkit/memory/task-ledger.md" <<EOF
-# Task Ledger
-
-Documentation example (must NOT be parsed as config):
-
-- backend: none
-
-## Configuration
-
-- backend: command
-- command: ./adapter.sh
-- events: all
-- mode: best-effort
-
-## Fields
-
-- backend: also-not-config
-EOF
-run bash -c 'cd "$1" && echo '\''{"event":"test"}'\'' | bash .prdkit/scripts/bash/ledger-emit.sh test.event' _ "$LPROJ"
-assert_eq 0 "$STATUS" "emission succeeds: $OUTPUT"
-assert_file "$LPROJ/adapter-received.json" "adapter ran: Configuration section won over the decoy line above it"
-
-it "adapter paths containing spaces remain forbidden independently of policy section parsing"
-mkdir -p "$LPROJ/space dir"
-cp "$LPROJ/adapter.sh" "$LPROJ/space dir/adapter.sh"
-rm "$LPROJ/adapter-received.json"
-printf '# Task Ledger\n\n## Configuration\n\n- backend: command\n- command: ./space dir/adapter.sh\n- events: all\n- mode: best-effort\n' > "$LPROJ/.prdkit/memory/task-ledger.md"
-run bash -c 'cd "$1" && echo '\''{"event":"test"}'\'' | bash .prdkit/scripts/bash/ledger-emit.sh test.event' _ "$LPROJ"
-assert_eq 1 "$STATUS" 'invalid adapter configuration fails'
-assert_contains "$OUTPUT" 'single path' 'diagnostic explains the intentional path contract'
-if [ ! -e "$LPROJ/adapter-received.json" ]; then
-    _ok 'forbidden adapter never runs'
-else
-    _no 'forbidden adapter ran'
-fi
 
 # ---------------------------------------------------------------------------
 it "build-review-package.sh rejects path-escaping change ids"

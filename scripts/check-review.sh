@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # check-review.sh — Before merging a change, check that its recorded independent review covers
 # the head being merged. Reads committed state only: the change record's tier and its State
-# `**Review**:` lines, the constitution's Rigor and local git. Needs no network and no model
+# `**Review**:` lines, and the policy (Rigor, reviewer registry, T0 paths) at the tip of the
+# trusted default branch, never the head's own copy, with local git. Needs no network and no model
 # credentials, so the merging agent and CI can both run it. It checks recorded verdicts; it does
 # not review, and it never grants merge authority.
 #
@@ -25,14 +26,18 @@
 # T1-T3 so must the change's start (its merge base with --base). A merge carrying only the record
 # and the log from a trusted start (a change closed after its code merged) skips coverage. T1-T3
 # need one independent verdict, T3 the owner's too, and no L0/L1 spec edit since the owner's head.
+# The tier is the record's one **Tier** field and never lower than any tier the record named on
+# the trusted branches, at the change's start or at a commit of the branch, nor below T3 for an L0
+# edit; T0 holds only when every changed path outside the record and the log is a regular file
+# under the trusted config's review-t0-paths.
 # A pass whose record is still at the head, with no child or outcome checkpoint, adds a note:
 # if the PR completes the change, close it before merge (close-change.sh). It never fails.
 # --verify-reports --pr <url> compares each linked report with its line; an unavailable or
 # mismatching report fails the check.
 #
 # Usage: check-review.sh [--json] [--head <rev>] [--base <rev>] [--repo <dir>] [<change-id>]
-#   <change-id> defaults to the current branch name; --base to the first of origin/HEAD,
-#   origin/main, origin/master, main and master that exists.
+#   <change-id> defaults to the current branch name; --base to origin/HEAD, and any --base must
+#   be origin/HEAD's target or a review-integration-branches entry in its committed config.
 #   Exit 0 pass, 1 fail, 2 usage.
 set -euo pipefail
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,54 +66,149 @@ root="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null)" || { echo "Not in
 [ -n "$id" ] || id="$(git -C "$root" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
 is_change_id "$id" || { echo "Expected a change id such as 004-export-csv (got: ${id:-none}); pass it explicitly" >&2; exit 2; }
 head="$(git -C "$root" rev-parse --verify --quiet "$head_ref^{commit}")" || { echo "Not a commit here: $head_ref" >&2; exit 2; }
-default_ref=""
-for candidate in origin/HEAD origin/main origin/master main master; do
-    if git -C "$root" rev-parse --verify --quiet "$candidate^{commit}" >/dev/null; then default_ref="$candidate"; break; fi
-done
+# Policy comes from the trusted default branch, never from the change or the caller. The policy
+# snapshot is origin/HEAD's current tip: Rigor, the reviewer registry and the T0 paths are read
+# there, whatever --base says, so neither a branch nor the choice of base changes the rules, and a
+# revoked privilege is not kept by an old merge base. --base only says where the change starts: it
+# must be origin/HEAD's target or one of the review-integration-branches its committed config
+# lists; any other --base is refused.
 if [ -n "$base_ref" ]; then
     git -C "$root" rev-parse --verify --quiet "$base_ref^{commit}" >/dev/null || { echo "Not a commit here: $base_ref" >&2; exit 2; }
-else
-    base_ref="$default_ref"
+elif git -C "$root" rev-parse --verify --quiet "origin/HEAD^{commit}" >/dev/null; then
+    base_ref=origin/HEAD
 fi
-# Only origin/HEAD establishes the default integration branch. Other bases may locate a
-# comparison, but do not grant exemptions. Additional integration refs must be configured in
-# the default branch's committed config, never in the change/worktree being checked.
 approved_refs="$(spec_trusted_refs "$root")"
-trusted_default="$(printf '%s\n' "$approved_refs" | sed -n 1p)"
-trusted_default_sha=""
-if [ -n "$trusted_default" ]; then
-    trusted_default_sha="$(git -C "$root" rev-parse --verify --quiet "$trusted_default^{commit}" || true)"
-fi
 import_base=""
 base_trusted=false
-base_canonical="$(git -C "$root" rev-parse --symbolic-full-name "$base_ref" 2>/dev/null || true)"
+base_canonical=""
+[ -z "$base_ref" ] || base_canonical="$(git -C "$root" rev-parse --symbolic-full-name "$base_ref" 2>/dev/null || true)"
 if [ -n "$base_canonical" ] && printf '%s\n' "$approved_refs" | grep -qxF -- "$base_canonical"; then
     import_base="$(git -C "$root" rev-parse "$base_ref^{commit}")"; base_trusted=true
 fi
+trusted_default="$(printf '%s\n' "$approved_refs" | sed -n 1p)"
+policy_at=""
+[ -z "$trusted_default" ] || policy_at="$(git -C "$root" rev-parse --verify --quiet "$trusted_default^{commit}" || true)"
+$base_trusted || import_base=""
 
-problems=(); rows=(); links=(); all_reviews=(); tier=""; rigor=""; record_at=""; record_only=false; start=""
-# Registration must precede use: a change cannot qualify its own maker or invented identity.
-registry_base="$trusted_default_sha"; registry_at=""; registry=""
-if [ -n "$registry_base" ]; then
-    registry_at="$(git -C "$root" merge-base "$registry_base" "$head" 2>/dev/null || true)"
-    if [ -n "$registry_at" ]; then
-        registry="$( { git -C "$root" show "$registry_at:.prdkit/memory/agents.md" 2>/dev/null || true; } | review_registry)"
-    fi
+problems=(); rows=(); links=(); all_reviews=(); tier=""; rigor=""; record_at=""; record_only=false; start=""; notes=()
+if [ -z "$policy_at" ]; then
+    problems+=("No trusted integration base: origin/HEAD does not resolve here, so there is no policy to check against; establish it (git remote set-head origin --auto) with its history fetched")
+elif [ -z "$base_ref" ]; then
+    problems+=("No base to find the change's start; pass --base <a trusted integration branch>")
+elif ! $base_trusted; then
+    problems+=("--base $base_ref is not a trusted integration branch (origin/HEAD's target, or one named by review-integration-branches in its committed config); pass the branch this change merges into")
 fi
+# Registration must precede use: a change cannot qualify its own maker or invented identity.
+registry_at="$policy_at"; registry=""
+if [ -n "$registry_at" ]; then
+    registry="$( { git -C "$root" show "$registry_at:.prdkit/memory/agents.md" 2>/dev/null || true; } | review_registry)"
+fi
+# Rigor: exactly one Rigor line, an empty one included, whose value is light or full followed by
+# nothing or a space; anything else (none, two, light/full, light1) is unknown, which fails.
+read_rigor() { # rev -> light|full|unknown
+    { git -C "$root" show "$1:.prdkit/memory/constitution.md" 2>/dev/null || true; } | tr -d '\r' | awk '
+        { line = $0 }
+        sub(/^[-*[:space:]]*[Rr]igor\**:\**[[:space:]]*/, "", line) { n++; value = tolower(line) }
+        END {
+            if (n == 1 && value ~ /^(light|full)([[:space:]]|$)/) { sub(/[[:space:]].*/, "", value); print value }
+            else print "unknown"
+        }'
+}
+rigor=unknown
+if [ -n "$policy_at" ]; then
+    rigor="$(read_rigor "$policy_at")"
+    [ "$rigor" != unknown ] ||
+        problems+=("The trusted base's constitution must name exactly one Rigor, light or full (- **Rigor**: light); fix .prdkit/memory/constitution.md on the integration branch")
+fi
+# Every **Tier** field in a record on stdin, one per line: T0-T3, or ? when its whole value (up to
+# the next · or the end of the line, in optional backticks) is not exactly one tier: T1/T3, T1-T3,
+# T1x, "T1, T3" and "T1 T3" are not tiers.
+record_tiers() {
+    awk '{ s = $0; sub(/\r$/, "", s)
+        while ((i = index(s, "**Tier**:")) > 0) {
+            s = substr(s, i + 9); v = s; j = index(v, "·"); if (j) v = substr(v, 1, j - 1)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+            if (v ~ /^`T[0-3]`$/) gsub(/`/, "", v)
+            if (v ~ /^T[0-3]$/) print v; else print "?"
+        } }'
+}
+# For a floor, every T0-T3 named in any **Tier** field value (up to the next ·), so that a
+# malformed earlier value such as T1/T3 still counts at its highest.
+floor_tiers() {
+    awk '{ s = $0
+        while ((i = index(s, "**Tier**:")) > 0) {
+            s = substr(s, i + 9); v = s; j = index(v, "·"); if (j) v = substr(v, 1, j - 1)
+            while (match(v, /T[0-3]/)) { print substr(v, RSTART, 2); v = substr(v, RSTART + 2) }
+        } }'
+}
+highest_tier() { grep -x 'T[0-3]' | sort | tail -n 1; } # tiers on stdin -> the highest
+tier_floor_of() { # rev -> the highest tier the record names there, if any
+    { git -C "$root" show "$1:$path" 2>/dev/null || true; } | floor_tiers | highest_tier || true
+}
+# T0 is docs only: every changed path outside the record and the log must be a regular,
+# non-executable file under a path the trusted config lists in review-t0-paths (literal paths;
+# a trailing / names a directory), and never the kit's policy, another change record or the L0/L1
+# spec. Prints the paths that do not qualify; fails when the diff cannot be read.
+t0_paths() { # rev -> configured entries, one per line
+    { git -C "$root" show "$1:.prdkit/memory/config.md" 2>/dev/null || true; } | awk "$SPEC_SKIP_AWK"'
+        { if (spec_skip($0)) next }
+        /^## / { section = $0; next }
+        section == "## Configuration" && /^- review-t0-paths:/ {
+            n++; value = $0; sub(/^- review-t0-paths:[[:space:]]*/, "", value)
+        }
+        END { if (n == 1) { gsub(/,/, " ", value); print value } }' | tr -s ' \t\r' '\n' |
+        grep -v -e '^$' -e '^/' -e '[][*?\\"]' -e '^\.\./' -e '/\.\./' -e '/\.\.$' -e '^\.\.$' || true
+}
+metadata_mode_problems() { # rev -> the record or log path when it is there but not a regular file
+    local file entry
+    for file in "$path" specs/log.md "specs/log/$id.md"; do
+        entry="$(GIT_NO_REPLACE_OBJECTS=1 git -C "$root" ls-tree "$1" -- "$file")" || return 1
+        case "$entry" in ""|"100644 blob "*) ;; *) printf '%s\n' "$file" ;; esac
+    done
+}
+t0_violations() { # from to
+    local allowed raw meta file old new entry ok
+    allowed="$(t0_paths "$policy_at")"
+    raw="$(LC_ALL=C GIT_NO_REPLACE_OBJECTS=1 git -C "$root" -c core.quotepath=true diff --raw --no-abbrev \
+        --no-renames --no-ext-diff --no-textconv --no-color --no-relative --ignore-submodules=none "$1" "$2" -- . \
+        ":(top,literal,exclude)$path" ":(top,literal,exclude)specs/log.md" \
+        ":(top,literal,exclude)specs/log/$id.md")" || return 1
+    while IFS="$(printf '\t')" read -r meta file; do
+        [ -n "$meta" ] || continue
+        old="${meta%% *}"; old="${old#:}"; new="${meta#* }"; new="${new%% *}"
+        ok=false
+        case "$old:$new" in 000000:100644|100644:100644|100644:000000) ok=true ;; esac
+        case "$file" in .prdkit|.prdkit/*|.product-kit|.product-kit/*|specs/changes/*|\"*) ok=false ;; esac
+        for entry in "${spec_l01[@]}"; do
+            case "$file" in "$entry"|"$entry"/*) ok=false ;; esac
+        done
+        if $ok; then
+            ok=false
+            while IFS= read -r entry; do
+                [ -n "$entry" ] || continue
+                case "$entry" in
+                    */) case "$file" in "$entry"*) ok=true ;; esac ;;
+                    *) [ "$file" != "$entry" ] || ok=true ;;
+                esac
+            done <<< "$allowed"
+        fi
+        $ok || printf '%s\n' "$file"
+    done <<< "$raw"
+}
 eligible() { [ "$(review_eligibility "$registry" "$1")" = reviewer ]; }
 path="specs/changes/$id.md"
 spec_l01=(specs/product.md specs/product specs/architecture.md specs/architecture specs/SPEC.md specs/decisions)
 changed_since() { # sha [pathspec...] -> paths changed from sha to head, outside the record and the log
     local sha="$1"; shift
     [ "$#" -gt 0 ] || set -- . ":(exclude)$path" ":(exclude)specs/log.md" ":(exclude)specs/log/$id.md"
-    git -C "$root" diff --name-only "$sha" "$head" -- "$@" | tr '\n' ' ' | sed 's/ $//'
+    git -C "$root" diff --name-only --no-renames --ignore-submodules=none "$sha" "$head" -- "$@" | tr '\n' ' ' | sed 's/ $//'
 }
 # Exact tree-entry deltas, without rename heuristics, external diff drivers, textconv or
 # whitespace normalization. Git quotes control characters in paths; no NUL data enters Bash.
 delta_signature() { # from to pathspec...
     local from="$1" to="$2"; shift 2
     git -C "$root" -c core.quotepath=true diff --no-ext-diff --no-textconv --no-renames \
-        --raw --no-abbrev "$from" "$to" -- "$@"
+        --ignore-submodules=none --raw --no-abbrev "$from" "$to" -- "$@"
 }
 unchanged_since() { # sha [pathspec...] -> covered without another review of this delta
     local sha="$1" delta merges cursor parents first second extra common before after
@@ -202,14 +302,67 @@ else
         esac
     done < <(GIT_NO_LAZY_FETCH=1 git -C "$root" ls-tree "$head" -- specs/log.md "specs/log/$id.md" 2>/dev/null)
     record="$(git -C "$root" show "$record_at:$path")"
-    tier="$(printf '%s\n' "$record" | sed -n 's/.*\*\*Tier\*\*:[[:space:]]*\(T[0-3]\)\([^0-9].*\)\{0,1\}$/\1/p' | head -n 1)"
-    rigor="$(git -C "$root" show "$head:.prdkit/memory/constitution.md" 2>/dev/null |
-        sed -n 's/^[-*[:space:]]*[Rr]igor\**:\**[[:space:]]*\([A-Za-z]*\).*/\1/p' | head -n 1 | tr '[:upper:]' '[:lower:]')" || true
-    case "$rigor" in light|full) ;; *) rigor=unknown ;; esac
+    # The tier is the record's single **Tier** field; a second one, even in a comment, is refused.
+    claims="$(printf '%s\n' "$record" | record_tiers)"
+    case "$claims" in
+        T[0-3]) tier="$claims" ;;
+        *$'\n'*) problems+=("The record names more than one review tier ($(printf '%s' "$claims" | tr '\n' ' ')); keep exactly one **Tier** field") ;;
+    esac
+    # The branch's own constitution never sets its Rigor; say so when it differs.
+    head_rigor="$(read_rigor "$head")"
+    if [ -n "$policy_at" ] && [ "$head_rigor" != "$rigor" ]; then
+        notes+=("Note: this head's constitution says Rigor $head_rigor; the check uses the trusted base's ($rigor) until that change merges.")
+    fi
     # The change starts where it leaves the base. Carrying only the record and the log from there
     # skips coverage, but only from a trusted start: a base inside the change's own history would
     # hide its code.
     [ -z "$base_ref" ] || start="$(git -C "$root" merge-base "$base_ref" "$head" 2>/dev/null)" || start=""
+    # A branch may raise its tier, never lower it. The floor is the highest tier the record names
+    # on the trusted default branch, on the base, where the change left the base, or at any commit
+    # of the branch since; an L0 edit (specs/product.md, specs/product/) is T3 (protocol.md).
+    floor=""; floor_at=""
+    raise_floor() { # tier where
+        if [ -n "$1" ] && { [ -z "$floor" ] || [[ "$1" > "$floor" ]]; }; then floor="$1"; floor_at="$2"; fi
+    }
+    trusted_floor() { # rev where: a record there must name exactly one tier, or the minimum is unknown
+        local named
+        git -C "$root" cat-file -e "$1:$path" 2>/dev/null || return 0
+        named="$( { git -C "$root" show "$1:$path" 2>/dev/null || true; } | record_tiers)"
+        case "$named" in
+            T[0-3]) raise_floor "$named" "$2" ;;
+            *) problems+=("The record at $2 names no readable tier, so the trusted minimum is unknown; fix it there first") ;;
+        esac
+    }
+    [ -z "$policy_at" ] || trusted_floor "$policy_at" "the trusted base (${trusted_default#refs/remotes/})"
+    [ -z "$import_base" ] || trusted_floor "$import_base" "the base ($base_ref)"
+    if [ -n "$start" ]; then
+        trusted_floor "$start" "the change's start ${start:0:12}"
+        while IFS= read -r commit; do
+            [ -n "$commit" ] || continue
+            raise_floor "$(tier_floor_of "$commit")" "commit ${commit:0:12}"
+        done < <(git -C "$root" rev-list --full-history "$start..$head" -- "$path" 2>/dev/null || true)
+        if [ "$start" != "$head" ] && [ -n "$(changed_since "$start" specs/product.md specs/product)" ]; then
+            raise_floor T3 "its L0 edit ($(changed_since "$start" specs/product.md specs/product))"
+        fi
+    fi
+    if [ -n "$tier" ] && [ -n "$floor" ] && [[ "$tier" < "$floor" ]]; then
+        problems+=("The record claims $tier, but its floor is $floor, from $floor_at: a branch may raise its tier, never lower it; claim **Tier**: $floor")
+        tier="$floor"
+    fi
+    # The record and the log are exempt from coverage only as regular, non-executable files, where
+    # the change starts and at its head: a directory there would exempt everything inside it, and
+    # converting or deleting an unsafe entry would hide that transition.
+    metadata_ends=("$head"); [ -z "$start" ] || [ "$start" = "$head" ] || metadata_ends=("$start" "$head")
+    for at in "${metadata_ends[@]}"; do
+        where="$head"; [ "$at" = "$head" ] || where="the change's start ${start:0:12}"
+        if ! odd="$(metadata_mode_problems "$at")"; then
+            problems+=("The tree at $where cannot be read to check the record and the log")
+        elif [ -n "$odd" ] && [ "$at" = "$head" ]; then
+            problems+=("$(printf '%s' "$odd" | tr '\n' ' ' | sed 's/ $//') must stay a regular, non-executable file")
+        elif [ -n "$odd" ]; then
+            problems+=("$(printf '%s' "$odd" | tr '\n' ' ' | sed 's/ $//') is not a regular, non-executable file at $where, so changing it cannot be exempt from review; fix it on the base first")
+        fi
+    done
     if $base_trusted && [ -n "$start" ] && [ "$start" != "$head" ] && [ -z "$(changed_since "$start")" ]; then
         record_only=true
     fi
@@ -247,7 +400,7 @@ else
             row[reviewer] = reviewer "\037" trim(f[1]) "\037" from "\037" to "\037" verdict "\037" count(f[5], "critical") "\037" count(f[5], "high") "\037" count(f[5], "medium") "\037" count(f[5], "low")
         }
         END { for (i = 1; i <= k; i++) print row[order[i]] }')
-    [ -n "$tier" ] || problems+=("The record names no review tier (**Tier**: T0–T3)")
+    case "$claims" in *$'\n'*) ;; *) [ -n "$tier" ] || problems+=("The record names no review tier (**Tier**: T0–T3)") ;; esac
     for review in ${all_reviews[@]+"${all_reviews[@]}"}; do
         IFS="$(printf '\037')" read -r line reviewer _ <<< "$review"
         [ "$reviewer" != owner ] || continue
@@ -339,7 +492,7 @@ else
             [ "$kind" != medium ] || [ "$rigor" != light ] || continue
             [ "$n" = 0 ] && continue
             if [ "$rigor" = unknown ]; then
-                problems+=("$label: $n $kind finding(s) block: the constitution names no Rigor (light or full), so medium blocks")
+                problems+=("$label: $n $kind finding(s) block: the trusted base's constitution names no single Rigor (light or full), so medium blocks")
             else
                 problems+=("$label: $n $kind finding(s) block under Rigor: $rigor")
             fi
@@ -354,11 +507,28 @@ else
             problems+=("$label: changed since the reviewed head $to: ${later:-merge integration is not covered}")
         fi
     done
+    if [ "$tier" = T0 ] && ! $record_only && [ -n "$policy_at" ]; then
+        # The tier is checked, not taken as the record's claim.
+        if [ -z "$start" ]; then
+            problems+=("T0: $head shares no history with $base_ref, so the change cannot be shown to be docs only; fetch the branch history")
+        elif ! t0_bad="$(t0_violations "$start" "$head")"; then
+            problems+=("T0: the change's diff from ${start:0:12} cannot be read, so it cannot be shown to be docs only")
+        elif [ -n "$t0_bad" ]; then
+            n_bad="$(printf '%s\n' "$t0_bad" | wc -l | tr -d ' ')"
+            shown="$(printf '%s\n' "$t0_bad" | head -n 10 | tr '\n' ' ' | sed 's/ $//')"
+            [ "$n_bad" -le 10 ] || shown="$shown and $((n_bad - 10)) more"
+            if [ -z "$(t0_paths "$policy_at")" ]; then
+                problems+=("T0 is docs only, and the trusted base's .prdkit/memory/config.md lists no review-t0-paths, so T0 covers only the record and the log; this change also touches: $shown. Claim T1 or higher")
+            else
+                problems+=("T0 is docs only: these changed paths are not regular files under the trusted base's review-t0-paths (or are policy, another change record or the L0/L1 spec): $shown. Claim T1 or higher")
+            fi
+        fi
+    fi
     if [ -n "$tier" ] && [ "$tier" != T0 ] && ! $record_only; then
         [ "$independent" -gt 0 ] || problems+=("$tier needs a recorded independent review; none found in State")
         # Coverage closes each reviewer's end; the change's start must be covered the same way.
         if [ -z "$start" ]; then
-            problems+=("$tier: no base to find the change's start (none of origin/HEAD, origin/main, origin/master, main, master); pass --base <the branch it merges into>")
+            [ -z "$policy_at" ] || problems+=("$tier: $head shares no history with $base_ref, so the change's start cannot be found; fetch the branch history")
         elif [ "$start" = "$head" ]; then
             problems+=("$tier: $head is already in $base_ref; pass --base <the branch it merges into>")
         elif [ "$independent" -gt 0 ] && ! covered "$start"; then
@@ -397,8 +567,8 @@ if [ "$result" = pass ] && [ "$record_at" = "$head" ]; then
     case $'\n'"$(spec_unclosed_changes "$root" "$head")"$'\n' in *$'\n'"$id"$'\n'*) record_open=true ;; esac
 fi
 if $json; then
-    printf '{"result":"%s","change":"%s","head":"%s","base":"%s","base_trusted":%s,"record_only":%s,"record_open":%s,"tier":"%s","rigor":"%s","record_at":"%s","reviews":[' \
-        "$result" "$id" "$head" "$(json_escape "$base_ref")" "$base_trusted" "$record_only" "$record_open" "$tier" "$rigor" "$(json_escape "$record_at")"
+    printf '{"result":"%s","change":"%s","head":"%s","base":"%s","base_trusted":%s,"policy_at":"%s","record_only":%s,"record_open":%s,"tier":"%s","rigor":"%s","record_at":"%s","reviews":[' \
+        "$result" "$id" "$head" "$(json_escape "$base_ref")" "$base_trusted" "$policy_at" "$record_only" "$record_open" "$tier" "$rigor" "$(json_escape "$record_at")"
     sep=""
     for row in ${rows[@]+"${rows[@]}"}; do
         IFS="$(printf '\037')" read -r reviewer round from to verdict critical high medium low <<< "$row"
@@ -414,15 +584,16 @@ elif [ "$result" = pass ]; then
         [ "${#rows[@]}" -gt 0 ] || [ "$tier" = T0 ] || note=" Note: a $tier record with no verdict, so its code merged unreviewed."
         printf 'PASS %s at %s: since %s it carries only the record and the log; %s recorded verdict(s), none blocking.%s\n' "$id" "$head" "$base_ref" "${#rows[@]}" "$note"
     elif [ "${#rows[@]}" -eq 0 ]; then
-        printf 'PASS %s at %s: tier T0 needs no independent review (the tier is the record'"'"'s claim).\n' "$id" "$head"
+        printf 'PASS %s at %s: tier T0 needs no independent review (every changed path is docs only under the trusted review-t0-paths).\n' "$id" "$head"
     else
         printf 'PASS %s at %s: %s, Rigor %s; %s recorded verdict(s) cover this head.\n' "$id" "$head" "$tier" "$rigor" "${#rows[@]}"
     fi
+    for note in ${notes[@]+"${notes[@]}"}; do printf '%s\n' "$note"; done
     ! $record_open || printf 'Note: %s is still at this head; if this PR completes the change, close it before merge: .prdkit/scripts/bash/close-change.sh %s "<log line>" (review.md, Closing).\n' "$path" "$id"
 else
     printf 'FAIL %s at %s:\n' "$id" "$head"
-    $base_trusted || printf '  Base is not trusted for coverage exemptions: establish origin/HEAD or configure review-integration-branches in its committed config.\n'
     for problem in "${problems[@]}"; do printf '  %s\n' "$problem"; done
+    for note in ${notes[@]+"${notes[@]}"}; do printf '%s\n' "$note"; done
 fi
 if ! $json && [ "${#rows[@]}" -gt 0 ]; then
     if [ "$report_verification" = not-requested ]; then

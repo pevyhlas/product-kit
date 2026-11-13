@@ -4,10 +4,10 @@
 bash tests/run.sh
 ```
 
-The suite uses Bash, standard utilities, Git, and jq 1.6+ for enrichment tests. Core helpers
-remain usable without jq. CI also runs ShellCheck 0.11.0. Tests create disposable consumer
+The suite uses Bash, standard utilities, Git, and jq 1.6+. Core helpers remain usable without
+jq. CI also runs ShellCheck 0.11.0. Tests create disposable consumer
 projects. The separate `CI (macOS)` workflow additionally exercises installer, upgrade, change,
-status, doctor, adoption-gate and retrospective behavior on macOS for every pull request and
+status, doctor and adoption-gate behavior on macOS for every pull request and
 push to main; it must pass before a merge but never gates a release.
 
 Linux CI also reruns the adoption-gate and doctor suites with Debian 12's mawk 1.3.4 20200120
@@ -26,6 +26,7 @@ reproduce the duplicate number; synchronization markers avoid a scheduler-depend
 | Installer ownership, harness targets, preservation, retired-file removal | init |
 | Partial copy/storage/managed-block/retirement/manifest failures, TERM/KILL, overlapping writes and coherent retry | upgrade_recovery |
 | 0.17 to 1.0 upgrade: retired files, untouched `specs/`, cutover message, gate warning, leftover features, a cutover that removes every 0.x folder, ignored leftovers, stale agent context | upgrade_1_0 |
+| Upgrade to 2.0 removes the ledger and retrospective files, keeps an edited ledger policy | upgrade_2_0 |
 | Source-less adoption integrity, managed harness entries, kit pins | adoption_gate |
 | Agent tier resolution, shared baseline/overrides, projection rendering and drift | agent_tiers |
 | Change numbering across checkouts, worktrees, `planned:` markers and retired 0.x numbers (folders, `specs/archive.md`, git history, shallow clones), never overwriting, dirty-tree refusal | new_change |
@@ -43,9 +44,6 @@ reproduce the duplicate number; synchronization markers avoid a scheduler-depend
 | Immutable review packages and bounded round allocation | review_package |
 | Remote checkpoint observation | delivery_checkpoint |
 | Context-budget advisories and strict doctor | context_budget |
-| Valid JSON envelopes, local/external ledger delivery and schema wiring | ledger_emit, ledger_schema |
-| Durable central-spool attribution and path boundaries | spool_adapter |
-| Retrospective input boundaries and optional enrichment | retrospective, retrospective_boundaries |
 | Evaluation runner comply/violate behavior | evals_runner |
 | Accepted-change economics, missing telemetry, independent acceptance and duplicate meters | accepted_change_benchmark |
 | Version and documentation links | version, doc_links |
