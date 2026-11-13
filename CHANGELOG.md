@@ -37,7 +37,10 @@ change by change.
     or L1 edit. `--json` adds `fingerprint`. A criss-cross history (two merge bases) fails closed.
   - Lines recorded before fingerprints stay readable, without a rewrite, while their commits are
     present here (no longer only in the head's history): each end reads as that commit's content,
-    and a missing commit fails closed. v1 receipts still verify those lines. A migration
+    and a missing commit fails closed. v1 receipts still verify those lines. A blocking legacy line
+    is also resolved by the rule it was written under (a later clean PASS from the same reviewer
+    over a commit range whose head descends from the blocking head), so a change closed after its
+    code merged keeps its resolved FAILs resolved. A migration
     (`init.sh --upgrade --migrate-reviews`) arrives with verdicts bound to their pull request.
   - A blocking line whose end is a commit gone from the history now stands (it used to be
     ignored) until a later clean PASS from the same reviewer re-reviews from `start`; returning to

@@ -388,4 +388,40 @@ assert_eq 1 "$STATUS" "record-only exempts coverage, not a standing FAIL"
 assert_contains "$OUTPUT" "code (round 3): its FAIL at $(shown "$FAILED_TO") stands: no later clean PASS from code reaches that content" "exact message"
 done_with
 
+it "a legacy FAIL resolved under the commit-range rule stays resolved when the change closes after merge"
+legacy_line() { # verdict from to
+    local counts='0 critical, 0 high, 0 medium, 0 low'
+    [ "$1" = PASS ] || counts='0 critical, 1 high, 0 medium, 0 low'
+    printf '**Review**: round 1 · %s..%s · code · %s · %s · %s\n' "$2" "$3" "$1" "$counts" "$LINK" >> "specs/changes/$ID.md"
+    git commit -qam "legacy $1 $2..$3" >/dev/null
+}
+close_after_merge() { # the code merged with its record open; a record-only PR closes it
+    git update-ref "$TRUSTED" HEAD
+    git rm -q "specs/changes/$ID.md"; mkdir -p specs/log
+    printf -- '- 2026-11-01 %s: closed\n' "$ID" > "specs/log/$ID.md"; git add specs/log; git commit -qm close >/dev/null
+    run bash "$CHECK" --json "$ID"
+}
+for shape in full narrow; do
+    begin "02$([ "$shape" = full ] && echo 1 || echo 2)-legacy-$shape"
+    S="$(git rev-parse --short "$TIP")"; B="$(git rev-parse --short HEAD~1)"
+    legacy_line FAIL "$S" "$B"
+    set_line src/app.txt 16 'line sixteen, fixed'; git commit -qam fix >/dev/null; C="$(git rev-parse --short HEAD)"
+    if [ "$shape" = full ]; then legacy_line PASS "$S" "$C"; else legacy_line PASS "$B" "$C"; fi
+    check
+    assert_eq 0 "$STATUS" "$shape: the gate passes before merge: $OUTPUT"
+    close_after_merge
+    assert_eq 0 "$STATUS" "$shape: the record-only close passes after the base advances: $OUTPUT"
+    assert_contains "$OUTPUT" '"record_only":true' "$shape: record-only"
+    done_with
+done
+begin 023-legacy-stands
+S="$(git rev-parse --short "$TIP")"; B="$(git rev-parse --short HEAD~1)"
+set_line src/app.txt 16 'line sixteen, fixed'; git commit -qam fix >/dev/null; C="$(git rev-parse --short HEAD)"
+legacy_line FAIL "$S" "$C"
+legacy_line PASS "$S" "$B"
+close_after_merge
+assert_eq 1 "$STATUS" "a later PASS on an older commit does not resolve a legacy FAIL after merge"
+assert_contains "$OUTPUT" "code (round 1): its FAIL at ${C:0:12} stands: no later clean PASS from code reaches that content" "exact message"
+done_with
+
 finish

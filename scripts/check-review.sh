@@ -20,7 +20,9 @@
 # blocking line (a FAIL, or counts that block for the Rigor or cannot be read) stands until a later
 # clean PASS from the same reviewer over a non-empty range starts at `start` or at content
 # reachable from the failed content through that reviewer's own later lines; only then (the
-# latter) does it link. A content is covered when links lead from it to the head's content: so a
+# latter) does it link. A blocking line recorded before fingerprints is also resolved by the old
+# rule: a later clean PASS over a commit range whose head descends from the blocking head.
+# A content is covered when links lead from it to the head's content: so a
 # verdict survives record-only commits, reverts, rebases, squashes and base merges that leave the
 # reviewed hunks and their 3 context lines alone. Each reviewer's latest content must be covered,
 # and for T1-T3 so must `start`. A merge carrying only the record and the log from a trusted start
@@ -449,7 +451,7 @@ else
     # clears the FAIL but never vouches for the step it failed. A standing line is a problem in
     # any tier and links nothing. Standing lines are evaluated in every mode, record-only
     # included: that mode exempts coverage, never an unresolved FAIL.
-    l_idx=(); l_block=(); l_fromfp=(); l_tofp=(); e_from=(); e_to=()
+    l_idx=(); l_block=(); l_fromfp=(); l_tofp=(); l_fromc=(); l_toc=(); e_from=(); e_to=()
     if [ -n "$fp_base" ]; then
         for i in ${v_rev[@]+"${!v_rev[@]}"}; do
             [ "${v_rev[i]}" != owner ] || continue
@@ -458,7 +460,9 @@ else
             [ "${v_verdict[i]}" = PASS ] && [ "${v_c[i]}" = 0 ] && [ "${v_h[i]}" = 0 ] && { [ "$rigor" = light ] || [ "${v_m[i]}" = 0 ]; } || block=true
             l_idx+=("$i"); l_block+=("$block")
             if resolve_token "${v_from[i]}" full; then l_fromfp+=("$tok_fp"); else l_fromfp+=(""); fi
+            l_fromc+=("$tok_commit")
             if resolve_token "${v_to[i]}" full; then l_tofp+=("$tok_fp"); else l_tofp+=(""); fi
+            l_toc+=("$tok_commit")
         done
     fi
     for k in ${l_idx[@]+"${!l_idx[@]}"}; do
@@ -488,6 +492,22 @@ else
                 fi
                 m=$((m + 1))
             done
+            # A line recorded before fingerprints is also resolved by the rule it was written
+            # under: a later clean PASS from the same eligible reviewer over a non-empty commit
+            # range whose head descends from (or is) the blocking head. Once the branch is in the
+            # base its commits all read as no change, so content alone could not resolve it. It
+            # clears the line, never links it.
+            if [ -z "$resolved_by" ] && [ -n "${l_toc[k]}" ] && eligible "$reviewer"; then
+                m=$((k + 1))
+                while [ "$m" -lt "${#l_idx[@]}" ] && [ -z "$resolved_by" ]; do
+                    j="${l_idx[m]}"
+                    if [ "${v_rev[j]}" = "$reviewer" ] && ! ${l_block[m]} && [ -n "${l_fromc[m]}" ] && [ -n "${l_toc[m]}" ] &&
+                        [ "${l_fromc[m]}" != "${l_toc[m]}" ] && git -C "$root" merge-base --is-ancestor "${l_toc[k]}" "${l_toc[m]}"; then
+                        resolved_by=legacy
+                    fi
+                    m=$((m + 1))
+                done
+            fi
             if [ -z "$resolved_by" ]; then
                 if [ -n "$x" ]; then
                     where="${v_to[i]}"; review_is_fp "$where" && where="$(shown_fp "$where")"; is_sha "$where" && where="${where:0:12}"
