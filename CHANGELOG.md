@@ -8,6 +8,45 @@ change by change.
 
 ## [Unreleased]
 
+### Changed
+
+- **`check-review.sh` reads its policy from the trusted integration base, never from the change
+  or the caller (breaking; #88).** Local probes showed three ways a branch could pass unreviewed or
+  under-reviewed work: a record that claimed T0 while changing code passed as "the record's claim";
+  a record-only commit after review could lower T3 to T1 and drop the owner's verdict; and a
+  branch could edit its own constitution from `Rigor: full` to `light` so a medium finding stopped
+  blocking. Each now fails, and each is a fixture in `tests/test_check_review.sh`.
+  - The base is `origin/HEAD`'s target, or a `--base` naming it or one of the
+    `review-integration-branches` in its committed config. Any other `--base` (a local branch, a
+    raw commit hash, an unlisted remote branch) fails, as does a repository without `origin/HEAD`;
+    the fallback to `origin/main`, `origin/master`, `main` and `master` is gone.
+  - Rigor, the reviewer registry and the new `review-t0-paths` setting are read at the current
+    tip of `origin/HEAD`'s target, the default branch, whatever `--base` names (`policy_at` in
+    `--json`; `registry_at` now names the same commit instead of the merge base), so another
+    integration branch cannot loosen them and a revoked reviewer no longer counts on an old branch.
+    A branch that edits its own Rigor gets a note, and the edit applies after it merges. The trusted
+    constitution must hold exactly one Rigor line valued `light` or `full` (optionally followed by
+    a space and a note); anything else fails the check.
+  - T0 is checked: every path the change touches since its start, outside its record and
+    `specs/log.md`, must be a regular non-executable file under a literal path or directory listed
+    in the trusted `review-t0-paths`, and none may be under `.prdkit/`, `.product-kit`, another
+    change record or the L0/L1 spec. Unset, T0 covers only the record and the log.
+  - The tier is the record's single `**Tier**:` field, whose whole value is exactly one of T0–T3;
+    a second field (even in a comment) or a value such as `T1/T3` or `T1, T3` fails. A branch may
+    raise its tier, never lower it: the floor is the highest tier the record names on the default
+    branch, on `--base`, at the change's start or at any commit of the branch since, and T3 when
+    the change edits L0 (`specs/product.md`, `specs/product/`), as the protocol tiers it. A lower
+    claim fails, and so does a record on one of those trusted commits whose tier field is not
+    exactly one tier (`T4`, `TBD`, `T1junk`, `T4/T1`, `T1, T3`).
+  - The record and `specs/log.md` are exempt from coverage only as regular, non-executable files
+    (or absent) both where the change starts and at the head: a directory there would exempt
+    everything in it, and converting or deleting an unsafe entry would hide that change. The
+    coverage diffs pass `--ignore-submodules=none`, so a submodule whose `.gitmodules` entry says
+    `ignore = all` can no longer hide a gitlink change behind a record-only close.
+  - This is the first of three steps toward binding review to content: it changes no Review-line
+    or receipt format. Coverage across merges, rebases and record-only commits (#66, #86) and
+    native owner approval (#69) are not addressed here.
+
 ### Removed (breaking)
 
 - **The execution ledger and the retrospective.** The ledger had one reader, the retrospective,
@@ -43,6 +82,45 @@ change by change.
   definitions or a vendored baseline without the renderer, and a CI call to the renderer of a
   deselected subsystem is flagged like a call to a removed helper. `agent-tiers-lib.sh` stays
   core: doctor and the adoption gate check the tier map in `agents.md` either way.
+
+### Fixed
+
+- `cleanup-change.sh` could delete a submodule commit that existed nowhere else (#85). A linked
+  worktree keeps its own copy of each submodule repository, and removing the worktree deletes it.
+  A commit made there and recorded in the superproject branch, but never pushed, left the
+  worktree clean, so the forced retry for submodules (or `--force`) removed it and the branch
+  pointed at a commit that no longer existed. Every removal, `--force` included, now refuses while
+  that copy holds a commit (its HEAD, a local branch, tag or stash, any reflog entry of those, or a
+  gitlink the worktree records) that no remote-tracking ref there and no ref or HEAD in the main
+  checkout's copy of the submodule contains, and names the submodule and the commit. Push it, or
+  fetch it into the main checkout's submodule, then rerun. The removal is refused too when git
+  cannot list those commits, and when any file or directory in that copy cannot be read, since git
+  reads around such a file (`log -g` lists nothing, `cat-file` calls the object missing); that
+  refusal names the unreadable path.
+- The forced removal now runs under a mutex, the directory `prdkit-cleanup.lock` in the
+  worktree's git directory (created atomically with `mkdir`), and repeats its checks under it, so
+  two runs cannot remove the same worktree at once. A refused, failed or interrupted removal
+  releases it; a run killed outright leaves it, and later runs refuse and name it until it is
+  removed. A worktree locked with `git worktree lock` is still refused with git's reason.
+- `cleanup-change.sh --closed` matched a worktree by its branch or its directory name, so it could
+  remove a detached-HEAD worktree whose directory carried a closed change id (losing commits no
+  ref reaches), a worktree on an unrelated branch, or one outside `.worktrees/`. It now matches
+  only the layout `new-change.sh` creates: `.worktrees/<id>` in the main checkout, on the branch
+  `<id>`. Any other worktree is left for removal by id.
+
+### Adoption
+
+- In CI, establish `origin/HEAD` (`git remote set-head origin --auto`, as the documented step
+  does) and pass the pull request's target as `--base origin/<target>`. A stacked branch needs its
+  target listed in `review-integration-branches` on the default branch.
+- Before relying on T0 for documentation, add `- review-t0-paths: <paths>` to the `## Configuration`
+  section of `.prdkit/memory/config.md` and merge it to the integration branch.
+- An open record whose tier a branch commit lowered now fails: restore the higher tier, or review
+  at it. An open change that edits `specs/product.md` or `specs/product/` below T3 needs T3 and
+  the owner's verdict.
+- The default branch's constitution must hold exactly one well-formed Rigor line. Land a Rigor, registry or `review-t0-paths` change in its own pull request first.
+- If the integration branch holds `specs/log.md` as an executable file or a directory, every
+  change that starts there fails until it holds a regular file; fix that on the branch first.
 
 ## [1.5.0] — 2026-11-10 — worktree cleanup
 

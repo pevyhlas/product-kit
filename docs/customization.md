@@ -54,7 +54,8 @@ working.
 
 Light and full share truthful evidence and relevant verification. Review follows the tiers in
 the protocol (T0 docs only, T1 one part, T2 several parts or an interface, security or data, T3
-an L0 edit or L1 one-way door); the constitution may require more. Full also makes medium
+an L0 edit or L1 one-way door); the constitution may require more. T0 is checked against the
+`review-t0-paths` setting, and Rigor is read from the trusted integration branch. Full also makes medium
 findings block and requires independent review of every substantive change. Critical and high
 findings block under both. No universal persona or end-to-end test count applies.
 

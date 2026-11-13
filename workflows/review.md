@@ -62,7 +62,8 @@ L1 edit needs the owner again:
 **Review**: round 1 · <base sha>..<approved head sha> · owner · PASS · <link to the owner's words>
 ```
 
-Register identities on the integration baseline before using them; maker, unregistered and
+Register identities on the trusted integration branch before using them (the check reads its
+current registry); maker, unregistered and
 ambiguous identities cannot count as independent verdicts or coverage. Preserve standing FAILs
 while reconciling older records. Registry eligibility is not proof that a fresh context ran. The
 offline gate leaves report links unverified; `check-review.sh --verify-reports --pr <GitHub PR
@@ -94,7 +95,8 @@ resolutions (choosing the old reviewed content included), extra edits and unveri
 still need coverage, and integration tests and baseline/contract revalidation still apply. This
 exemption and record-only closure trust only `origin/HEAD` or `review-integration-branches` read
 from that default branch's committed config, never an arbitrary `--base` or a change-local config
-edit. Without `origin/HEAD`, full review coverage applies; establish the remote default first.
+edit. Without `origin/HEAD` the check fails: it has no policy to read, so establish the remote
+default first.
 
 ## Closing
 
@@ -128,9 +130,10 @@ record is its review carrier; never fabricate acceptance or open a cleanup-only 
 run `.prdkit/scripts/bash/cleanup-change.sh <id>` from the main checkout; it keeps the worktree's
 evidence, retrospectives and ledger events before removing the worktree. A repository with
 submodules needs no `--force`: the script retries a clean worktree that git refuses only for its
-submodules. `cleanup-change.sh --closed` sweeps every worktree whose change is closed on the
-trusted integration branch (record gone, log line present), skipping dirty or locked ones and
-leaving branches alone; run it after merges so finished worktrees do not pile up.
+submodules, and refuses any removal that would delete a submodule commit nothing else holds.
+`cleanup-change.sh --closed` sweeps every `.worktrees/<id>` on branch `<id>` whose change is closed
+on the trusted integration branch (record gone, log line present), skipping dirty or locked ones
+and leaving branches alone; run it after merges so finished worktrees do not pile up.
 
 A `--no-branch` record closes the same way, through the project's authorized delivery route; its
 shared checkout stays, so skip `cleanup-change.sh`. A detached HEAD can hold a record, but
