@@ -31,13 +31,13 @@ change by change.
     `specs/log.md`, must be a regular non-executable file under a literal path or directory listed
     in the trusted `review-t0-paths`, and none may be under `.prdkit/`, `.product-kit`, another
     change record or the L0/L1 spec. Unset, T0 covers only the record and the log.
-  - The tier is the record's single `**Tier**:` field, valued exactly one of T0–T3; a second
-    field (even in a comment) or a value such as `T1/T3` fails. A branch may raise its tier, never
-    lower it: the floor is the highest tier the record names on the default branch, on `--base`,
-    at the change's start or at any commit of the branch since, and T3 when the change edits L0
-    (`specs/product.md`, `specs/product/`), as the protocol tiers it. A lower claim fails, and so
-    does a record on one of those trusted commits whose tier field is not exactly one tier
-    (`T4`, `TBD`, `T1junk`, `T4/T1`).
+  - The tier is the record's single `**Tier**:` field, whose whole value is exactly one of T0–T3;
+    a second field (even in a comment) or a value such as `T1/T3` or `T1, T3` fails. A branch may
+    raise its tier, never lower it: the floor is the highest tier the record names on the default
+    branch, on `--base`, at the change's start or at any commit of the branch since, and T3 when
+    the change edits L0 (`specs/product.md`, `specs/product/`), as the protocol tiers it. A lower
+    claim fails, and so does a record on one of those trusted commits whose tier field is not
+    exactly one tier (`T4`, `TBD`, `T1junk`, `T4/T1`, `T1, T3`).
   - The record and `specs/log.md` are exempt from coverage only as regular, non-executable files
     (or absent) both where the change starts and at the head: a directory there would exempt
     everything in it, and converting or deleting an unsafe entry would hide that change. The

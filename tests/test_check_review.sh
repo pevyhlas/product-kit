@@ -186,7 +186,7 @@ assert_eq 0 "$STATUS" "a value followed by a note is still one Rigor"
 git update-ref "refs/remotes/origin/$DEFAULT" "$TRUSTED_TIP"
 
 it "a tier field must be exactly one tier"
-for bad in 'T1/T3' 'T1-T3' 'T1x'; do
+for bad in 'T1/T3' 'T1-T3' 'T1x' 'T1, T3' 'T1; T3' 'T1 T3'; do
     record "$bad" "$(verdict code PASS "$CLEAN")"
     run bash "$CHECK"
     assert_eq 1 "$STATUS" "**Tier**: $bad fails"
@@ -296,7 +296,7 @@ done
 
 it "a record on a trusted branch must name a readable tier, or the minimum is unknown"
 record T1 "$(verdict code PASS "$CLEAN")"
-for bad in T4 TBD T1junk T4/T1 'TBD (formerly T1)'; do
+for bad in T4 TBD T1junk T4/T1 'TBD (formerly T1)' 'T1, T3' 'T1; T3' 'T1 T3'; do
     git show HEAD:specs/changes/001-greet.md | sed "s|\*\*Tier\*\*: T[0-3]|**Tier**: $bad|" |
         trusted_edit "refs/remotes/origin/$DEFAULT" specs/changes/001-greet.md
     run bash "$CHECK"

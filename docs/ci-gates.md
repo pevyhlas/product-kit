@@ -98,16 +98,18 @@ remote branch) fails. At the policy snapshot it reads:
   non-executable file under one of them, and none is under `.prdkit/`, `.product-kit`, another
   change record or the L0/L1 spec. Unset, T0 covers only the record and the log.
 
-The tier is the record's one `**Tier**:` field, whose value is exactly one of T0–T3 (`T1/T3`,
-`T1-T3` or a second field, even in a comment, fails). It may rise, never fall. Its floor is the
-highest tier the record names on the default branch, on `--base`, where the change left the base
-and at every commit of the branch since, and T3 when the change edits L0 (`specs/product.md` or
-`specs/product/`, as `protocol.md` tiers it). A record on the default branch, on `--base` or at
-the change's start that names no readable tier fails the check. A record-only commit that lowers
-T3 to T1 after review fails and the owner's verdict is still required. The record and
-`specs/log.md` stay exempt from coverage only as regular, non-executable files at the head (never
-a directory, link or submodule), and a submodule's `ignore` setting never hides a gitlink change. To land a policy change, merge it first in its own pull request, checked
-under the policy it replaces.
+The tier is the record's one `**Tier**:` field, whose whole value (up to the next `·`) is exactly
+one of T0–T3 (`T1/T3`, `T1-T3`, `T1, T3` or a second field, even in a comment, fails). It may
+rise, never fall. Its floor is the highest tier the record names on the default branch, on
+`--base`, where the change left the base and at every commit of the branch since, and T3 when the
+change edits L0 (`specs/product.md` or `specs/product/`, as `protocol.md` tiers it). A record on
+the default branch, on `--base` or at the change's start whose tier field is not exactly one tier
+fails the check. A record-only commit that lowers T3 to T1 after review fails and the owner's
+verdict is still required. The record and `specs/log.md` stay exempt from coverage only as
+regular, non-executable files (or absent) where the change starts and at the head (never a
+directory, link or submodule), and a submodule's `ignore` setting never hides a gitlink change.
+To land a policy change, merge it first in its own pull request, checked under the policy it
+replaces.
 
 ### Reviewer eligibility and report links
 

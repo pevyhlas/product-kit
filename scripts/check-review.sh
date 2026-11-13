@@ -120,13 +120,16 @@ if [ -n "$policy_at" ]; then
     [ "$rigor" != unknown ] ||
         problems+=("The trusted base's constitution must name exactly one Rigor, light or full (- **Rigor**: light); fix .prdkit/memory/constitution.md on the integration branch")
 fi
-# Every **Tier** field in a record on stdin, one per line: T0-T3, or ? when its value is not
-# exactly one tier (T1/T3, T1-T3 and T1x are not tiers).
+# Every **Tier** field in a record on stdin, one per line: T0-T3, or ? when its whole value (up to
+# the next · or the end of the line, in optional backticks) is not exactly one tier: T1/T3, T1-T3,
+# T1x, "T1, T3" and "T1 T3" are not tiers.
 record_tiers() {
-    awk '{ s = $0
+    awk '{ s = $0; sub(/\r$/, "", s)
         while ((i = index(s, "**Tier**:")) > 0) {
-            s = substr(s, i + 9); v = s; sub(/^[[:space:]`]*/, "", v)
-            if (v ~ /^T[0-3]([[:space:]`,;)]|$)/) print substr(v, 1, 2); else print "?"
+            s = substr(s, i + 9); v = s; j = index(v, "·"); if (j) v = substr(v, 1, j - 1)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+            if (v ~ /^`T[0-3]`$/) gsub(/`/, "", v)
+            if (v ~ /^T[0-3]$/) print v; else print "?"
         } }'
 }
 # For a floor, every T0-T3 named in any **Tier** field value (up to the next ·), so that a
