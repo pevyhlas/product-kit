@@ -100,7 +100,8 @@ reverted, a rebase, a squash and a base merge that does not overlap keep it. A r
 overlapping base merge voids it. Overlapping means the base's own changes touch a line the change
 adds or removes, or one of the 3 unchanged context lines around it the reviewer saw (a clean
 merge more than 3 lines away keeps it), or base and change both touch a binary file, a symlink, a
-submodule, a file the change adds or deletes, or a mode. A conflict resolved by keeping the
+submodule, a file the change adds or deletes, or a mode; where the edited lines' surroundings
+repeat in the file, the file is bound to its exact objects. A conflict resolved by keeping the
 reviewed lines still voids it: those lines now replace the base's. Integration tests and
 baseline/contract revalidation still apply. Coverage and record-only closure trust only
 `origin/HEAD` or `review-integration-branches` read from that default branch's committed config,

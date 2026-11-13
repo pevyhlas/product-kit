@@ -28,7 +28,10 @@ change by change.
     merge, and lapses on a real fix or an overlapping base merge. Overlapping means the base's own
     changes touch a line the change adds or removes, or one of the 3 context lines around it, or
     base and change both touch a binary file, a symlink, a submodule, a file the change adds or
-    deletes, or a mode; a conflict resolved by keeping the reviewed lines overlaps too. A failing
+    deletes, or a mode (a mode change binds the file's exact objects); where the edited lines'
+    surroundings repeat in the file, the file is bound to its exact objects, so an edit moved to
+    another identical block never shares a fingerprint; a conflict resolved by keeping the
+    reviewed lines overlaps too. A failing
     reviewer's narrow re-review of the fix carries the other approvals forward. The owner's T3
     verdict binds only the L0/L1 spec, so it survives code fixes and rebases and lapses on an L0
     or L1 edit. `--json` adds `fingerprint`. A criss-cross history (two merge bases) fails closed.
@@ -38,7 +41,8 @@ change by change.
     (`init.sh --upgrade --migrate-reviews`) arrives with verdicts bound to their pull request.
   - A blocking line whose end is a commit gone from the history now stands (it used to be
     ignored) until a later clean PASS from the same reviewer re-reviews from `start`; returning to
-    earlier content or rewriting history never clears a FAIL.
+    earlier content or rewriting history never clears a FAIL, and a merge carrying only the record
+    and the log still fails on a standing FAIL (it exempts coverage only).
   - `build-review-package.sh --since` accepts any earlier reviewed head except HEAD, also one a
     rebase or squash left out of HEAD's history, and prints `FINGERPRINT` and `SINCE_FINGERPRINT`
     in its JSON and index. The offline gate now also uses `mktemp`, `wc`, `sort` and a SHA-256

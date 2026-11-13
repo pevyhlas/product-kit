@@ -15,6 +15,8 @@ printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer 
 mkdir -p src assets specs
 i=1; while [ "$i" -le 30 ]; do echo "line $i"; i=$((i + 1)); done > src/app.txt
 printf 'notes\n' > src/other.txt
+printf 'a\nb\nc\nDENY\nd\ne\nf\na\nb\nc\nDENY\nd\ne\nf\n' > src/policy.txt
+i=1; while [ "$i" -le 10 ]; do echo "step $i"; i=$((i + 1)); done > src/tool.sh
 printf 'bin\000one\n' > assets/blob.bin
 printf '# Product\n\nThe product.\n' > specs/product.md
 git add -A >/dev/null; git commit -qm installed >/dev/null
@@ -331,6 +333,59 @@ check
 assert_eq 1 "$STATUS" "the earlier verdict does not cover the new delta"
 assert_contains "$OUTPUT" "code (round 1): changed since the reviewed content" "names the stale verdict"
 assert_contains "$OUTPUT" "T2: the recorded ranges do not chain from the change's start" "and the uncovered start"
+done_with
+
+it "where the edited lines' surroundings repeat, the file is bound to its exact objects"
+begin 018-repeat
+set_line src/policy.txt 4 ALLOW; git commit -qam "allow in the first block" >/dev/null
+pass code
+REVIEWED_TO="$(last_to)"
+base_line src/app.txt 28 'base twenty-eight'
+git merge -q --no-edit "$TRUSTED" >/dev/null
+check
+assert_eq 0 "$STATUS" "a base edit elsewhere in a file with unique anchors keeps the verdict: $OUTPUT"
+set_line src/policy.txt 4 DENY; set_line src/policy.txt 11 ALLOW; git commit -qam "allow in the second block instead" >/dev/null
+HEAD_FP="$(json_fp)"
+check
+assert_eq 1 "$STATUS" "the same hunk text in the other block is other content"
+assert_contains "$OUTPUT" "code (round 1): changed since the reviewed content $(shown "$REVIEWED_TO"): no recorded verdict carries it to this head's content ($(shown "$HEAD_FP"))" "exact message"
+done_with
+
+it "a mode change binds the file's exact objects: a base edit elsewhere in it voids the verdict"
+begin 019-mode
+chmod +x src/tool.sh; git update-index --chmod=+x src/tool.sh; git commit -qm "make the tool executable" >/dev/null
+pass code
+REVIEWED_TO="$(last_to)"
+base_line src/tool.sh 9 'base step 9'
+git merge -q --no-edit "$TRUSTED" >/dev/null
+assert_eq 'base step 9' "$(sed -n 9p src/tool.sh)" "the merge is clean"
+assert_eq 100755 "$(git ls-files -s src/tool.sh | cut -d' ' -f1)" "and keeps the reviewed mode"
+HEAD_FP="$(json_fp)"
+check
+assert_eq 1 "$STATUS" "voids"
+assert_contains "$OUTPUT" "code (round 1): changed since the reviewed content $(shown "$REVIEWED_TO"): no recorded verdict carries it to this head's content ($(shown "$HEAD_FP"))" "exact message"
+done_with
+
+it "a merge carrying only the record and the log still fails on a standing FAIL"
+begin 020-closed
+pass code; X="$(git rev-parse HEAD)"
+set_line src/app.txt 16 'line sixteen, A'; git commit -qam A >/dev/null
+pass code HEAD "$X"; A="$(git rev-parse HEAD)"
+set_line src/app.txt 17 'line seventeen, B'; git commit -qam B >/dev/null
+fail code HEAD "$A"
+FAILED_TO="$(last_to)"
+git revert --no-edit HEAD~1 >/dev/null
+pass code HEAD "$X"
+check
+assert_eq 1 "$STATUS" "the FAIL at B stands: the narrow PASS from X does not continue from B"
+assert_contains "$OUTPUT" "code (round 3): its FAIL at $(shown "$FAILED_TO") stands: no later clean PASS from code reaches that content" "exact message"
+git update-ref "$TRUSTED" HEAD
+printf '\nMerged with the record open.\n' >> "specs/changes/$ID.md"; git commit -qam "record note" >/dev/null
+run bash "$CHECK" --json "$ID"
+assert_contains "$OUTPUT" '"record_only":true' "the merge carries only the record"
+check
+assert_eq 1 "$STATUS" "record-only exempts coverage, not a standing FAIL"
+assert_contains "$OUTPUT" "code (round 3): its FAIL at $(shown "$FAILED_TO") stands: no later clean PASS from code reaches that content" "exact message"
 done_with
 
 finish

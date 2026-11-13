@@ -447,9 +447,10 @@ else
     # re-review) or is reachable from X through R's own lines recorded after the blocking one.
     # Only a line resolved through that reachability links: a full re-review of other content
     # clears the FAIL but never vouches for the step it failed. A standing line is a problem in
-    # any tier and links nothing.
+    # any tier and links nothing. Standing lines are evaluated in every mode, record-only
+    # included: that mode exempts coverage, never an unresolved FAIL.
     l_idx=(); l_block=(); l_fromfp=(); l_tofp=(); e_from=(); e_to=()
-    if $fp_ready; then
+    if [ -n "$fp_base" ]; then
         for i in ${v_rev[@]+"${!v_rev[@]}"}; do
             [ "${v_rev[i]}" != owner ] || continue
             case "${v_verdict[i]}" in PASS|FAIL) ;; *) continue ;; esac

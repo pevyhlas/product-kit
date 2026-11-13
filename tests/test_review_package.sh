@@ -216,6 +216,22 @@ assert_not_contains "$(cat "$pkg/delta.patch")" 'more from the base' "and nothin
 assert_not_contains "$(cat "$pkg/delta.patch")" "commit $MERGE2" "the resolving merge stays out of the delta"
 assert_contains "$(cat "$pkg/index.md")" "check merge $MERGE2 in the full diff" "index names the resolving merge"
 
+it "A blob that cannot be read leaves the fingerprint empty, never a valid-looking one"
+fb="$(setup_fixture_repo)"; track_tmp "$fb"
+FBMAIN="$(git -C "$fb" symbolic-ref --short HEAD)"; FBBASE="$(git -C "$fb" rev-parse HEAD)"
+git -C "$fb" checkout -q -b 010-blob
+echo more >> "$fb/seed.txt"; git -C "$fb" commit -q -am more; FBHEAD="$(git -C "$fb" rev-parse HEAD)"
+trust_at "$fb" "$FBMAIN" "$FBBASE"
+out="$(cd "$fb" && bash "$SCRIPT" 010-blob "$FBBASE")"
+assert_contains "$out" '"FINGERPRINT":"fp1:' "control: the fingerprint is computed"
+BLOBFAKE="$(mktemp -d)"; track_tmp "$BLOBFAKE"
+# shellcheck disable=SC2016  # the stub's own variables, expanded when it runs
+printf '#!/bin/sh\nc=\nfor a in "$@"; do [ "$a" = cat-file ] && c=1; [ -n "$c" ] && [ "$a" = blob ] && exit 128; done\nexec "%s" "$@"\n' "$(command -v git)" > "$BLOBFAKE/git"
+chmod +x "$BLOBFAKE/git"
+out="$(cd "$fb" && PATH="$BLOBFAKE:$PATH" bash "$SCRIPT" 010-blob "$FBBASE")"
+assert_contains "$out" '"FINGERPRINT":""' "a failed blob read prints no fingerprint"
+assert_contains "$(cat "$(pkg_of "$out")/index.md")" "Content fingerprint: none: a changed file's content cannot be read between ${FBBASE:0:12} and $FBHEAD." "index.md says why"
+
 it "A --since outside HEAD's history is accepted: a squash or rebase leaves the reviewed head behind"
 # Formerly refused. Content fingerprints keep a verdict across a squash or rebase, so the narrow
 # delta must start at the reviewed head even when HEAD no longer descends from it.
