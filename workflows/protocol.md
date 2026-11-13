@@ -112,7 +112,9 @@ class, upstream message. Never discard an external tool's stderr.
 | T2 | several parts, an interface, security or data | 1 per applicable concern |
 | T3 | L0 edit or L1 one-way door | design review plus the owner |
 
-The constitution may require more. Review, merge and closing follow [review.md](review.md).
+The constitution may require more. A branch may raise its tier, never lower it; an L0 edit
+makes it T3. T0 holds only for paths the `review-t0-paths` setting lists. Rigor, the reviewer registry and that setting are
+read from the trusted integration branch, so a change to them applies only after it merges. Review, merge and closing follow [review.md](review.md).
 
 ## Results
 

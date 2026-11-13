@@ -2,8 +2,16 @@
 set -euo pipefail
 source "$PK_ROOT/tests/evals/fixture.sh"
 fixture_project
-fixture_change
+# The trusted integration base: check-review reads its policy there, and T0 holds only for paths
+# its config lists as docs only.
 printf '.prdkit/cache/\n.eval-state/\n' >> .gitignore
+awk '{ print } /^## Configuration$/ { print ""; print "- review-t0-paths: README.md" }' .prdkit/memory/config.md > .prdkit/memory/config.md.new
+mv .prdkit/memory/config.md.new .prdkit/memory/config.md
+git add -A && git commit -qm 'fixture: integration base lists README.md as docs only'
+default="$(git symbolic-ref --short HEAD)"
+git update-ref "refs/remotes/origin/$default" HEAD
+git symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$default"
+fixture_change
 mkdir -p .eval-state .prdkit/cache/implementation
 printf '# Existing greeting\n\nThe tool prints Welcome.\n' > README.md
 printf '# PR 1\n\nDocumentation of existing R-01, no behavior change.\n' > .eval-state/pr.md

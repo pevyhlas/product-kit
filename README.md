@@ -212,7 +212,7 @@ bash .prdkit/scripts/bash/doctor.sh --strict   # spec integrity, reading budgets
 
 | Tier | When                                           | Independent reviewers        |
 | ---- | ---------------------------------------------- | ---------------------------- |
-| T0   | Docs only, no behavior change                  | None                         |
+| T0   | Docs only (trusted `review-t0-paths`)          | None                         |
 | T1   | Inside one part, no interface change           | 1                            |
 | T2   | Several parts, an interface, security or data  | 1 per applicable concern     |
 | T3   | Product (L0) edit or architecture one-way door | Design review plus the owner |
