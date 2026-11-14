@@ -63,3 +63,5 @@ closed change's worktree at once (branches are kept). See [feature delivery](fea
 Git only; `bounds.sh <change>` lists the constraints, non-goals and qualities in a change's
 scope. Label semantic judgments and keep them apart from what a helper observed. No helper
 evaluates product usefulness.
+
+`check-review.sh` sources `review-coverage-lib.sh` for its internal coverage engine.
