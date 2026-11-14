@@ -6,6 +6,8 @@
 # Interface (no arguments; all existing caller globals retain their scope):
 # - review_coverage_evaluate: resolve content, build edges and evaluate each latest verdict.
 # - review_coverage_require_start: enforce T1–T3 start coverage, after the caller's T0 checks.
+# review_coverage_require_start requires a prior review_coverage_evaluate call, which defines
+# the nested covered() and sets independent, owner and fp_ready.
 # Inputs: verdict arrays v_rev, v_round, v_from, v_to, v_verdict, v_c, v_h, v_m and latest;
 # context root, id, rigor, fp_base, head, start, record_only, tier, policy_at, base_ref,
 # fp_cache, shallow_hint, registry, REVIEW_FP_EMPTY and REVIEW_L01_PATHSPECS. The caller also
