@@ -127,12 +127,13 @@ fx_pr() { # number head [JSON overrides, including head/base/author]
 }
 
 fx_review() { # PR body [GraphQL review JSON overrides]
-    local overrides="${3:-}" next
+    local overrides="${3:-}" next next_id
     [ -n "$overrides" ] || overrides='{}'
     next="$GH_STUB_DIR/reviews/$1.next"
+    next_id="$(jq -s '[.[][] | .fullDatabaseId | tonumber] | (max // 1000) + 1' "$GH_STUB_DIR"/reviews/*.json)" || return 1
     jq --arg body "$2" --argjson number "$1" --argjson overrides "$overrides" \
+        --argjson id "$next_id" \
         --slurpfile pr "$GH_STUB_DIR/pulls/$1.json" --slurpfile author "$GH_STUB_DIR/publisher.json" '
-        ((map(.fullDatabaseId | tonumber) | max // 1000) + 1) as $id |
         . + [({fullDatabaseId:($id|tostring),url:("https://github.com/owner/repo/pull/"+($number|tostring)+"#pullrequestreview-"+($id|tostring)),
                body:$body,state:"COMMENTED",submittedAt:"2026-01-02T00:00:00Z",lastEditedAt:null,editor:null,
                author:$author[0],commit:{oid:$pr[0].head.sha}} * $overrides)]' "$GH_STUB_DIR/reviews/$1.json" > "$next" &&

@@ -111,10 +111,11 @@ case "$route" in
             [ "$event" = COMMENT ] || exit 1
             # COMMENT reviews are accepted on closed PRs too (probe §9.6).
             [ -f "$GH_STUB_DIR/pulls/$number.json" ] || exit 1
+            next_id="$(jq -s '[.[][] | .fullDatabaseId | tonumber] | (max // 1000) + 1' "$GH_STUB_DIR"/reviews/*.json)"
             jq -n --slurpfile reviews "$GH_STUB_DIR/reviews/$number.json" \
                 --slurpfile pr "$GH_STUB_DIR/pulls/$number.json" --slurpfile author "$GH_STUB_DIR/publisher.json" \
+                --argjson id "$next_id" \
                 --arg body "$body" --argjson number "$number" --arg time "${GH_STUB_NOW:-2026-01-02T12:00:00Z}" '
-                (($reviews[0] | map(.fullDatabaseId | tonumber) | max // 1000) + 1) as $id |
                 {fullDatabaseId:($id|tostring),url:("https://github.com/owner/repo/pull/"+($number|tostring)+"#pullrequestreview-"+($id|tostring)),
                  body:$body,state:"COMMENTED",submittedAt:$time,lastEditedAt:null,editor:null,
                  author:$author[0],commit:{oid:$pr[0].head.sha}}' > "$GH_STUB_DIR/posted.json"
