@@ -52,8 +52,14 @@ bash .prdkit/scripts/bash/check-review.sh --pr <url> [--save-receipts <file>] [-
 ```
 
 ```
-bash .prdkit/scripts/bash/publish-review.sh <change-id> --pr <url> --reviewer <id> --verdict PASS|FAIL --counts <c>,<h>,<m>,<l> --report <url> --head <rev> [--since <rev>] [--from-report <file>] [--base <ref>] [--dry-run]
+bash /trusted-install/.prdkit/scripts/bash/publish-review.sh <change-id> --repo <fetch-only-clone> --pr <url> --reviewer <id> --verdict PASS|FAIL --counts <c>,<h>,<m>,<l> --report <url> --head <rev> [--since <rev>] [--from-report <file>] [--base <ref>] [--dry-run]
 ```
+
+The publisher runs the helper and its libraries from the trusted default branch or a pinned
+kit install, never from a PR checkout. `--repo` points at a fetch-only clone; do not execute its
+code. A publisher CI job must never run PR-controlled code with the publisher key, including a
+`pull_request` job with secrets. The gate's candidate-script residual is not permission to
+expose publishing credentials to candidate code.
 
 Reviews are run by the worker, never by CI: the worker dispatches the tier's independent
 reviewers (`protocol.md`) and preserves each report verbatim. A trusted publisher posts its

@@ -69,6 +69,11 @@ change by change.
   author the PR. It proves account separation, not machine separation. Explicit `shared` warns
   that receipts bind content, ordering and counts, not reviewer independence. Do not list the
   shared `github-actions[bot]` account; prefer a reviewer-controlled App credential or a human.
+  The publisher must run `publish-review.sh` and its libraries from the trusted default branch
+  or a pinned kit install, never from a PR checkout. `--repo` points at a fetch-only clone; a
+  publisher CI job never runs PR-controlled code with the publisher key (for example a
+  `pull_request` job with secrets). Otherwise candidate code can steal the credential or forge
+  verdicts; account isolation does not prevent that.
 - **Receipt schema v3 only.** v1/v2 receipt readers, commit-token coverage and ancestry-based
   legacy FAIL clearance are removed. Author typename plus database id authenticates a publisher,
   never its login or report text. Any edit invalidates a receipt and blocks, even when its author

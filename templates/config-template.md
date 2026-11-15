@@ -43,3 +43,13 @@ a branch can add workflows using it. `required` is the kit's isolation choice an
 publisher that also authored the PR; it proves account separation, not machine separation.
 Use a dedicated reviewer-only App credential, a human publisher, or explicitly choose `shared`.
 Shared mode warns that authenticated content/order/counts do not prove reviewer independence.
+
+For publication, run `publish-review.sh` from the trusted default branch or a pinned kit install,
+never a PR checkout; `--repo` names a fetch-only clone, whose code is never executed:
+
+```text
+bash /trusted-install/.prdkit/scripts/bash/publish-review.sh <change-id> --repo <fetch-only-clone> ...
+```
+
+A publisher CI job must never run PR-controlled code with the publisher key (for example a
+`pull_request` job with secrets).

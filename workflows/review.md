@@ -37,8 +37,13 @@ durable public home. End the review report with `Verdict: PASS|FAIL` and then
 
 An authorized **publisher**, not the maker or a pasted block, authenticates the verdict:
 
+Run `publish-review.sh` and its libraries from the trusted default branch or a pinned kit
+install, **never from a PR checkout**. `--repo` points at a fetch-only clone used for Git objects,
+not code execution. A publisher CI job must never run PR-controlled code with the publisher key
+(for example a `pull_request` job with secrets).
+
 ```bash
-bash .prdkit/scripts/bash/publish-review.sh <change-id> --pr <url> --reviewer <registry-id> \
+bash /trusted-install/.prdkit/scripts/bash/publish-review.sh <change-id> --repo <fetch-only-clone> --pr <url> --reviewer <registry-id> \
   --verdict PASS --counts 0,0,0,0 --report <report-url> --head <reviewed-sha> --from-report <file>
 ```
 
@@ -87,7 +92,7 @@ Only the original review author's typename and numeric id may restate it. Restat
 original verdict**, never reconstruct it from a corrupted, maker-editable host body:
 
 ```bash
-bash .prdkit/scripts/bash/publish-review.sh --pr <posting-pr-url> \
+bash /trusted-install/.prdkit/scripts/bash/publish-review.sh --repo <fetch-only-clone> --pr <posting-pr-url> \
   --restates <invalid-review-id> --receipt-id <original-32-hex-id> [--restates-pr <origin-pr>]
 ```
 
