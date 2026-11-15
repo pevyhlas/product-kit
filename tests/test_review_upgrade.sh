@@ -26,6 +26,7 @@ EOF
 - review-owner: user:1003
 - review-publisher-isolation: required
 EOF
+    printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n| security | reviewer |\n' >> "$PROJ/.prdkit/memory/agents.md"
     commit_fixture policy; trusted_tip
 }
 upgrade() { run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade "$@"; }
@@ -273,4 +274,94 @@ run bash "$PROJ/.prdkit/scripts/bash/doctor.sh" --json
 assert_contains "$OUTPUT" 'Legacy 1.x blocking lines: specs/changes/001-merged-open.md' 'doctor JSON advisory names record'
 assert_not_contains "$OUTPUT" 'Legacy 1.x blocking lines: specs/changes/003-clean.md' 'doctor never turns PASS into a blocker'
 assert_not_contains "$(cat "$GH_STUB_DIR/requests")" POST 'diagnostics do not publish'
+it 'real interrupted installs retry only validated same-source states under both upgrade flags'
+REAL_MV="$(command -v mv)"; REAL_RM="$(command -v rm)"; export REAL_MV REAL_RM
+FAULTS="$(mktemp -d)"; track_tmp "$FAULTS"
+cat > "$FAULTS/mv" <<'EOF'
+#!/usr/bin/env bash
+if [ "${!#}" = "$FAULT_ROOT/.prdkit/templates/change-template.md" ] && [ "$FAULT_PHASE" = template ]; then exit 73; fi
+exec "$REAL_MV" "$@"
+EOF
+cat > "$FAULTS/rm" <<'EOF'
+#!/usr/bin/env bash
+if [ "${!#}" = "$FAULT_ROOT/.prdkit/.install-state" ] && [ "$FAULT_PHASE" = published ]; then exit 74; fi
+exec "$REAL_RM" "$@"
+EOF
+chmod +x "$FAULTS/mv" "$FAULTS/rm"
+for flag in plain migrate; do
+    for phase in template published; do
+        transition_project
+        printf '\nNew command bytes\n' >> "$PROJ/.product-kit/commands/prdkit.md"
+        printf '\nNew template bytes\n' >> "$PROJ/.product-kit/templates/change-template.md"
+        commit_fixture source
+        args=(); [ "$flag" != migrate ] || args=(--migrate-reviews)
+        run env PATH="$FAULTS:$PATH" FAULT_ROOT="$PROJ" FAULT_PHASE="$phase" bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade "${args[@]}"
+        assert_eq 1 "$([ "$STATUS" -ne 0 ] && echo 1 || echo 0)" "$phase fails at a real boundary"
+        assert_contains "$OUTPUT" 'Incomplete install' 'interruption stays explicit'
+        assert_contains "$(cat "$PROJ/.claude/commands/prdkit.md")" 'New command bytes' 'tracked command really was replaced'
+        assert_file "$PROJ/.prdkit/.install-state" 'same-source marker retained'
+        upgrade "${args[@]}"
+        assert_eq 0 "$STATUS" "real same-source retry ($flag/$phase): $OUTPUT"
+        assert_contains "$(cat "$PROJ/.prdkit/templates/change-template.md")" 'New template bytes' 'retry installs complete target'
+        assert_not_contains "$(cat "$GH_STUB_DIR/requests")" POST 'interruption/retry never posts'
+    done
+done
+
+it 'end to end: upgrade, re-review an open 1.x PR, then close a merged-open legacy record'
+transition_project
+use_gh_stub
+mkdir -p "$PROJ/specs/changes"
+printf '# Merged open\n**Tier**: T1\n## State\n%s\n%s\n' "$FAIL" "$PASS" > "$PROJ/specs/changes/001-merged-open.md"
+commit_fixture inherited; trusted_tip
+BASE_BRANCH="$(git -C "$PROJ" symbolic-ref --short HEAD)"
+git -C "$PROJ" checkout -qb 002-open
+printf '# Open\n**Tier**: T1\n## State\n%s\n**Review**: round 2 · old · security · PASS · %s · text\n' "${FAIL%text}open-text" "$CLEAN" > "$PROJ/specs/changes/002-open.md"
+printf implementation > "$PROJ/source.txt"
+commit_fixture implementation
+fx_pr 7 "$(git -C "$PROJ" rev-parse HEAD)" '{"head":{"ref":"002-open"}}'
+git -C "$PROJ" checkout -q "$BASE_BRANCH"
+upgrade --migrate-reviews
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_not_contains "$(cat "$GH_STUB_DIR/requests")" POST 'the transition itself never posts'
+run git -C "$PROJ" diff --exit-code HEAD -- specs/changes/
+assert_eq 0 "$STATUS" 'upgrade creates no record diff'
+commit_fixture upgraded; trusted_tip
+git -C "$PROJ" checkout -q 002-open
+git -C "$PROJ" merge -qm 'merge upgraded default' "$BASE_BRANCH" || exit 1
+fx_pr 7 "$(git -C "$PROJ" rev-parse HEAD)" '{"head":{"ref":"002-open"}}'
+gate_upgrade_fixture() {
+    run bash "$PROJ/.prdkit/scripts/bash/check-review.sh" --repo "$PROJ" --json --pr "https://github.com/owner/repo/pull/$1" "$2"
+}
+publish_upgrade_fixture() {
+    local pr="$1" change="$2" reviewer="$3"; shift 3
+    # The publisher entry point is trusted kit source; --repo supplies only local fixture objects.
+    run bash "$PK_ROOT/scripts/publish-review.sh" "$change" --repo "$PROJ" --pr "https://github.com/owner/repo/pull/$pr" \
+        --reviewer "$reviewer" --verdict PASS --counts 0,0,0,0 --report https://example.invalid/report --head HEAD "$@"
+    assert_eq 0 "$STATUS" "$OUTPUT"
+}
+gate_upgrade_fixture 7 002-open
+assert_eq 1 "$STATUS" '1.x PASS is not native coverage'
+assert_contains "$OUTPUT" 'legacy blocker' 'open PR legacy FAIL stands'
+publish_upgrade_fixture 7 002-open security
+gate_upgrade_fixture 7 002-open
+assert_eq 1 "$STATUS" 'another reviewer coverage does not clear code FAIL'
+assert_eq 1 "$(printf '%s' "$OUTPUT" | jq '[.legacy_blockers[]|select(.cleared==false)]|length')" 'exactly its own legacy blocker remains'
+publish_upgrade_fixture 7 002-open code
+gate_upgrade_fixture 7 002-open
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq true "$(printf '%s' "$OUTPUT" | jq '.legacy_blockers[0].cleared')" 'full native same-reviewer PASS clears open PR'
+
+git -C "$PROJ" checkout -q "$BASE_BRANCH"
+git -C "$PROJ" checkout -qb 003-close
+rm "$PROJ/specs/changes/001-merged-open.md"
+printf -- '- 2026-01-01 001-merged-open: closed\n' > "$PROJ/specs/log.md"
+commit_fixture closing
+fx_pr 9 "$(git -C "$PROJ" rev-parse HEAD)" '{"head":{"ref":"003-close"}}'
+gate_upgrade_fixture 9 001-merged-open
+assert_eq 1 "$STATUS" '1.x-cleared inherited FAIL still blocks closing'
+assert_eq true "$(printf '%s' "$OUTPUT" | jq .record_only)" 'closing has genuinely empty content'
+publish_upgrade_fixture 9 001-merged-open code --clears-legacy
+gate_upgrade_fixture 9 001-merged-open
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq true "$(printf '%s' "$OUTPUT" | jq '.legacy_blockers[0].cleared')" 'native full PASS permits record-only closing'
 finish

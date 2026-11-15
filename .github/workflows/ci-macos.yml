@@ -57,6 +57,7 @@ jobs:
           /bin/bash tests/test_review_gate.sh
           /bin/bash tests/test_review_legacy_scan.sh
           /bin/bash tests/test_review_legacy_gate.sh
+          /bin/bash tests/test_review_upgrade.sh
           /bin/bash tests/test_review_owner.sh
           /bin/bash tests/test_publish_review.sh
           /bin/bash tests/test_review_package.sh
