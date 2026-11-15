@@ -299,3 +299,103 @@ upgrade_no_overwrite() (
         return 1
     fi
 )
+
+upgrade_inventory_json() { # inventory rows -> JSON array, presentation only
+    jq -Rn '[inputs | split("\u001f") | {id:.[0],change:.[1],path:.[2],line:(.[3]|tonumber),reviewer:.[4],verdict:.[5],reason:.[6]}]' < "$1"
+}
+
+upgrade_blockers_json() { # collect rows inventory-json -> JSON with optional raw line location
+    jq -Rn --slurpfile inventory "$2" '[inputs | split("\u001f") |
+        {id:.[0],change:.[1],reviewer:.[2],reason:.[3]} |
+        . as $b | ([$inventory[0][] | select(.id==$b.id)][0] // {}) as $location |
+        . + {path:($location.path // ("specs/changes/"+.change+".md")),line:($location.line // null)}]' < "$1"
+}
+
+upgrade_host_repo() {
+    local url
+    url="$(git -C "$TARGET" config --get remote.origin.url)" || return 1
+    case "$url" in
+        https://github.com/*) url="${url#https://github.com/}" ;;
+        git@github.com:*) url="${url#git@github.com:}" ;;
+        ssh://git@github.com/*) url="${url#ssh://git@github.com/}" ;;
+        *) return 1 ;;
+    esac
+    url="${url%.git}"
+    [[ "$url" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 1
+    printf '%s\n' "$url"
+}
+
+upgrade_transition_report() (
+    local work change path repo pr head base checked ref canonical available note
+    command -v jq >/dev/null 2>&1 || { echo 'The 2.0 transition report requires jq; nothing was written.' >&2; return 1; }
+    work="$(mktemp -d)" || return 1
+    trap 'rm -rf "$work"' EXIT
+    review_legacy_inventory "$TARGET" "$UP_POLICY_AT" "$UP_RIGOR" "$work/cache" "$work/inventory" || return 1
+    upgrade_inventory_json "$work/inventory" > "$work/inventory.json" || return 1
+    : > "$work/records.jsonl"; : > "$work/prs.jsonl"; : > "$work/notes.jsonl"
+    jq -r '.[].change' "$work/inventory.json" | LC_ALL=C sort -u > "$work/changes" || return 1
+    while IFS= read -r change; do
+        path="specs/changes/$change.md"
+        review_legacy_collect "$TARGET" "$change" "$UP_POLICY_AT" "$UP_POLICY_AT" "$UP_RIGOR" "$work/cache" "$work/blockers" || return 1
+        upgrade_blockers_json "$work/blockers" "$work/inventory.json" > "$work/blockers.json" || return 1
+        jq -cn --arg change "$change" --arg path "$path" --slurpfile blockers "$work/blockers.json" --slurpfile inventory "$work/inventory.json" '
+            {change:$change,path:$path,legacy_blockers:$blockers[0],
+             pass_lines:([$inventory[0][] | select(.change==$change and .verdict=="PASS")]|length)}' >> "$work/records.jsonl" || return 1
+    done < "$work/changes"
+    note=''
+    if ! command -v gh >/dev/null 2>&1; then note='Could not list open PRs: gh is missing; default-branch report is complete.'
+    elif ! repo="$(upgrade_host_repo)"; then note='Could not list open PRs: origin is not a GitHub repository URL.'
+    elif ! gh api --method GET "repos/$repo/pulls?state=open&per_page=100" --paginate > "$work/open-pages" 2>/dev/null; then
+        note='Could not list open PRs: the host API is unavailable; the upgrade can proceed.'
+    elif ! jq -se 'length>0 and all(.[]; type=="array" and all(.[];
+        (.number|type)=="number" and (.head.sha|type)=="string" and (.head.sha|test("^[0-9a-f]{40}$")) and
+        (.head.ref|type)=="string" and (.base.ref|type)=="string"))' "$work/open-pages" >/dev/null; then
+        note='Could not list open PRs: the host returned incomplete or malformed pages.'
+    else
+        jq -sc 'add | unique_by(.number)[]' "$work/open-pages" > "$work/open.jsonl" || return 1
+        while IFS= read -r pr; do
+            head="$(printf '%s' "$pr" | jq -r .head.sha)"; base="$(printf '%s' "$pr" | jq -r .base.ref)"
+            canonical=''
+            while IFS= read -r ref; do
+                checked="${ref#refs/remotes/}"; checked="${checked#*/}"
+                if [ "$checked" = "$base" ]; then canonical="$ref"; break; fi
+            done <<< "$UP_REFS"
+            [ -n "$canonical" ] || continue
+            checked="$(printf '%s' "$pr" | jq -r .head.ref)"
+            is_change_id "$checked" || checked=''
+            available=true
+            if ! review_legacy_inventory "$TARGET" "$head" "$UP_RIGOR" "$work/cache" "$work/pr-inventory" 2>/dev/null ||
+                ! review_legacy_collect "$TARGET" "$checked" "$canonical" "$head" "$UP_RIGOR" "$work/cache" "$work/pr-blockers" 2>/dev/null; then available=false; fi
+            if $available; then
+                upgrade_inventory_json "$work/pr-inventory" > "$work/pr-inventory.json" || return 1
+                upgrade_blockers_json "$work/pr-blockers" "$work/pr-inventory.json" > "$work/pr-blockers.json" || return 1
+            else printf '[]\n' > "$work/pr-inventory.json"; printf '[]\n' > "$work/pr-blockers.json"; fi
+            printf '%s' "$pr" | jq -c --argjson available "$available" --arg checked "$checked" \
+                --slurpfile inventory "$work/pr-inventory.json" --slurpfile blockers "$work/pr-blockers.json" '
+                {number,url:(.html_url // ""),head:.head.sha,base:.base.ref,checked_change:$checked,scan_available:$available,
+                 legacy_blockers:$blockers[0],reviews_owed:([$inventory[0][]|select(.verdict=="PASS")|.reviewer] + [$blockers[0][].reviewer] | unique),
+                 note:(if $available then "" else "Legacy scan unavailable: fetch this PR head and its complete history locally, then rerun; no network fetch was attempted." end)}' \
+                >> "$work/prs.jsonl" || return 1
+        done < "$work/open.jsonl"
+    fi
+    [ -z "$note" ] || jq -cn --arg note "$note" '$note' >> "$work/notes.jsonl"
+    jq -n --arg policy_at "$UP_POLICY_AT" --slurpfile records "$work/records.jsonl" \
+        --slurpfile prs "$work/prs.jsonl" --slurpfile notes "$work/notes.jsonl" '
+        {schema:"prdkit.review-transition.v1",policy_at:$policy_at,records:$records,open_prs:$prs,notes:$notes,
+         totals:{records_with_blockers:([$records[]|select(.legacy_blockers|length>0)]|length),
+                 blockers_per_reviewer:([$records[].legacy_blockers[]]|group_by(.reviewer)|map({key:.[0].reviewer,value:length})|from_entries),
+                 open_prs:($prs|length),reviews_owed:([$prs[].reviews_owed[]]|length)}}' > "$work/report.json" || return 1
+    if $JSON; then cat "$work/report.json"
+    else
+        jq -r '"2.0 review transition (trusted tip " + .policy_at + ")",
+          "1.x PASS verdicts stop counting; no verdict is converted or published.",
+          (.records[] | "Record " + .path + ": " + (.pass_lines|tostring) + " PASS line(s) stop counting",
+            (.legacy_blockers[] | "  " + .reviewer + " at line " + (.line|tostring) + ": " + .reason)),
+          (.open_prs[] | ("Open PR #" + (.number|tostring) + ": " + (.reviews_owed|join(", ")) + " need fresh 2.0 reviews"),
+            (.legacy_blockers[] | "  " + .change + ": " + .reviewer + ": " + .reason), (if .note!="" then .note else empty end)),
+          (.notes[]),
+          ("Totals: " + (.totals.records_with_blockers|tostring) + " records with blockers; " +
+            (.totals.open_prs|tostring) + " open PRs; " + (.totals.reviews_owed|tostring) + " reviews owed"),
+          (.totals.blockers_per_reviewer | to_entries[] | "  " + .key + ": " + (.value|tostring) + " default-branch blocker(s)")' "$work/report.json"
+    fi
+)

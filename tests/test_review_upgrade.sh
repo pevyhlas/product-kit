@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # The 2.0 review transition uses committed, local history and the host stub only.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+use_gh_stub
 
 commit_fixture() { git -C "$PROJ" add -A && git -C "$PROJ" commit -qm "$1" || exit 1; }
 trusted_tip() {
@@ -10,6 +11,7 @@ trusted_tip() {
 transition_project() {
     PROJ="$(make_inited_project --copy)"; track_tmp "$PROJ"
     PROJ="$(cd "$PROJ" && pwd -P)"
+    git -C "$PROJ" remote add origin https://github.com/owner/repo.git
     # Release ownership stays with the maintainer; a fixture explicitly models the 2.0 source.
     printf '2.0.0\n' > "$PROJ/.product-kit/VERSION"
     cat > "$PROJ/.prdkit/memory/constitution.md" <<'EOF'
@@ -186,4 +188,77 @@ commit_fixture source
 upgrade --migrate-reviews
 assert_eq 0 "$STATUS" 'outdated but pristine is safe'
 assert_contains "$(cat "$PROJ/.claude/commands/prdkit.md")" 'New pristine command' 'command refreshed'
+it 'transition report reuses the scan for default records and open trusted-base PRs, without writes or POST'
+transition_project
+use_gh_stub
+mkdir -p "$PROJ/specs/changes"
+CLEAN='0 critical, 0 high, 0 medium, 0 low'
+FAIL="**Review**: round 1 · old · code · FAIL · $CLEAN · text"
+PASS="**Review**: round 2 · old · code · PASS · $CLEAN · text"
+printf '# Record\n## State\n%s\n%s\n' "$FAIL" "$PASS" > "$PROJ/specs/changes/001-merged-open.md"
+commit_fixture inherited; trusted_tip
+BASE_BRANCH="$(git -C "$PROJ" symbolic-ref --short HEAD)"
+git -C "$PROJ" checkout -qb 002-open
+printf '# Open\n## State\n%s\n**Review**: round 2 · old · security · PASS · %s · text\n' "${FAIL%text}open-text" "$CLEAN" > "$PROJ/specs/changes/002-open.md"
+commit_fixture open
+OPEN_HEAD="$(git -C "$PROJ" rev-parse HEAD)"
+fx_pr 7 "$OPEN_HEAD" '{"head":{"ref":"002-open"}}'
+fx_pr 8 "$OPEN_HEAD" '{"base":{"ref":"untrusted"}}'
+git -C "$PROJ" checkout -q "$BASE_BRANCH"
+BEFORE="$(git -C "$PROJ" status --porcelain --untracked-files=all)"
+upgrade --migrate-reviews --dry-run --json
+assert_eq 0 "$STATUS" "$OUTPUT"
+REPORT="$OUTPUT"
+assert_eq prdkit.review-transition.v1 "$(printf '%s' "$REPORT" | jq -r .schema)" 'JSON report schema'
+assert_eq 1 "$(printf '%s' "$REPORT" | jq .totals.records_with_blockers)" '1.x-cleared FAIL still reported'
+assert_eq 1 "$(printf '%s' "$REPORT" | jq .totals.blockers_per_reviewer.code)" 'totals by reviewer'
+assert_eq 1 "$(printf '%s' "$REPORT" | jq .totals.open_prs)" 'only trusted-base open PRs listed'
+assert_eq 2 "$(printf '%s' "$REPORT" | jq .totals.reviews_owed)" 'one fresh review per owed reviewer'
+assert_eq 1 "$(printf '%s' "$REPORT" | jq '.records[0].pass_lines')" 'PASS lines counted, never converted'
+assert_eq 3 "$(printf '%s' "$REPORT" | jq '.records[0].legacy_blockers[0].line')" 'raw blob line number'
+assert_eq 'legacy FAIL' "$(printf '%s' "$REPORT" | jq -r '.records[0].legacy_blockers[0].reason')" 'same gate reason'
+assert_eq '["code","security"]' "$(printf '%s' "$REPORT" | jq -c '.open_prs[0].reviews_owed')" 'FAIL clearer and PASS reviewer owe native reviews'
+assert_eq 1 "$(printf '%s' "$REPORT" | jq '.open_prs[0].legacy_blockers|length')" 'open PR history scanned'
+assert_not_contains "$(cat "$GH_STUB_DIR/requests")" POST 'report never posts'
+unchanged
+upgrade --migrate-reviews --dry-run
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_contains "$OUTPUT" 'Record specs/changes/001-merged-open.md' 'text report names record'
+assert_contains "$OUTPUT" 'code at line 3: legacy FAIL' 'text report names reviewer, raw line and reason'
+assert_contains "$OUTPUT" 'Open PR #7' 'text report names PR'
+assert_not_contains "$(cat "$GH_STUB_DIR/requests")" POST 'text report never posts'
+unchanged
+
+it 'API failure is reported, not an upgrade blocker'
+run env GH_STUB_OFFLINE=true bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --migrate-reviews --dry-run --json
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_contains "$OUTPUT" 'host API is unavailable' 'API omission explicit'
+assert_not_contains "$(cat "$GH_STUB_DIR/requests")" POST 'unavailable report never posts'
+
+it 'a missing local PR head is an unavailable scan, not a claim of zero blockers'
+fx_pr 7 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa '{"head":{"ref":"002-open"}}'
+upgrade --migrate-reviews --dry-run --json
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq false "$(printf '%s' "$OUTPUT" | jq '.open_prs[0].scan_available')" 'absent local head explicit'
+assert_contains "$OUTPUT" 'fetch this PR head' 'report never fetches implicitly'
+
+it 'missing gh leaves the default-branch report available with a note'
+TOOLS="$(mktemp -d)"; track_tmp "$TOOLS"
+for tool in bash dirname basename git head tail tr awk sed grep cat mktemp rm mkdir mv cp chmod ln readlink cut cmp sort jq wc sha256sum shasum; do
+    tool_path="$(command -v "$tool")" || continue
+    ln -s "$tool_path" "$TOOLS/$tool"
+done
+run env PATH="$TOOLS" bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --migrate-reviews --dry-run --json
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_contains "$OUTPUT" 'gh is missing' 'missing host tool noted'
+assert_eq 1 "$(printf '%s' "$OUTPUT" | jq .totals.records_with_blockers)" 'default records still complete'
+unchanged
+
+it 'installing migration writes kit files only and never publishes or changes a record'
+upgrade --migrate-reviews
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_not_contains "$(cat "$GH_STUB_DIR/requests")" POST 'install never posts'
+run git -C "$PROJ" diff --exit-code HEAD -- specs/changes/
+assert_eq 0 "$STATUS" 'record bytes untouched during install'
+assert_eq 1 "$(git -C "$PROJ" ls-files specs/changes/ | wc -l | tr -d ' ')" 'no record created'
 finish

@@ -5,7 +5,7 @@
 # id/change/reviewer/reason rows, or fails without publishing a partial result.
 # WORK is a caller-owned cache, shared by the current and clearance-head scans.
 # All history/tree/blob reads are plumbing, with replacements and lazy fetch disabled.
-# shellcheck disable=SC2034 # Cache outputs and normalized receipt fields cross interfaces.
+# shellcheck disable=SC2034,SC2030,SC2031 # Shared outputs; each public scan intentionally confines its Git environment.
 
 review_legacy_awk_preserves_nul() { # caller-owned work directory; one probe per collect
     local expected actual
@@ -59,44 +59,82 @@ _legacy_lines() { # blob path -> LL_LINES: active line text, never truncated NUL
             fi
         fi
         if [ ! -f "$LL_LINES" ]; then
-            LC_ALL=C awk "$SPEC_SKIP_AWK"'
+            LC_ALL=C awk -v numbers="$LL_LINES.numbers.next" "$SPEC_SKIP_AWK"'
             { original=$0; gsub(/[\035-\037]/, " "); if (spec_skip($0)) next }
             /^## / { sec=$0; sub(/^##[[:space:]]+/, "", sec); next }
-            sec=="State" && /^\*\*Review\*\*:/ { print original }
+            sec=="State" && /^\*\*Review\*\*:/ { print original; print NR > numbers }
             ' "$ll_work/blob" > "$LL_LINES.next" || return 1
+            # An empty record has no number rows, but still gets a complete sidecar.
+            [ -f "$LL_LINES.numbers.next" ] || : > "$LL_LINES.numbers.next"
+            mv "$LL_LINES.numbers.next" "$LL_LINES.numbers" || return 1
             mv "$LL_LINES.next" "$LL_LINES" || return 1
         fi
     fi
 }
-_legacy_emit() { # path lines-file -> append blockers; range/link/fingerprint fields are never read
-    local change="${1##*/}" display_change number reviewer reason digest
-    change="${change%.md}"
-    LC_ALL=C awk -v rigor="$ll_rigor" '
+review_legacy_classify() { # active-lines-file rigor -> active index / reviewer / verdict / reason
+    LC_ALL=C awk -v rigor="$2" '
         BEGIN { nul=sprintf("%c",0) }
         function trim(s) { gsub(/`/, "", s); gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
         function count(s,k, v) { if (!match(s,"[0-9]+ " k)) return "?"; v=substr(s,RSTART,RLENGTH); sub(/ .*/,"",v); return v }
         { gsub(/[\035-\037]/, " "); sub(/^\*\*Review\*\*:[[:space:]]*/, ""); n=split($0,f," · ")
           r=n>=3 ? tolower(trim(f[3])) : ""; if (r=="" || (nul!="" && index(r,nul))) r="(unnamed)"
           verdict=toupper(trim(f[4])); c=count(f[5],"critical"); h=count(f[5],"high"); m=count(f[5],"medium"); l=count(f[5],"low")
-          if (r=="owner") { if (verdict=="PASS") next; reason="owner legacy verdict is not a readable PASS" }
+           reason=""
+           if (r=="owner") { if (verdict!="PASS") reason="owner legacy verdict is not a readable PASS" }
           else if (verdict=="FAIL") reason="legacy FAIL"
           else if (verdict!="PASS") reason="unreadable legacy verdict"
           else if (c=="?" || h=="?" || m=="?" || l=="?") reason="unreadable legacy counts"
           else if (c!="0" || h!="0" || (rigor!="light" && m!="0")) reason="legacy counts block under Rigor " rigor
-          else next
-          print NR "\037" r "\037" reason }
-    ' "$2" > "$ll_work/classified" || return 1
-    while IFS=$'\037' read -r number reviewer reason; do
-        # Keep line bytes out of shell variables (which cannot hold NUL). Hash the
-        # original active line, without its newline, even in a binary-marked blob.
-        digest="$( { printf 'prdkit-legacy\000%s\000' "$change"
-            LC_ALL=C awk -v number="$number" 'NR==number { printf "%s", $0; exit }' "$2"
-        } | review_sha256)" || return 1
+           print NR "\037" r "\037" verdict "\037" reason }
+    ' "$1"
+}
+
+_legacy_identity() { # change lines-file active-index -> full digest, byte preserving
+    { printf 'prdkit-legacy\000%s\000' "$1"
+        LC_ALL=C awk -v number="$3" 'NR==number { printf "%s", $0; exit }' "$2"
+    } | review_sha256
+}
+
+_legacy_emit() { # path lines-file -> append blockers; range/link/fingerprint fields are never read
+    local change="${1##*/}" display_change number reviewer verdict reason digest
+    change="${change%.md}"
+    review_legacy_classify "$2" "$ll_rigor" > "$ll_work/classified" || return 1
+    while IFS=$'\037' read -r number reviewer verdict reason; do
+        [ -n "$reason" ] || continue
+        digest="$(_legacy_identity "$change" "$2" "$number")" || return 1
         # Presentation fields use the gate's row delimiter; identity always hashes the original bytes.
         display_change="$(printf '%s' "$change" | tr '\035-\037\n\r' ' ')" || return 1
         printf '%s\037%s\037%s\037%s\n' "${digest:0:32}" "$display_change" "$reviewer" "$reason" >> "$ll_rows" || return 1
     done < "$ll_work/classified"
 }
+
+# Presentation adapter for the installer and diagnostics. The gate's same parser,
+# classifier and identity function supply raw-blob line numbers and ignored PASS metadata.
+# This grants no verdict; review_legacy_collect remains the blocker authority.
+review_legacy_inventory() ( # root at rigor work output
+    local ll_root="$1" at="$2" rigor="$3" ll_work="$4" output="$5" entry number reviewer verdict reason digest change line
+    local LL_TREE LL_PATH LL_BLOB LL_LINES ll_awk_nul=false ll_error="$5.error"
+    export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
+    set -o pipefail
+    spec_objects_local "$ll_root" || return 1
+    mkdir -p "$ll_work" || return 1
+    if review_legacy_awk_preserves_nul "$ll_work"; then ll_awk_nul=true; fi
+    _legacy_tree "$at" || return 1
+    : > "$output.next" || return 1
+    while IFS= read -r -d '' entry; do
+        _legacy_record "$entry" || continue
+        _legacy_lines "$LL_BLOB" "$LL_PATH" || return 1
+        review_legacy_classify "$LL_LINES" "$rigor" > "$ll_work/inventory-classified" || return 1
+        change="${LL_PATH##*/}"; change="${change%.md}"
+        while IFS=$'\037' read -r number reviewer verdict reason; do
+            digest="$(_legacy_identity "$change" "$LL_LINES" "$number")" || return 1
+            line="$(awk -v n="$number" 'NR==n { print; exit }' "$LL_LINES.numbers")" || return 1
+            printf '%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\n' \
+                "${digest:0:32}" "$change" "$LL_PATH" "$line" "$reviewer" "$verdict" "$reason" "$number" >> "$output.next" || return 1
+        done < "$ll_work/inventory-classified"
+    done < "$LL_TREE"
+    mv "$output.next" "$output"
+)
 
 review_legacy_collect() ( # subshell contains Git environment and scratch outputs
     local ll_root="$1" checked="$2" base="$3" head="$4" ll_rigor="$5" ll_work="$6" output="$7"

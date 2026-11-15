@@ -754,11 +754,8 @@ if upgrade_source_2 && $UPGRADE; then
     upgrade_preflight || exit 1
     upgrade_no_overwrite || exit 1
     if ! $MIGRATE_REVIEWS; then upgrade_plain_guard || exit 1; fi
-    if $DRY_RUN; then
-        if $JSON; then printf '{"policy_at":"%s","records":[],"open_prs":[]}\n' "$UP_POLICY_AT"
-        else echo 'Review transition preflight passed; no files installed.'; fi
-        exit 0
-    fi
+    if $MIGRATE_REVIEWS; then upgrade_transition_report || exit 1; fi
+    if $DRY_RUN; then exit 0; fi
 fi
 
 # Serialize writes, with a retained phase marker rather than pretending the whole install is
