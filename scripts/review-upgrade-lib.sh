@@ -109,7 +109,7 @@ upgrade_preflight() {
 }
 
 # Snapshot a HEAD entry without filters or git-show absence masking.
-upgrade_head_file() { # relative path destination
+upgrade_head_file() { # relative path destination link-metadata
     local entry mode blob
     entry="$(git -C "$TARGET" ls-tree HEAD -- ":(top,literal)$1")" || return 1
     [ -n "$entry" ] || return 0
@@ -119,41 +119,116 @@ upgrade_head_file() { # relative path destination
         100644|100755)
             git -C "$TARGET" cat-file blob "$blob" > "$2" || return 1
             if [ "$mode" = 100755 ]; then chmod 755 "$2"; else chmod 644 "$2"; fi ;;
-        120000) ln -s "$(git -C "$TARGET" cat-file blob "$blob")" "$2" || return 1 ;;
+        120000)
+            git -C "$TARGET" cat-file blob "$blob" > "$2" || return 1
+            mkdir -p "$(dirname "$3")" && : > "$3" || return 1 ;;
         *) return 1 ;;
     esac
 }
 
-upgrade_same_file() {
-    if [ -L "$1" ] || [ -L "$2" ]; then
-        [ -L "$1" ] && [ -L "$2" ] && [ "$(readlink "$1")" = "$(readlink "$2")" ]
+upgrade_same_file() { # real file rendered regular file link-metadata
+    if [ -f "$3" ]; then
+        [ -L "$1" ] && [ "$(readlink "$1")" = "$(cat "$2")" ]
+    elif [ -L "$1" ] || [ -L "$2" ]; then
+        return 1
     elif [ -f "$1" ] && [ -f "$2" ]; then
         { { [ -x "$1" ] && [ -x "$2" ]; } || { [ ! -x "$1" ] && [ ! -x "$2" ]; }; } && cmp -s "$1" "$2"
     else [ ! -e "$1" ] && [ ! -e "$2" ]; fi
 }
 
+upgrade_resolved_destination() { # also resolve the existing parent of a new destination
+    local path="$1" parent suffix=''
+    while [ ! -e "$path" ] && [ ! -L "$path" ]; do
+        parent="$(dirname "$path")"
+        [ "$parent" != "$path" ] || return 1
+        suffix="/$(basename "$path")$suffix"; path="$parent"
+    done
+    path="$(physical_path "$path")" || return 1
+    printf '%s%s\n' "$path" "$suffix"
+}
+
+# Before any renderer or target write: root-file edits cannot share a destination
+# with installation/deletion, another root edit, the source, or the record namespace.
+upgrade_destinations_safe() (
+    local work src rel action line dest other role root record_root entry blob manifest
+    work="$(mktemp -d)" || return 1
+    trap 'rm -rf "$work"' EXIT
+    : > "$work/planned"
+    while IFS=$'\t' read -r src rel; do printf '%s\037installed %s\n' "$TARGET/$rel" "$rel"; done < <(list_kit_files) > "$work/roles"
+    for rel in .prdkit/.manifest .prdkit/.manifest.tmp .prdkit/.install-state .prdkit/.install-lock; do
+        printf '%s\037installer metadata %s\n' "$TARGET/$rel" "$rel" >> "$work/roles"
+    done
+    # Include retired destinations from both the retained and committed manifests.
+    entry="$(git -C "$TARGET" ls-tree HEAD -- .prdkit/.manifest)" || return 1
+    case "$entry" in '100644 blob '*|'100755 blob '*)
+        blob="${entry%%$'\t'*}"; blob="${blob##* }"
+        git -C "$TARGET" cat-file blob "$blob" > "$work/previous" || return 1 ;;
+        *) : > "$work/previous" ;;
+    esac
+    for manifest in "$MANIFEST" "$work/previous"; do
+        [ -f "$manifest" ] || continue
+        while IFS= read -r line; do
+            rel="${line#*  }"
+            [[ "$rel" =~ $KIT_FILE_RE || "$rel" =~ $INSTALLED_RE ]] || continue
+            printf '%s\037recorded/retired %s\n' "$TARGET/$rel" "$rel" >> "$work/roles"
+        done < "$manifest"
+    done
+    while IFS=$'\t' read -r rel action; do
+        [ "$action" != remove ] || printf '%s\037retired %s\n' "$TARGET/$rel" "$rel" >> "$work/roles"
+    done < <(list_retired_commands; list_retired_kit_files)
+    LC_ALL=C sort -u "$work/roles" > "$work/unique-roles" || return 1
+    record_root="$(upgrade_resolved_destination "$TARGET/specs/changes")" || return 1
+    while IFS=$'\037' read -r dest role; do
+        other="$(upgrade_resolved_destination "$dest")" || { echo "Cannot resolve planned destination ($role); nothing was written." >&2; return 1; }
+        case "$other/" in "$TARGET/specs/changes/"*|"$record_root/"*)
+            echo "Planned destination ($role) overlaps protected specs/changes/: $other; nothing was written." >&2; return 1 ;;
+        esac
+        printf '%s\037%s\n%s\037%s\n' "$dest" "$role" "$other" "$role" >> "$work/planned"
+    done < "$work/unique-roles"
+    for root in AGENTS.md .gitignore; do
+        [ "$root" != AGENTS.md ] || has_harness agents || continue
+        dest="$(upgrade_resolved_destination "$TARGET/$root")" || { echo "Cannot resolve root-file edit $root; nothing was written." >&2; return 1; }
+        case "$dest/" in "$PK_ROOT/"*) echo "Root-file edit $root overlaps kit source tree: $dest; nothing was written." >&2; return 1 ;; esac
+        case "$dest/" in "$TARGET/"*) ;; *) echo "Root-file edit $root resolves outside the checkout: $dest; nothing was written." >&2; return 1 ;; esac
+        case "$dest/" in "$TARGET/specs/changes/"*|"$record_root/"*)
+            echo "Root-file edit $root overlaps protected specs/changes/: $dest; nothing was written." >&2; return 1 ;;
+        esac
+        while IFS=$'\037' read -r other role; do
+            if [ "$dest" = "$other" ]; then
+                echo "Root-file edit $root overlaps $role at $dest; nothing was written." >&2; return 1
+            fi
+        done < "$work/planned"
+        printf '%s\037root-file edit %s\n' "$dest" "$root" >> "$work/planned"
+    done
+)
+
 upgrade_render_expected() { # caller-owned work directory -> head/, rendered/, paths (NUL)
     local work="$1" src rel entry rec cur kit ignore hash line dest trailing action
     mkdir -p "$work/head/.prdkit" "$work/rendered" || return 1
-    upgrade_head_file .prdkit/.manifest "$work/head/.prdkit/.manifest" || return 1
+    upgrade_head_file .prdkit/.manifest "$work/head/.prdkit/.manifest" "$work/head-links/.prdkit/.manifest" || return 1
     # The last committed manifest, never a dirty intermediate, is the ownership baseline.
     local MANIFEST="$work/head/.prdkit/.manifest"
     list_kit_files > "$work/files" || return 1
     : > "$work/paths" || return 1
     while IFS=$'\t' read -r src rel; do
         printf '%s\0' "$rel" >> "$work/paths" || return 1
-        upgrade_head_file "$rel" "$work/head/$rel" || return 1
+        upgrade_head_file "$rel" "$work/head/$rel" "$work/head-links/$rel" || return 1
         dest="$work/rendered/$rel"
         mkdir -p "$(dirname "$dest")" || return 1
         case "$rel" in
             .claude/commands/*|.opencode/commands/*)
                 if ! $MODE_COPY; then
                     case "$src" in "$TARGET"/*) entry="../../${src#"$TARGET"/}" ;; *) entry="$src" ;; esac
-                    ln -s "$entry" "$dest" || return 1
+                    printf '%s' "$entry" > "$dest" || return 1
+                    mkdir -p "$work/rendered-links/$(dirname "$rel")" && : > "$work/rendered-links/$rel" || return 1
                     continue
                 fi ;;
             .prdkit/templates/*|.prdkit/memory/*)
-                if [ -L "$work/head/$rel" ]; then cp -P "$work/head/$rel" "$dest"; continue; fi
+                if [ -f "$work/head-links/$rel" ]; then
+                    cp "$work/head/$rel" "$dest" || return 1
+                    mkdir -p "$work/rendered-links/$(dirname "$rel")" && : > "$work/rendered-links/$rel" || return 1
+                    continue
+                fi
                 if [ -f "$work/head/$rel" ] && ! $FORCE; then
                     cur="$(hash_file "$work/head/$rel")"; rec="$(recorded_hash "$rel")"
                     kit="$(hash_file "$src")"
@@ -174,9 +249,9 @@ upgrade_render_expected() { # caller-owned work directory -> head/, rendered/, p
             [[ "$rel" =~ $KIT_FILE_RE || "$rel" =~ $INSTALLED_RE ]] || continue
             awk -F '\t' -v p="$rel" '$2==p { found=1 } END { exit !found }' "$work/files" && continue
             case "$rel" in .prdkit/memory/*) case " $RETIRED_MEMORY " in *" ${rel##*/} "*) ;; *) continue ;; esac ;; esac
-            upgrade_head_file "$rel" "$work/head/$rel" || return 1
+            upgrade_head_file "$rel" "$work/head/$rel" "$work/head-links/$rel" || return 1
             case "$rel" in .prdkit/templates/*|.prdkit/memory/*)
-                if [ -L "$work/head/$rel" ] || { [ -f "$work/head/$rel" ] && [ "$(hash_file "$work/head/$rel")" != "${line%%  *}" ]; }; then continue; fi ;;
+                if [ -f "$work/head-links/$rel" ] || { [ -f "$work/head/$rel" ] && [ "$(hash_file "$work/head/$rel")" != "${line%%  *}" ]; }; then continue; fi ;;
             esac
             printf '%s\0' "$rel" >> "$work/paths" || return 1
         done < "$MANIFEST"
@@ -185,15 +260,17 @@ upgrade_render_expected() { # caller-owned work directory -> head/, rendered/, p
         [ "$action" = remove ] || continue
         printf '%s\0' "$rel" >> "$work/paths" || return 1
         if [ ! -e "$work/head/$rel" ] && [ ! -L "$work/head/$rel" ]; then
-            upgrade_head_file "$rel" "$work/head/$rel" || return 1
+            upgrade_head_file "$rel" "$work/head/$rel" "$work/head-links/$rel" || return 1
         fi
     done < <(list_retired_commands; list_retired_kit_files)
     for rel in AGENTS.md .gitignore; do
         [ "$rel" != AGENTS.md ] || has_harness agents || continue
         if dest="$(root_file_path "$rel")"; then dest="${dest#"$TARGET"/}"; else continue; fi
         printf '%s\0' "$dest" >> "$work/paths" || return 1
-        upgrade_head_file "$dest" "$work/head/$dest" || return 1
+        upgrade_head_file "$dest" "$work/head/$dest" "$work/head-links/$dest" || return 1
         mkdir -p "$(dirname "$work/rendered/$dest")" || return 1
+        # Always create a fresh regular payload, never a writable rendering symlink.
+        rm -f "$work/rendered/$dest" || return 1
         if [ -f "$work/head/$dest" ]; then cp -p "$work/head/$dest" "$work/rendered/$dest"; else : > "$work/rendered/$dest"; fi
         if [ "$rel" = AGENTS.md ]; then
             render_agents_section > "$work/section" || return 1
@@ -221,7 +298,7 @@ upgrade_render_expected() { # caller-owned work directory -> head/, rendered/, p
         while IFS=$'\t' read -r src rel; do
             dest="$work/rendered/$rel"
             kit="$(hash_file "$src")"
-            if [ -L "$dest" ]; then
+            if [ -f "$work/rendered-links/$rel" ]; then
                 case "$rel" in
                     .claude/commands/*|.opencode/commands/*) cur="$kit" ;;
                     *) [ -e "$TARGET/$rel" ] || continue; cur="$(hash_file "$TARGET/$rel")" ;;
@@ -233,7 +310,7 @@ upgrade_render_expected() { # caller-owned work directory -> head/, rendered/, p
         done < "$work/files"
     } > "$work/rendered/.prdkit/.manifest"
     printf '.prdkit/.manifest.tmp\0' >> "$work/paths" || return 1
-    upgrade_head_file .prdkit/.manifest.tmp "$work/head/.prdkit/.manifest.tmp" || return 1
+    upgrade_head_file .prdkit/.manifest.tmp "$work/head/.prdkit/.manifest.tmp" "$work/head-links/.prdkit/.manifest.tmp" || return 1
     cp "$work/rendered/.prdkit/.manifest" "$work/rendered/.prdkit/.manifest.tmp"
 }
 
@@ -267,7 +344,7 @@ upgrade_checkout_clean() (
                 echo "P1: AGENTS.md changed outside the managed section: $rel; nothing was written." >&2; return 1
             fi
         fi
-        if ! upgrade_same_file "$TARGET/$rel" "$work/head/$rel" && ! upgrade_same_file "$TARGET/$rel" "$work/rendered/$rel"; then
+        if ! upgrade_same_file "$TARGET/$rel" "$work/head/$rel" "$work/head-links/$rel" && ! upgrade_same_file "$TARGET/$rel" "$work/rendered/$rel" "$work/rendered-links/$rel"; then
             echo "P1: not a validated intermediate state (bytes, type or mode): $rel; nothing was written." >&2; return 1
         fi
     done < "$work/dirty"
@@ -310,7 +387,7 @@ upgrade_no_overwrite() (
             fi
             continue
         fi
-        if upgrade_same_file "$dest" "$work/rendered/$rel"; then continue; fi
+        if upgrade_same_file "$dest" "$work/rendered/$rel" "$work/rendered-links/$rel"; then continue; fi
         case "$rel" in .prdkit/templates/*|.prdkit/memory/*)
             # Non-forced conffiles with custom bytes are preserved by install_conffile.
             if ! $FORCE && [ -n "$src" ]; then continue; fi ;;

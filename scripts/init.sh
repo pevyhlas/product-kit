@@ -757,6 +757,7 @@ if [ -n "$PROBLEMS" ]; then
 fi
 
 if upgrade_source_2 && $UPGRADE; then
+    upgrade_destinations_safe || exit 1
     upgrade_preflight || exit 1
     upgrade_no_overwrite || exit 1
     if ! $MIGRATE_REVIEWS; then upgrade_plain_guard || exit 1; fi
