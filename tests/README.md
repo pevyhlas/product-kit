@@ -16,6 +16,22 @@ equivalent. The CI step verifies the downloaded package checksum and the missing
 
 ## Coverage
 
+Host-adapter tests use `use_gh_stub` from `tests/lib.sh`; it installs `tests/gh-stub.sh`
+as `gh` on `PATH` and selects an isolated `GH_STUB_DIR`. The stub never invokes the real host.
+`fx_pr`, `fx_review`, `fx_owner_review`, `fx_activity` and `fx_closed_pr` build generic
+`owner/repo` fixtures; their final optional argument is a JSON object of overrides.
+Review fixtures use GraphQL fields, including both edit markers. REST deliberately has neither.
+The publishing identity is configurable in `publisher.json`; the installation viewer has the
+same numeric id but typename `User`, while a posted review keeps the publisher's typename.
+
+Every invocation and GraphQL page is appended to `requests`. Tests can empty it before an
+offline check and assert it stays empty. `GH_STUB_OFFLINE=true`, `GH_STUB_FAIL=<route>` and
+`GH_STUB_PARTIAL=<route>` inject failures (for example `pulls/7` or
+`graphql:PrdkitReviews`). `GH_STUB_PAGE_SIZE=1` exercises review cursor paging; a partial
+GraphQL stream stops with `hasNextPage:true`. Named operations are `PrdkitReviews` and
+`PrdkitViewer`. A JSON file under `routes/` overrides a route, replacing `/`, `?`, `&`, `=`
+and `:` with `_`; use it for malformed or non-advancing-cursor responses.
+
 `test_new_change_linked.sh` forces overlapping automatic allocations from two linked worktrees.
 Its private-copy negative control replaces the common lock with a per-worktree lock and must
 reproduce the duplicate number; synchronization markers avoid a scheduler-dependent race test.
