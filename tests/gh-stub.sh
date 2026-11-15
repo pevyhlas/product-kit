@@ -51,6 +51,9 @@ case "${GH_STUB_FAIL:-}" in
     "$route"|"$endpoint"|"$alias_route") echo "gh stub: injected failure: $route" >&2; exit 1 ;;
 esac
 override="$GH_STUB_DIR/routes/$(printf '%s' "$route" | tr '/?&=:' '_____').json"
+if [ "$operation" = PrdkitReviews ] && [ -f "$GH_STUB_DIR/routes/graphql_PrdkitReviews-$number.json" ]; then
+    override="$GH_STUB_DIR/routes/graphql_PrdkitReviews-$number.json"
+fi
 if [ -f "$override" ]; then emit < "$override"; exit; fi
 if [ "$endpoint" = graphql ]; then
     case "$operation" in
@@ -75,7 +78,8 @@ if [ "$endpoint" = graphql ]; then
                 jq -n --slurpfile pr "$pr" --slurpfile reviews "$reviews" \
                     --argjson offset "$offset" --argjson size "$page_size" --argjson more "$more" --arg cursor "cursor-$next" '
                     $pr[0] as $p | {data:{repository:{pullRequest:{
-                        number:$p.number, author:$p.author, state:($p.state | ascii_upcase),
+                        number:$p.number, author:$p.author,
+                        state:(if $p.merged_at!=null then "MERGED" else ($p.state|ascii_upcase) end),
                         headRefOid:$p.head.sha, headRefName:$p.head.ref, baseRefName:$p.base.ref,
                         createdAt:$p.created_at, merged:($p.merged_at != null),
                         reviews:{nodes:$reviews[0][$offset:($offset+$size)],

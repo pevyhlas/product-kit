@@ -42,10 +42,19 @@ receipt() { # PR [payload jq transform] [GraphQL node overrides]
     body="$(printf '<!-- prdkit-review\n%s\n-->\nReport.\n' "$payload")"
     fx_review "$1" "$body" "${3:-}"
 }
-fetch() {
+fetch() { # [failure]; policy/rigor are inputs, every fetch/scope output is reset
     WORK="$(mktemp -d)"; track_tmp "$WORK"
+    RC_ERROR=""; RC_REPO=""; RC_PR=""; RC_PR_HEAD=""; RC_PR_CREATED=""; RC_BASE=""
+    RC_FETCHED=""; RC_PR_AUTHOR=""; RC_IGNORED=0; RC_NOTES=(); RC_PROBLEMS=()
+    RC_INVALID=0; RC_CARRIED=0; RC_RECEIPTS=0
+    RC_FILE="$WORK/receipts"; RC_COVERAGE="$WORK/coverage"
+    : > "$RC_FILE"; : > "$RC_COVERAGE" # A failed read must not open stdin in a later assertion.
     if review_receipts_fetch "$PR_URL" "$PROJ" "$WORK"; then STATUS=0; else STATUS=$?; fi
     if [ "$STATUS" -eq 0 ]; then review_receipts_scope 001-reviewed light "$REGISTRY" "$WORK" "$PROJ" || STATUS=$?; fi
+    if [ "${1:-success}" = success ]; then
+        assert_eq 0 "$STATUS" "host read/scope succeeds: $RC_ERROR"
+        assert_eq '' "$RC_ERROR" 'successful read has no error'
+    fi
 }
 problems() { printf '%s\n' ${RC_PROBLEMS[@]+"${RC_PROBLEMS[@]}"}; }
 reset_host
@@ -214,6 +223,20 @@ reset_host; fx_closed_pr 6 "$HEAD_SHA"; receipt 6 '.verdict="FAIL"'; receipt 6; 
 assert_eq 0 "$RC_CARRIED" 'origin resolves its own FAIL before carry'
 reset_host; fx_closed_pr 6 "$HEAD_SHA" '{"merged_at":"2026-01-03T00:00:00Z"}'; receipt 6 '.verdict="FAIL"'; fetch
 assert_eq '' "$(problems)" 'ordinary merged receipts are ignored'
+
+it 'REST and GraphQL closed-source merge status must agree'
+for mismatch in state merged rest; do
+    reset_host; fx_closed_pr 6 "$HEAD_SHA" '{"merged_at":"2026-01-03T00:00:00Z"}'; fetch
+    case "$mismatch" in
+        state) edit='.data.repository.pullRequest.state="CLOSED"' ;;
+        merged) edit='.data.repository.pullRequest.merged=false' ;;
+        rest) edit='.'; fx_closed_pr 6 "$HEAD_SHA" ;;
+    esac
+    jq "$edit" "$WORK/pages-6" > "$GH_STUB_DIR/routes/graphql_PrdkitReviews-6.json"
+    fetch failure
+    assert_eq 1 "$STATUS" "$mismatch disagreement fails closed"
+    assert_contains "$RC_ERROR" 'changed while enumerating'
+done
 reset_host
 fx_pr 7 "$HEAD_SHA" '{"head":{"ref":"feature&other=#fragment","label":"owner:feature&other=#fragment"}}'
 fx_closed_pr 6 "$HEAD_SHA" '{"head":{"ref":"feature&other=#fragment","label":"owner:feature&other=#fragment"}}'
@@ -245,20 +268,20 @@ fetch
 assert_eq 2 "$RC_RECEIPTS"
 assert_contains "$(problems)" 'blocking verdict stands'
 GH_STUB_PARTIAL=graphql:PrdkitReviews; export GH_STUB_PARTIAL
-fetch
+fetch failure
 assert_eq 1 "$STATUS"
 assert_contains "$RC_ERROR" 'incomplete'
 unset GH_STUB_PARTIAL GH_STUB_PAGE_SIZE
 reset_host; receipt 7; fetch
 jq '.data.repository.pullRequest.reviews.pageInfo={hasNextPage:true,endCursor:"same"}' "$WORK/pages-7" > "$GH_STUB_DIR/routes/graphql_PrdkitReviews.json"
 jq '.data.repository.pullRequest.reviews.pageInfo={hasNextPage:false,endCursor:"same"}' "$WORK/pages-7" >> "$GH_STUB_DIR/routes/graphql_PrdkitReviews.json"
-fetch
+fetch failure
 assert_eq 1 "$STATUS" 'even a terminating stream must advance its cursor'
 assert_contains "$RC_ERROR" 'non-advancing'
-reset_host; fx_closed_pr 6 "$HEAD_SHA"; rm "$GH_STUB_DIR/reviews/6.json"; fetch
+reset_host; fx_closed_pr 6 "$HEAD_SHA"; rm "$GH_STUB_DIR/reviews/6.json"; fetch failure
 assert_eq 1 "$STATUS"
 assert_contains "$RC_ERROR" 'PR 6'
-reset_host; GH_STUB_OFFLINE=true; export GH_STUB_OFFLINE; fetch
+reset_host; GH_STUB_OFFLINE=true; export GH_STUB_OFFLINE; fetch failure
 assert_eq 1 "$STATUS"
 unset GH_STUB_OFFLINE
 

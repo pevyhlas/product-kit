@@ -75,6 +75,11 @@ for kind in other narrow dirty invalid foreign closed merged; do
         merged) fx_closed_pr 6 "$(git rev-parse HEAD)" '{"merged_at":"2026-01-03T00:00:00Z"}'; publish code "$ID" HEAD . 6 ;;
     esac
     online; standing
+    if [ "$kind" = merged ]; then
+        assert_contains "$OUTPUT" '"authority":"host"' 'merged source was read successfully, not unavailable'
+        assert_contains "$OUTPUT" 'legacy blocker' 'the standing reason is legacy history'
+        assert_not_contains "$OUTPUT" 'changed while enumerating'
+    fi
 done
 
 it 'same-reviewer full PASS in origin or checked scope clears, but a later native FAIL still blocks'

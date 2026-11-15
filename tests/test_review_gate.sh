@@ -57,6 +57,15 @@ assert_contains "$OUTPUT" '"authority":"host"'
 assert_contains "$OUTPUT" '"receipt":"https://github.com/owner/repo/pull/7#pullrequestreview-1001"'
 assert_not_contains "$OUTPUT" report_verification
 
+it 'a merged predecessor on the same head branch does not make the gate unavailable'
+fx_closed_pr 6 "$HEAD_SHA" '{"merged_at":"2026-01-03T00:00:00Z"}'
+publish 6 '.verdict="FAIL"'
+online
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_contains "$OUTPUT" '"authority":"host"'
+assert_contains "$OUTPUT" '"carried_blockers":0'
+rm "$GH_STUB_DIR/pulls/6.json" "$GH_STUB_DIR/reviews/6.json"
+
 it 'an invalid authenticated receipt remains host evidence and blocks'
 publish 7 '.id="00000000000000000000000000000002"|.to="fp1:0000000000000000000000000000000000000000000000000000000000000000"'
 online

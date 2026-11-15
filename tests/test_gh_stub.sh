@@ -25,6 +25,10 @@ assert_eq "$HEAD_SHA" "$OUTPUT"
 run gh api 'repos/owner/repo/pulls?state=closed&head=owner:feature'
 assert_eq '5,6' "$(printf '%s' "$OUTPUT" | jq -r 'sort_by(.number) | map(.number|tostring) | join(",")')"
 assert_contains "$OUTPUT" 'merged_at' 'merged predecessors remain available for restatements'
+run gh api graphql --paginate -f query="$QUERY" -F number=5
+assert_eq 0 "$STATUS"
+assert_eq MERGED "$(printf '%s' "$OUTPUT" | jq -r .data.repository.pullRequest.state)" 'merged GraphQL state is not REST CLOSED'
+assert_eq true "$(printf '%s' "$OUTPUT" | jq .data.repository.pullRequest.merged)"
 
 it 'GraphQL pages preserve reviews and cursor order'
 fx_review 7 first

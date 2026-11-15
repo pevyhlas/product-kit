@@ -140,7 +140,10 @@ review_receipts_fetch() { # URL root work; policy already read; caller supplies 
     while IFS= read -r number; do
         [ "$number" = "$RC_PR" ] || _receipts_reviews "$RC_REPO" "$number" "$work" || return 1
         if [ "$number" != "$RC_PR" ] && ! jq -e --arg ref "$(jq -r .head.ref "$work/pr.json")" \
-            '.pr.headRefName==$ref and .pr.state=="CLOSED"' "$work/source-$number.json" >/dev/null; then
+            --argjson number "$number" --slurpfile closed "$work/closed" '
+            ($closed | [.[][] | select(.number==$number) | (.merged_at!=null)] | unique) as $merged |
+            ($merged|length)==1 and .pr.headRefName==$ref and .pr.merged==$merged[0] and
+            .pr.state==(if $merged[0] then "MERGED" else "CLOSED" end)' "$work/source-$number.json" >/dev/null; then
             RC_ERROR="closed source PR $number changed while enumerating; retry"; return 1
         fi
         cat "$work/source-$number.json" >> "$work/sources"
