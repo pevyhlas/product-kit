@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # check-review.sh passes a change only when its recorded independent review covers the head being
 # merged: PASS verdicts, nothing blocking for the rigor, the reviewed content unchanged outside
-# the record and the log, the tier's reviewers present. These fixtures record commit ranges, the
-# format before content fingerprints, which the check still reads (test_review_fingerprint.sh
-# covers the fingerprint lines record-review.sh writes). It reads committed state, so a closing commit that deletes the
+# the record and the log, the tier's reviewers present. Historical commit-range recipes here
+# become real publisher receipts through review-fixtures.sh; the gate never reads those ranges
+# as verdicts. It reads committed structure, so a closing commit that deletes the
 # record still checks against the record's last version. Its policy (Rigor, registry, T0 paths)
 # comes from the trusted integration base, and a branch cannot lower its own tier.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -316,7 +316,7 @@ run bash "$CHECK"
 assert_contains "$OUTPUT" "invalid verdict or finding counts" "unreadable counts are not zero"
 record T2
 run bash "$CHECK"
-assert_contains "$OUTPUT" "T2 needs a recorded independent review; none found in State" "no review"
+assert_contains "$OUTPUT" "T2 needs a recorded independent review; publish a receipt on this PR" "no review"
 record "" "$(verdict code PASS "$CLEAN")"
 run bash "$CHECK"
 assert_contains "$OUTPUT" "The record names no review tier" "tier required"
@@ -324,7 +324,7 @@ assert_contains "$OUTPUT" "The record names no review tier" "tier required"
 it "an example verdict inside a comment or code fence is never counted"
 record T1 '<!-- example:' "$(verdict code PASS "$CLEAN")" '-->' '```' "$(verdict code PASS "$CLEAN")" '```'
 run bash "$CHECK"
-assert_contains "$OUTPUT" "T1 needs a recorded independent review; none found in State" "examples ignored"
+assert_contains "$OUTPUT" "T1 needs a recorded independent review; publish a receipt on this PR" "examples ignored"
 
 it "a self-declared T0 on code fails: T0 is checked against the trusted review-t0-paths"
 record T0
@@ -602,7 +602,7 @@ sed -i.bak '/^\*\*Review\*\*:/d; /^\*\*Receipt fixture\*\*:/d' specs/changes/001
 git commit -qam "no verdicts" >/dev/null
 run bash "$CHECK" 001-greet
 assert_eq 0 "$STATUS" "a record-only close passes"
-assert_contains "$OUTPUT" "a T1 record with no verdict, so its code merged unreviewed" "but says the code had no verdict"
+assert_contains "$OUTPUT" "no covering receipt needed on this PR" "earlier PR coverage is not inferred from this PR's receipts"
 # An integration branch other than the default one, named as a remote-tracking --base, is trusted.
 git checkout -q -b develop "$DEFAULT"; echo d > dev.txt; git add dev.txt; git commit -qm develop >/dev/null
 git update-ref refs/remotes/origin/develop develop

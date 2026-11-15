@@ -229,7 +229,7 @@ for mode in docs record; do
     done
 done
 
-it 'owner FAIL and unnamed blockers fail closed until the native owner adapter exists'
+it 'owner FAIL and unnamed blockers fail closed without a confirmed activity witness'
 for reviewer in owner ''; do
     for mode in closing carrier; do
         fresh; record "$A" T0 "**Review**: round 1 · ignored · $reviewer · FAIL"

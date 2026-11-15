@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Phase-A bridge for the existing coverage scenarios: their record text is a *test recipe*,
-# never gate evidence. Translate the recipe into publisher-authored v3 host fixtures before
-# invoking the real gate. Cache publication tokens/base_at so later base updates cannot rewrite
-# what the fixture publisher reviewed. New authority tests use fx_review directly instead.
+# Coverage scenario recipes are test data, never gate evidence. Valid new recipes call the real
+# publisher against the stub, then cache its immutable body for host-fixture replay across base
+# updates. Deliberately malformed/ineligible recipes use fx_review to test gate-side rejection.
 # shellcheck disable=SC2016,SC2034 # Literal jq variables; run outputs consumed by suites.
 source "$PK_ROOT/scripts/common.sh"
 source "$PK_ROOT/scripts/spec-lib.sh"
+source "$PK_ROOT/scripts/review-policy-lib.sh"
 source "$PK_ROOT/scripts/review-fingerprint-lib.sh"
 
 receipt_policy() { # project; call before the fixture's baseline commit
@@ -22,7 +22,7 @@ EOF
 receipt_host() { # root change head [base]; intentionally test-only legacy recipe decoding
     local project="$1" change="$2" head="$3" base="${4:-origin/HEAD}" at record text cache key body
     local line reviewer round from to verdict c h m l link from_token to_token since rhead base_at canonical serial=0
-    local owner_commit="" candidate owner_key slice
+    local owner_commit="" candidate owner_key slice publisher_output publish_args policy_ref fixture_registry from_fp published publisher
     [ -n "${GH_STUB_DIR:-}" ] || use_gh_stub
     canonical="$(git -C "$project" rev-parse --symbolic-full-name "$base" 2>/dev/null || true)"
     case "$canonical" in refs/remotes/origin/*) ;; *) canonical="$(git -C "$project" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null || true)" ;; esac
@@ -56,6 +56,7 @@ receipt_host() { # root change head [base]; intentionally test-only legacy recip
             continue
         fi
         serial=$((serial+1))
+        published=false
         key="$(printf '%s\n%s\n' "$change" "$line" | review_sha256)"
         if [ -f "$cache/$key" ]; then body="$(cat "$cache/$key")"
         else
@@ -81,8 +82,34 @@ receipt_host() { # root change head [base]; intentionally test-only legacy recip
                  from:$from,to:$to,head:$head,since:$since,base:$base,base_at:$base_at,verdict:$verdict,
                  critical:($c|count),high:($h|count),medium:($m|count),low:($l|count),report:$report}')"
             body="$(printf '<!-- prdkit-review\n%s\n-->\n' "$body")"
+            policy_ref="$(spec_trusted_refs "$project" | sed -n 1p)"
+            fixture_registry="$( { git -C "$project" show "$policy_ref:.prdkit/memory/agents.md" 2>/dev/null || true; } | review_registry)"
+            from_fp="$from_token"; [ "$from_fp" != start ] || from_fp="$REVIEW_FP_EMPTY"
+            if [ "$rhead" != 0000000000000000000000000000000000000000 ] && [ "$from_fp" != "$to_token" ] &&
+                [[ "$c,$h,$m,$l" =~ ^[0-9]+,[0-9]+,[0-9]+,[0-9]+$ ]] &&
+                { [ "$verdict" = PASS ] || [ "$verdict" = FAIL ]; } &&
+                [ "$(review_eligibility "$fixture_registry" "$reviewer")" = reviewer ] &&
+                spec_trusted_refs "$project" | grep -xF -- "$canonical" >/dev/null; then
+                publish_args=(); [ -z "$since" ] || publish_args=(--since "$since")
+                publisher="$project/.prdkit/scripts/bash/publish-review.sh"
+                # Minimal Git-only scenarios use the source helper with --repo, just as their
+                # gate comes from another installed fixture. Never substitute a fake success.
+                [ -f "$publisher" ] || publisher="$PK_ROOT/scripts/publish-review.sh"
+                if ! publisher_output="$(bash "$publisher" "$change" --repo "$project" \
+                    --pr https://github.com/owner/repo/pull/7 --reviewer "$reviewer" --verdict "$verdict" \
+                    --counts "$c,$h,$m,$l" --report "$link" --head "$rhead" --base "$canonical" ${publish_args[@]+"${publish_args[@]}"} 2>&1)"; then
+                    printf '%s\n' "$publisher_output" >&2; return 1
+                fi
+                body="$(jq -r .body "$GH_STUB_DIR/posted.json")"
+                # The recipe's order, not whether this body was cached, sets fixture time.
+                # POST/read-back has completed; align the replay metadata with fx_review.
+                jq '.[-1].submittedAt="2026-01-02T00:00:00Z"' "$GH_STUB_DIR/reviews/7.json" > "$GH_STUB_DIR/reviews/7.next" &&
+                    mv "$GH_STUB_DIR/reviews/7.next" "$GH_STUB_DIR/reviews/7.json" || return 1
+                published=true
+            fi
             printf '%s\n' "$body" > "$cache/$key"
         fi
+        $published && continue
         fx_review 7 "$body" "$(jq -cn --argjson id "$((1000+serial))" '{fullDatabaseId:($id|tostring)}')"
     done < <(printf '%s\n' "$text" | awk "$SPEC_SKIP_AWK"'
         { if (spec_skip($0)) next }
@@ -116,7 +143,7 @@ receipt_run() { # real script [arguments]; use the real gate/close helper with t
     done
     [ -n "$change" ] || change="$(git -C "$project" branch --show-current)"
     head="$(git -C "$project" rev-parse "$head^{commit}")"
-    receipt_host "$project" "$change" "$head" "$base"
+    if ! receipt_host "$project" "$change" "$head" "$base"; then OUTPUT='receipt fixture publication failed'; STATUS=1; return; fi
     receipt_raw_run ${receipt_env[@]+"${receipt_env[@]}"} bash "$script" --pr https://github.com/owner/repo/pull/7 "$@"
 }
 

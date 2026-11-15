@@ -41,7 +41,7 @@
 #          "REPORT_PATH":"/abs/cache/round-N/report.md","INDEX_PATH":"…","SINCE_SHA":"<hash>",
 #          "FINGERPRINT":"fp1:…","SINCE_FINGERPRINT":"fp1:…"}: the content fingerprints of HEAD and
 #          SINCE (review-fingerprint-lib.sh), empty when BASE is not the merge base with a trusted
-#          integration branch. Record the verdict with record-review.sh, which computes the same
+#          integration branch. Publish the verdict with publish-review.sh, which computes the same
 #          fingerprints; never type them.
 #
 # Exit status: 0 on success, 1 on usage or revision errors.
@@ -103,7 +103,7 @@ for rev in "$BASE_SHA" "$HEAD_SHA"; do
         exit 1
     fi
 done
-# Freeze both ends: a name such as HEAD moves, and the State Review line records these hashes.
+# Freeze both ends: a name such as HEAD moves, and the receipt records immutable provenance.
 BASE_SHA="$(git -C "$REPO_ROOT" rev-parse --verify "${BASE_SHA}^{commit}")"
 HEAD_SHA="$(git -C "$REPO_ROOT" rev-parse --verify "${HEAD_SHA}^{commit}")"
 if ! git -C "$REPO_ROOT" merge-base --is-ancestor "$BASE_SHA" "$HEAD_SHA"; then
@@ -278,7 +278,7 @@ done
 # The content fingerprints the verdict binds, against the trusted ref BASE is the merge base with.
 FINGERPRINT=""; SINCE_FINGERPRINT=""
 if [ -z "$FP_REF" ]; then
-    FP_TEXT="none: BASE is not the change's merge base with a trusted integration branch, so record-review.sh computes them when the verdict is recorded"
+    FP_TEXT="none: BASE is not the change's merge base with a trusted integration branch, so publish-review.sh computes them when the verdict is published"
 elif review_fingerprint "$REPO_ROOT" "$CHANGE_ID" "$FP_REF" "$HEAD_SHA" >/dev/null; then
     FINGERPRINT="$REVIEW_FP"; FP_TEXT="$FINGERPRINT (HEAD, against ${FP_REF#refs/remotes/})"
     if [ -n "$SINCE" ]; then
@@ -297,7 +297,7 @@ cat > "$PACKAGE_DIR/index.md" <<EOF
 
 - Full range: $BASE_SHA..$HEAD_SHA
 - Focused delta (delta.patch): $DELTA
-- Content fingerprint: $FP_TEXT. Record the verdict with record-review.sh, which binds it to the
+- Content fingerprint: $FP_TEXT. Publish the verdict with publish-review.sh, which binds it to the
   reviewed content, not to these commits.
 - Inventory: manifest.tsv (bytes and Git blob object IDs of exact packaged content).
 - Tracked context is read from the named HEAD, never the working copy.

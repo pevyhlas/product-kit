@@ -40,7 +40,8 @@ host_repo="${BASH_REMATCH[1]}"; number="${BASH_REMATCH[2]}"
 command -v jq >/dev/null 2>&1 || refuse 'publishing and dry-run JSON encoding need jq'
 root="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null)" || refuse "not inside a Git checkout: $repo"
 canonical="$(git -C "$root" rev-parse --symbolic-full-name "$base_ref" 2>/dev/null || true)"
-if [ -z "$canonical" ] || ! spec_trusted_refs "$root" | grep -qxF -- "$canonical"; then
+# Drain every ref: grep -q can SIGPIPE the producer under pipefail when more refs follow.
+if [ -z "$canonical" ] || ! spec_trusted_refs "$root" | grep -xF -- "$canonical" >/dev/null; then
     refuse "--base $base_ref is not a trusted integration branch (origin/HEAD's target, or one named by review-integration-branches in its committed config); pass the branch this change merges into"
 fi
 base_at="$(git -C "$root" rev-parse --verify "$canonical^{commit}")" || refuse "not a commit here: $base_ref"

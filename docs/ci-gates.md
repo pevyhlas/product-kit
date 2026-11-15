@@ -1,9 +1,9 @@
 # CI gates for consumer repositories
 
-Three installed helpers give one-line, read-only CI steps in dependency-free Bash: the adoption
-gate checks the installed kit against its recorded contract, the review check checks a change's
-recorded review verdicts, and strict doctor checks the spec and agent context. None needs
-network access or model credentials.
+Three installed helpers provide read-only CI checks: adoption validates the installed kit,
+review validates authenticated PR receipts and blockers, and strict doctor checks the spec and
+agent context. Online review gating needs `gh`, `jq` and host access in every tier. Adoption,
+doctor and offline review previews need no host credential; no helper needs a model credential.
 
 ## Adoption gate — `check-adoption.sh`
 
@@ -48,41 +48,45 @@ cross-checked as well. `--json` emits `{result, checks, findings}`.
 ## Review check — `check-review.sh`
 
 ```
-bash .prdkit/scripts/bash/check-review.sh [--json] [--head <rev>] [--base <rev>] [<change-id>]
+bash .prdkit/scripts/bash/check-review.sh --pr <url> [--save-receipts <file>] [--json] [--head <rev>] [--base <rev>] [<change-id>]
 ```
 
 ```
-bash .prdkit/scripts/bash/record-review.sh <change-id> --reviewer <id> --verdict PASS|FAIL --link <url> --head <rev> [--since <rev>] [--counts <c>,<h>,<m>,<l>] [--round <n>] [--base <ref>]
+bash .prdkit/scripts/bash/publish-review.sh <change-id> --pr <url> --reviewer <id> --verdict PASS|FAIL --counts <c>,<h>,<m>,<l> --report <url> --head <rev> [--since <rev>] [--from-report <file>] [--base <ref>] [--dry-run]
 ```
 
 Reviews are run by the worker, never by CI: the worker dispatches the tier's independent
-reviewers (`protocol.md`), posts each report on the PR and records one `**Review**:` line per
-verdict in the change record's State with `record-review.sh` (`review.md`), which binds it to
-content fingerprints. Before merging, the merging agent runs the check on the exact head it
+reviewers (`protocol.md`) and preserves each report verbatim. A trusted publisher posts its
+content-bound v3 verdict in a submitted COMMENT review; repository text authenticates nothing.
+Before merging, the merging agent runs the online check on the exact head it
 merges (`--head <sha>`, then `gh pr merge --match-head-commit <sha>`). It passes when:
 
-- every recorded verdict, in any tier, is PASS with no critical or high finding (no medium
+- every latest receipt verdict, in any tier, is PASS with no critical or high finding (no medium
   either under `Rigor: full`, or when the trusted constitution names no single Rigor); a
-  reviewer's later line supersedes its earlier one;
+  reviewer's later receipt supersedes its earlier one in host order;
 - no blocking line stands: a blocking line (a FAIL, or counts that block for the Rigor or
   cannot be read) by a reviewer at some content stands until a later clean PASS from the same
   reviewer, over a non-empty range, starts at `start` (a full re-review) or at content reachable
   from the failed content through that reviewer's own later lines; only the latter makes its
   range link. A blocking end that names no content here stands unless a later clean full
   re-review follows. Returning to earlier content or rewriting history never clears it;
-- the reviews cover the change: each range end is `start` (no change), `fp1:<sha256>` (the
-  change's content: its delta from where it leaves `--base`, outside the record and its log
-  entry), or, on a line recorded before fingerprints, a commit hash present here, read as that
-  commit's content. Every non-blocking PASS range, superseded rounds included, links its two
+- the reviews cover the change: each range end is `start` (no change) or `fp1:<sha256>` (the
+  change's delta from where it leaves `--base`, outside its own record and log). A blocking
+  receipt may end at `none`, which gives no content coverage. Every non-blocking PASS range,
+  superseded rounds included, links its two
   contents, and so does a blocking range resolved through the reviewer's own later lines. Each
   reviewer's reviewed content must link to this head's content (`fingerprint` in `--json`), and
   for T1–T3 so must `start`, so narrow re-reviews of fixes chain while a gap fails. A rebase, a
   squash, a reverted edit and a base merge that does not overlap keep the content; a fix or an
-  overlapping base merge (`review.md`, Merge) changes it. No range may be empty; a head already
+  overlapping base merge (`review.md`, Merge) changes it. Empty coverage ranges are refused;
+  validated empty full PASS legacy-clearance receipts remain start-to-start verdicts and grant
+  no edge. Adding content expires their clearance without invalidating them; a head already
   inside `--base` fails;
-- the tier's minimum is recorded: one independent verdict for T1–T3, plus the owner's for T3,
-  whose fingerprint covers only the L0/L1 spec and must equal this head's: a code fix or a
-  rebase keeps it, an L0 or L1 edit voids it. Which concerns a T2 change
+- the tier's minimum is present: one independent verdict for T1–T3, plus native owner approval
+  for T3. The latest decisive owner review must be APPROVED, its GraphQL commit must equal the
+  head strictly before submission in the activity log, and its L0/L1 fingerprint must equal this
+  head's. CHANGES_REQUESTED and DISMISSED are barriers. A code fix or
+  rebase can keep approval, while an L0/L1 edit voids it. Which concerns a T2 change
   needed is the worker's call; the check sees only what is recorded;
 - the tier holds (see Policy from the trusted base below).
 
@@ -101,6 +105,10 @@ remote branch) fails. At the policy snapshot it reads:
   under the trusted one, with a note; the edit applies once it merges.
 - **The reviewer registry** from `.prdkit/memory/agents.md` (below). A reviewer revoked there no
   longer counts, whatever the branch's merge base said.
+- **Receipt policy** from `.prdkit/memory/config.md`: `review-host: github`, non-empty numeric
+  `review-publishers` (`bot:<id>` and/or `user:<id>`), personal `review-owner` ids (`user:<id>`),
+  and `review-publisher-isolation: required|shared`. Missing or malformed keys fail. Required
+  isolation rejects the PR author as publisher; shared mode reports its independence limitation.
 - **`review-t0-paths`** from `.prdkit/memory/config.md`: literal paths, a trailing `/` naming a
   directory (for example `- review-t0-paths: docs/, README.md`). A T0 change passes only when
   every path it changes since its start, outside its record and `specs/log.md`, is a regular
@@ -120,9 +128,9 @@ directory, link or submodule), and a submodule's `ignore` setting never hides a 
 To land a policy change, merge it first in its own pull request, checked under the policy it
 replaces.
 
-### Reviewer eligibility and report links
+### Reviewer eligibility and authenticated receipts
 
-Every non-owner Review line must name an eligible identity in `.prdkit/memory/agents.md` at the
+Every covering receipt must name an eligible identity in `.prdkit/memory/agents.md` at the
 trusted base's current tip (`registry_at`, the same as `policy_at`). Without `origin/HEAD` no
 identity is registered; an arbitrary `--base` or local main/master cannot supply its own policy.
 A change cannot add its own maker to the registry and approve itself.
@@ -134,38 +142,55 @@ exact identity and the role is `Independent review`/`Review` or `Implementation`
 Placeholders and free-form descriptions are not registrations. `owner` remains a reserved verdict.
 
 **Adoption:** establish the advertised remote default (`git remote set-head origin --auto` after
-fetching its history), and integrate the identities used by active Review lines before enabling
+fetching its history), and integrate the identities used by receipts before enabling
 the updated gate. Existing concern labels such as `code` must become registered review identities, or be
 reconciled with actual reviewer evidence. Preserve unresolved FAILs; deleting an ineligible
 identity is not a clean verdict. Registry checking tests declared eligibility, not session independence.
 
-The default check needs no network or extra dependencies. JSON exposes `registry_at` and
-`report_verification: "not-requested"`; text output states that report links are unverified.
-Opt in to GitHub report consistency with:
+GraphQL authenticates the publisher by author typename plus numeric database id, never login,
+text or `viewer` typename. Each submitted publisher review must contain exactly one valid v3
+block. Any edit marker, malformed block, wrong repo/PR, conflicting id or fingerprint mismatch
+blocks. Identical retries are no-ops in their first host position. Non-publisher copies are ignored
+and counted. Tokens are recomputed against the receipt's `base_at`, not today's advanced base,
+when its provenance commits are local; authenticated tokens survive an absent reviewed head.
+
+`--pr` reads every page, this PR's blockers for every change, and standing blockers from closed,
+unmerged PRs of the same head branch. Earlier deliveries never grant coverage. Merged PRs supply
+only restatements; repairs retain the origin PR's position and scope. See the
+[review workflow](../workflows/review.md#repairing-an-edited-or-invalid-receipt) for publisher
+logs and recovery. API errors, missing `gh`/`jq` and partial/non-advancing pages are
+`authority:"unavailable"`, exit 1, never an empty list.
+
+The owner's native approval is not a receipt. The activity guard requests ascending order,
+includes merges/deletions, rejects same-second submission ties, and checks continuity only in
+the deciding window. Retention is unknown. An undetermined approval needs a new push (even a
+record-only commit) and re-approval. An absent approved commit names the required fetch. No
+owner text or relay can replace this; the owner cannot self-approve a T3 PR.
+
+Only `authority:"host"` can pass with exit **0**. For offline preview:
 
 ```bash
-bash .prdkit/scripts/bash/check-review.sh --verify-reports --pr https://github.com/OWNER/REPO/pull/123 <change-id>
+bash .prdkit/scripts/bash/check-review.sh --pr <url> --save-receipts receipts.txt <change-id>
+bash .prdkit/scripts/bash/check-review.sh --receipts receipts.txt <change-id>  # preview pass: 3
 ```
 
-This mode needs `gh` and `jq`. It verifies the PR head, each `#issuecomment-N` link's actual PR
-membership, and one structured receipt per report with matching reviewer, range, verdict and
-finding counts. Append the receipt `record-review.sh` printed for the line to the report comment:
+Snapshots are writable, unauthenticated, US-separated normalized rows, readable with awk and
+without gh/jq. They re-run local policy, fingerprints, coverage, owner slice and legacy history.
+JSON reports `authority:"snapshot"`; no source reports `authority:"none"`. Human output prints
+PREVIEW and fetch time. A would-be pass in either mode exits **3**, not merge authority. JSON
+also reports `pr`, `pr_head`, `head_is_pr_head`, `publisher_isolation`, receipt/ignored/invalid/
+carried counts, `legacy_blockers`, native `owner` metadata and `reviews[].receipt` URLs.
 
-```text
-<!-- prdkit-review
-{"schema":"prdkit.review.v2","reviewer":"code-review","from":"start","to":"fp1:<64 hex>","head":"<full reviewed SHA>","verdict":"PASS","critical":0,"high":0,"medium":0,"low":0}
--->
-```
-
-`from` and `to` must be exactly the line's recorded ends; `head` is provenance and not compared.
-A line recorded before fingerprints keeps its v1 receipt (`"schema":"prdkit.review.v1"` with
-`base` and `head` as the two commits' full hashes), checked while those commits are here.
-The owner's linked comment needs one too, with reviewer `owner` and verdict PASS; counts are
-optional there and in the owner's line, whose link is its last field. Historical reports also
-need receipts when this mode is used. Missing tools, unavailable/offline API access, missing
-history or a mismatch returns a failing result rather than a verified PASS. Matching metadata
-does not authenticate the reviewer session: shared bot accounts can publish for several roles.
-The main session must still preserve dispatch/report provenance and enforce independent review.
+The legacy blocker-only scan reads active 1.x State review lines from raw Git blobs and complete
+history, including deleted/edited/transferred inherited records. No 1.x PASS converts or covers.
+FAIL, blocking counts and unreadable verdicts/counts stand until the same reviewer's clean full
+native PASS on this PR includes them in its own reviewed history. Owner and unnamed blockers
+need a valid native owner approval with the same historical proof. Lines never enter coverage.
+These blockers apply to T0 and record-only changes too. Branch renaming can escape closed-PR
+carry; rewriting pre-merge branch history can erase a newly introduced legacy line. Default-
+branch inherited blockers are protected. The candidate's CI scripts remain part of the trust
+boundary: trusted execution is not provided by this change. With shared credentials, review
+independence remains a deployment property, not something the host can prove.
 
 A closing commit that deletes the record is checked against the record's last committed
 version; `close-change.sh` makes that commit only after the check passes. A passing check whose
@@ -190,16 +215,18 @@ exemption, are computed only against a trusted base; both trust only the remote 
 identified by `origin/HEAD`, plus `review-integration-branches` in `.prdkit/memory/config.md` read
 from that default's committed snapshot (for example `- review-integration-branches: origin/develop`).
 A change cannot whitelist itself through its own config. Missing/duplicate settings grant no
-additional trust. Establish `origin/HEAD` before relying on an exemption; no network lookup runs here.
+additional trust. Establish `origin/HEAD` before relying on an exemption; blocker enumeration
+still requires the online host in every tier.
 
 Without `--base` the check uses `origin/HEAD`; it no longer falls back to `origin/main`,
 `origin/master`, `main` or `master`, and an explicit base must be trusted as above. JSON exposes
 `base_trusted` and `policy_at`. Name the actual PR target; a stacked branch whose target is not a
-configured integration branch cannot pass until that target is configured. Each range is still
-trusted as recorded, not authenticated; a verdict carried from an earlier delivery of the same
-change to identical content still counts until verdicts are bound to their pull request. The change id defaults to the current branch.
+configured integration branch cannot pass until that target is configured. Only receipts on
+this PR cover its checked change; earlier PASSes never carry. The change id defaults to the
+current branch. If `--head` differs from the PR head, only fingerprint-identical metadata changes
+are allowed, so an unpushed closing commit can be checked. Merge using the actual PR head.
 
-It checks recorded verdicts; it does not review, and it never grants merge authority. Where the
+It authenticates recorded verdicts; it does not review, and it never grants merge authority. Where the
 plan offers no branch protection, the merging agent's run is the gate. CI can run it as a
 visible status, with the branch history fetched. It applies to change branches only: a branch
 not named after a change has no record to check. Pin each action to a full commit SHA with its
@@ -208,16 +235,18 @@ version as a comment, as the kit's own workflows do.
 ```yaml
 - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
   with: { fetch-depth: 0, ref: "${{ github.event.pull_request.head.sha }}" }
-- name: Recorded review covers the head
+- name: Authenticated review covers the head
   env:
     HEAD_REF: ${{ github.head_ref }}
     HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     BASE_REF: ${{ github.base_ref }}
+    PR_URL: ${{ github.event.pull_request.html_url }}
+    GH_TOKEN: ${{ github.token }}
   run: |
     # actions/checkout may initialize origin without its remote-default symbolic ref.
     git remote set-head origin --auto
     case "$HEAD_REF" in
-      [0-9][0-9][0-9]-*) bash .prdkit/scripts/bash/check-review.sh --head "$HEAD_SHA" --base "origin/$BASE_REF" "$HEAD_REF" ;;
+      [0-9][0-9][0-9]-*) bash .prdkit/scripts/bash/check-review.sh --pr "$PR_URL" --head "$HEAD_SHA" --base "origin/$BASE_REF" "$HEAD_REF" ;;
       *) echo "Not a change branch; no review record to check." ;;
     esac
 ```
@@ -243,7 +272,7 @@ It reports, as advisories: a 0.x layout or two canons, a `specs/archive/` folder
 removed 0.x paths, spec files over their reading budgets,
 cited IDs that are undefined or retired (in spec files and tests), a reviewed change record
 still on the default branch and in the checkout with no child or outcome checkpoint keeping it
-open (merged without closing; a record with no verdict, such as T0, is not detected), trace
+open (merged without closing, including T0 and records with no verdict), trace
 drift (`Code:` paths not in the repository, stale `planned:` markers, unallocated R/Q items and
 parts, change records restating or citing undefined IDs), expired holds and waivers,
 open inbox items and their age, retained resolved items, inbox items in the old one-line form, local machine paths in

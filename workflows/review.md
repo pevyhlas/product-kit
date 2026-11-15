@@ -2,7 +2,7 @@
 
 **Inputs**: a built change with its acceptance results, its record, PR and diff, the spec it
 touches, the reviewers registered in `.prdkit/memory/agents.md`, and project policy.
-**Writes**: the review package, reports on the PR, `**Review**:` lines in State, the final PR
+**Writes**: the review package, reports and publisher-authored receipts on the PR, the final PR
 context, the log entry (`specs/log/<id>.md`) and the record's deletion.
 **Result**: a closed change whose exact head may merge, or review pending or a recorded blocker.
 
@@ -30,60 +30,90 @@ work send the tracked diff plus the untracked file contents, with their hashes. 
 trustworthy package, review is pending.
 
 Critical and high findings block, medium blocks under `Rigor: full`, low is advisory. A failed
-tool run is not a product FAIL and an absent reviewer is not approval. Post each report on the PR
-once one exists: it is the durable review record, since the record is deleted on close and the
-cache is local. Record each verdict with `.prdkit/scripts/bash/record-review.sh <change-id>
---reviewer <id> --verdict PASS|FAIL --counts <c>,<h>,<m>,<l> --link <report> --head <reviewed sha>`,
-using an eligible identity registered in `.prdkit/memory/agents.md`. It appends one State line,
-bound to content fingerprints it computes (never typed, never edited), and prints the receipt
-for the report comment. A later line supersedes the same reviewer's earlier one, whatever its
-round:
+tool run is not a product FAIL and an absent reviewer is not approval. Preserve each report
+verbatim on the PR; the change record will be deleted on close and the local cache is not its
+durable public home. End the review report with `Verdict: PASS|FAIL` and then
+`Counts: <n> critical, <n> high, <n> medium, <n> low`, exactly as the review prompt specifies.
 
-```text
-**Review**: round 2 · start..fp1:<64 hex> · <registered reviewer identity> · PASS · 0 critical, 0 high, 1 medium, 0 low · <report link>
+An authorized **publisher**, not the maker or a pasted block, authenticates the verdict:
+
+```bash
+bash .prdkit/scripts/bash/publish-review.sh <change-id> --pr <url> --reviewer <registry-id> \
+  --verdict PASS --counts 0,0,0,0 --report <report-url> --head <reviewed-sha> --from-report <file>
 ```
 
-`start` is the empty change; `fp1:` names the change's content (its delta from where it leaves the
-trusted base, outside the record and the log). Re-review only changed source, scoped to the fix:
-the package's `--since <previous reviewed head>` keeps a focused delta alongside the full diff, and
-`record-review.sh --since <previous reviewed head>` records the narrow range. Any commit with that
-content works, also one a rebase or squash left behind. BASE must be the change's current merge
-base with a trusted integration branch (`origin/HEAD`, or one named by
-`review-integration-branches` in its committed config, as `check-review.sh` reads them), or the
-package script refuses `--since`; after a base merge, pass the new merge base. Never dispatch a
-round when no source changed since the last verdict (`record-review.sh` refuses an empty range).
-Map findings to fixes and affected obligations, preserving unaffected approvals and evidence;
-re-open a concern only when its source, bounds or evidence applicability changed. The recorded
-range is the range actually inspected. Required reviewers and the final-head check still apply.
-A T3 change also records the owner's verdict, `--reviewer owner` without `--since` (counts
-optional, not read), linking their words; it binds the L0/L1 spec only, so a code fix or a rebase
-keeps it and any later L0 or L1 edit needs the owner again:
+It computes the content tokens and random id, posts one v3 JSON block in a submitted COMMENT
+review (not an issue comment), and reads back the author, body and edit markers through GraphQL.
+It writes no verdict into the record. `--dry-run` prints the block without host access; it needs
+jq for JSON encoding. The publisher posts it; never paste it yourself. Submitted reviews cannot
+be deleted, but anyone with pull-request write access can edit them: **any edit invalidates the
+receipt and blocks**, even if the author, commit and submission time are unchanged.
 
-```text
-**Review**: round 1 · start..fp1:<64 hex> · owner · PASS · <link to the owner's words>
+`start` is the empty change; `fp1:` names the change's delta from its trusted base, outside its
+own record and log. Re-review only changed source, scoped to the fix: use the package's
+`--since <previous reviewed head>` and the publisher's same flag. A rebase or squash may leave
+that head outside the current ancestry; equal reviewed content still works. BASE must be the
+current merge base with a trusted integration branch for a focused package; after a base merge,
+use the new merge base. Never dispatch a round with no source change. The range is the range
+actually inspected. Map findings to fixes and affected obligations, preserving unaffected review.
+
+Trusted default-branch policy names `review-host: github`, numeric `review-publishers`, personal
+numeric `review-owner` ids, and `review-publisher-isolation: required|shared`. Register eligible
+reviewer identities there too; a branch cannot register itself. Bot and User account types plus
+database ids authenticate publishers; logins and report text do not. Obtain ids with
+`gh api users/<login> --jq .id` or `gh api 'users/<slug>[bot]' --jq .id`.
+Never list `github-actions[bot]`: a maker can add a workflow using that shared identity.
+
+Prefer a dedicated publisher App whose key exists only on a reviewer-controlled user/host/CI
+job, or a human publisher. `required` rejects a publisher that authored this PR; account
+separation alone does not prove separate machines or credentials. Explicit `shared` warns that
+receipts bind content, order and counts, not reviewer independence.
+
+T3 needs the owner's latest decisive native review: APPROVED counts, CHANGES_REQUESTED or
+DISMISSED is a barrier, and COMMENTED is ignored. The approved commit's L0/L1 slice must match
+the checked head. A code fix or rebase can keep it; an L0/L1 edit needs approval again. The gate
+confirms the commit was the head strictly before submission using all activity types and the
+deciding window's continuity. Same-second ties or aged-out/missing activity fail closed: push
+a commit (record-only is enough), then approve again. Retention is not known. Owner text,
+receipts and record lines never approve; an owner-authored T3 PR needs a different PR author.
+
+### Repairing an edited or invalid receipt
+
+Keep the publisher log in `.prdkit/cache/receipts/<pr>/<receipt-id>.json`. Restate the **full
+original verdict**, never reconstruct it from a corrupted host body:
+
+```bash
+bash .prdkit/scripts/bash/publish-review.sh --pr <posting-pr-url> \
+  --restates <invalid-review-id> --receipt-id <original-32-hex-id> [--restates-pr <origin-pr>]
 ```
 
-Register identities on the trusted integration branch before using them (the check reads its
-current registry); maker, unregistered and
-ambiguous identities cannot count as independent verdicts or coverage. Preserve standing FAILs
-while reconciling older records. Registry eligibility is not proof that a fresh context ran. The
-offline gate leaves report links unverified; `check-review.sh --verify-reports --pr <GitHub PR
-URL> <change-id>` optionally compares them with the recorded metadata and needs `gh`, `jq` and
-readable reports on that exact PR head. Each linked comment, the owner's included, then carries
-the one receipt `record-review.sh` printed for that line; the owner's has no counts:
+On a later PR, `pr` names the posting PR and `restates_pr` names the origin; omit `restates_pr`
+on the origin PR itself (closed PRs accept COMMENT reviews). The other fields stay original.
+A repair keeps the original host position and PR scope; a repaired old PASS grants no coverage
+on the new PR. Repairs survive a closed or merged carrier. A lost log can leave a permanent
+blocker; preserve it outside the maker's reach along with the publisher credential.
 
-```text
-<!-- prdkit-review
-{"schema":"prdkit.review.v2","reviewer":"owner","from":"start","to":"fp1:<64 hex>","head":"<full approved head sha>","verdict":"PASS"}
--->
-```
+### PR scope and legacy blockers
 
-Lines recorded before fingerprints (`<base sha>..<head sha>`, v1 receipts) stay readable while
-their commits are here: each end reads as that commit's content.
+Only this PR's checked-change receipts grant coverage. All blocking receipts on this PR count,
+even for a renamed, deleted or sibling change. Standing blockers carry from closed, unmerged
+PRs of the same head branch; merged PRs contribute only repairs. An unreadable source is
+unavailable, not empty. Renaming the branch to escape carry remains a residual risk.
+
+1.x PASS lines grant nothing and are never converted. The blocker-only Git history scan keeps
+FAIL, blocking-count and unreadable State lines, including lines removed with a carrier record.
+They clear only through the same reviewer's clean native full PASS on this PR for the origin
+or checked change, whose reviewed head/base_at history includes the blocker. Owner and unnamed
+blockers need the owner's valid native approval with the same historical-inclusion check.
+For genuinely empty content, `--clears-legacy` permits that reviewer's clean full PASS only
+when the scan finds its blocker; it creates no coverage edge. Added content expires that
+clearance, not the receipt: a later clean full PASS can clear normally. Rewriting pre-merge
+branch history to erase a newly introduced line remains a residual; inherited default-branch
+lines stay protected. The scan lasts through 2.x. The transition installs no converted PASS.
 
 ## Merge
 
-Merge only when the required checks pass and `.prdkit/scripts/bash/check-review.sh --head <sha>
+Merge only when the required checks pass and `.prdkit/scripts/bash/check-review.sh --pr <url> --head <sha>
 <change-id>` passes on the exact head being merged, then merge that head (`gh pr merge
 --match-head-commit <sha>` on GitHub). It passes when every reviewer's latest verdict is PASS with
 nothing blocking, the recorded verdicts chain by content from `start` and from each reviewer's
@@ -126,14 +156,16 @@ review; ordinary review coverage applies to their changes/deletions. Ignored scr
 discarded after useful context is durable. A child PR updates only its row and the checkpoint in
 its parent, and never copies its plan, findings or evidence there.
 
-After PASS, only verdict metadata, record deletion and the log change: commit the final Review
-line, then run `.prdkit/scripts/bash/close-change.sh <id> "<intent> — <IDs> — <disposition;
+After PASS, only record deletion and the log change: publish the final receipts,
+then run `.prdkit/scripts/bash/close-change.sh --pr <url> <id> "<intent> — <IDs> — <disposition;
 runtime unknown if relevant> — <PR>"`, which writes the log entry `specs/log/<id>.md` and deletes
 the record once `check-review.sh` passes. The text is at most 300 characters: carried findings and
 follow-ups go to the parent's row or the spec, evidence stays on the PR. One file per closed
 change means two branches that each close a change never conflict in the log; compaction folds
 the entries into `specs/log.md` ([compact.md](compact.md)). Push both commits together, so
-required checks run once on the closed head; the PR, not the record, carries any handoff to whoever merges. Do not change scope,
+required checks run on the closed head; the helper accepts an unpushed closing commit only when
+its fingerprint equals the PR head and refuses an offline preview. The PR, not the record,
+carries any handoff to whoever merges. Do not change scope,
 acceptance or policy after review without reviewing the affected changes. Later defects use
 ordinary linked fix changes, which inherit the failing outcome's attempts, limits and holds
 ([protocol.md](protocol.md)); they never retroactively turn an unknown into a PASS or erase a
@@ -141,7 +173,7 @@ known unmet obligation. Never reopen a completed transaction merely to clear wor
 change merged with its record still open (status flags it) closes in the next relevant PR, whose
 record is its review carrier; never fabricate acceptance or open a cleanup-only PR. After merge
 run `.prdkit/scripts/bash/cleanup-change.sh <id>` from the main checkout; it keeps the worktree's
-evidence, retrospectives and ledger events before removing the worktree. A repository with
+evidence before removing the worktree. A repository with
 submodules needs no `--force`: the script retries a clean worktree that git refuses only for its
 submodules, and refuses any removal that would delete a submodule commit nothing else holds.
 `cleanup-change.sh --closed` sweeps every `.worktrees/<id>` on branch `<id>` whose change is closed
@@ -165,5 +197,5 @@ all required reviewer concerns, including owner approval where required. Post th
 useful context/evidence on this PR, add its log disposition and delete it **before** the carrier's
 final review. That review covers the combined diff and integrated outcomes, including these
 deletions. Only the carrier's verdict metadata/deletion and log may change after PASS. Run
-`check-review.sh` for the carrier at the exact final head; do not start mutually dependent
+`check-review.sh --pr <url>` for the carrier at the exact final head; do not start mutually dependent
 post-review updates to two records. An inherited approval is not fresh coverage for changed work.

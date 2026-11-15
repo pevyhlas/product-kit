@@ -914,10 +914,9 @@ spec_objects_local() { # root
         [ "$(git version 2>/dev/null | awk '{ split($3, v, "."); print v[1] * 1000 + v[2] }')" -ge 2045 ]
 }
 
-# Records committed at <rev> that a PR-scoped change left behind: every reviewer's latest State
-# verdict is PASS, yet no record at <rev> names it as Parent and it keeps no outcome checkpoint
-# (programme parents legitimately stay open). A record with no verdict, such as T0, is never
-# listed. Committed objects only; prints change ids.
+# Records committed at <rev> with no child or outcome checkpoint keeping them open.
+# Verdicts are host receipts, not record text: T0 and not-yet-reviewed records are listed too.
+# Committed objects only; prints change ids.
 spec_unclosed_changes() { # root rev
     local root="$1" rev="$2" path
     git -C "$root" rev-parse --verify --quiet "$rev^{commit}" >/dev/null 2>&1 || return 0
@@ -937,17 +936,11 @@ spec_unclosed_changes() { # root rev
             /^\*\*(Outcome|Milestone|Critical path|Allocation|Progress|Selection|No-progress changes|Progress limit)\*\*:/ {
                 key = $0; sub(/^\*\*/, "", key); sub(/\*\*:.*/, "", key); keys[key] = 1
             }
-            /^\*\*Review\*\*:/ {
-                split($0, f, " · "); who = tolower(trim(f[3])); verdict = toupper(trim(f[4]))
-                if (verdict == "PASS" || verdict == "FAIL") latest[who] = verdict
-            }
             END {
                 # The checkpoint shapes spec_change_progress reads, the legacy 1.3.1 one included.
                 if (keys["No-progress changes"] || keys["Progress limit"] || (keys["Outcome"] && keys["Milestone"] &&
                     (keys["Critical path"] || keys["Allocation"] || keys["Progress"] || keys["Selection"]))) checkpoint = 1
-                passed = 0
-                for (who in latest) { passed = 1; if (latest[who] != "PASS") { passed = 0; break } }
-                print id "\037" parent "\037" (passed && !checkpoint)
+                print id "\037" parent "\037" (!checkpoint)
             }'
     done | awk -F '\037' '{ id[++n] = $1; flagged[n] = $3; if ($2 != "") named[$2] = 1 }
         END { for (i = 1; i <= n; i++) if (flagged[i] && !(id[i] in named)) print id[i] }'

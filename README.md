@@ -210,7 +210,10 @@ bash .prdkit/scripts/bash/check-adoption.sh    # pinned kit version and install 
 bash .prdkit/scripts/bash/doctor.sh --strict   # spec integrity, reading budgets, agent context size
 ```
 
-`check-review.sh` verifies, on a change branch, that the recorded review verdicts cover the exact head being merged. It checks the record; it doesn't review. See [CI gates](docs/ci-gates.md).
+`check-review.sh --pr <url>` verifies publisher-authored review receipts and blockers for the exact
+head being merged. T3 also needs the owner's native approval, confirmed against the activity log.
+It checks evidence; it does not review. The online check needs `gh` and `jq`; offline snapshots
+are previews (exit 3), never merge authority. See [CI gates](docs/ci-gates.md).
 
 | Tier | When                                           | Independent reviewers        |
 | ---- | ---------------------------------------------- | ---------------------------- |

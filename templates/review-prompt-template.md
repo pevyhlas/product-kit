@@ -25,14 +25,13 @@ Return:
   terms (never a required input). A copy the diff adds or edits is medium; a contradiction it creates (an old copy
   of a changed fact) is high; untouched older duplication is low, with a pointer.
 - Anything not verifiable from the package; never guess a pass.
-- Identify the eligible registered reviewer context `{REVIEWER_ID}` and give the verdict and
-  counts. When the project uses online report verification, the coordinator records them with
-  `record-review.sh` and pastes the receipt it prints, which binds the reviewed content, under the
-  verbatim report on the PR:
+- Identify the eligible registered reviewer context `{REVIEWER_ID}`. The coordinator preserves
+  your report verbatim; the trusted publisher runs `publish-review.sh --from-report <file>` to
+  bind the verdict and counts to reviewed content; the publisher posts it; never paste it yourself:
 
 ```text
 <!-- prdkit-review
-{"schema":"prdkit.review.v2","reviewer":"{REVIEWER_ID}","from":"start","to":"fp1:<64 hex>","head":"{HEAD_SHA}","verdict":"{PASS_OR_FAIL}","critical":0,"high":0,"medium":0,"low":0}
+{"schema":"prdkit.review.v3","id":"<32 hex>","repo":"<owner>/<name>","pr":1,"change":"{CHANGE_ID}","reviewer":"{REVIEWER_ID}","from":"start","to":"fp1:<64 hex>","head":"{HEAD_SHA}","since":"","base":"refs/remotes/origin/<branch>","base_at":"<40 hex>","verdict":"{PASS_OR_FAIL}","critical":0,"high":0,"medium":0,"low":0,"report":"<url>"}
 -->
 ```
 
@@ -48,3 +47,10 @@ findings addressed or not, inspect the behavior the fix affects and cross-bounda
 and keep unchanged approvals. The full diff remains available for context; do not re-ingest every
 prior transcript. State which concern/range the verdict covers. For a design judgment between concepts you did not produce, report
 compliance per concept, real tradeoffs and a recommendation; difference alone is not a defect.
+
+End the report with exactly these last two lines, substituting your verdict and non-negative counts:
+
+```text
+Verdict: PASS
+Counts: 0 critical, 0 high, 0 medium, 0 low
+```

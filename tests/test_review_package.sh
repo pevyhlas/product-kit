@@ -9,7 +9,7 @@
 #   - revision and usage errors exit non-zero
 #   - --since needs BASE to be the change's current merge base with a trusted integration branch,
 #     accepts an earlier head a squash or rebase left out of HEAD's history, and the JSON carries
-#     the content fingerprints record-review.sh binds
+#     the content fingerprints publish-review.sh binds
 
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"

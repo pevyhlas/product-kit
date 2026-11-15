@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # close-change.sh — Close a reviewed change in its own PR with one commit: refuse unless
 # check-review.sh passes at HEAD, then write the change's log entry and delete its record.
-# Run it once the final Review line is committed and before the final push, so required checks
+# Run it once the required receipts are published and before the final push, so required checks
 # run once on the closed head. It commits in the current checkout only; it never pushes, merges
 # or removes a worktree (cleanup-change.sh does that after merge, or --closed for every closed change).
 #
-# Usage: close-change.sh [--base <rev>] [--date YYYY-MM-DD] [-m <message>] <change-id> "<log text>"
+# Usage: close-change.sh --pr <url> [--base <rev>] [--date YYYY-MM-DD] [-m <message>] <change-id> "<log text>"
 #   <log text> follows "- <date> <id>: " on the entry: "<intent> — <IDs> — <disposition> — <PR>",
 #   at most 300 characters. The entry is its own file, specs/log/<id>.md, so two branches that
 #   each close a change never conflict; compaction folds entries into specs/log.md (compact.md).
@@ -44,7 +44,7 @@ root="$(git rev-parse --show-toplevel 2>/dev/null)" || refuse "not inside a Git 
 path="specs/changes/$id.md"; log="specs/log.md"; entry="specs/log/$id.md"
 git -C "$root" cat-file -e "HEAD:$path" 2>/dev/null || refuse "no record $path at HEAD"
 git -C "$root" diff --quiet HEAD -- "$path" ||
-    refuse "$path has uncommitted edits: commit the final Review line first; the check reads committed state"
+    refuse "$path has uncommitted edits: commit the record edits first; the check reads committed state"
 git -C "$root" diff --cached --quiet || refuse "other changes are staged; commit or unstage them, so this commit holds only the record and its log entry"
 if [ -e "$root/$entry" ] || git -C "$root" cat-file -e "HEAD:$entry" 2>/dev/null ||
     { [ -f "$root/$log" ] && grep -q "^- [0-9-]* $id:" "$root/$log"; }; then

@@ -502,7 +502,7 @@ RETIRED_HELPERS='artifact-lib.sh check-artifacts.sh check-canon.sh check-impleme
 check-prerequisites.sh check-signoff.sh cleanup-feature.sh create-new-feature.sh
 evidence-fingerprint.sh evidence-lib.sh parts-lib.sh record-analysis.sh resolve-context.sh
 review-scope-lib.sh review-scope.sh setup-plan.sh status-lib.sh update-agent-context.sh
-ledger-emit.sh ledger-spool-adapter.sh json-lib.sh retrospective.sh'
+ledger-emit.sh ledger-spool-adapter.sh json-lib.sh retrospective.sh record-review.sh review-reports-lib.sh'
 kit_file_retired() { # installed or kit path -> 0 when the kit does not ship or install it and it is the kit's
     local kit="${1#.prdkit/}"
     kit="${kit#.product-kit/}"; kit="${kit/#scripts\/bash\//scripts/}"

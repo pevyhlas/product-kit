@@ -20,10 +20,14 @@ equivalent. The CI step verifies the downloaded package checksum and the missing
 and checks the three blocker sources, raw-blob parsing, record modes and diff-driver immunity.
 `test_review_legacy_gate.sh` combines those blockers with independent native receipt fixtures:
 scope, historical inclusion, unavailable evidence, empty-content clearance and all gate modes.
-Owner-dependent clearance remains fail closed until the native owner adapter is implemented.
+Owner-dependent clearance requires a confirmed native approval and historical inclusion.
 The older coverage recipe bridge also reads `**Receipt fixture**:` lines: these are test data,
 not active legacy verdicts, so narrow native coverage tests do not acquire a legacy full-PASS
 requirement. Actual legacy-line tests keep `**Review**:` and assert that stricter requirement.
+Valid new recipe verdicts now run the real publisher against the stub, caching its immutable
+body for replay across base changes. Only deliberate malformed/ineligible data bypasses the
+publisher to exercise gate-side rejection. `test_review_owner.sh` and `test_publish_review.sh`
+exercise native activity/identity and real POST/read-back/cache/repair paths independently.
 
 Host-adapter tests use `use_gh_stub` from `tests/lib.sh`; it installs `tests/gh-stub.sh`
 as `gh` on `PATH` and selects an isolated `GH_STUB_DIR`. The stub never invokes the real host.

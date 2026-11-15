@@ -252,7 +252,6 @@ changed_since() { # sha [pathspec...] -> paths changed from sha to head, outside
     [ "$#" -gt 0 ] || set -- . ":(exclude)$path" ":(exclude)specs/log.md" ":(exclude)specs/log/$id.md"
     git -C "$root" diff --name-only --no-renames --ignore-submodules=none "$sha" "$head" -- "$@" | tr '\n' ' ' | sed 's/ $//'
 }
-is_sha() { case "$1" in ""|*[!0-9a-f]*) return 1 ;; esac; [ "${#1}" -ge 7 ] && [ "${#1}" -le 40 ]; }
 
 if git -C "$root" cat-file -e "$head:$path" 2>/dev/null; then
     record_at="$head"
@@ -454,9 +453,7 @@ if $json; then
         "$(review_legacy_json)" "$RC_RECEIPTS" "$RC_IGNORED" "$RC_INVALID" "$RC_CARRIED" "$(review_owner_json)" "$(json_array ${problems[@]+"${problems[@]}"})"
 elif [ "$result" = pass ]; then
     if $record_only; then
-        note=""
-        [ "${#rows[@]}" -gt 0 ] || [ "$tier" = T0 ] || note=" Note: a $tier record with no verdict, so its code merged unreviewed."
-        printf 'PASS %s at %s: since %s it carries only the record and the log; %s recorded verdict(s), none blocking.%s\n' "$id" "$head" "$base_ref" "${#rows[@]}" "$note"
+        printf 'PASS %s at %s: since %s it carries only the record and the log; %s recorded verdict(s), none blocking; no covering receipt needed on this PR.\n' "$id" "$head" "$base_ref" "${#rows[@]}"
     elif [ "${#rows[@]}" -eq 0 ]; then
         printf 'PASS %s at %s: tier T0 needs no independent review (every changed path is docs only under the trusted review-t0-paths).\n' "$id" "$head"
     else
