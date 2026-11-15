@@ -39,10 +39,11 @@ alias_route="${route%%\?*}"
 operation=""
 if [ "$endpoint" = graphql ]; then
     operation="$(printf '%s\n' "$query" | awk '
-        /^[[:space:]]*(query|mutation)[[:space:]]+[A-Za-z_]/ {
+        !found && /^[[:space:]]*(query|mutation)[[:space:]]+[A-Za-z_]/ {
             sub(/^[[:space:]]*(query|mutation)[[:space:]]+/, "")
-            sub(/[^A-Za-z_0-9].*/, ""); print; exit
-        }')"
+            sub(/[^A-Za-z_0-9].*/, ""); operation=$0; found=1
+        }
+        END { if (found) print operation }')"
     [ -n "$operation" ] || { echo 'gh stub: a named GraphQL operation is required' >&2; exit 2; }
     route="graphql:$operation"
 fi

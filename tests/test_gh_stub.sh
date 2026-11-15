@@ -10,6 +10,14 @@ fx_pr 4 "$HEAD_SHA" '{"head":{"label":"owner:other"}}'
 QUERY='query PrdkitReviews($owner:String!, $name:String!, $number:Int!, $endCursor:String) { repository(owner:$owner,name:$name) { pullRequest(number:$number) { author { __typename login databaseId } state headRefOid baseRefName reviews(first:100,after:$endCursor) { nodes { fullDatabaseId url body state submittedAt lastEditedAt editor { login } author { __typename login } commit { oid } } pageInfo { hasNextPage endCursor } } } } }'
 reviews() { gh api graphql --paginate -f query="$QUERY" -F owner=owner -F name=repo -F number=7 "$@"; }
 
+it 'operation discovery consumes the whole query even under pipefail'
+# A long valid trailing GraphQL comment makes an early-exit awk reader SIGPIPE the writer
+# deterministically; normal short multi-line queries can hit the same race intermittently.
+long_query="$QUERY"$'\n'"$(awk 'BEGIN { for (i=0;i<4000;i++) print "# trailing comment" }')"
+run gh api graphql --paginate -f query="$long_query" -F number=7
+assert_eq 0 "$STATUS" 'named query parsing must not turn SIGPIPE into host unavailability'
+assert_eq 0 "$(printf '%s' "$OUTPUT" | jq '.data.repository.pullRequest.reviews.nodes|length')"
+
 it 'PR fixtures expose the head, base, author and state'
 run gh api repos/owner/repo/pulls/7 --jq '.head.sha'
 assert_eq 0 "$STATUS"
