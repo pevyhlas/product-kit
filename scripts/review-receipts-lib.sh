@@ -17,6 +17,9 @@
 review_receipts_policy() {
     local root="$1" at="$2" key value kind item list
     RC_ERROR=""; RC_PUBLISHERS=""; RC_OWNERS=""; RC_ISOLATION=""; RC_NOTES=()
+    if [ -z "$at" ] || ! git -C "$root" rev-parse --verify "$at^{commit}" >/dev/null 2>&1; then
+        RC_ERROR='No trusted receipt policy commit; establish origin/HEAD with its history fetched'; return 1
+    fi
     for key in review-host review-publishers review-owner review-publisher-isolation; do
         value="$( { git -C "$root" show "$at:.prdkit/memory/config.md" 2>/dev/null || true; } | awk "$SPEC_SKIP_AWK"'
             { if (spec_skip($0)) next }

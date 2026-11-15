@@ -35,6 +35,7 @@ while [ "$#" -gt 0 ]; do
 done
 emit() { if [ -n "$filter" ]; then jq -r "$filter"; else cat; fi; }
 route="${endpoint#repos/*/*/}"
+alias_route="${route%%\?*}"
 operation=""
 if [ "$endpoint" = graphql ]; then
     operation="$(printf '%s\n' "$query" | awk '
@@ -46,7 +47,7 @@ if [ "$endpoint" = graphql ]; then
     route="graphql:$operation"
 fi
 case "${GH_STUB_FAIL:-}" in
-    "$route"|"$endpoint") echo "gh stub: injected failure: $route" >&2; exit 1 ;;
+    "$route"|"$endpoint"|"$alias_route") echo "gh stub: injected failure: $route" >&2; exit 1 ;;
 esac
 override="$GH_STUB_DIR/routes/$(printf '%s' "$route" | tr '/?&=:' '_____').json"
 if [ -f "$override" ]; then emit < "$override"; exit; fi
@@ -87,7 +88,7 @@ if [ "$endpoint" = graphql ]; then
     exit
 fi
 case "${GH_STUB_PARTIAL:-}" in
-    "$route"|"$endpoint") printf '%s\n' '{"incomplete":'; exit ;;
+    "$route"|"$endpoint"|"$alias_route") printf '%s\n' '{"incomplete":'; exit ;;
 esac
 case "$route" in
     pulls\?state=closed\&head=*)
@@ -129,7 +130,10 @@ case "$route" in
                 user:{id:.author.databaseId,login:.author.login,type:.author.__typename}}]' "$GH_STUB_DIR/reviews/$number.json" | emit
         fi ;;
     pulls/[0-9]*) emit < "$GH_STUB_DIR/$route.json" ;;
-    activity\?*|activity) emit < "$GH_STUB_DIR/activity.json" ;;
+    activity\?*|activity)
+        # The real endpoint defaults to newest first; direction=asc is explicit.
+        if [[ "$endpoint" = *direction=asc* ]]; then jq 'sort_by(.timestamp,.id)' "$GH_STUB_DIR/activity.json" | emit
+        else jq 'sort_by(.timestamp,.id)|reverse' "$GH_STUB_DIR/activity.json" | emit; fi ;;
     users/*) emit < "$GH_STUB_DIR/users/${route#users/}.json" ;;
     issues/comments/[0-9]*) emit < "$GH_STUB_DIR/$route.json" ;;
     *) echo "gh stub: no fixture route $route" >&2; exit 1 ;;

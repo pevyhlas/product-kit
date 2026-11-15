@@ -253,6 +253,6 @@ review_coverage_require_start() {
         elif [ "$independent" -gt 0 ] && $fp_ready && ! covered "$REVIEW_FP_EMPTY"; then
             problems+=("$tier: the recorded ranges do not chain from the change's start ${start:0:12} (where it leaves $base_ref) to this head's content; review the whole change")
         fi
-        [ "$tier" != T3 ] || $owner || problems+=("T3 needs the owner's verdict too (a **Review** line with reviewer owner)")
+        [ "$tier" != T3 ] || $owner || problems+=("T3 needs the owner's native approval too")
     fi
 }

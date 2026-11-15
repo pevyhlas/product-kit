@@ -209,7 +209,7 @@ record T1 "$(verdict code PASS "$CLEAN" "$BASE..$L0_HEAD")"
 run bash "$CHECK"
 assert_eq 1 "$STATUS" "a T1 record with an L0 edit fails"
 assert_contains "$OUTPUT" "its floor is T3, from its L0 edit (specs/product/requirements.md)" "names the L0 path"
-assert_contains "$OUTPUT" "T3 needs the owner's verdict too" "the owner gate applies"
+assert_contains "$OUTPUT" "T3 needs the owner's native approval too" "the owner gate applies"
 git reset -q --hard "$REVIEWED"
 
 it "the record's tier where the change left the base is a floor, even after the base closed it"
@@ -401,13 +401,13 @@ it "a branch may raise its tier but never lower it, even by a record-only commit
 record T3 "$(verdict design PASS "$CLEAN")"
 run bash "$CHECK"
 assert_eq 1 "$STATUS" "T3 without the owner fails"
-assert_contains "$OUTPUT" "T3 needs the owner's verdict too" "owner required"
+assert_contains "$OUTPUT" "T3 needs the owner's native approval too" "owner required"
 sed -i.bak 's/\*\*Tier\*\*: T3/**Tier**: T1/' specs/changes/001-greet.md && rm -f specs/changes/001-greet.md.bak
 git commit -qam "lower the tier after review" >/dev/null
 run bash "$CHECK" --json
 assert_eq 1 "$STATUS" "a record-only T3-to-T1 commit does not drop the owner gate"
 assert_contains "$OUTPUT" "The record claims T1, but its floor is T3, from commit" "names the lowering"
-assert_contains "$OUTPUT" "T3 needs the owner's verdict too" "the owner gate stands"
+assert_contains "$OUTPUT" "T3 needs the owner's native approval too" "the owner gate stands"
 assert_contains "$OUTPUT" '"tier":"T3"' "the effective tier is the floor"
 git reset -q --hard HEAD~1
 sed -i.bak 's/\*\*Tier\*\*: T3/**Tier**: T1 <!-- **Tier**: T0 -->/' specs/changes/001-greet.md && rm -f specs/changes/001-greet.md.bak
@@ -434,7 +434,7 @@ git update-ref "refs/remotes/origin/$DEFAULT" "$TRUSTED_TIP"
 it "T3 also needs the owner's verdict, which carries no counts and covers the L0 and L1 spec"
 record T3 "$(verdict design PASS "$CLEAN")"
 run bash "$CHECK"
-assert_contains "$OUTPUT" "T3 needs the owner's verdict too" "owner required"
+assert_contains "$OUTPUT" "T3 needs the owner's native approval too" "owner required"
 OWNED="$REVIEWED"
 record T3 "$(verdict design PASS "$CLEAN")" "**Review**: round 1 · $BASE..$OWNED · owner · PASS · https://example.invalid/pr/1#c2"
 run bash "$CHECK"
@@ -444,14 +444,14 @@ REVIEWED="$(git rev-parse --short HEAD)"
 record T3 "$(verdict design PASS "$CLEAN")" "**Review**: round 1 · $BASE..$OWNED · owner · PASS · https://example.invalid/pr/1#c2"
 run bash "$CHECK"
 assert_eq 1 "$STATUS" "an L0 edit after the owner's head fails"
-assert_contains "$OUTPUT" "the L0/L1 spec changed since the owner's head $OWNED: specs/product.md" "names the spec file"
+assert_contains "$OUTPUT" "the L0/L1 spec changed since the owner's native approval" "requires fresh approval of the spec edit"
 git reset -q --hard "$OWNED"; REVIEWED="$OWNED"
 mkdir -p specs/product/journeys; echo '# J-01 Ask (hypothesis)' > specs/product/journeys/j-01-ask.md
 git add specs/product; git commit -qm "journey after the owner" >/dev/null
 REVIEWED="$(git rev-parse --short HEAD)"
 record T3 "$(verdict design PASS "$CLEAN")" "**Review**: round 1 · $BASE..$OWNED · owner · PASS · https://example.invalid/pr/1#c2"
 run bash "$CHECK"
-assert_contains "$OUTPUT" "the L0/L1 spec changed since the owner's head $OWNED: specs/product/journeys/j-01-ask.md" "a journey file is L0"
+assert_contains "$OUTPUT" "the L0/L1 spec changed since the owner's native approval" "a journey file is L0"
 git reset -q --hard "$OWNED"; REVIEWED="$OWNED"
 
 it "a scoped re-review covers an older reviewer's head when its range starts at or before it"

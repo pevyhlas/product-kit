@@ -127,14 +127,6 @@ review_legacy_collect() ( # subshell contains Git environment and scratch output
     LC_ALL=C awk -F '\037' '!seen[$1]++' "$ll_rows" > "$output.next" && mv "$output.next" "$output"
 )
 
-owner_native_approval_valid() { # root checked-change trusted-base checked-head
-    # TODO(c1c-owner): §3 must validate the latest decisive native review, its L0/L1
-    # slice and drift guard. On success set OWNER_APPROVED_COMMIT to the confirmed
-    # head at submission. State lines and unconfirmed O rows must never satisfy this.
-    OWNER_APPROVED_COMMIT=""
-    return 1
-}
-
 _legacy_evidence() { # root change base head rigor work -> LL_EVIDENCE (complete scan only)
     local key
     key="$(printf '%s\000%s\000%s' "$2" "$3" "$4" | review_sha256)" || return 1

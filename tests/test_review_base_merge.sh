@@ -158,7 +158,7 @@ printf '\n**Review**: round 2 · %s..%s · code · PASS · %s · https://example
 git add "$RECORD"; git commit -qm 'code review after resolution'
 check
 assert_eq 1 "$STATUS" 'code review cannot replace owner approval for L0 integration'
-assert_contains "$OUTPUT" "L0/L1 spec changed since the owner's head" 'owner gap named'
+assert_contains "$OUTPUT" "L0/L1 spec changed since the owner's native approval" 'owner gap named'
 
 it "an arbitrary local base cannot manufacture a trusted import"
 start_case

@@ -22,12 +22,14 @@ EOF
 receipt_host() { # root change head [base]; intentionally test-only legacy recipe decoding
     local project="$1" change="$2" head="$3" base="${4:-origin/HEAD}" at record text cache key body
     local line reviewer round from to verdict c h m l link from_token to_token since rhead base_at canonical serial=0
+    local owner_commit="" candidate owner_key slice
     [ -n "${GH_STUB_DIR:-}" ] || use_gh_stub
     canonical="$(git -C "$project" rev-parse --symbolic-full-name "$base" 2>/dev/null || true)"
     case "$canonical" in refs/remotes/origin/*) ;; *) canonical="$(git -C "$project" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null || true)" ;; esac
     base_at="$(git -C "$project" rev-parse --verify "$canonical^{commit}" 2>/dev/null || git -C "$project" rev-list --max-parents=0 "$head" | head -n 1)"
     fx_pr 7 "$head" "$(jq -cn --arg base "${canonical#refs/remotes/origin/}" '{base:{ref:$base}}')"
     printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
+    printf '[]\n' > "$GH_STUB_DIR/activity.json"
     [ -n "$canonical" ] || return 0 # No trusted publishing baseline in this scenario yet.
     record="specs/changes/$change.md"; at="$head"
     if ! git -C "$project" cat-file -e "$head:$record" 2>/dev/null; then
@@ -36,7 +38,23 @@ receipt_host() { # root change head [base]; intentionally test-only legacy recip
     text="$(git -C "$project" show "$at:$record" 2>/dev/null || true)"
     cache="$(git -C "$project" rev-parse --absolute-git-dir)/receipt-fixtures"; mkdir -p "$cache"
     while IFS=$'\037' read -r line reviewer round from to verdict c h m l link; do
-        [ -n "$line" ] && [ "$reviewer" != owner ] || continue
+        [ -n "$line" ] || continue
+        if [ "$reviewer" = owner ]; then
+            [ "$verdict" = PASS ] || continue
+            owner_key="$(printf '%s\n%s' "$change" "$line" | review_sha256)"
+            if [ -f "$cache/owner-$owner_key" ]; then owner_commit="$(cat "$cache/owner-$owner_key")"
+            elif [[ "$to" =~ ^[0-9a-f]{7,40}$ ]]; then
+                owner_commit="$(git -C "$project" rev-parse --verify "$to^{commit}" 2>/dev/null || printf '%s' "$to")"
+            elif review_is_fp "$to"; then
+                owner_commit=""
+                while IFS= read -r candidate; do
+                    slice="$(review_fingerprint "$project" "$change" "$base_at" "$candidate" "${REVIEW_L01_PATHSPECS[@]}" 2>/dev/null)" || continue
+                    if [ "$slice" = "$to" ]; then owner_commit="$candidate"; break; fi
+                done < <(git -C "$project" rev-list "$head" --all --reflog)
+            fi
+            [ -z "$owner_commit" ] || printf '%s\n' "$owner_commit" > "$cache/owner-$owner_key"
+            continue
+        fi
         serial=$((serial+1))
         key="$(printf '%s\n%s\n' "$change" "$line" | review_sha256)"
         if [ -f "$cache/$key" ]; then body="$(cat "$cache/$key")"
@@ -76,6 +94,11 @@ receipt_host() { # root change head [base]; intentionally test-only legacy recip
             range=trim(f[2]); cut=index(range,"..."); width=3; if (!cut) { cut=index(range,".."); width=2 }
             print original "\037" trim(f[3]) "\037" trim(f[1]) "\037" (cut?substr(range,1,cut-1):"") "\037" (cut?substr(range,cut+width):"") "\037" trim(f[4]) "\037" count(f[5],"critical") "\037" count(f[5],"high") "\037" count(f[5],"medium") "\037" count(f[5],"low") "\037" trim(f[n])
         }')
+    if [ -n "$owner_commit" ]; then
+        fx_owner_review 7 APPROVED "$owner_commit"
+        fx_activity 0000000000000000000000000000000000000000 "$owner_commit" '{"activity_type":"branch_creation","timestamp":"2026-01-01T23:00:00Z"}'
+        if [ "$owner_commit" != "$head" ]; then fx_activity "$owner_commit" "$head" '{"timestamp":"2026-01-02T01:00:00Z"}'; fi
+    fi
 }
 
 receipt_run() { # real script [arguments]; use the real gate/close helper with the fixture host

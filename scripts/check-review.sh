@@ -3,7 +3,7 @@
 # fingerprints and structure still come from committed Git state. The coverage engine is unchanged.
 # Online --pr enumerates this PR and closed-source blockers in every tier. --receipts revalidates
 # an untrusted snapshot without gh/jq. With no source, only structure and coverage needs are known.
-# Exit 0 host pass, 1 fail, 2 usage, 3 preview pass. Owner State handling is temporary in phase A.
+# Exit 0 host pass, 1 fail, 2 usage, 3 preview pass. The owner approves natively, never by text.
 # shellcheck disable=SC2034 # Coverage inputs and normalized row fields cross sourced interfaces.
 set -euo pipefail
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,6 +15,8 @@ source "$SCRIPT_DIR/review-fingerprint-lib.sh"
 source "$SCRIPT_DIR/review-coverage-lib.sh"
 # shellcheck source=scripts/review-receipts-lib.sh
 source "$SCRIPT_DIR/review-receipts-lib.sh"
+# shellcheck source=scripts/review-owner-lib.sh
+source "$SCRIPT_DIR/review-owner-lib.sh"
 # shellcheck source=scripts/review-legacy-lib.sh
 source "$SCRIPT_DIR/review-legacy-lib.sh"
 json=false; head_ref=HEAD; base_ref=""; repo=.; id=""
@@ -82,7 +84,7 @@ shallow_hint=""
 fp_cache="$(mktemp -d)" || { echo "check-review.sh: no temporary directory for content fingerprints" >&2; exit 2; }
 trap 'rm -rf "$fp_cache"' EXIT
 if [ -z "$policy_at" ]; then
-    problems+=("No trusted integration base: origin/HEAD does not resolve here, so there is no policy to check against; establish it (git remote set-head origin --auto) with its history fetched")
+    problems+=("No trusted integration base: origin/HEAD does not resolve here, so there is no policy to check against; establish it (git remote set-head origin --auto) with its history fetched$shallow_hint")
 elif [ -z "$base_ref" ]; then
     problems+=("No base to find the change's start; pass --base <a trusted integration branch>")
 elif ! $base_trusted; then
@@ -124,8 +126,9 @@ if [ -n "$pr_url" ] || [ -n "$receipts_file" ]; then
         publisher_isolation="$RC_ISOLATION"
         if [ -n "$pr_url" ]; then
             authority=unavailable
-            if review_receipts_fetch "$pr_url" "$root" "$fp_cache/receipts-work"; then authority=host; receipt_ready=true
-            else problems+=("${RC_ERROR:-could not read receipts completely}"); fi
+            if review_receipts_fetch "$pr_url" "$root" "$fp_cache/receipts-work" && review_owner_capture "$fp_cache/receipts-work"; then
+                authority=host; receipt_ready=true
+            else problems+=("${RC_ERROR:-could not read receipts and owner activity completely}"); fi
         else
             authority=snapshot
             if review_receipts_read "$receipts_file" "$fp_cache/receipts-work"; then receipt_ready=true
@@ -158,6 +161,8 @@ if [ "$publisher_isolation" = shared ] && [ "$authority" != host ]; then
 fi
 # Legacy history is local evidence in every mode and tier, even when the checked
 # record is absent or the host is unavailable. It never joins the coverage arrays.
+OWNER_VALID=false; OWNER_REVIEW=""; OWNER_STATE=""; OWNER_COMMIT=""; OWNER_HEAD_AT_SUBMISSION=""; OWNER_ERROR='the owner has no decisive native review on this PR'
+if $receipt_ready; then owner_native_approval_valid "$root" "$id" "$fp_base" "$head" || true; fi
 legacy_receipts=""; LL_BLOCKERS=(); LL_EMPTY_VALID=(); LL_EMPTY_ALLOWED=()
 if $receipt_ready; then legacy_receipts="$RC_FILE"; fi
 if [ -n "$fp_base" ]; then
@@ -353,38 +358,8 @@ else
     if $base_trusted && [ -n "$start" ] && [ "$start" != "$head" ] && [ -z "$(changed_since "$start")" ]; then
         record_only=true
     fi
-    # Retain only the owner State adapter during phase A. Independent verdicts below come from
-    # the validated receipt list in host order, never from these record lines.
+    # All verdicts come from the validated host/snapshot list, in host order.
     v_line=(); v_rev=(); v_round=(); v_from=(); v_to=(); v_verdict=(); v_c=(); v_h=(); v_m=(); v_l=(); v_link=()
-    while IFS="$(printf '\037')" read -r line reviewer round from to verdict critical high medium low link; do
-        [ -n "$line" ] || continue
-        # TODO(c1c-owner): replace only this temporary owner State adapter with §3 native approval.
-        [ "$reviewer" = owner ] || continue
-        # Owner FAIL/unreadable lines are resolved only by the legacy scan, never coverage.
-        [ "$verdict" = PASS ] || continue
-        v_line+=("$line"); v_rev+=("$reviewer"); v_round+=("$round"); v_from+=("$from"); v_to+=("$to")
-        v_verdict+=("$verdict"); v_c+=("$critical"); v_h+=("$high"); v_m+=("$medium"); v_l+=("$low"); v_link+=("$link")
-        v_receipt+=("")
-        v_receipt_head+=("")
-        v_empty_clearance+=(false)
-    done < <(printf '%s\n' "$record" | awk "$SPEC_SKIP_AWK"'
-        { gsub(/[\035-\037]/, " "); if (spec_skip($0)) next }
-        function trim(s) { gsub(/`/, "", s); gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
-        function count(s, kind,   v) { v = s; if (!match(v, "[0-9]+ " kind)) return "?"; v = substr(v, RSTART, RLENGTH); sub(/ .*/, "", v); return v }
-        /^## / { sec = $0; sub(/^##[[:space:]]+/, "", sec); next }
-        sec == "State" && /^\*\*Review\*\*:/ {
-            line = $0; sub(/^\*\*Review\*\*:[[:space:]]*/, "", line)
-            n = split(line, f, " · ")
-            reviewer = n >= 3 ? tolower(trim(f[3])) : ""
-            if (reviewer == "") reviewer = "(unnamed)"
-            range = trim(f[2]); cut = index(range, "..."); width = 3
-            if (!cut) { cut = index(range, ".."); width = 2 }
-            from = cut ? substr(range, 1, cut - 1) : ""; to = cut ? substr(range, cut + width) : ""
-            verdict = toupper(trim(f[4]))
-            # The link is the last field: after the counts, or after the verdict on an owner line.
-            link = (n > (reviewer == "owner" ? 4 : 5)) ? trim(f[n]) : ""
-            print NR "\037" reviewer "\037" trim(f[1]) "\037" from "\037" to "\037" verdict "\037" count(f[5], "critical") "\037" count(f[5], "high") "\037" count(f[5], "medium") "\037" count(f[5], "low") "\037" link
-        }')
     if $receipt_ready; then
         while IFS="$sep37" read -r kind seq origin review submitted receipt_id change reviewer from to receipt_head since receipt_base base_at verdict critical high medium low link carried; do
             [ "$kind" = R ] || continue
@@ -422,7 +397,9 @@ else
     coverage_record_only="$record_only"
     [ "$tier" != T0 ] || record_only=true
     review_coverage_evaluate
+    owner="$OWNER_VALID"
     record_only="$coverage_record_only"
+    if [ "$tier" = T3 ] && ! $record_only && ! $owner; then problems+=("$OWNER_ERROR"); fi
     # Keep actionable path diagnostics when the publisher's provenance commit is still local.
     # These are diagnostics only; authenticated tokens, never the commits, decide coverage.
     if $fp_ready; then
@@ -472,9 +449,9 @@ if $json; then
             "$(json_escape "$critical")" "$(json_escape "$high")" "$(json_escape "$medium")" "$(json_escape "$low")" "$(json_escape "$receipt_url")"
         sep=,
     done
-    printf '],"registry_at":"%s","authority":"%s","pr":"%s","pr_head":"%s","head_is_pr_head":%s,"publisher_isolation":"%s","legacy_blockers":%s,"receipts":%s,"ignored_receipts":%s,"invalid_receipts":%s,"carried_blockers":%s,"owner":{"review":null,"state":null,"commit":null,"head_at_submission":null},"problems":%s}\n' \
+    printf '],"registry_at":"%s","authority":"%s","pr":"%s","pr_head":"%s","head_is_pr_head":%s,"publisher_isolation":"%s","legacy_blockers":%s,"receipts":%s,"ignored_receipts":%s,"invalid_receipts":%s,"carried_blockers":%s,"owner":%s,"problems":%s}\n' \
         "$registry_at" "$authority" "$(json_escape "${pr_url:-${RC_PR:+https://github.com/$RC_REPO/pull/$RC_PR}}")" "$pr_head" "$head_is_pr_head" "$publisher_isolation" \
-        "$(review_legacy_json)" "$RC_RECEIPTS" "$RC_IGNORED" "$RC_INVALID" "$RC_CARRIED" "$(json_array ${problems[@]+"${problems[@]}"})"
+        "$(review_legacy_json)" "$RC_RECEIPTS" "$RC_IGNORED" "$RC_INVALID" "$RC_CARRIED" "$(review_owner_json)" "$(json_array ${problems[@]+"${problems[@]}"})"
 elif [ "$result" = pass ]; then
     if $record_only; then
         note=""

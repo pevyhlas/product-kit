@@ -56,7 +56,7 @@ git add specs/changes/002-final-child.md; git commit -qm 'combined independent p
 it "the combined tier still requires owner approval"
 run bash "$CHECK" --base origin/main 002-final-child
 assert_eq 1 "$STATUS" "owner gate not lost with parent deletion"
-assert_contains "$OUTPUT" "T3 needs the owner's verdict" "owner missing"
+assert_contains "$OUTPUT" "T3 needs the owner's native approval" "owner missing"
 
 printf '**Review**: round 2 · %s..%s · owner · PASS · fixture:owner-words\n' "$BASE" "$PREPARED" >> specs/changes/002-final-child.md
 git add specs/changes/002-final-child.md; git commit -qm 'owner verdict on combined scope'

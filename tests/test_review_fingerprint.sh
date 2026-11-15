@@ -310,7 +310,6 @@ rec --reviewer owner --verdict PASS --head HEAD
 assert_eq 0 "$STATUS" "the owner's line records without counts: $OUTPUT"
 assert_contains "$OUTPUT" "· owner · PASS · $LINK" "no counts on the line"
 assert_contains "$OUTPUT" '"verdict":"PASS"}' "no counts in the receipt"
-OWNER_TO="$(last_to)"
 check
 assert_eq 0 "$STATUS" "T3 passes: $OUTPUT"
 F1="$(git rev-parse HEAD)"
@@ -327,7 +326,7 @@ printf '# Product\n\nThe product, refined again.\n' > specs/product.md; git comm
 pass design HEAD "$F2"
 check
 assert_eq 1 "$STATUS" "an L0 edit needs the owner again"
-assert_contains "$OUTPUT" "owner (round 1): the L0/L1 spec changed since the owner's approval ($(shown "$OWNER_TO"))" "exact message"
+assert_contains "$OUTPUT" "the L0/L1 spec changed since the owner's native approval" "native approval slice changed"
 done_with
 
 it "a stale PASS from an earlier delivery of the same change fails closed"
