@@ -722,16 +722,6 @@ if $CHECK; then
     exit 1
 fi
 
-if upgrade_source_2 && $UPGRADE; then
-    upgrade_preflight || exit 1
-    if ! $MIGRATE_REVIEWS; then upgrade_plain_guard || exit 1; fi
-    if $DRY_RUN; then
-        if $JSON; then printf '{"policy_at":"%s","records":[],"open_prs":[]}\n' "$UP_POLICY_AT"
-        else echo 'Review transition preflight passed; no files installed.'; fi
-        exit 0
-    fi
-fi
-
 # --- Install / upgrade -------------------------------------------------------
 # Refuse before writing anything when a directory the installer writes into is a symlink, is
 # not a directory or resolves outside TARGET, or when a directory sits where the kit installs a
@@ -745,6 +735,12 @@ containment_problems() {
         if [ -d "$TARGET/$rel" ] && [ ! -L "$TARGET/$rel" ]; then printf '%s is a directory where the kit installs a file\n' "$rel"; fi
     done < <(list_kit_files; printf 'manifest\t.prdkit/.manifest\nmanifest\t.prdkit/.manifest.tmp\nstate\t.prdkit/.install-state\nlock\t.prdkit/.install-lock\n')
     [ ! -L "$PRDKIT_DIR/.install-state" ] || printf '.prdkit/.install-state is a symlink\n'
+    for rel in AGENTS.md .gitignore; do
+        [ "$rel" != AGENTS.md ] || has_harness agents || continue
+        if src="$(root_file_path "$rel")" && [ -d "$src" ]; then
+            printf '%s resolves to a directory where the installer edits a root file\n' "$rel"
+        fi
+    done
 }
 PROBLEMS="$(containment_problems)"
 if [ -n "$PROBLEMS" ]; then
@@ -752,6 +748,17 @@ if [ -n "$PROBLEMS" ]; then
     printf '%s\n' "$PROBLEMS" | sed 's/^/  /' >&2
     echo "The installer writes only into real directories inside the project. Replace each path above with a real directory (or move it aside), then re-run." >&2
     exit 1
+fi
+
+if upgrade_source_2 && $UPGRADE; then
+    upgrade_preflight || exit 1
+    upgrade_no_overwrite || exit 1
+    if ! $MIGRATE_REVIEWS; then upgrade_plain_guard || exit 1; fi
+    if $DRY_RUN; then
+        if $JSON; then printf '{"policy_at":"%s","records":[],"open_prs":[]}\n' "$UP_POLICY_AT"
+        else echo 'Review transition preflight passed; no files installed.'; fi
+        exit 0
+    fi
 fi
 
 # Serialize writes, with a retained phase marker rather than pretending the whole install is

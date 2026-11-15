@@ -141,4 +141,49 @@ for kind in pristine unrelated edited staged outside wrong-source mode; do
     if [ "$kind" = pristine ]; then assert_eq 0 "$STATUS" 'validated rendered intermediate state accepted'
     else assert_eq 1 "$STATUS" "$kind still refuses"; fi
 done
+it 'ignored and committed customized commands refuse before the first mutation, also on retry'
+for kind in ignored committed retired managed; do
+    for attempt in first retry; do
+        transition_project
+        case "$kind" in
+            ignored)
+                printf '\n.claude/commands/prdkit.md\n' >> "$PROJ/.gitignore"
+                git -C "$PROJ" rm --cached -q .claude/commands/prdkit.md
+                commit_fixture ignore
+                printf '\nUser command\n' >> "$PROJ/.claude/commands/prdkit.md" ;;
+            committed)
+                printf '\nUser command\n' >> "$PROJ/.claude/commands/prdkit.md"
+                commit_fixture customization ;;
+            retired)
+                printf 'Pristine retired helper\n' > "$PROJ/.prdkit/scripts/bash/retired.sh"
+                printf '%s  .prdkit/scripts/bash/retired.sh\n' "$( (sha256sum "$PROJ/.prdkit/scripts/bash/retired.sh" 2>/dev/null || shasum -a 256 "$PROJ/.prdkit/scripts/bash/retired.sh") | cut -d' ' -f1)" >> "$PROJ/.prdkit/.manifest"
+                printf 'Customized helper\n' > "$PROJ/.prdkit/scripts/bash/retired.sh"
+                commit_fixture customization ;;
+            managed)
+                mv "$PROJ/AGENTS.md" "$PROJ/CLAUDE.md"
+                ln -s CLAUDE.md "$PROJ/AGENTS.md"
+                sed 's/## Product-Kit workflow/## Custom workflow/' "$PROJ/CLAUDE.md" > "$PROJ/agents.next"
+                mv "$PROJ/agents.next" "$PROJ/CLAUDE.md"
+                commit_fixture customization ;;
+        esac
+        if [ "$attempt" = retry ]; then printf 'source-version: 2.0.0\n' > "$PROJ/.prdkit/.install-state"; fi
+        before_manifest="$(cat "$PROJ/.prdkit/.manifest")"
+        before_command="$(cat "$PROJ/.claude/commands/prdkit.md")"
+        before_status="$(git -C "$PROJ" status --porcelain --untracked-files=all)"
+        upgrade --migrate-reviews
+        assert_eq 1 "$STATUS" "$kind customization refuses on $attempt upgrade"
+        assert_contains "$OUTPUT" 'nothing was written' 'refusal precedes mutation'
+        assert_eq "$before_manifest" "$(cat "$PROJ/.prdkit/.manifest")" 'manifest untouched'
+        assert_eq "$before_command" "$(cat "$PROJ/.claude/commands/prdkit.md")" 'early command untouched'
+        assert_eq "$before_status" "$(git -C "$PROJ" status --porcelain --untracked-files=all)" 'entire target status unchanged'
+    done
+done
+
+it 'pristine outdated commands still upgrade'
+transition_project
+printf '\nNew pristine command\n' >> "$PROJ/.product-kit/commands/prdkit.md"
+commit_fixture source
+upgrade --migrate-reviews
+assert_eq 0 "$STATUS" 'outdated but pristine is safe'
+assert_contains "$(cat "$PROJ/.claude/commands/prdkit.md")" 'New pristine command' 'command refreshed'
 finish

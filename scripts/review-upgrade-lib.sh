@@ -121,7 +121,7 @@ upgrade_same_file() {
 }
 
 upgrade_render_expected() { # caller-owned work directory -> head/, rendered/, paths (NUL)
-    local work="$1" src rel entry rec cur kit ignore hash line dest trailing
+    local work="$1" src rel entry rec cur kit ignore hash line dest trailing action
     mkdir -p "$work/head/.prdkit" "$work/rendered" || return 1
     upgrade_head_file .prdkit/.manifest "$work/head/.prdkit/.manifest" || return 1
     # The last committed manifest, never a dirty intermediate, is the ownership baseline.
@@ -169,6 +169,13 @@ upgrade_render_expected() { # caller-owned work directory -> head/, rendered/, p
             printf '%s\0' "$rel" >> "$work/paths" || return 1
         done < "$MANIFEST"
     fi
+    while IFS=$'\t' read -r rel action; do
+        [ "$action" = remove ] || continue
+        printf '%s\0' "$rel" >> "$work/paths" || return 1
+        if [ ! -e "$work/head/$rel" ] && [ ! -L "$work/head/$rel" ]; then
+            upgrade_head_file "$rel" "$work/head/$rel" || return 1
+        fi
+    done < <(list_retired_commands; list_retired_kit_files)
     for rel in AGENTS.md .gitignore; do
         [ "$rel" != AGENTS.md ] || has_harness agents || continue
         if dest="$(root_file_path "$rel")"; then dest="${dest#"$TARGET"/}"; else continue; fi
@@ -210,6 +217,9 @@ upgrade_render_expected() { # caller-owned work directory -> head/, rendered/, p
             printf '%s  %s\n' "$hash" "$rel"
         done < "$work/files"
     } > "$work/rendered/.prdkit/.manifest"
+    printf '.prdkit/.manifest.tmp\0' >> "$work/paths" || return 1
+    upgrade_head_file .prdkit/.manifest.tmp "$work/head/.prdkit/.manifest.tmp" || return 1
+    cp "$work/rendered/.prdkit/.manifest" "$work/rendered/.prdkit/.manifest.tmp"
 }
 
 upgrade_checkout_clean() (
@@ -236,4 +246,56 @@ upgrade_checkout_clean() (
             echo "P1: not a validated intermediate state (bytes, type or mode): $rel; nothing was written." >&2; return 1
         fi
     done < "$work/dirty"
+)
+
+# Inspect the entire planned overwrite/delete set, including ignored files. Git cleanliness
+# alone is not ownership: a committed customization is still the project's work.
+upgrade_no_overwrite() (
+    local work rel src dest rec cur section expected problem=false
+    work="$(mktemp -d)" || return 1
+    trap 'rm -rf "$work"' EXIT
+    upgrade_render_expected "$work" || return 1
+    while IFS= read -r -d '' rel; do
+        dest="$TARGET/$rel"
+        { [ -e "$dest" ] || [ -L "$dest" ]; } || continue
+        src="$(awk -F '\t' -v p="$rel" '$2==p { print $1 }' "$work/files")"
+        case "$rel" in .prdkit/.manifest) continue ;; esac
+        if [ -z "$src" ] && { [ "$dest" = "$(root_file_path AGENTS.md 2>/dev/null)" ] || [ "$dest" = "$(root_file_path .gitignore 2>/dev/null)" ]; }; then
+            # Root files are edited in place, not replaced as kit-owned documents. Only
+            # the managed block is overwritten; the ignore operation only appends entries.
+            if has_harness agents && [ "$dest" = "$(root_file_path AGENTS.md 2>/dev/null)" ] && grep -qF "$AGENTS_BEGIN" "$dest"; then
+                section="$(managed_agents_section "$dest")" || { echo "Customized managed section: $rel" >&2; problem=true; continue; }
+                cur="$(printf '%s\n' "$section" | install_hash_stream)"
+                rec="$(install_manifest_value "$MANIFEST" agents-section 2>/dev/null)" || rec=""
+                expected="$(render_agents_section | install_hash_stream)"
+                if [ "$cur" != "$rec" ] && [ "$cur" != "$expected" ]; then
+                    echo "Customized managed section: $rel" >&2; problem=true
+                fi
+            fi
+            continue
+        fi
+        if upgrade_same_file "$dest" "$work/rendered/$rel"; then continue; fi
+        case "$rel" in .prdkit/templates/*|.prdkit/memory/*)
+            # Non-forced conffiles with custom bytes are preserved by install_conffile.
+            if ! $FORCE && [ -n "$src" ]; then continue; fi ;;
+        esac
+        rec="$(recorded_hash "$rel")"
+        if [ -L "$dest" ]; then
+            case "$rel" in .claude/commands/*|.opencode/commands/*)
+                if is_kit_command_link "$dest"; then continue; fi ;;
+            esac
+        elif [ -f "$dest" ] && [ -n "$rec" ]; then
+            cur="$(hash_file "$dest")" || return 1
+            if [ "$cur" = "$rec" ]; then
+                if [ -z "$src" ] || { { [ -x "$dest" ] && [ -x "$work/rendered/$rel" ]; } ||
+                    { [ ! -x "$dest" ] && [ ! -x "$work/rendered/$rel" ]; }; }; then continue; fi
+            fi
+        fi
+        echo "Customized overwrite/delete destination: $rel" >&2
+        problem=true
+    done < "$work/paths"
+    if $problem; then
+        echo 'Refusing to overwrite or delete customized content; nothing was written. Reconcile these files before upgrading.' >&2
+        return 1
+    fi
 )
