@@ -124,7 +124,7 @@ assert_contains "$OUTPUT" 'Report links unverified' 'human output has the same l
 mkdir .git/no-network-tools
 # Standard utilities only; content fingerprints add mktemp, rm, wc, sort and one SHA-256 tool.
 sha_tool=sha256sum; command -v sha256sum >/dev/null 2>&1 || sha_tool=shasum
-for cmd in bash dirname git sed awk tr head grep cat mktemp rm wc sort "$sha_tool"; do
+for cmd in bash dirname git sed awk tr head tail grep cat mktemp rm wc sort "$sha_tool"; do
     ln -s "$(command -v "$cmd")" ".git/no-network-tools/$cmd"
 done
 run env PATH="$PROJ/.git/no-network-tools" bash "$CHECK" --json 001-reviewed
