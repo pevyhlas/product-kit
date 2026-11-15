@@ -125,6 +125,10 @@ for setting in GH_STUB_OFFLINE=true GH_STUB_PARTIAL=pulls/7; do
     assert_eq 1 "$STATUS"
     assert_contains "$OUTPUT" '"authority":"unavailable"'
 done
+run env 'GH_STUB_FAIL=pulls?state=closed&head=owner%3Afeature' bash "$CHECK" --json --pr "$PR" 001-reviewed
+assert_eq 1 "$STATUS" 'a failed closed-source listing is not an empty successful list'
+assert_contains "$OUTPUT" '"authority":"unavailable"'
+assert_contains "$OUTPUT" 'could not enumerate closed source PRs completely'
 printf 'previous snapshot\n' > .git/unavailable-snapshot
 run env GH_STUB_OFFLINE=true bash "$CHECK" --json --pr "$PR" --save-receipts .git/unavailable-snapshot 001-reviewed
 assert_eq 1 "$STATUS"

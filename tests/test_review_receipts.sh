@@ -154,6 +154,13 @@ assert_eq 2 "$RC_INVALID" 'a visible original id must match'
 reset_host; receipt 7; receipt 7 '.restates="1001"'; fetch
 assert_eq 1 "$RC_INVALID" 'restatement cannot remove a valid receipt'
 
+it 'even a same-id restatement cannot replace a valid FAIL with PASS'
+reset_host; receipt 7 '.verdict="FAIL"'
+receipt 7 '.id="00000000000000000000000000000001"|.restates="1001"'
+fetch
+assert_eq 1 "$RC_INVALID" 'same id reaches the invalid-original guard, not the id-mismatch guard'
+assert_contains "$(problems)" 'blocking verdict stands' 'the valid original FAIL remains'
+
 it 'a different listed publisher cannot restate another publishers invalid receipt'
 for author in '{"__typename":"Bot","databaseId":1004,"login":"other[bot]"}' '{"__typename":"User","databaseId":1001,"login":"other"}'; do
     reset_host; RC_PUBLISHERS=$'bot:1001\nbot:1004\nuser:1001'
@@ -173,6 +180,15 @@ receipt 7; fetch
 assert_eq '' "$(problems)" 'same reviewer full PASS for the checked carrier clears the sibling'
 reset_host; receipt 7 '.change="002-sibling"'; fetch
 assert_eq '' "$(cat "$RC_COVERAGE")" 'a foreign PASS grants no coverage'
+
+it 'other-change blockers require full PASS; a non-empty narrow PASS cannot clear them'
+reset_host; receipt 7 '.change="002-sibling"|.verdict="FAIL"'
+receipt 7 '.from="fp1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"|.since="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"'
+fetch
+assert_eq 0 "$RC_INVALID" 'the narrow receipt itself is valid'
+assert_contains "$(problems)" 'code 002-sibling blocking verdict stands'
+receipt 7; fetch
+assert_eq '' "$(problems)" 'a later full PASS from start clears the foreign blocker'
 
 it 'host order is submittedAt then numeric review id, not fixture order'
 reset_host; receipt 7 . '{"fullDatabaseId":"1010","submittedAt":"2026-01-03T00:00:00Z"}'
@@ -228,6 +244,25 @@ receipt 7 '.reviewer="security"'; fetch
 assert_eq 1 "$RC_CARRIED" 'another reviewer cannot clear carry'
 receipt 7; fetch
 assert_eq 0 "$RC_CARRIED" 'full PASS on this PR clears carry'
+
+it 'a carried FAIL is not cleared by the same reviewers non-empty narrow PASS'
+reset_host; fx_closed_pr 6 "$HEAD_SHA"; receipt 6 '.verdict="FAIL"'
+receipt 7 '.from="fp1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"|.since="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"'
+fetch
+assert_eq 0 "$RC_INVALID"
+assert_eq 1 "$RC_CARRIED" 'narrow PASS cannot clear carry'
+assert_contains "$(problems)" 'blocking verdict stands'
+receipt 7; fetch
+assert_eq 0 "$RC_CARRIED" 'full PASS from start clears it'
+
+it 'invalid receipts on closed-unmerged PRs carry even after a fresh full PASS'
+reset_host; fx_closed_pr 6 "$HEAD_SHA"
+receipt 6 '.verdict="FAIL"' '{"lastEditedAt":"2026-01-03T00:00:00Z"}'
+receipt 7; fetch
+assert_eq 1 "$RC_INVALID" 'the edited predecessor cannot be dropped'
+assert_eq 1 "$RC_CARRIED" 'only a same-author restatement can clear invalid carry'
+assert_contains "$(problems)" '/pull/6#pullrequestreview-1001: edited receipt'
+
 reset_host; fx_closed_pr 6 "$HEAD_SHA"; receipt 6; fetch
 assert_eq '' "$(cat "$RC_COVERAGE")" 'earlier delivery PASS never covers this PR'
 reset_host; fx_closed_pr 6 "$HEAD_SHA"; receipt 6 '.verdict="FAIL"'; receipt 6; fetch
@@ -320,4 +355,31 @@ assert_eq '' "$(cat "$GH_STUB_DIR/requests")" 'missing optional tools never call
 printf 'bad snapshot\n' > "$SNAPSHOT"
 if PATH="$TOOLS" review_receipts_read "$SNAPSHOT" "$OFFLINE_WORK"; then STATUS=0; else STATUS=$?; fi
 assert_eq 1 "$STATUS" 'malformed offline source is rejected without optional tools'
+
+it 'tampered snapshots revalidate fields, content consistency and increasing sequence offline'
+reset_host; receipt 7; receipt 7 '.reviewer="security"'; fetch
+SNAPSHOT="$WORK/original-snapshot"; review_receipts_write "$SNAPSHOT"
+: > "$GH_STUB_DIR/requests"
+for tamper in owner token fingerprint sequence; do
+    awk -F '\037' -v OFS='\037' -v tamper="$tamper" '
+        NR==2 && tamper=="owner" { $8="owner" }
+        NR==2 && tamper=="token" { $9="not-a-token"; $12="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+        NR==2 && tamper=="fingerprint" { $10="fp1:0000000000000000000000000000000000000000000000000000000000000000" }
+        NR==3 && tamper=="sequence" { $2=1 }
+        { print }' "$SNAPSHOT" > "$WORK/tampered-snapshot"
+    OFFLINE_WORK="$(mktemp -d)"; track_tmp "$OFFLINE_WORK"
+    if PATH="$TOOLS" review_receipts_read "$WORK/tampered-snapshot" "$OFFLINE_WORK"; then STATUS=0; else STATUS=$?; fi
+    if [ "$tamper" = sequence ]; then
+        assert_eq 1 "$STATUS" 'non-increasing sequence rejects the snapshot before scope'
+        assert_contains "$RC_ERROR" 'malformed receipt snapshot'
+    else
+        assert_eq 0 "$STATUS" "$RC_ERROR"
+        if PATH="$TOOLS" review_receipts_scope 001-reviewed light "$REGISTRY" "$OFFLINE_WORK" "$PROJ"; then STATUS=0; else STATUS=$?; fi
+        assert_eq 0 "$STATUS" "$RC_ERROR"
+        assert_eq 1 "$RC_INVALID" "$tamper becomes an invalid blocking row"
+        if [ "$tamper" = fingerprint ]; then assert_contains "$(problems)" 'its to is not the content of its head'
+        else assert_contains "$(problems)" 'invalid receipt tokens or fields'; fi
+    fi
+    assert_eq '' "$(cat "$GH_STUB_DIR/requests")" 'tampered replay still makes no host call'
+done
 finish

@@ -256,9 +256,13 @@ it 'an owner or unnamed FAIL added after an approval and then removed stays bloc
 for reviewer in owner ''; do
     fresh; record "$B" T0; commit content; BEFORE="$(git rev-parse HEAD)"
     host; fx_owner_review 7 APPROVED "$BEFORE"
+    fx_activity 0000000000000000000000000000000000000000 "$BEFORE" '{"activity_type":"branch_creation","timestamp":"2026-01-01T00:00:00Z"}'
     printf '**Review**: round 1 · ignored · %s · FAIL\n' "$reviewer" >> "$B"; commit blocker
     record "$B" T0; commit removed
+    fx_activity "$BEFORE" "$(git rev-parse HEAD)" '{"timestamp":"2026-01-03T00:00:00Z"}'
     assert_eq "$(review_fingerprint "$PROJ" "$ID" "$BASE" "$BEFORE")" "$(review_fingerprint "$PROJ" "$ID" "$BASE" HEAD)"
     online; standing
+    assert_eq "$BEFORE" "$(printf '%s' "$OUTPUT" | jq -r .owner.head_at_submission)" 'approval is confirmed; only historical inclusion can block'
+    assert_eq APPROVED "$(printf '%s' "$OUTPUT" | jq -r .owner.state)"
 done
 finish

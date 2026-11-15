@@ -83,7 +83,7 @@ for flags in base since owner identity maker unknown fingerprint since-fingerpri
     case "$flags" in
         base) post --dry-run --base wip ;;
         since) post --dry-run --since HEAD ;;
-        owner) post --dry-run --reviewer owner --since HEAD~1 ;;
+        owner) post --dry-run --reviewer owner ;;
         identity) post --dry-run --reviewer Code ;;
         maker) post --dry-run --reviewer maker ;;
         unknown) post --dry-run --reviewer absent ;;
@@ -94,6 +94,7 @@ for flags in base since owner identity maker unknown fingerprint since-fingerpri
     esac
     assert_eq 1 "$STATUS" "$flags: $OUTPUT"
     assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
+    if [ "$flags" = owner ]; then assert_contains "$OUTPUT" 'the owner approves natively on the PR' 'owner refusal is independent of --since and registry eligibility'; fi
 done
 run bash "$PUB" 001-reviewed --pr "$PR" --reviewer code --verdict PASS --report https://example.invalid/report --head HEAD --dry-run
 assert_eq 1 "$STATUS" 'counts are required without --from-report'
