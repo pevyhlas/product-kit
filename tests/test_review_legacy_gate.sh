@@ -265,4 +265,32 @@ for reviewer in owner ''; do
     assert_eq "$BEFORE" "$(printf '%s' "$OUTPUT" | jq -r .owner.head_at_submission)" 'approval is confirmed; only historical inclusion can block'
     assert_eq APPROVED "$(printf '%s' "$OUTPUT" | jq -r .owner.state)"
 done
+
+it 'a NUL-bearing record with non-preserving awk is unavailable with one actionable path message'
+fresh; record "$B" T0
+printf 'ignored\000tail\n' >> "$B"; commit binary; host
+AWK_SHIM="$(mktemp -d)"; track_tmp "$AWK_SHIM"
+REAL_AWK="$(command -v awk)"; export REAL_AWK
+cat > "$AWK_SHIM/awk" <<'EOF'
+#!/usr/bin/env bash
+args=()
+for arg in "$@"; do
+    arg="${arg//sprintf\(\"%c\",0\)/\"\"}"
+    args+=("$arg")
+done
+exec "$REAL_AWK" "${args[@]}"
+EOF
+chmod +x "$AWK_SHIM/awk"
+run env PATH="$AWK_SHIM:$PATH" bash "$CHECK" --json --pr "$PR" --save-receipts .git/nul-snapshot "$ID"
+assert_eq 1 "$STATUS"
+assert_eq unavailable "$(printf '%s' "$OUTPUT" | jq -r .authority)"
+assert_eq 1 "$(printf '%s' "$OUTPUT" | jq '.problems|length')" 'no misleading generic history or blocker message'
+assert_contains "$OUTPUT" "$B: awk cannot read NUL bytes"
+assert_contains "$OUTPUT" 'run the gate with an awk that preserves them (for example gawk)'
+: > "$GH_STUB_DIR/requests"
+run env PATH="$AWK_SHIM:$PATH" bash "$CHECK" --json --receipts .git/nul-snapshot "$ID"
+assert_eq 1 "$STATUS"
+assert_eq unavailable "$(printf '%s' "$OUTPUT" | jq -r .authority)"
+assert_contains "$OUTPUT" "$B: awk cannot read NUL bytes"
+assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
 finish

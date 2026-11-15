@@ -7,6 +7,25 @@
 # All history/tree/blob reads are plumbing, with replacements and lazy fetch disabled.
 # shellcheck disable=SC2034 # Cache outputs and normalized receipt fields cross interfaces.
 
+review_legacy_awk_preserves_nul() { # caller-owned work directory; one probe per collect
+    local expected actual
+    printf 'left\000right' > "$1/awk-nul-input" || return 1
+    LC_ALL=C awk 'BEGIN { printf "%d", length(sprintf("%c",0)) }' > "$1/awk-nul-length" || return 1
+    LC_ALL=C awk '{ printf "%s", $0 }' "$1/awk-nul-input" > "$1/awk-nul-output" || return 1
+    [ "$(cat "$1/awk-nul-length")" = 1 ] || return 1
+    # Compare the complete byte streams through the same byte-preserving SHA-256 tool
+    # used for identities; neither NUL-bearing stream enters a shell variable.
+    expected="$(review_sha256 < "$1/awk-nul-input")" || return 1
+    actual="$(review_sha256 < "$1/awk-nul-output")" || return 1
+    [ "$expected" = "$actual" ]
+}
+
+_legacy_nul_error() { # collect output basename; propagate a subshell's specific failure
+    [ -f "$1.error" ] || return 0
+    LL_NUL_UNAVAILABLE=true
+    LL_NUL_ERROR="$(cat "$1.error")"
+}
+
 _legacy_tree() { # commit -> LL_TREE (raw NUL-delimited ls-tree entries)
     LL_TREE="$ll_work/tree-$1"
     if [ ! -f "$LL_TREE" ]; then
@@ -25,16 +44,28 @@ _legacy_entry() { # commit literal-path -> LL_ENTRY, empty for an absent path
     git -C "$ll_root" ls-tree -z "$1" -- ":(top,literal)$2" > "$ll_work/entry" || return 1
     IFS= read -r -d '' LL_ENTRY < "$ll_work/entry" || true
 }
-_legacy_lines() { # blob -> LL_LINES: active line text, never raw-text matching across sections
+_legacy_lines() { # blob path -> LL_LINES: active line text, never truncated NUL-bearing records
+    local status
     LL_LINES="$ll_work/lines-$1"
-    if [ ! -f "$LL_LINES" ]; then
+    if [ ! -f "$LL_LINES" ] || { ! $ll_awk_nul && [ ! -f "$ll_work/nul-free-$1" ]; }; then
         git -C "$ll_root" cat-file blob "$1" > "$ll_work/blob" || return 1
-        LC_ALL=C awk "$SPEC_SKIP_AWK"'
+        if ! $ll_awk_nul; then
+            if review_file_without_nul "$ll_work/blob"; then : > "$ll_work/nul-free-$1" || return 1
+            else
+                status=$?; [ "$status" -eq 1 ] || return 1
+                printf 'legacy scan unavailable: %s: awk cannot read NUL bytes; run the gate with an awk that preserves them (for example gawk)\n' "$2" > "$ll_error" || return 1
+                cat "$ll_error" >&2
+                return 1
+            fi
+        fi
+        if [ ! -f "$LL_LINES" ]; then
+            LC_ALL=C awk "$SPEC_SKIP_AWK"'
             { original=$0; gsub(/[\035-\037]/, " "); if (spec_skip($0)) next }
             /^## / { sec=$0; sub(/^##[[:space:]]+/, "", sec); next }
             sec=="State" && /^\*\*Review\*\*:/ { print original }
-        ' "$ll_work/blob" > "$LL_LINES.next" || return 1
-        mv "$LL_LINES.next" "$LL_LINES" || return 1
+            ' "$ll_work/blob" > "$LL_LINES.next" || return 1
+            mv "$LL_LINES.next" "$LL_LINES" || return 1
+        fi
     fi
 }
 _legacy_emit() { # path lines-file -> append blockers; range/link/fingerprint fields are never read
@@ -72,12 +103,15 @@ review_legacy_collect() ( # subshell contains Git environment and scratch output
     local start entry record_path blob parent fork commit parents bases status start_tree tree fork_tree unchanged
     local parent_blobs=()
     local LL_TREE LL_ENTRY LL_PATH LL_BLOB LL_LINES ll_rows
+    local ll_awk_nul=false ll_error="$output.error"
     export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
     set -o pipefail
     spec_objects_local "$ll_root" || return 1
     # A shallow boundary hides parents and their lines even if merge-base happens to succeed.
     [ "$(git -C "$ll_root" rev-parse --is-shallow-repository)" = false ] || return 1
     mkdir -p "$ll_work" || return 1
+    rm -f "$ll_error" || return 1
+    if review_legacy_awk_preserves_nul "$ll_work"; then ll_awk_nul=true; fi
     ll_rows="$(mktemp "$ll_work/rows.XXXXXX")" || return 1
     start="$(review_merge_base "$ll_root" "$base" "$head")" || return 1
     _legacy_tree "$start" || return 1; start_tree="$LL_TREE"
@@ -87,7 +121,7 @@ review_legacy_collect() ( # subshell contains Git environment and scratch output
         record_path="$LL_PATH"; blob="$LL_BLOB"
         _legacy_entry "$head" "$record_path" || return 1
         if [ "$record_path" = "specs/changes/$checked.md" ] || [ "$entry" != "$LL_ENTRY" ]; then
-            _legacy_lines "$blob" && _legacy_emit "$record_path" "$LL_LINES" || return 1
+            _legacy_lines "$blob" "$record_path" && _legacy_emit "$record_path" "$LL_LINES" || return 1
         fi
     done < "$start_tree"
     # (3) No pathspec: branch-side parents dropped by a merge resolution remain in the walk.
@@ -102,7 +136,7 @@ review_legacy_collect() ( # subshell contains Git environment and scratch output
             _legacy_tree "$fork" || return 1; fork_tree="$LL_TREE"
             while IFS= read -r -d '' entry; do
                 _legacy_record "$entry" || continue
-                _legacy_lines "$LL_BLOB" && cat "$LL_LINES" >> "$ll_work/fork-lines" || return 1
+                _legacy_lines "$LL_BLOB" "$LL_PATH" && cat "$LL_LINES" >> "$ll_work/fork-lines" || return 1
             done < "$fork_tree"
         done
         _legacy_tree "$commit" || return 1; tree="$LL_TREE"
@@ -121,9 +155,9 @@ review_legacy_collect() ( # subshell contains Git environment and scratch output
             $unchanged && continue
             cat "$ll_work/fork-lines" > "$ll_work/excluded" || return 1
             for parent in ${parent_blobs[@]+"${parent_blobs[@]}"}; do
-                _legacy_lines "$parent" && cat "$LL_LINES" >> "$ll_work/excluded" || return 1
+                _legacy_lines "$parent" "$record_path" && cat "$LL_LINES" >> "$ll_work/excluded" || return 1
             done
-            _legacy_lines "$blob" || return 1
+            _legacy_lines "$blob" "$record_path" || return 1
             LC_ALL=C awk 'FILENAME==ARGV[1] { seen[$0]=1; next } !($0 in seen)' \
                 "$ll_work/excluded" "$LL_LINES" > "$ll_work/introduced" || return 1
             _legacy_emit "$record_path" "$ll_work/introduced" || return 1
@@ -136,9 +170,10 @@ _legacy_evidence() { # root change base head rigor work -> LL_EVIDENCE (complete
     local key
     key="$(printf '%s\000%s\000%s' "$2" "$3" "$4" | review_sha256)" || return 1
     LL_EVIDENCE="$6/evidence-$key"
-    [ ! -f "$LL_EVIDENCE.unavailable" ] || return 1
+    if [ -f "$LL_EVIDENCE.unavailable" ]; then _legacy_nul_error "$LL_EVIDENCE"; return 1; fi
     if [ ! -f "$LL_EVIDENCE" ]; then
         if ! review_legacy_collect "$1" "$2" "$3" "$4" "$5" "$6/cache" "$LL_EVIDENCE" 2>/dev/null; then
+            _legacy_nul_error "$LL_EVIDENCE"
             : > "$LL_EVIDENCE.unavailable"
             return 1
         fi
@@ -151,10 +186,13 @@ review_legacy_resolve() { # root checked base head rigor registry work scoped-re
     local type seq origin review time receipt_id rchange rreviewer from to rhead since rbase base_at verdict c h m l report carried
     local LL_EVIDENCE OWNER_APPROVED_COMMIT="" owner_checked=false owner_valid=false
     LL_BLOCKERS=(); LL_PROBLEMS=(); LL_EMPTY_VALID=(); LL_EMPTY_ALLOWED=()
+    LL_NUL_UNAVAILABLE=false; LL_NUL_ERROR=""
     mkdir -p "$work" || { LL_PROBLEMS+=('legacy scan: cannot allocate history evidence'); return 1; }
     current="$work/current"
     if ! review_legacy_collect "$root" "$checked" "$base" "$head" "$rigor" "$work/cache" "$current" 2>/dev/null; then
-        LL_PROBLEMS+=('legacy scan: cannot read the complete local history, trees and record blobs; fetch the full history and objects before checking')
+        _legacy_nul_error "$current"
+        if $LL_NUL_UNAVAILABLE; then LL_PROBLEMS+=("$LL_NUL_ERROR")
+        else LL_PROBLEMS+=('legacy scan: cannot read the complete local history, trees and record blobs; fetch the full history and objects before checking'); fi
         return 1
     fi
     # Validate the empty full PASS exception at its own reviewed head. LL_EMPTY_VALID
@@ -216,6 +254,7 @@ review_legacy_resolve() { # root checked base head rigor registry work scoped-re
             fi
         fi
     done < "$current"
+    if $LL_NUL_UNAVAILABLE; then LL_PROBLEMS=("$LL_NUL_ERROR"); return 1; fi
 }
 
 review_legacy_json() {

@@ -123,7 +123,27 @@ run bash "$PUB" 001-reviewed --pr "$PR" --reviewer code --report https://example
 assert_eq 0 "$STATUS" 'report may supply verdict and counts'
 assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
 
+it 'a NUL-bearing report is refused rather than accepting a truncated verdict'
+fresh
+printf 'Verdict: PASS\000hidden text\nCounts: 0 critical, 0 high, 0 medium, 0 low\n' > .git/nul-report
+post --dry-run --from-report .git/nul-report
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" '--from-report contains NUL bytes'
+assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
+
+it 'publisher registry and Rigor blob inputs reject NUL before awk parsing'
+for policy in agents.md constitution.md; do
+    fresh
+    { git show "$BASE:.prdkit/memory/$policy"; printf '\000hidden\n'; } |
+        trusted_edit refs/remotes/origin/main ".prdkit/memory/$policy"
+    post --dry-run
+    assert_eq 1 "$STATUS" "$policy cannot be silently truncated"
+    assert_contains "$OUTPUT" 'contains NUL bytes'
+    assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
+done
+
 it 'malformed or trailing report text cannot supply a verdict'
+fresh
 for trailer in 'Counts: unreadable' 'Counts: 0 critical, 0 high, 0 medium, -1 low' 'trailing explanation'; do
     printf 'Verdict: PASS\n%s\n' "$trailer" > .git/report
     post --dry-run --from-report .git/report

@@ -44,10 +44,14 @@ AWK_SHIM="$(mktemp -d)"; track_tmp "$AWK_SHIM"
 REAL_AWK="$(command -v awk)"; export REAL_AWK
 cat > "$AWK_SHIM/awk" <<'EOF'
 #!/usr/bin/env bash
-# Model one-true-awk returning an empty string for its NUL sentinel on Linux too.
+# Model both the empty NUL sentinel and record truncation, independently.
 args=()
 for arg in "$@"; do
-    arg="${arg//sprintf\(\"%c\",0\)/\"\"}"
+    if [ "${AWK_SHIM_NUL_LENGTH:-0}" = 1 ]; then arg="${arg//sprintf\(\"%c\",0\)/\"x\"}"
+    else arg="${arg//sprintf\(\"%c\",0\)/\"\"}"; fi
+    if [ "${AWK_SHIM_TRUNCATE_NUL:-false}" = true ] && [[ "$arg" = *'$0'* ]]; then
+        arg='{ _shim_nul=sprintf("%c",0); if (_shim_nul!="" && (_shim_pos=index($0,_shim_nul))) $0=substr($0,1,_shim_pos-1) } '"$arg"
+    fi
     args+=("$arg")
 done
 exec "$REAL_AWK" "${args[@]}"
@@ -173,9 +177,50 @@ assert_eq no "$([ -e .git/textconv-called ] && echo yes || echo no)" 'no diff dr
 it 'raw blob and line identities preserve NUL bytes without passing them through shell variables'
 fresh
 printf '# Record\nignored\000bytes\n## State\n%s\000suffix\n' "$FAIL" > "$A"; commit binary
-scan; assert_eq 1 "$COUNT"
-DIGEST="$(printf 'prdkit-legacy\000001-original\000%s\000suffix' "$FAIL" | review_sha256)"
-assert_eq "${DIGEST:0:32}" "${FOUND%%$'\037'*}" 'identity includes every byte of the active line'
+if review_legacy_awk_preserves_nul "$CACHE"; then
+    scan; assert_eq 1 "$COUNT"
+    DIGEST="$(printf 'prdkit-legacy\000001-original\000%s\000suffix' "$FAIL" | review_sha256)"
+    assert_eq "${DIGEST:0:32}" "${FOUND%%$'\037'*}" 'identity includes every byte of the active line'
+else
+    run review_legacy_collect "$PROJ" "$CHECKED" "$BASE" HEAD "$RIGOR" "$CACHE" "$CACHE/result"
+    assert_eq 1 "$STATUS" 'non-preserving native awk must refuse binary records'
+    assert_eq no "$([ -f "$CACHE/result" ] && echo yes || echo no)" 'no partial result'
+    assert_contains "$OUTPUT" "$A: awk cannot read NUL bytes"
+    assert_contains "$OUTPUT" 'run the gate with an awk that preserves them (for example gawk)'
+fi
+
+it 'NUL suffixes remain distinct identities, or the scan refuses before the exclusion join'
+fresh; CHECKED=001-original
+printf '# Record\n## State\n%s\000first\n' "$FAIL" > "$A"; commit inherited
+BASE="$(git rev-parse HEAD)"
+printf '# Record\n## State\n%s\000second\n' "$FAIL" > "$A"; commit introduced
+if review_legacy_awk_preserves_nul "$CACHE"; then
+    scan; assert_eq 2 "$COUNT" 'a different NUL suffix cannot be excluded as the parent line'
+    for suffix in first second; do
+        DIGEST="$(printf 'prdkit-legacy\000001-original\000%s\000%s' "$FAIL" "$suffix" | review_sha256)"
+        assert_contains "$FOUND" "${DIGEST:0:32}"
+    done
+else
+    run review_legacy_collect "$PROJ" "$CHECKED" "$BASE" HEAD "$RIGOR" "$CACHE" "$CACHE/result"
+    assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" "$A: awk cannot read NUL bytes"
+fi
+
+it 'Linux also exercises refusal with an empty sentinel or a truncating record reader'
+for length in 0 1; do
+    fresh; record specs/changes/000-earlier.md "$FAIL"
+    printf '# Record\n## State\n%s\000hidden suffix\n' "$FAIL" > "$A"; commit binary
+    # Reuse a preserving reader's cache when available: cache reuse must not bypass the guard.
+    if review_legacy_awk_preserves_nul "$CACHE"; then scan; fi
+    PATH="$AWK_SHIM:$PATH" AWK_SHIM_NUL_LENGTH="$length" AWK_SHIM_TRUNCATE_NUL=true \
+        run review_legacy_awk_preserves_nul "$CACHE"
+    assert_eq 1 "$STATUS" 'both sentinel and byte-exact round-trip checks are required'
+    PATH="$AWK_SHIM:$PATH" AWK_SHIM_NUL_LENGTH="$length" AWK_SHIM_TRUNCATE_NUL=true \
+        run review_legacy_collect "$PROJ" "$CHECKED" "$BASE" HEAD "$RIGOR" "$CACHE" "$CACHE/refused"
+    assert_eq 1 "$STATUS"
+    assert_eq no "$([ -f "$CACHE/refused" ] && echo yes || echo no)" 'earlier blockers are not published as a partial scan'
+    assert_contains "$OUTPUT" "$A: awk cannot read NUL bytes"
+    assert_contains "$OUTPUT" 'run the gate with an awk that preserves them (for example gawk)'
+done
 
 it 'unreadable counts/verdicts block, including low counts; readable owner PASS needs no counts'
 fresh

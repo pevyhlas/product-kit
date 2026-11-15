@@ -21,13 +21,15 @@ review_receipts_policy() {
         RC_ERROR='No trusted receipt policy commit; establish origin/HEAD with its history fetched'; return 1
     fi
     for key in review-host review-publishers review-owner review-publisher-isolation; do
-        value="$( { git -C "$root" show "$at:.prdkit/memory/config.md" 2>/dev/null || true; } | awk "$SPEC_SKIP_AWK"'
+        value="$(set -o pipefail; { git -C "$root" show "$at:.prdkit/memory/config.md" 2>/dev/null || true; } | review_text_stream | awk "$SPEC_SKIP_AWK"'
             { if (spec_skip($0)) next }
             /^## / { section = $0; next }
             section == "## Configuration" && index($0, "- " key ":") == 1 {
                 n++; value = substr($0, length(key) + 4); gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
             }
-            END { if (n == 1) print value }' key="$key")"
+            END { if (n == 1) print value }' key="$key")" || {
+            RC_ERROR='Trusted receipt policy .prdkit/memory/config.md contains NUL bytes or cannot be read'; return 1
+        }
         case "$key" in
             review-host) [ "$value" = github ] || RC_ERROR='review-host must be github' ;;
             review-publisher-isolation)
@@ -259,7 +261,7 @@ review_receipts_write() { # destination; writer never changes RC_FILE
 review_receipts_read() { # snapshot work; no gh or jq, including on errors
     local file="$1" work="$2" header magic repo pr prhead created base fetched isolation author
     RC_ERROR=""; RC_IGNORED=0; RC_NOTES=(); RC_FILE="$work/receipts"
-    if [ ! -f "$file" ] || ! LC_ALL=C awk -F '\037' '
+    if [ ! -f "$file" ] || ! review_file_without_nul "$file" || ! LC_ALL=C awk -F '\037' '
         function digits(s) { return s ~ /^[0-9]+$/ }
         # Spell out digits for older mawk as well as BSD awk (no interval dependency).
         function timestamp(s) { return s ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/ }

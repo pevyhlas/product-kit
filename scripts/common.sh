@@ -32,6 +32,25 @@ is_change_id() {
     [[ "$1" =~ ^[0-9]{3,}-[a-z0-9]+(-[a-z0-9]+)*$ ]]
 }
 
+# Byte checks must not use awk or shell strings: either can discard NUL.
+# Return 0 for NUL-free input, 1 for NUL, 2 for an unreadable input/check failure.
+review_file_without_nul() (
+    set -o pipefail
+    local size kept
+    size="$(wc -c < "$1" | tr -d '[:space:]')" || return 2
+    kept="$(LC_ALL=C tr -d '\000' < "$1" | wc -c | tr -d '[:space:]')" || return 2
+    [ -n "$size" ] && [ -n "$kept" ] || return 2
+    [ "$size" = "$kept" ]
+)
+
+# Text-only policy/protocol inputs must reject NUL before any awk or shell decoding.
+review_text_stream() (
+    local file
+    file="$(mktemp)" || return 1
+    trap 'rm -f "$file"' EXIT
+    cat > "$file" && review_file_without_nul "$file" && cat "$file"
+)
+
 # Escape a UTF-8 value for embedding inside a double-quoted JSON string. Bash
 # strings cannot contain NUL; every other U+0001–U+001F control must be escaped.
 json_escape() {

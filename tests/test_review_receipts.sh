@@ -79,6 +79,14 @@ if review_receipts_policy "$PROJ" refs/remotes/origin/policy; then STATUS=0; els
 assert_eq 1 "$STATUS" 'duplicate policy key fails closed'
 review_receipts_policy "$PROJ" "$BASE"
 
+it 'NUL-bearing trusted receipt policy is rejected before awk can truncate it'
+{ git show "$BASE:.prdkit/memory/config.md"; printf '\000hidden\n'; } |
+    trusted_edit refs/remotes/origin/policy .prdkit/memory/config.md
+if review_receipts_policy "$PROJ" refs/remotes/origin/policy; then STATUS=0; else STATUS=$?; fi
+assert_eq 1 "$STATUS"
+assert_contains "$RC_ERROR" 'contains NUL bytes'
+review_receipts_policy "$PROJ" "$BASE"
+
 it 'a listed numeric Bot author authenticates a valid v3 review'
 receipt 7
 fetch
@@ -89,6 +97,11 @@ assert_eq '' "$(problems)"
 assert_eq 1 "$(wc -l < "$RC_COVERAGE" | tr -d ' ')"
 assert_contains "$(cat "$GH_STUB_DIR/requests")" 'graphql' 'reviews read through GraphQL'
 assert_contains "$(cat "$GH_STUB_DIR/requests")" '-f owner=owner -f name=repo -F number=7' 'GraphQL names stay strings while the PR number is typed'
+
+it 'a decoded host receipt NUL is rejected before normalized rows reach awk'
+reset_host; receipt 7 '.report="bad\u0000row"'; fetch
+assert_eq 1 "$RC_INVALID"
+assert_contains "$(problems)" 'missing or mistyped receipt field'
 
 it 'receipt submission times must be canonical whole-second UTC values'
 for submitted in '2026-01-02T00:00:00.5Z' '2026-01-02T00:00:00+00:00' 'not-a-timestamp'; do
@@ -395,6 +408,16 @@ it 'snapshot receipt submission times also fail closed without gh or jq'
 awk -F '\037' -v OFS='\037' 'NR==2 { $5="2026-01-02T00:00:00.5Z" } { print }' "$SNAPSHOT" > "$WORK/bad-time"
 OFFLINE_WORK="$(mktemp -d)"; track_tmp "$OFFLINE_WORK"
 if PATH="$TOOLS" review_receipts_read "$WORK/bad-time" "$OFFLINE_WORK"; then STATUS=0; else STATUS=$?; fi
+assert_eq 1 "$STATUS"
+assert_contains "$RC_ERROR" 'malformed receipt snapshot'
+assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
+
+it 'raw NUL in a snapshot is rejected before awk or shell row decoding'
+# Embed it in an otherwise valid header, not an extra invalid row: a truncating awk
+# and Bash read would otherwise accept the original numeric author id unchanged.
+{ IFS= read -r header; printf '%s\000\n' "$header"; cat; } < "$SNAPSHOT" > "$WORK/nul-snapshot"
+OFFLINE_WORK="$(mktemp -d)"; track_tmp "$OFFLINE_WORK"
+if PATH="$TOOLS" review_receipts_read "$WORK/nul-snapshot" "$OFFLINE_WORK"; then STATUS=0; else STATUS=$?; fi
 assert_eq 1 "$STATUS"
 assert_contains "$RC_ERROR" 'malformed receipt snapshot'
 assert_eq '' "$(cat "$GH_STUB_DIR/requests")"

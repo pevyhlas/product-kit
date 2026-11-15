@@ -175,6 +175,7 @@ legacy_receipts=""; LL_BLOCKERS=(); LL_EMPTY_VALID=(); LL_EMPTY_ALLOWED=()
 if $receipt_ready; then legacy_receipts="$RC_FILE"; fi
 if [ -n "$fp_base" ]; then
     review_legacy_resolve "$root" "$id" "$fp_base" "$head" "$rigor" "$registry" "$fp_cache/legacy" "$legacy_receipts" "$RC_PR" || true
+    [ "${LL_NUL_UNAVAILABLE:-false}" != true ] || authority=unavailable
     problems+=(${LL_PROBLEMS[@]+"${LL_PROBLEMS[@]}"})
 fi
 # Every **Tier** field in a record on stdin, one per line: T0-T3, or ? when its whole value (up to
@@ -261,13 +262,15 @@ changed_since() { # sha [pathspec...] -> paths changed from sha to head, outside
     git -C "$root" diff --name-only --no-renames --ignore-submodules=none "$sha" "$head" -- "$@" | tr '\n' ' ' | sed 's/ $//'
 }
 
-if git -C "$root" cat-file -e "$head:$path" 2>/dev/null; then
+if [ "${LL_NUL_UNAVAILABLE:-false}" = true ]; then : # Do not decode a record the scan cannot read.
+elif git -C "$root" cat-file -e "$head:$path" 2>/dev/null; then
     record_at="$head"
 elif last="$(git -C "$root" log -1 --format=%H "$head" -- "$path" 2>/dev/null)" && [ -n "$last" ] &&
     git -C "$root" cat-file -e "$last^:$path" 2>/dev/null; then
     record_at="$last^"
 fi
-if [ -z "$record_at" ]; then
+if [ "${LL_NUL_UNAVAILABLE:-false}" = true ]; then :
+elif [ -z "$record_at" ]; then
     hint=" (a shallow clone needs the branch history)"
     ! git -C "$root" cat-file -e "$head:specs/features/$id" 2>/dev/null ||
         hint=" (a 0.x feature the owner keeps open becomes a change record at the cutover or restructure; see .prdkit/workflows/compact.md)"

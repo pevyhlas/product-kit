@@ -48,10 +48,10 @@ base_at="$(git -C "$root" rev-parse --verify "$canonical^{commit}")" || refuse "
 policy_ref="$(spec_trusted_refs "$root" | sed -n 1p)"
 policy_at="$(git -C "$root" rev-parse --verify "$policy_ref^{commit}")"
 review_receipts_policy "$root" "$policy_at" || refuse "$RC_ERROR"
-registry="$( { git -C "$root" show "$policy_at:.prdkit/memory/agents.md" 2>/dev/null || true; } | review_registry)"
-rigor="$( { git -C "$root" show "$policy_at:.prdkit/memory/constitution.md" 2>/dev/null || true; } | tr -d '\r' | awk '
+registry="$( { git -C "$root" show "$policy_at:.prdkit/memory/agents.md" 2>/dev/null || true; } | review_text_stream | review_registry)" || refuse 'trusted registry contains NUL bytes or cannot be read'
+rigor="$( { git -C "$root" show "$policy_at:.prdkit/memory/constitution.md" 2>/dev/null || true; } | review_text_stream | tr -d '\r' | awk '
     { line=$0 } sub(/^[-*[:space:]]*[Rr]igor\**:\**[[:space:]]*/,"",line) { n++; value=tolower(line) }
-    END { if (n==1 && value ~ /^(light|full)([[:space:]]|$)/) { sub(/[[:space:]].*/,"",value); print value } else print "unknown" }')"
+    END { if (n==1 && value ~ /^(light|full)([[:space:]]|$)/) { sub(/[[:space:]].*/,"",value); print value } else print "unknown" }')" || refuse 'trusted constitution contains NUL bytes or cannot be read'
 [ "$rigor" != unknown ] || refuse 'the trusted constitution must name exactly one well-formed Rigor, light or full'
 work="$(mktemp -d)" || refuse 'cannot allocate publication work directory'
 trap 'rm -rf "$work"' EXIT
@@ -105,6 +105,7 @@ else
     case "$report" in *" · "*|*$'\n'*|*$'\r'*|*$'\037'*) refuse 'the report URL must be one field, with no line break or separator' ;; esac
     if [ -n "$from_report" ]; then
         [ -f "$from_report" ] || refuse "cannot read --from-report $from_report"
+        review_file_without_nul "$from_report" || refuse '--from-report contains NUL bytes or cannot be read'
         report_verdict="$(awk '{ sub(/\r$/,""); previous=last; last=$0 } END { print previous }' "$from_report")"
         report_counts="$(awk '{ sub(/\r$/,""); last=$0 } END { print last }' "$from_report")"
         [[ "$report_verdict" =~ ^Verdict:[[:space:]]+(PASS|FAIL)$ ]] || refuse 'the report must end with Verdict: PASS|FAIL and Counts: <n> critical, <n> high, <n> medium, <n> low'
