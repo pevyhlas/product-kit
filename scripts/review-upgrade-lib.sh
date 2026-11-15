@@ -426,11 +426,12 @@ upgrade_inventory_json() { # inventory rows -> JSON array, presentation only
     jq -Rn '[inputs | split("\u001f") | {id:.[0],change:.[1],path:.[2],line:(.[3]|tonumber),reviewer:.[4],verdict:.[5],reason:.[6]}]' < "$1"
 }
 
-upgrade_blockers_json() { # collect rows inventory-json -> JSON with optional raw line location
-    jq -Rn --slurpfile inventory "$2" '[inputs | split("\u001f") |
+upgrade_blockers_json() { # collect rows inventory-json [checked path] -> full-path presentation
+    jq -Rn --slurpfile inventory "$2" --arg path "${3:-}" --rawfile locations "$1.paths" '[inputs | split("\u001f") |
         {id:.[0],change:.[1],reviewer:.[2],reason:.[3]} |
-        . as $b | ([$inventory[0][] | select(.id==$b.id)][0] // {}) as $location |
-        . + {path:($location.path // ("specs/changes/"+.change+".md")),line:($location.line // null)}]' < "$1"
+        . as $b | ([$inventory[0][] | select(.id==$b.id and ($path=="" or .path==$path))][0] // {}) as $location |
+        ([$locations|split("\n")[]|split("\u001f")|select(.[0]==$b.id and ($path=="" or .[1]==$path))|.[1]][0]) as $origin |
+        . + {path:($location.path // $origin),line:($location.line // null)}]' < "$1"
 }
 
 upgrade_host_repo() {
@@ -468,15 +469,15 @@ upgrade_transition_report() (
     review_legacy_inventory "$TARGET" "$UP_POLICY_AT" "$UP_RIGOR" "$work/cache" "$work/inventory" || return 1
     upgrade_inventory_json "$work/inventory" > "$work/inventory.json" || return 1
     : > "$work/records.jsonl"; : > "$work/prs.jsonl"; : > "$work/notes.jsonl"
-    jq -r '.[].change' "$work/inventory.json" | LC_ALL=C sort -u > "$work/changes" || return 1
-    while IFS= read -r change; do
-        path="specs/changes/$change.md"
-        review_legacy_collect "$TARGET" "$change" "$UP_POLICY_AT" "$UP_POLICY_AT" "$UP_RIGOR" "$work/cache" "$work/blockers" || return 1
-        upgrade_blockers_json "$work/blockers" "$work/inventory.json" > "$work/blockers.json" || return 1
+    jq -r '.[].path' "$work/inventory.json" | LC_ALL=C sort -u > "$work/paths" || return 1
+    while IFS= read -r path; do
+        change="${path##*/}"; change="${change%.md}"
+        review_legacy_collect "$TARGET" "$change" "$UP_POLICY_AT" "$UP_POLICY_AT" "$UP_RIGOR" "$work/cache" "$work/blockers" "$path" || return 1
+        upgrade_blockers_json "$work/blockers" "$work/inventory.json" "$path" > "$work/blockers.json" || return 1
         jq -cn --arg change "$change" --arg path "$path" --slurpfile blockers "$work/blockers.json" --slurpfile inventory "$work/inventory.json" '
             {change:$change,path:$path,legacy_blockers:$blockers[0],
-             pass_lines:([$inventory[0][] | select(.change==$change and .verdict=="PASS")]|length)}' >> "$work/records.jsonl" || return 1
-    done < "$work/changes"
+             pass_lines:([$inventory[0][] | select(.path==$path and .verdict=="PASS")]|length)}' >> "$work/records.jsonl" || return 1
+    done < "$work/paths"
     note=''
     if ! command -v gh >/dev/null 2>&1; then note='Could not list open PRs: gh is missing; default-branch report is complete.'
     elif ! repo="$(upgrade_host_repo)"; then note='Could not list open PRs: origin is not a GitHub repository URL.'

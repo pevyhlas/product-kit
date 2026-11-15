@@ -549,4 +549,28 @@ assert_eq 1 "$STATUS" 'ignored PASS record refuses plain upgrade'
 assert_contains "$OUTPUT" 'checkout record specs/changes/001-ignored.md' 'refusal identifies the ignored record'
 assert_contains "$OUTPUT" 'nothing was written' 'refusal precedes install'
 assert_eq "$before" "$(tree_snapshot "$PROJ")" 'ignored record and complete target remain unchanged'
+it 'F4: nested records and duplicate basenames retain their paths and blocker identities'
+transition_project
+use_gh_stub
+mkdir -p "$PROJ/specs/changes/archive"
+printf '# Top\n## State\n%s\n' "$FAIL" > "$PROJ/specs/changes/001-work.md"
+printf '# Nested\n\n## State\n%s\n%s\n' "$FAIL" "$PASS" > "$PROJ/specs/changes/archive/001-work.md"
+commit_fixture records; trusted_tip
+upgrade --migrate-reviews --dry-run --json
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq 2 "$(printf '%s' "$OUTPUT" | jq .totals.records_with_blockers)" 'both record paths report blockers'
+assert_eq '["specs/changes/001-work.md","specs/changes/archive/001-work.md"]' "$(printf '%s' "$OUTPUT" | jq -c '[.records[].path]')" 'no nested path is rebuilt from a basename'
+assert_eq '["specs/changes/001-work.md","specs/changes/archive/001-work.md"]' "$(printf '%s' "$OUTPUT" | jq -c '[.records[].legacy_blockers[0].path]')" 'blocker locations keep full paths'
+assert_eq '[3,4]' "$(printf '%s' "$OUTPUT" | jq -c '[.records[].legacy_blockers[0].line]')" 'raw line locations are scoped by path'
+assert_eq '[0,1]' "$(printf '%s' "$OUTPUT" | jq -c '[.records[].pass_lines]')" 'PASS counts do not combine duplicate basenames'
+assert_eq 1 "$(printf '%s' "$OUTPUT" | jq '[.records[].legacy_blockers[0].id]|unique|length')" 'identical basename/text retains the existing blocker identity'
+upgrade --migrate-reviews --dry-run
+assert_eq 0 "$STATUS" "$OUTPUT"
+for path in specs/changes/001-work.md specs/changes/archive/001-work.md; do assert_contains "$OUTPUT" "Record $path:" 'text report retains record path'; done
+upgrade --migrate-reviews
+assert_eq 0 "$STATUS" "$OUTPUT"
+run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --check
+for path in specs/changes/001-work.md specs/changes/archive/001-work.md; do assert_contains "$OUTPUT" "Legacy 1.x blocking lines: $path (code: legacy FAIL)" 'check includes each full record path'; done
+run bash "$PROJ/.prdkit/scripts/bash/doctor.sh" --json
+for path in specs/changes/001-work.md specs/changes/archive/001-work.md; do assert_contains "$OUTPUT" "Legacy 1.x blocking lines: $path (code: legacy FAIL)" 'doctor includes each full record path'; done
 finish

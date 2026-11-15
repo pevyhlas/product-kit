@@ -2,7 +2,9 @@
 # Blocker-only 1.x history scan (design §4.1). Source after spec-lib.sh and
 # review-fingerprint-lib.sh. No verdict from this library is a coverage edge.
 # review_legacy_collect ROOT CHANGE BASE HEAD RIGOR WORK OUTPUT writes US-separated
-# id/change/reviewer/reason rows, or fails without publishing a partial result.
+# id/change/reviewer/reason rows plus OUTPUT.paths (id/path presentation metadata),
+# or fails without publishing a partial result. Optional argument 8 selects a full
+# checked-record path for inventory callers; gate callers retain the change-id API.
 # WORK is a caller-owned cache, shared by the current and clearance-head scans.
 # All history/tree/blob reads are plumbing, with replacements and lazy fetch disabled.
 # shellcheck disable=SC2034,SC2030,SC2031 # Shared outputs; each public scan intentionally confines its Git environment.
@@ -96,7 +98,7 @@ _legacy_identity() { # change lines-file active-index -> full digest, byte prese
 }
 
 _legacy_emit() { # path lines-file -> append blockers; range/link/fingerprint fields are never read
-    local change="${1##*/}" display_change number reviewer verdict reason digest
+    local change="${1##*/}" display_change display_path number reviewer verdict reason digest
     change="${change%.md}"
     review_legacy_classify "$2" "$ll_rigor" > "$ll_work/classified" || return 1
     while IFS=$'\037' read -r number reviewer verdict reason; do
@@ -104,7 +106,9 @@ _legacy_emit() { # path lines-file -> append blockers; range/link/fingerprint fi
         digest="$(_legacy_identity "$change" "$2" "$number")" || return 1
         # Presentation fields use the gate's row delimiter; identity always hashes the original bytes.
         display_change="$(printf '%s' "$change" | tr '\035-\037\n\r' ' ')" || return 1
+        display_path="$(printf '%s' "$1" | tr '\035-\037\n\r' ' ')" || return 1
         printf '%s\037%s\037%s\037%s\n' "${digest:0:32}" "$display_change" "$reviewer" "$reason" >> "$ll_rows" || return 1
+        printf '%s\037%s\n' "${digest:0:32}" "$display_path" >> "$ll_locations" || return 1
     done < "$ll_work/classified"
 }
 
@@ -138,9 +142,10 @@ review_legacy_inventory() ( # root at rigor work output
 
 review_legacy_collect() ( # subshell contains Git environment and scratch outputs
     local ll_root="$1" checked="$2" base="$3" head="$4" ll_rigor="$5" ll_work="$6" output="$7"
+    local checked_path="${8:-specs/changes/$2.md}"
     local start entry record_path blob parent fork commit parents bases status start_tree tree fork_tree unchanged
     local parent_blobs=()
-    local LL_TREE LL_ENTRY LL_PATH LL_BLOB LL_LINES ll_rows
+    local LL_TREE LL_ENTRY LL_PATH LL_BLOB LL_LINES ll_rows ll_locations
     local ll_awk_nul=false ll_error="$output.error"
     export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
     set -o pipefail
@@ -151,6 +156,7 @@ review_legacy_collect() ( # subshell contains Git environment and scratch output
     rm -f "$ll_error" || return 1
     if review_legacy_awk_preserves_nul "$ll_work"; then ll_awk_nul=true; fi
     ll_rows="$(mktemp "$ll_work/rows.XXXXXX")" || return 1
+    ll_locations="$ll_rows.paths"; : > "$ll_locations" || return 1
     start="$(review_merge_base "$ll_root" "$base" "$head")" || return 1
     _legacy_tree "$start" || return 1; start_tree="$LL_TREE"
     # (1) Checked record, and (2) inherited records not kept identical by path/mode/blob.
@@ -158,7 +164,7 @@ review_legacy_collect() ( # subshell contains Git environment and scratch output
         _legacy_record "$entry" || continue
         record_path="$LL_PATH"; blob="$LL_BLOB"
         _legacy_entry "$head" "$record_path" || return 1
-        if [ "$record_path" = "specs/changes/$checked.md" ] || [ "$entry" != "$LL_ENTRY" ]; then
+        if [ "$record_path" = "$checked_path" ] || [ "$entry" != "$LL_ENTRY" ]; then
             _legacy_lines "$blob" "$record_path" && _legacy_emit "$record_path" "$LL_LINES" || return 1
         fi
     done < "$start_tree"
@@ -201,7 +207,9 @@ review_legacy_collect() ( # subshell contains Git environment and scratch output
             _legacy_emit "$record_path" "$ll_work/introduced" || return 1
         done < "$tree"
     done < "$ll_work/commits"
-    LC_ALL=C awk -F '\037' '!seen[$1]++' "$ll_rows" > "$output.next" && mv "$output.next" "$output"
+    LC_ALL=C awk '!seen[$0]++' "$ll_locations" > "$output.paths.next" &&
+        LC_ALL=C awk -F '\037' '!seen[$1]++' "$ll_rows" > "$output.next" &&
+        mv "$output.paths.next" "$output.paths" && mv "$output.next" "$output"
 )
 
 _legacy_evidence() { # root change base head rigor work -> LL_EVIDENCE (complete scan only)
@@ -310,7 +318,7 @@ review_legacy_json() {
 # Read-only diagnostics for remaining 1.x debt. Both the checkout commit and the
 # trusted default tip are inspected; no host access or jq is required.
 review_legacy_record_findings() (
-    local root="$1" work at refs default rigor=unknown change identity reviewer reason ignored
+    local root="$1" work at refs default rigor=unknown change path identity reviewer reason ignored
     work="$(mktemp -d)" || { echo 'Legacy 1.x scan unavailable: cannot allocate scratch storage'; return 1; }
     trap 'rm -rf "$work"' EXIT
     set -o pipefail
@@ -324,15 +332,16 @@ review_legacy_record_findings() (
         if ! review_legacy_inventory "$root" "$at" "$rigor" "$work/cache" "$work/inventory"; then
             echo 'Legacy 1.x scan unavailable: fetch the complete local history and record blobs before checking'; return 1
         fi
-        awk -F '\037' 'NF { print $2 }' "$work/inventory" | LC_ALL=C sort -u > "$work/changes" || return 1
-        while IFS= read -r change; do
-            if ! review_legacy_collect "$root" "$change" "$at" "$at" "$rigor" "$work/cache" "$work/blockers"; then
+        awk -F '\037' 'NF { print $3 }' "$work/inventory" | LC_ALL=C sort -u > "$work/paths" || return 1
+        while IFS= read -r path; do
+            change="${path##*/}"; change="${change%.md}"
+            if ! review_legacy_collect "$root" "$change" "$at" "$at" "$rigor" "$work/cache" "$work/blockers" "$path"; then
                 echo 'Legacy 1.x scan unavailable: fetch the complete local history and record blobs before checking'; return 1
             fi
             while IFS=$'\037' read -r identity ignored reviewer reason; do
-                printf 'Legacy 1.x blocking lines: specs/changes/%s.md (%s: %s)\n' "$change" "$reviewer" "$reason" >> "$work/findings" || return 1
+                printf 'Legacy 1.x blocking lines: %s (%s: %s)\n' "$path" "$reviewer" "$reason" >> "$work/findings" || return 1
             done < "$work/blockers"
-        done < "$work/changes"
+        done < "$work/paths"
     done < "$work/tips"
     LC_ALL=C sort -u "$work/findings"
 )
