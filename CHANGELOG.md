@@ -10,6 +10,8 @@ change by change.
 
 ### Changed
 
+- internal: coverage engine moved to review-coverage-lib.sh; no behaviour change
+
 - **Review verdicts bind content fingerprints, not commit ranges (breaking; closes #66 and #86).**
   A verdict used to name a hand-typed `<base sha>..<head sha>` range and coverage was proven from
   commit ancestry, so a base merge, an edit reverted before a base merge (#86), a narrow range
