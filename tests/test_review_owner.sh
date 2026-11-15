@@ -147,4 +147,124 @@ for reviewer in owner ''; do
     approve "$B" '{"submittedAt":"2026-01-04T00:00:00Z"}'
     online; assert_eq 0 "$STATUS" "$OUTPUT"; assert_eq true "$(printf '%s' "$OUTPUT" | jq '.legacy_blockers[0].cleared')"
 done
+
+it 'approve-request-approve and dismissed approval variants follow the latest decisive state'
+fresh; approve
+fx_owner_review 7 CHANGES_REQUESTED "$A" '{"submittedAt":"2026-01-03T00:00:00Z"}'
+approve "$A" '{"submittedAt":"2026-01-04T00:00:00Z"}'
+online; assert_eq 0 "$STATUS" "$OUTPUT"
+fresh; approve
+fx_owner_review 7 DISMISSED "$A" '{"submittedAt":"2026-01-03T00:00:00Z"}'
+online; assert_eq 1 "$STATUS" 'a dismissed later approval is a barrier to the earlier one'
+assert_eq DISMISSED "$(printf '%s' "$OUTPUT" | jq -r .owner.state)"
+
+it 'activity pagination reads the deciding entry on page two and rejects a later page error'
+fresh; approve
+fx_activity "$A" "$A" '{"activity_type":"pr_merge","timestamp":"2026-01-01T12:00:00Z"}'
+GH_STUB_ACTIVITY_PAGE_SIZE=1; export GH_STUB_ACTIVITY_PAGE_SIZE
+online; assert_eq 0 "$STATUS" "$OUTPUT"
+assert_contains "$(cat "$GH_STUB_DIR/requests")" 'page activity page=2'
+run env GH_STUB_FAIL=activity-page-2 bash "$CHECK" --json --pr "$PR" 001-reviewed
+assert_eq 1 "$STATUS" 'a successful first page cannot hide an unreadable second page'
+assert_contains "$OUTPUT" '"authority":"unavailable"'
+run env GH_STUB_PARTIAL=activity bash "$CHECK" --json --pr "$PR" 001-reviewed
+assert_eq 1 "$STATUS" 'malformed activity is not an empty log'
+assert_contains "$OUTPUT" 'complete owner activity log'
+unset GH_STUB_ACTIVITY_PAGE_SIZE
+
+it 'all supported deciding types confirm the head, independent of fixture order'
+for kind in push force_push branch_creation pr_merge merge_queue_merge; do
+    fresh; approve
+    fx_activity "$A" "$A" "$(jq -cn --arg kind "$kind" '{activity_type:$kind,timestamp:"2026-01-01T12:00:00Z"}')"
+    jq reverse "$GH_STUB_DIR/activity.json" > .git/activity
+    mv .git/activity "$GH_STUB_DIR/activity.json"
+    online; assert_eq 0 "$STATUS" "$kind: $OUTPUT"
+done
+
+it 'a confirmed but missing approved commit names the exact fetch instead of passing by tokens'
+fresh; MISSING=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+approve "$MISSING"
+printf '[]\n' > "$GH_STUB_DIR/activity.json"
+fx_activity 0000000000000000000000000000000000000000 "$MISSING" '{"activity_type":"branch_creation","timestamp":"2026-01-01T00:00:00Z"}'
+fx_activity "$MISSING" "$A" '{"timestamp":"2026-01-03T00:00:00Z"}'
+online; assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "the owner approved $MISSING, which is not here; git fetch origin $MISSING"
+
+it 'reparenting identical content keeps approval, while an L1 edit lapses it'
+fresh; approve
+# A different parent, as after a rebase/squash, with exactly the approved tree.
+NEW_BASE="$(printf 'base advanced\n' | git commit-tree "$(git rev-parse "$BASE^{tree}")" -p "$BASE")"
+git update-ref refs/remotes/origin/main "$NEW_BASE"
+REBASED="$(printf 'rebased delivery\n' | git commit-tree "$(git rev-parse "$A^{tree}")" -p "$NEW_BASE")"
+git reset -q --hard "$REBASED"
+fx_activity "$A" "$REBASED" '{"activity_type":"force_push","timestamp":"2026-01-03T00:00:00Z"}'
+online; assert_eq 0 "$STATUS" "$OUTPUT"
+printf '# Architecture\nChanged contract.\n' > specs/architecture.md
+git add specs/architecture.md; git commit -qm L1
+online; assert_eq 1 "$STATUS" 'architecture specification edits need the owner again'
+assert_contains "$OUTPUT" 'L0/L1 spec changed'
+
+it 'native owner snapshots and structure previews never invoke gh or jq'
+fresh; approve; online --save-receipts .git/owner-offline
+assert_eq 0 "$STATUS" "$OUTPUT"
+TOOLS="$(mktemp -d)"; track_tmp "$TOOLS"
+sha_tool=sha256sum; command -v sha256sum >/dev/null 2>&1 || sha_tool=shasum
+for cmd in bash dirname basename git sed awk tr head tail grep cat mktemp rm mv mkdir wc sort "$sha_tool"; do
+    ln -s "$(command -v "$cmd")" "$TOOLS/$cmd"
+done
+: > "$GH_STUB_DIR/requests"
+run env PATH="$TOOLS" bash "$CHECK" --json --receipts .git/owner-offline 001-reviewed
+assert_eq 3 "$STATUS" "$OUTPUT"
+assert_eq "$A" "$(printf '%s' "$OUTPUT" | jq -r .owner.head_at_submission)"
+assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
+run env PATH="$TOOLS" bash "$CHECK" --json 001-reviewed
+assert_eq 1 "$STATUS" 'no source cannot approve or supply independent coverage'
+assert_contains "$OUTPUT" '"authority":"none"'
+assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
+
+it 'inherited owner and unnamed blockers clear on T0, record-only closing and a new carrier'
+for reviewer in owner ''; do
+    for mode in docs closing carrier; do
+        fresh; git reset -q --hard "$BASE"
+        mkdir -p specs/changes docs
+        printf '# Record\n**Tier**: T0\n## State\n**Review**: round 1 · ignored · %s · FAIL\n**Review**: round 2 · ignored · owner · PASS\n' "$reviewer" > specs/changes/001-reviewed.md
+        if [ "$mode" = docs ]; then
+            printf documentation > docs/guide.md; git add -A; git commit -qm docs
+            CHANGE=001-reviewed
+        else
+            git add specs/changes; git commit -qm inherited
+            git update-ref refs/remotes/origin/main HEAD
+            git rm -q specs/changes/001-reviewed.md
+            mkdir -p specs/log; printf -- '- 2026-01-01 001-reviewed: closed\n' > specs/log/001-reviewed.md
+            CHANGE=001-reviewed
+            if [ "$mode" = carrier ]; then
+                CHANGE=002-carrier
+                mkdir -p specs/changes
+                printf '# Carrier\n**Tier**: T1\n## State\n' > specs/changes/002-carrier.md
+                printf implementation > source.txt
+            fi
+            git add -A; git commit -qm "$mode"
+        fi
+        AT="$(git rev-parse HEAD)"; use_gh_stub; fx_pr 7 "$AT"
+        if [ "$mode" = carrier ]; then
+            run bash .prdkit/scripts/bash/publish-review.sh "$CHANGE" --pr "$PR" --reviewer code --verdict PASS --counts 0,0,0,0 --report https://example.invalid/report --head HEAD
+            assert_eq 0 "$STATUS" "$OUTPUT"
+        fi
+        run bash "$CHECK" --json --pr "$PR" "$CHANGE"
+        assert_eq 1 "$STATUS" "$mode waits for native approval"
+        assert_eq false "$(printf '%s' "$OUTPUT" | jq '.legacy_blockers[0].cleared')"
+        fx_activity 0000000000000000000000000000000000000000 "$AT" '{"activity_type":"branch_creation","timestamp":"2026-01-01T00:00:00Z"}'
+        fx_owner_review 7 DISMISSED "$AT"
+        run bash "$CHECK" --json --pr "$PR" "$CHANGE"
+        assert_eq 1 "$STATUS" 'dismissed approval cannot clear an inherited owner blocker'
+        fx_owner_review 7 APPROVED "$AT" '{"submittedAt":"2026-01-03T00:00:00Z"}'
+        run bash "$CHECK" --json --pr "$PR" --save-receipts .git/owner-clearance "$CHANGE"
+        assert_eq 0 "$STATUS" "$mode: $OUTPUT"
+        assert_eq true "$(printf '%s' "$OUTPUT" | jq '.legacy_blockers[0].cleared')"
+        : > "$GH_STUB_DIR/requests"
+        run env PATH="$TOOLS" bash "$CHECK" --json --receipts .git/owner-clearance "$CHANGE"
+        assert_eq 3 "$STATUS" "$mode snapshot: $OUTPUT"
+        assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
+    done
+done
 finish

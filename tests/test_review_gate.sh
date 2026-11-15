@@ -81,6 +81,29 @@ assert_eq 1 "$STATUS" 'no source grants no coverage'
 assert_contains "$OUTPUT" '"authority":"none"'
 assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
 
+it 'offline gate modes use only standard tools; either missing online tool fails unavailable'
+TOOLS="$(mktemp -d)"; track_tmp "$TOOLS"
+sha_tool=sha256sum; command -v sha256sum >/dev/null 2>&1 || sha_tool=shasum
+for cmd in bash dirname basename git sed awk tr head tail grep cat mktemp rm mv mkdir wc sort "$sha_tool"; do
+    ln -s "$(command -v "$cmd")" "$TOOLS/$cmd"
+done
+: > "$GH_STUB_DIR/requests"
+run env PATH="$TOOLS" bash "$CHECK" --json --receipts .git/receipts 001-reviewed
+assert_eq 3 "$STATUS" "$OUTPUT"
+assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
+run env PATH="$TOOLS" bash "$CHECK" --json 001-reviewed
+assert_eq 1 "$STATUS" 'structure-only mode cannot invent missing coverage'
+assert_contains "$OUTPUT" '"authority":"none"'
+assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
+for missing in gh jq; do
+    if [ "$missing" = gh ]; then ln -s "$(command -v jq)" "$TOOLS/jq"
+    else rm -f "$TOOLS/jq"; ln -s "$GH_STUB_DIR/bin/gh" "$TOOLS/gh"; fi
+    run env PATH="$TOOLS" bash "$CHECK" --json --pr "$PR" 001-reviewed
+    assert_eq 1 "$STATUS" "missing $missing cannot pass"
+    assert_contains "$OUTPUT" '"authority":"unavailable"'
+    assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
+done
+
 it 'contradictory source modes are usage errors'
 run bash "$CHECK" --pr "$PR" --receipts .git/receipts 001-reviewed
 assert_eq 2 "$STATUS"
@@ -163,6 +186,44 @@ publish 7 '.change="002-docs"|.verdict="FAIL"|.to="none"|.head="aaaaaaaaaaaaaaaa
 run bash "$CHECK" --json --pr "$PR" 002-docs
 assert_eq 1 "$STATUS" 'T0 FAIL blocks online'
 assert_contains "$OUTPUT" 'blocking verdict stands'
+
+it "a renamed carrier cannot drop another identity's FAIL, and foreign PASS never covers"
+git checkout -qb 003-original "$BASE"
+mkdir -p specs/changes
+printf '# Original\n**Tier**: T1\n## State\n' > specs/changes/003-original.md
+printf implementation > source.txt; git add -A; git commit -qm original
+use_gh_stub; fx_pr 7 "$(git rev-parse HEAD)"
+PUB="$PROJ/.prdkit/scripts/bash/publish-review.sh"
+run bash "$PUB" 003-original --pr "$PR" --reviewer code --verdict FAIL --counts 0,0,0,0 --report https://example.invalid/report --head HEAD
+assert_eq 0 "$STATUS" "$OUTPUT"
+git rm -q specs/changes/003-original.md
+mkdir -p specs/changes
+printf '# Carrier\n**Tier**: T1\n## State\n' > specs/changes/004-carrier.md
+mkdir -p specs/log; printf -- '- 2026-01-01 003-original: moved to carrier\n' > specs/log/003-original.md
+git add -A; git commit -qm carrier
+fx_pr 7 "$(git rev-parse HEAD)"
+printf '| security | reviewer |\n' >> .git/registry-fragment
+{ git show "$BASE:.prdkit/memory/agents.md"; cat .git/registry-fragment; } |
+    trusted_edit refs/remotes/origin/main .prdkit/memory/agents.md
+run bash "$PUB" 004-carrier --pr "$PR" --reviewer security --verdict PASS --counts 0,0,0,0 --report https://example.invalid/report --head HEAD
+assert_eq 0 "$STATUS" "$OUTPUT"
+run bash "$CHECK" --json --pr "$PR" 004-carrier
+assert_eq 1 "$STATUS" 'another reviewer covers the carrier but cannot clear the original FAIL'
+assert_contains "$OUTPUT" 'code 003-original blocking verdict stands'
+run bash "$PUB" 004-carrier --pr "$PR" --reviewer code --verdict PASS --counts 0,0,0,0 --report https://example.invalid/report --head HEAD
+assert_eq 0 "$STATUS" "$OUTPUT"
+run bash "$CHECK" --json --pr "$PR" 004-carrier
+assert_eq 0 "$STATUS" "$OUTPUT"
+printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
+run bash "$PUB" 003-original --pr "$PR" --reviewer code --verdict PASS --counts 0,0,0,0 --report https://example.invalid/report --head HEAD
+assert_eq 0 "$STATUS" "$OUTPUT"
+run bash "$CHECK" --json --pr "$PR" 004-carrier
+assert_eq 1 "$STATUS" 'foreign PASS supplies no carrier coverage'
+assert_contains "$OUTPUT" 'needs a recorded independent review'
+
+# Restore the T0 closing fixture for its independent preview-exit test.
+git checkout -q 002-docs
+use_gh_stub; fx_pr 7 "$(git rev-parse HEAD)"
 
 it 'close-change refuses a preview from its gate without changing source'
 # Deliberately replace the gate only in this disposable project to inject its exit contract.

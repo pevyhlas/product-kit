@@ -161,6 +161,20 @@ fetch
 assert_eq '' "$(problems)" 'later PASS clears despite reverse fixture order'
 assert_eq $'1009\n1010' "$(awk -F '\037' '{ print $4 }' "$RC_COVERAGE")"
 
+it 'same-second receipt order compares review ids numerically across digit lengths'
+reset_host; receipt 7 . '{"fullDatabaseId":"10000"}'
+receipt 7 '.verdict="FAIL"' '{"fullDatabaseId":"9999"}'
+fetch
+assert_eq '' "$(problems)" '10000 is later than 9999, not lexically earlier'
+assert_eq $'9999\n10000' "$(awk -F '\037' '{ print $4 }' "$RC_COVERAGE")"
+
+it 'neither retired receipt schema nor an owner relay can authenticate a verdict'
+for edit in '.schema="prdkit.review.v1"' '.reviewer="owner"'; do
+    reset_host; receipt 7 "$edit"; fetch
+    assert_eq 1 "$RC_INVALID"
+    assert_eq '' "$(cat "$RC_COVERAGE")"
+done
+
 it 'tokens are checked against base_at, not the current base tip; missing heads stand as authenticated tokens'
 reset_host; receipt 7 '.to="fp1:0000000000000000000000000000000000000000000000000000000000000000"'; fetch
 assert_eq 1 "$RC_INVALID"

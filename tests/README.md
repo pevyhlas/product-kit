@@ -40,7 +40,9 @@ same numeric id but typename `User`, while a posted review keeps the publisher's
 Every invocation and GraphQL page is appended to `requests`. Tests can empty it before an
 offline check and assert it stays empty. `GH_STUB_OFFLINE=true`, `GH_STUB_FAIL=<route>` and
 `GH_STUB_PARTIAL=<route>` inject failures (for example `pulls/7` or
-`graphql:PrdkitReviews`). `GH_STUB_PAGE_SIZE=1` exercises review cursor paging; a partial
+`graphql:PrdkitReviews`). `GH_STUB_PAGE_SIZE=1` exercises review cursor paging;
+`GH_STUB_ACTIVITY_PAGE_SIZE=1` pages the ascending activity stream and
+`GH_STUB_FAIL=activity-page-2` fails after a successful first page. A partial
 GraphQL stream stops with `hasNextPage:true`. Named operations are `PrdkitReviews` and
 `PrdkitViewer`. A JSON file under `routes/` overrides a route, replacing `/`, `?`, `&`, `=`
 and `:` with `_`; use it for malformed or non-advancing-cursor responses.

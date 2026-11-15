@@ -55,11 +55,30 @@ assert_not_contains "$(cat "$GH_STUB_DIR/requests")" 'pulls/7/reviews/1001' 'RES
 RECEIPT_ID="$(payload | jq -r .id)"
 assert_file ".prdkit/cache/receipts/7/$RECEIPT_ID.json"
 assert_eq "$RECEIPT_ID" "$(jq -r .id ".prdkit/cache/receipts/7/$RECEIPT_ID.json")"
+assert_eq "$RECEIPT_ID" "$(jq -r .id .prdkit/cache/receipts/7/reviews/1001.json)" 'review-id log points to the posted verdict'
 gate; assert_eq 0 "$STATUS" "$OUTPUT"
+
+it 'a second trusted integration ref cannot SIGPIPE a dry-run default-base match'
+fresh
+git show "$BASE:.prdkit/memory/config.md" | sed '/^## Configuration$/a\
+- review-integration-branches: origin/develop' | trusted_edit refs/remotes/origin/main .prdkit/memory/config.md
+post --dry-run
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
+
+it 'a failed POST keeps the write-ahead payload and never reports publication'
+fresh
+run env GH_STUB_FAIL=pulls/7/reviews bash "$PUB" 001-reviewed --pr "$PR" --reviewer code --verdict FAIL --counts 0,0,0,0 --report https://example.invalid/report --head HEAD
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'POST failed or its result is unknown'
+saved_log="$(printf '%s\n' "$OUTPUT" | sed 's/.*payload is retained at //;s/; inspect the PR before retrying$//')"
+assert_file "$saved_log"
+assert_eq FAIL "$(jq -r .verdict "$saved_log")"
+assert_not_contains "$OUTPUT" 'Published '
 
 it 'all b refusals occur without posting'
 fresh; git branch -f wip HEAD
-for flags in base since owner identity maker unknown fingerprint counts; do
+for flags in base since owner identity maker unknown fingerprint since-fingerprint counts report-field; do
     case "$flags" in
         base) post --dry-run --base wip ;;
         since) post --dry-run --since HEAD ;;
@@ -68,11 +87,17 @@ for flags in base since owner identity maker unknown fingerprint counts; do
         maker) post --dry-run --reviewer maker ;;
         unknown) post --dry-run --reviewer absent ;;
         fingerprint) post --dry-run --head fp1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;;
+        since-fingerprint) post --dry-run --since fp1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;;
         counts) post --dry-run --counts 0,0,-1,0 ;;
+        report-field) post --dry-run --report 'https://example.invalid/a · b' ;;
     esac
     assert_eq 1 "$STATUS" "$flags: $OUTPUT"
     assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
 done
+run bash "$PUB" 001-reviewed --pr "$PR" --reviewer code --verdict PASS --report https://example.invalid/report --head HEAD --dry-run
+assert_eq 1 "$STATUS" 'counts are required without --from-report'
+assert_contains "$OUTPUT" '--counts is required'
+assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
 
 it 'a posted review with unavailable GraphQL read-back retains its repair payload'
 fresh
@@ -96,10 +121,30 @@ run bash "$PUB" 001-reviewed --pr "$PR" --reviewer code --report https://example
 assert_eq 0 "$STATUS" 'report may supply verdict and counts'
 assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
 
+it 'malformed or trailing report text cannot supply a verdict'
+for trailer in 'Counts: unreadable' 'Counts: 0 critical, 0 high, 0 medium, -1 low' 'trailing explanation'; do
+    printf 'Verdict: PASS\n%s\n' "$trailer" > .git/report
+    post --dry-run --from-report .git/report
+    assert_eq 1 "$STATUS" "$trailer"
+    assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
+done
+
+it 'dry-run is JSON-only and leaves no publisher log even without gh on PATH'
+fresh; TOOLS="$(mktemp -d)"; track_tmp "$TOOLS"
+sha_tool=sha256sum; command -v sha256sum >/dev/null 2>&1 || sha_tool=shasum
+for cmd in bash dirname git sed awk tr head tail grep cat mktemp rm mv mkdir wc sort jq od "$sha_tool"; do
+    ln -s "$(command -v "$cmd")" "$TOOLS/$cmd"
+done
+logs_before="$(find .prdkit/cache/receipts -type f | sort)"
+run env PATH="$TOOLS" bash "$PUB" 001-reviewed --pr "$PR" --reviewer code --verdict PASS --counts 0,0,0,0 --report https://example.invalid/report --head HEAD --dry-run
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq "$logs_before" "$(find .prdkit/cache/receipts -type f | sort)"
+assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
+
 it 'read-back rejects wrong typename/id, edits and changed body, retaining the log'
 for overrides in '{"author":{"__typename":"User","databaseId":1001}}' \
     '{"author":{"databaseId":1005}}' '{"lastEditedAt":"2026-01-03T00:00:00Z"}' \
-    '{"editor":{"login":"admin"}}' '{"body":"corrupted"}'; do
+    '{"editor":{"login":"admin"}}' '{"body":"corrupted"}' '{"state":"APPROVED"}'; do
     fresh
     run env GH_STUB_POST_OVERRIDES="$overrides" bash "$PUB" 001-reviewed --pr "$PR" --reviewer code --verdict PASS --counts 0,0,0,0 --report https://example.invalid/report --head HEAD
     assert_eq 1 "$STATUS" "$OUTPUT"
@@ -108,6 +153,17 @@ for overrides in '{"author":{"__typename":"User","databaseId":1001}}' \
     saved="$(jq -r '.body|split("\n")[1]|fromjson|.id' "$GH_STUB_DIR/post-request.json")"
     assert_file ".prdkit/cache/receipts/7/$saved.json" 'write-ahead log survives failed verification'
 done
+
+it 'GraphQL must return the exact POST review database id'
+fresh; post
+assert_eq 0 "$STATUS" "$OUTPUT"
+gh api graphql --hostname github.com -f 'query=query PrdkitReviews { fixture }' -F owner=owner -F name=repo -F number=7 > .git/read-back
+jq '.data.repository.pullRequest.reviews.nodes[0].fullDatabaseId="9999"' .git/read-back > "$GH_STUB_DIR/routes/graphql_PrdkitReviews.json"
+post
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'GraphQL author, id, edit state or body did not verify'
+saved="$(jq -r '.body|split("\n")[1]|fromjson|.id' "$GH_STUB_DIR/post-request.json")"
+assert_file ".prdkit/cache/receipts/7/$saved.json"
 
 it 'required isolation refuses before POST, while viewer User still matches the bot numeric id'
 fresh; fx_pr 7 "$A" '{"user":{"id":1001},"author":{"databaseId":1001,"__typename":"Bot"}}'

@@ -136,8 +136,18 @@ case "$route" in
     pulls/[0-9]*) emit < "$GH_STUB_DIR/$route.json" ;;
     activity\?*|activity)
         # The real endpoint defaults to newest first; direction=asc is explicit.
-        if [[ "$endpoint" = *direction=asc* ]]; then jq 'sort_by(.timestamp,.id)' "$GH_STUB_DIR/activity.json" | emit
-        else jq 'sort_by(.timestamp,.id)|reverse' "$GH_STUB_DIR/activity.json" | emit; fi ;;
+        if [[ "$endpoint" = *direction=asc* ]]; then activity_order='sort_by(.timestamp,.id)'
+        else activity_order='sort_by(.timestamp,.id)|reverse'; fi
+        total="$(jq length "$GH_STUB_DIR/activity.json")"
+        size="${GH_STUB_ACTIVITY_PAGE_SIZE:-100}"; offset=0; page=1
+        while :; do
+            printf 'page activity page=%s offset=%s\n' "$page" "$offset" >> "$GH_STUB_DIR/requests"
+            if [ "${GH_STUB_FAIL:-}" = "activity-page-$page" ]; then exit 1; fi
+            jq --argjson offset "$offset" --argjson size "$size" \
+                "$activity_order | .[\$offset:(\$offset+\$size)]" "$GH_STUB_DIR/activity.json" | emit
+            offset=$((offset+size)); page=$((page+1))
+            if ! $paginate || [ "$offset" -ge "$total" ]; then break; fi
+        done ;;
     users/*) emit < "$GH_STUB_DIR/users/${route#users/}.json" ;;
     issues/comments/[0-9]*) emit < "$GH_STUB_DIR/$route.json" ;;
     *) echo "gh stub: no fixture route $route" >&2; exit 1 ;;
