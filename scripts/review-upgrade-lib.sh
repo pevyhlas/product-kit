@@ -2,7 +2,11 @@
 # Read-only 2.0 installer preflight. Sourced by init.sh; no host writes.
 # shellcheck disable=SC2034 # Installer and report outputs are shared across sourced files.
 upgrade_source_2() {
-    local major="${PK_VERSION%%.*}"
+    upgrade_version_2 "$PK_VERSION"
+}
+
+upgrade_version_2() {
+    local major="${1%%.*}"
     case "$major" in ''|*[!0-9]*) return 1 ;; esac
     [ "$major" -ge 2 ]
 }

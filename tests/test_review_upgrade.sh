@@ -261,4 +261,16 @@ assert_not_contains "$(cat "$GH_STUB_DIR/requests")" POST 'install never posts'
 run git -C "$PROJ" diff --exit-code HEAD -- specs/changes/
 assert_eq 0 "$STATUS" 'record bytes untouched during install'
 assert_eq 1 "$(git -C "$PROJ" ls-files specs/changes/ | wc -l | tr -d ' ')" 'no record created'
+it 'check and doctor list records with 1.x blockers, but not clean PASS-only records'
+commit_fixture upgraded
+mkdir -p "$PROJ/specs/changes"
+printf '# Clean\n## State\n%s\n' "$PASS" > "$PROJ/specs/changes/003-clean.md"
+commit_fixture clean
+run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --check
+assert_contains "$OUTPUT" 'Legacy 1.x blocking lines: specs/changes/001-merged-open.md (code: legacy FAIL)' 'check lists standing legacy debt'
+assert_not_contains "$OUTPUT" 'Legacy 1.x blocking lines: specs/changes/003-clean.md' 'clean PASS is not a blocker'
+run bash "$PROJ/.prdkit/scripts/bash/doctor.sh" --json
+assert_contains "$OUTPUT" 'Legacy 1.x blocking lines: specs/changes/001-merged-open.md' 'doctor JSON advisory names record'
+assert_not_contains "$OUTPUT" 'Legacy 1.x blocking lines: specs/changes/003-clean.md' 'doctor never turns PASS into a blocker'
+assert_not_contains "$(cat "$GH_STUB_DIR/requests")" POST 'diagnostics do not publish'
 finish

@@ -582,6 +582,10 @@ if $CHECK; then
     fi
     echo "Product-Kit check — kit version $PK_VERSION, installed $(head -n 1 "$MANIFEST")"
     echo
+    installed_version="$(install_manifest_value "$MANIFEST" version 2>/dev/null)" || installed_version=''
+    if upgrade_source_2 || upgrade_version_2 "$installed_version"; then
+        review_legacy_record_findings "$TARGET" || true
+    fi
 
     OUTDATED=()
     MODIFIED=()

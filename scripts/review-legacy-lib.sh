@@ -306,3 +306,33 @@ review_legacy_json() {
     done
     printf ']'
 }
+
+# Read-only diagnostics for remaining 1.x debt. Both the checkout commit and the
+# trusted default tip are inspected; no host access or jq is required.
+review_legacy_record_findings() (
+    local root="$1" work at refs default rigor=unknown change identity reviewer reason ignored
+    work="$(mktemp -d)" || { echo 'Legacy 1.x scan unavailable: cannot allocate scratch storage'; return 1; }
+    trap 'rm -rf "$work"' EXIT
+    set -o pipefail
+    refs="$(spec_trusted_refs "$root")" || return 1
+    default="$(printf '%s\n' "$refs" | sed -n 1p)"
+    if [ -n "$default" ]; then rigor="$(read_rigor "$default")"; fi
+    { git -C "$root" rev-parse --verify HEAD; [ -z "$default" ] || git -C "$root" rev-parse --verify "$default"; } > "$work/refs" || return 1
+    LC_ALL=C sort -u "$work/refs" > "$work/tips" || return 1
+    : > "$work/findings" || return 1
+    while IFS= read -r at; do
+        if ! review_legacy_inventory "$root" "$at" "$rigor" "$work/cache" "$work/inventory"; then
+            echo 'Legacy 1.x scan unavailable: fetch the complete local history and record blobs before checking'; return 1
+        fi
+        awk -F '\037' 'NF { print $2 }' "$work/inventory" | LC_ALL=C sort -u > "$work/changes" || return 1
+        while IFS= read -r change; do
+            if ! review_legacy_collect "$root" "$change" "$at" "$at" "$rigor" "$work/cache" "$work/blockers"; then
+                echo 'Legacy 1.x scan unavailable: fetch the complete local history and record blobs before checking'; return 1
+            fi
+            while IFS=$'\037' read -r identity ignored reviewer reason; do
+                printf 'Legacy 1.x blocking lines: specs/changes/%s.md (%s: %s)\n' "$change" "$reviewer" "$reason" >> "$work/findings" || return 1
+            done < "$work/blockers"
+        done < "$work/changes"
+    done < "$work/tips"
+    LC_ALL=C sort -u "$work/findings"
+)
