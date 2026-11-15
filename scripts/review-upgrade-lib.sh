@@ -68,13 +68,22 @@ upgrade_record_lines() { # root rev output work
 }
 
 upgrade_plain_guard() (
-    local work
+    local work path
     work="$(mktemp -d)" || return 1
     trap 'rm -rf "$work"' EXIT
     [ -n "$UP_POLICY_AT" ] || { echo 'No trusted integration base: establish origin/HEAD with its history fetched.' >&2; return 1; }
     upgrade_record_lines "$TARGET" "$UP_POLICY_AT" "$work/trusted" "$work/a" || return 1
-    # Include uncommitted checkout records as well as HEAD. P1 already requires them clean,
-    # so HEAD is an exact, raw-object representation, not a diff-driver-dependent text read.
+    # Ordinary status omits ignored records. Do not treat HEAD as the checkout
+    # inventory until every extra checkout record has been explicitly reconciled.
+    git -C "$TARGET" ls-files --others --exclude-standard -z -- specs/changes/ > "$work/extra" || return 1
+    git -C "$TARGET" ls-files --others --ignored --exclude-standard -z -- specs/changes/ >> "$work/extra" || return 1
+    while IFS= read -r -d '' path; do
+        case "$path" in *.md) ;; *) continue ;; esac
+        if [ -f "$TARGET/$path" ] && [ ! -L "$TARGET/$path" ]; then
+            echo "Untracked or ignored checkout record $path must be reconciled before plain 2.0 upgrade; nothing was written." >&2
+            return 1
+        fi
+    done < "$work/extra"
     upgrade_record_lines "$TARGET" HEAD "$work/checkout" "$work/b" || return 1
     if [ -s "$work/trusted" ] || [ -s "$work/checkout" ]; then
         cat "$work/trusted" "$work/checkout" | LC_ALL=C sort -u >&2

@@ -536,4 +536,17 @@ for root in AGENTS.md .gitignore; do
     assert_eq "$before" "$(tree_snapshot "$PROJ")" 'record collision mutates no target path'
     assert_eq "$records_before" "$(tree_snapshot "$PROJ/specs/changes")" 'all record entries preserved'
 done
+it 'F3: an ignored checkout record cannot silently cross the plain 2.0 transition'
+transition_project
+printf '\nspecs/changes/\n' >> "$PROJ/.gitignore"
+commit_fixture ignore
+mkdir -p "$PROJ/specs/changes"
+printf '# Ignored\n## State\n%s\n' "$PASS" > "$PROJ/specs/changes/001-ignored.md"
+assert_eq '' "$(git -C "$PROJ" status --porcelain)" 'ignored record is invisible to ordinary status'
+before="$(tree_snapshot "$PROJ")"
+upgrade
+assert_eq 1 "$STATUS" 'ignored PASS record refuses plain upgrade'
+assert_contains "$OUTPUT" 'checkout record specs/changes/001-ignored.md' 'refusal identifies the ignored record'
+assert_contains "$OUTPUT" 'nothing was written' 'refusal precedes install'
+assert_eq "$before" "$(tree_snapshot "$PROJ")" 'ignored record and complete target remain unchanged'
 finish
