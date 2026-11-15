@@ -22,6 +22,9 @@
 #                   unmodified templates/memory, add new files. Consumer edits to
 #                   templates/memory are preserved and listed; edits to kit-owned
 #                   commands/scripts are overwritten (and called out in the output).
+#   --migrate-reviews  With --upgrade to 2.0: accept fresh native reviews, report 1.x blockers
+#   --dry-run       With --upgrade --migrate-reviews: preflight and report only; install nothing
+#   --json          With --dry-run: machine-readable transition report
 #   --with NAME     Also install an optional subsystem (agent-tiers: render-agents.sh and the
 #                   neutral agent-definition template). The manifest records the choice and
 #                   later runs keep it; a project that uses agent tiers (.prdkit/agents/*.md
@@ -48,6 +51,12 @@ SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PK_ROOT="$(CDPATH="" cd "$SCRIPT_DIR/.." && pwd -P)"
 source "$SCRIPT_DIR/install-lib.sh"
 source "$SCRIPT_DIR/spec-lib.sh"
+source "$SCRIPT_DIR/common.sh"
+source "$SCRIPT_DIR/review-policy-lib.sh"
+source "$SCRIPT_DIR/review-fingerprint-lib.sh"
+source "$SCRIPT_DIR/review-receipts-lib.sh"
+source "$SCRIPT_DIR/review-legacy-lib.sh"
+source "$SCRIPT_DIR/review-upgrade-lib.sh"
 
 PK_VERSION="unknown"
 [ -f "$PK_ROOT/VERSION" ] && PK_VERSION="$(head -n 1 "$PK_ROOT/VERSION" | tr -d '[:space:]')"
@@ -62,12 +71,17 @@ TARGET=""
 HARNESS_RAW=""
 WITH_RAW=""
 WITHOUT_RAW=""
+MIGRATE_REVIEWS=false; DRY_RUN=false; JSON=false
+IGNORE_ENTRIES=".prdkit/ledger/ .prdkit/cache/ .prdkit/retrospective/ .worktrees/ .prdkit/.install-lock .prdkit/.install-state"
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --copy) MODE_COPY=true; MODE_EXPLICIT=true ;;
         --symlink) MODE_COPY=false; MODE_EXPLICIT=true ;;
         --upgrade) UPGRADE=true ;;
+        --migrate-reviews) MIGRATE_REVIEWS=true ;;
+        --dry-run) DRY_RUN=true ;;
+        --json) JSON=true ;;
         --check) CHECK=true ;;
         --force) FORCE=true ;;
         --harness)
@@ -94,6 +108,13 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+if { $MIGRATE_REVIEWS && { ! $UPGRADE || ! upgrade_source_2; }; } ||
+    { $DRY_RUN && ! $MIGRATE_REVIEWS; } || { $JSON && ! $DRY_RUN; } ||
+    { $CHECK && { $MIGRATE_REVIEWS || $DRY_RUN; }; }; then
+    echo 'Usage: init.sh --upgrade --migrate-reviews [--dry-run [--json]] (requires kit 2.0 or newer)' >&2
+    exit 2
+fi
 
 # --- Resolve target project root ---
 if [ -z "$TARGET" ]; then
@@ -544,6 +565,10 @@ list_retired_ci_calls() {
 }
 
 # --- --check: read-only drift report ----------------------------------------
+if upgrade_source_2 && { $UPGRADE || $CHECK; }; then
+    upgrade_policy_context
+    upgrade_rigor_diagnosis || { if $MIGRATE_REVIEWS; then exit 1; fi; }
+fi
 if $CHECK; then
     incomplete=false
     if [ -e "$PRDKIT_DIR/.install-state" ] || [ -L "$PRDKIT_DIR/.install-state" ]; then
@@ -695,6 +720,16 @@ if $CHECK; then
     if [ "$drift" -eq 0 ]; then echo "The install is up to date; fix the references listed above by hand."
     else echo "Run 'bash .product-kit/scripts/init.sh --upgrade' to apply the safe changes."; fi
     exit 1
+fi
+
+if upgrade_source_2 && $UPGRADE; then
+    upgrade_preflight || exit 1
+    if ! $MIGRATE_REVIEWS; then upgrade_plain_guard || exit 1; fi
+    if $DRY_RUN; then
+        if $JSON; then printf '{"policy_at":"%s","records":[],"open_prs":[]}\n' "$UP_POLICY_AT"
+        else echo 'Review transition preflight passed; no files installed.'; fi
+        exit 0
+    fi
 fi
 
 # --- Install / upgrade -------------------------------------------------------
@@ -1059,7 +1094,6 @@ fi
 # ignored and never enters a routine add. Seeding them here means no later command has to mutate a tracked
 # .gitignore mid-run (which would dirty the tree it is about to check). A symlinked .gitignore is
 # edited at its target only while that stays inside the project.
-IGNORE_ENTRIES=".prdkit/ledger/ .prdkit/cache/ .prdkit/retrospective/ .worktrees/ .prdkit/.install-lock .prdkit/.install-state"
 record_progress ignore .gitignore
 if GITIGNORE="$(root_file_path .gitignore)"; then
     for ignore_entry in $IGNORE_ENTRIES; do
