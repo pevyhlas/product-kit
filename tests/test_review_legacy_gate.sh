@@ -146,7 +146,7 @@ online; standing; assert_contains "$OUTPUT" '"record_only":true'
 host; publish security; online; standing
 printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
 publish code; online --save-receipts .git/snapshot; cleared
-assert_contains "$OUTPUT" '"reviews":[]' 'clearance contributes no coverage verdict or edge'
+assert_eq "start..$REVIEW_FP_EMPTY" "$(printf '%s' "$OUTPUT" | jq -r '.reviews[]|select(.reviewer=="code")|.range')" 'empty clearance retains its start-to-start verdict without a coverage edge'
 assert_eq "$REVIEW_FP_EMPTY" "$(jq -r '.[-1].body|split("\n")[1]|fromjson|.to' "$GH_STUB_DIR/reviews/7.json")"
 : > "$GH_STUB_DIR/requests"
 run bash "$CHECK" --json --receipts .git/snapshot "$ID"
@@ -162,6 +162,48 @@ done
 run env PATH="$TOOLS" bash "$CHECK" --json --receipts .git/snapshot "$ID"
 assert_eq 3 "$STATUS" 'empty-content clearance is a jq-free, gh-free snapshot preview'
 assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
+
+it 'adding content expires empty clearance without turning the receipt into a blocker'
+EMPTY_HEAD="$(git rev-parse HEAD)"
+printf implementation > source.txt; commit 'add content after empty clearance'
+online; standing
+assert_contains "$OUTPUT" '"record_only":false'
+assert_contains "$OUTPUT" '"invalid_receipts":0'
+assert_not_contains "$OUTPUT" 'empty-content clearance requires' 'the historical empty PASS is not invalidated'
+assert_not_contains "$OUTPUT" ' is empty' 'start-to-start is not a permanently invalid range'
+assert_contains "$OUTPUT" 'the recorded ranges do not chain' 'the empty PASS grants no coverage edge'
+# Another reviewer supplies coverage, but only R can clear the legacy blocker from R.
+publish security; online --save-receipts .git/content-snapshot; standing
+assert_eq 1 "$(printf '%s' "$OUTPUT" | jq '.problems|length')" 'only the standing legacy blocker remains; the latest start for R is covered'
+assert_contains "$(printf '%s' "$OUTPUT" | jq -r '.problems[0]')" 'legacy blocker'
+: > "$GH_STUB_DIR/requests"
+run env PATH="$TOOLS" bash "$CHECK" --json --receipts .git/content-snapshot "$ID"
+standing
+assert_eq 1 "$(printf '%s' "$OUTPUT" | jq '.problems|length')" 'snapshot also treats the old empty PASS as non-blocking'
+assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
+
+it 'a later native full PASS clears the restored blocker and supersedes the empty verdict'
+publish code; online --save-receipts .git/full-snapshot; cleared
+FULL_FP="$(review_fingerprint "$PROJ" "$ID" "$BASE" HEAD)"
+assert_eq "start..$FULL_FP" "$(printf '%s' "$OUTPUT" | jq -r '.reviews[]|select(.reviewer=="code")|.range')" 'the later full PASS is the latest covered verdict for R'
+assert_contains "$OUTPUT" '"receipts":3' 'the earlier empty receipt remains in the authenticated history'
+assert_eq '[]' "$(printf '%s' "$OUTPUT" | jq -c '.problems')"
+: > "$GH_STUB_DIR/requests"
+run env PATH="$TOOLS" bash "$CHECK" --json --receipts .git/full-snapshot "$ID"
+assert_eq 3 "$STATUS" 'the full-PASS repair also succeeds in a jq-free snapshot preview'
+assert_eq true "$(printf '%s' "$OUTPUT" | jq '.legacy_blockers[0].cleared')"
+assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
+
+it 'a latest start-to-start receipt is covered by ordinary start coverage and adds no edge'
+publish code "$ID" "$EMPTY_HEAD"; online; cleared
+assert_eq "start..$REVIEW_FP_EMPTY" "$(printf '%s' "$OUTPUT" | jq -r '.reviews[]|select(.reviewer=="code")|.range')" 'the latest-covered rule sees the empty receipt, not a silently retained older verdict'
+printf '\nmore content\n' >> source.txt; commit 'unreviewed content after full PASS'
+online
+assert_eq 1 "$STATUS" 'an empty latest verdict cannot cover subsequently added content'
+assert_eq true "$(printf '%s' "$OUTPUT" | jq '.legacy_blockers[0].cleared')" 'the earlier non-empty full PASS still clears through its own B-H2 scan'
+assert_contains "$OUTPUT" 'the recorded ranges do not chain' 'coverage, not an empty-receipt validity problem, fails'
+assert_not_contains "$OUTPUT" 'empty-content clearance requires'
+assert_not_contains "$OUTPUT" ' is empty'
 
 it 'empty narrow PASS is refused and cannot clear'
 fresh; ID=001-original; record "$A" T1 "$FAIL"; commit inherited

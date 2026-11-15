@@ -153,32 +153,34 @@ review_legacy_resolve() { # root checked base head rigor registry work scoped-re
     local identity change reviewer reason cleared current row evidence current_fp="" empty_ok
     local type seq origin review time receipt_id rchange rreviewer from to rhead since rbase base_at verdict c h m l report carried
     local LL_EVIDENCE OWNER_APPROVED_COMMIT="" owner_checked=false owner_valid=false
-    LL_BLOCKERS=(); LL_PROBLEMS=(); LL_EMPTY_ALLOWED=()
+    LL_BLOCKERS=(); LL_PROBLEMS=(); LL_EMPTY_VALID=(); LL_EMPTY_ALLOWED=()
     mkdir -p "$work" || { LL_PROBLEMS+=('legacy scan: cannot allocate history evidence'); return 1; }
     current="$work/current"
     if ! review_legacy_collect "$root" "$checked" "$base" "$head" "$rigor" "$work/cache" "$current" 2>/dev/null; then
         LL_PROBLEMS+=('legacy scan: cannot read the complete local history, trees and record blobs; fetch the full history and objects before checking')
         return 1
     fi
-    # Empty content is clearance-only. Accept the full PASS exception only if this
-    # reviewer actually has a blocker in the allowed scope at its reviewed head.
-    # No such receipt enters the coverage arrays, even at T0 or in record-only mode.
+    # Validate the empty full PASS exception at its own reviewed head. LL_EMPTY_VALID
+    # retains those start-to-start verdicts for the ordinary latest-covered rule;
+    # they add no coverage edge. LL_EMPTY_ALLOWED separately enables their legacy
+    # clearance only while the currently checked change still has empty content.
     if [ -n "$receipts" ]; then
         while IFS=$'\037' read -r type seq origin review time receipt_id rchange rreviewer from to rhead since rbase base_at verdict c h m l report carried; do
             [ "$type" = R ] && [ "$origin" = "$pr" ] && [ "$to" = "$REVIEW_FP_EMPTY" ] || continue
             _receipts_blocking "$verdict" "$c" "$h" "$m" "$rigor" && continue
             empty_ok=false
             if [ "$from" = start ] && [ "$(review_eligibility "$registry" "$rreviewer")" = reviewer ]; then
-                if [ -z "$current_fp" ]; then current_fp="$(review_fingerprint "$root" "$checked" "$base" "$head")" || current_fp=unavailable; fi
-                if [ "$current_fp" = "$REVIEW_FP_EMPTY" ] &&
-                    _legacy_evidence "$root" "$rchange" "$base_at" "$rhead" "$rigor" "$work"; then
+                if _legacy_evidence "$root" "$rchange" "$base_at" "$rhead" "$rigor" "$work"; then
                     while IFS=$'\037' read -r identity change reviewer reason; do
                         if [ "$reviewer" = "$rreviewer" ] && { [ "$change" = "$rchange" ] || [ "$rchange" = "$checked" ]; }; then empty_ok=true; break; fi
                     done < "$LL_EVIDENCE"
                 fi
             fi
-            if $empty_ok; then LL_EMPTY_ALLOWED+=("$seq")
-            else LL_PROBLEMS+=("receipt review $review: empty-content clearance requires a full PASS for this reviewer's legacy blocker, with available reviewed history and no fingerprinted content"); fi
+            if $empty_ok; then
+                LL_EMPTY_VALID+=("$seq")
+                if [ -z "$current_fp" ]; then current_fp="$(review_fingerprint "$root" "$checked" "$base" "$head")" || current_fp=unavailable; fi
+                [ "$current_fp" != "$REVIEW_FP_EMPTY" ] || LL_EMPTY_ALLOWED+=("$seq")
+            else LL_PROBLEMS+=("receipt review $review: empty-content clearance requires a full PASS for this reviewer's legacy blocker, with available reviewed history at its empty head"); fi
         done < "$receipts"
     fi
     while IFS=$'\037' read -r identity change reviewer reason; do

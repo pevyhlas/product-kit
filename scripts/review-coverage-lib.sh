@@ -9,6 +9,8 @@
 # review_coverage_require_start requires a prior review_coverage_evaluate call, which defines
 # the nested covered() and sets independent, owner and fp_ready.
 # Inputs: verdict arrays v_rev, v_round, v_from, v_to, v_verdict, v_c, v_h, v_m and latest;
+# optional v_empty_clearance marks validated empty-content full PASS receipts. Their
+# start-to-start range grants no edge, but its end participates in latest coverage.
 # context root, id, rigor, fp_base, head, start, record_only, tier, policy_at, base_ref,
 # fp_cache, shallow_hint, registry, REVIEW_FP_EMPTY and REVIEW_L01_PATHSPECS. The caller also
 # owns v_l, v_link, v_line and order; verdict arrays, rows and notes are not modified here.
@@ -227,7 +229,9 @@ review_coverage_evaluate() {
         from_fp=""
         if resolve_token "$from" full; then from_fp="$tok_fp"; else problems+=("$label: $tok_err"); fi
         if ! resolve_token "$to" full; then problems+=("$label: $tok_err"); continue; fi
-        if [ "$from_fp" = "$tok_fp" ]; then problems+=("$label: the range $from..$to is empty"); continue; fi
+        if [ "$from_fp" = "$tok_fp" ] && [ "${v_empty_clearance[i]:-false}" != true ]; then
+            problems+=("$label: the range $from..$to is empty"); continue
+        fi
         covered "$tok_fp" && continue
         if [ -n "$tok_commit" ]; then
             later="$(review_stream_paths "$fp_cache/$tok_commit.full.stream" "$head_stream" | tr '\n' ' ' | sed 's/ $//')"

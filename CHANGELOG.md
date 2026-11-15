@@ -15,6 +15,9 @@ change by change.
   parent. Legacy PASS text grants no independent coverage. A blocker needs its reviewer's clean
   full PASS receipt on this PR, with a historical scan proving the review included it; an
   empty-content full PASS can clear a record-only closing change without adding a coverage edge.
+  Adding content expires that clearance without invalidating the empty receipt; a later clean
+  full PASS can clear the blocker normally. The empty receipt participates in latest-covered
+  checks as a start-to-start verdict and never becomes a permanent obstacle.
   Blockers apply in every tier and preview mode. Owner and unnamed blockers fail closed pending
   the native owner adapter. JSON lists blocker identities, origins, reasons and clearance state.
 

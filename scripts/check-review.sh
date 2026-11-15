@@ -67,7 +67,7 @@ $base_trusted || import_base=""
 problems=(); rows=(); tier=""; rigor=""; record_at=""; record_only=false; start=""; notes=()
 sep37="$(printf '\037')"; head_fp=""; fp_ready=false
 v_line=(); v_rev=(); v_round=(); v_from=(); v_to=(); v_verdict=(); v_c=(); v_h=(); v_m=(); v_l=(); v_link=()
-v_receipt=(); v_receipt_head=()
+v_receipt=(); v_receipt_head=(); v_empty_clearance=()
 authority=none; pr_head=""; head_is_pr_head=false; publisher_isolation=""
 [ -z "$receipts_file" ] || authority=snapshot
 RC_PR=""; RC_PR_HEAD=""; RC_FETCHED=""; RC_IGNORED=0; RC_INVALID=0; RC_CARRIED=0; RC_RECEIPTS=0
@@ -158,7 +158,7 @@ if [ "$publisher_isolation" = shared ] && [ "$authority" != host ]; then
 fi
 # Legacy history is local evidence in every mode and tier, even when the checked
 # record is absent or the host is unavailable. It never joins the coverage arrays.
-legacy_receipts=""; LL_BLOCKERS=(); LL_EMPTY_ALLOWED=()
+legacy_receipts=""; LL_BLOCKERS=(); LL_EMPTY_VALID=(); LL_EMPTY_ALLOWED=()
 if $receipt_ready; then legacy_receipts="$RC_FILE"; fi
 if [ -n "$fp_base" ]; then
     review_legacy_resolve "$root" "$id" "$fp_base" "$head" "$rigor" "$registry" "$fp_cache/legacy" "$legacy_receipts" "$RC_PR" || true
@@ -366,6 +366,7 @@ else
         v_verdict+=("$verdict"); v_c+=("$critical"); v_h+=("$high"); v_m+=("$medium"); v_l+=("$low"); v_link+=("$link")
         v_receipt+=("")
         v_receipt_head+=("")
+        v_empty_clearance+=(false)
     done < <(printf '%s\n' "$record" | awk "$SPEC_SKIP_AWK"'
         { gsub(/[\035-\037]/, " "); if (spec_skip($0)) next }
         function trim(s) { gsub(/`/, "", s); gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
@@ -387,15 +388,15 @@ else
     if $receipt_ready; then
         while IFS="$sep37" read -r kind seq origin review submitted receipt_id change reviewer from to receipt_head since receipt_base base_at verdict critical high medium low link carried; do
             [ "$kind" = R ] || continue
-            clearance_only=false
-            for allowed in ${LL_EMPTY_ALLOWED[@]+"${LL_EMPTY_ALLOWED[@]}"}; do [ "$seq" != "$allowed" ] || clearance_only=true; done
-            $clearance_only && continue
+            empty_clearance=false
+            for valid in ${LL_EMPTY_VALID[@]+"${LL_EMPTY_VALID[@]}"}; do [ "$seq" != "$valid" ] || empty_clearance=true; done
             ordinal=1
             for prior in ${v_rev[@]+"${v_rev[@]}"}; do [ "$prior" != "$reviewer" ] || ordinal=$((ordinal+1)); done
             v_line+=("$seq"); v_rev+=("$reviewer"); v_round+=("round $ordinal"); v_from+=("$from"); v_to+=("$to")
             v_verdict+=("$verdict"); v_c+=("$critical"); v_h+=("$high"); v_m+=("$medium"); v_l+=("$low"); v_link+=("$link")
             v_receipt+=("https://github.com/$RC_REPO/pull/$origin#pullrequestreview-$review")
             v_receipt_head+=("$receipt_head")
+            v_empty_clearance+=("$empty_clearance")
         done < "$RC_COVERAGE"
     fi
     # Each reviewer's latest line, in order of first appearance.
