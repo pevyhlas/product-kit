@@ -99,6 +99,71 @@ trusted_edit() { # ref path < content
     local status=$?; rm -f "$idx"; return "$status"
 }
 
+# Per-test host fixtures. The executable is always this repository's stub, never a real gh.
+use_gh_stub() { # [fixture directory]
+    GH_STUB_DIR="${1:-$(mktemp -d)}"; export GH_STUB_DIR
+    [ -n "$GH_STUB_DIR" ] || return 1
+    mkdir -p "$GH_STUB_DIR/bin" "$GH_STUB_DIR/pulls" "$GH_STUB_DIR/reviews" \
+        "$GH_STUB_DIR/routes" "$GH_STUB_DIR/users" "$GH_STUB_DIR/issues/comments"
+    cp "$TESTS_DIR/gh-stub.sh" "$GH_STUB_DIR/bin/gh"
+    chmod +x "$GH_STUB_DIR/bin/gh"
+    : > "$GH_STUB_DIR/requests"
+    printf '%s\n' '{"__typename":"Bot","login":"publisher[bot]","databaseId":1001}' > "$GH_STUB_DIR/publisher.json"
+    printf '%s\n' '[]' > "$GH_STUB_DIR/activity.json"
+    export PATH="$GH_STUB_DIR/bin:$PATH"
+    track_tmp "$GH_STUB_DIR"
+}
+
+fx_pr() { # number head [JSON overrides, including head/base/author]
+    local overrides="${3:-}"
+    [ -n "$overrides" ] || overrides='{}'
+    jq -n --argjson number "$1" --arg head "$2" --argjson overrides "$overrides" '
+        {number:$number,html_url:("https://github.com/owner/repo/pull/"+($number|tostring)),
+         state:"open",merged_at:null,created_at:"2026-01-01T00:00:00Z",
+         author:{__typename:"User",login:"maker",databaseId:1002},user:{id:1002,login:"maker",type:"User"},
+         head:{sha:$head,ref:"feature",label:"owner:feature",repo:{full_name:"owner/repo",owner:{login:"owner"}}},
+         base:{ref:"main"}} * $overrides' > "$GH_STUB_DIR/pulls/$1.json"
+    [ -f "$GH_STUB_DIR/reviews/$1.json" ] || printf '%s\n' '[]' > "$GH_STUB_DIR/reviews/$1.json"
+}
+
+fx_review() { # PR body [GraphQL review JSON overrides]
+    local overrides="${3:-}" next next_id
+    [ -n "$overrides" ] || overrides='{}'
+    next="$GH_STUB_DIR/reviews/$1.next"
+    next_id="$(jq -s '[.[][] | .fullDatabaseId | tonumber] | (max // 1000) + 1' "$GH_STUB_DIR"/reviews/*.json)" || return 1
+    jq --arg body "$2" --argjson number "$1" --argjson overrides "$overrides" \
+        --argjson id "$next_id" \
+        --slurpfile pr "$GH_STUB_DIR/pulls/$1.json" --slurpfile author "$GH_STUB_DIR/publisher.json" '
+        . + [({fullDatabaseId:($id|tostring),url:("https://github.com/owner/repo/pull/"+($number|tostring)+"#pullrequestreview-"+($id|tostring)),
+               body:$body,state:"COMMENTED",submittedAt:"2026-01-02T00:00:00Z",lastEditedAt:null,editor:null,
+               author:$author[0],commit:{oid:$pr[0].head.sha}} * $overrides)]' "$GH_STUB_DIR/reviews/$1.json" > "$next" &&
+        mv "$next" "$GH_STUB_DIR/reviews/$1.json"
+}
+
+fx_owner_review() { # PR APPROVED|CHANGES_REQUESTED|DISMISSED commit [overrides]
+    local overrides="${4:-}"
+    [ -n "$overrides" ] || overrides='{}'
+    overrides="$(jq -n --arg state "$2" --arg commit "$3" --argjson overrides "$overrides" '
+        {state:$state,commit:{oid:$commit},author:{__typename:"User",login:"owner",databaseId:1003}} * $overrides')" || return 1
+    fx_review "$1" 'Owner review.' "$overrides"
+}
+
+fx_activity() { # before after [activity JSON overrides]
+    local overrides="${3:-}"
+    [ -n "$overrides" ] || overrides='{}'
+    jq --arg before "$1" --arg after "$2" --argjson overrides "$overrides" '
+        . + [({id:(length+1001),activity_type:"push",ref:"refs/heads/feature",before:$before,after:$after,
+               timestamp:"2026-01-01T12:00:00Z"} * $overrides)]' "$GH_STUB_DIR/activity.json" > "$GH_STUB_DIR/activity.next" &&
+        mv "$GH_STUB_DIR/activity.next" "$GH_STUB_DIR/activity.json"
+}
+
+fx_closed_pr() { # number head [JSON overrides; merged_at non-null models a merge]
+    local overrides="${3:-}"
+    [ -n "$overrides" ] || overrides='{}'
+    overrides="$(jq -n --argjson overrides "$overrides" '{state:"closed"} * $overrides')" || return 1
+    fx_pr "$1" "$2" "$overrides"
+}
+
 # Register cleanup of temp dirs created during the run.
 _TMPDIRS=()
 track_tmp() { _TMPDIRS+=("$1"); }

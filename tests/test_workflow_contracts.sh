@@ -44,7 +44,10 @@ assert_contains "$protocol" "Never discard an external tool's stderr" "stderr ke
 it "review is independent, tiered and never empty"
 assert_contains "$protocol" '| T0 | docs only, no behavior change | none |' "T0"
 assert_contains "$protocol" '| T3 | L0 edit or L1 one-way door | design review plus the owner |' "T3"
-assert_contains "$review" 'Never dispatch a round when no source changed' "no empty re-review"
+assert_contains "$review" 'Never dispatch a round with no source change' "no empty re-review"
+for suite in review_fingerprint review_receipts review_gate review_legacy_scan review_legacy_gate review_owner publish_review; do
+    assert_contains "$(cat "$PK_ROOT/.github/workflows/ci-macos.yml")" "/bin/bash tests/test_$suite.sh" "$suite runs under native macOS Bash"
+done
 assert_contains "$review" 'did not implement' "independent reviewer"
 assert_contains "$review" 'untracked file contents' "uncommitted review includes new files"
 assert_contains "$review" '.prdkit/scripts/bash/build-review-package.sh <change-id> <base>' "package helper"

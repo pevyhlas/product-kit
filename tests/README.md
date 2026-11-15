@@ -16,6 +16,37 @@ equivalent. The CI step verifies the downloaded package checksum and the missing
 
 ## Coverage
 
+`test_review_legacy_scan.sh` constructs real commit graphs (including criss-cross fork points)
+and checks the three blocker sources, raw-blob parsing, record modes and diff-driver immunity.
+`test_review_legacy_gate.sh` combines those blockers with independent native receipt fixtures:
+scope, historical inclusion, unavailable evidence, empty-content clearance and all gate modes.
+Owner-dependent clearance requires a confirmed native approval and historical inclusion.
+The older coverage recipe bridge also reads `**Receipt fixture**:` lines: these are test data,
+not active legacy verdicts, so narrow native coverage tests do not acquire a legacy full-PASS
+requirement. Actual legacy-line tests keep `**Review**:` and assert that stricter requirement.
+Valid new recipe verdicts now run the real publisher against the stub, caching its immutable
+body for replay across base changes. Only deliberate malformed/ineligible data bypasses the
+publisher to exercise gate-side rejection. `test_review_owner.sh` and `test_publish_review.sh`
+exercise native activity/identity and real POST/read-back/cache/repair paths independently.
+
+Host-adapter tests use `use_gh_stub` from `tests/lib.sh`; it installs `tests/gh-stub.sh`
+as `gh` on `PATH` and selects an isolated `GH_STUB_DIR`. The stub never invokes the real host.
+`fx_pr`, `fx_review`, `fx_owner_review`, `fx_activity` and `fx_closed_pr` build generic
+`owner/repo` fixtures; their final optional argument is a JSON object of overrides.
+Review fixtures use GraphQL fields, including both edit markers. REST deliberately has neither.
+The publishing identity is configurable in `publisher.json`; the installation viewer has the
+same numeric id but typename `User`, while a posted review keeps the publisher's typename.
+
+Every invocation and GraphQL page is appended to `requests`. Tests can empty it before an
+offline check and assert it stays empty. `GH_STUB_OFFLINE=true`, `GH_STUB_FAIL=<route>` and
+`GH_STUB_PARTIAL=<route>` inject failures (for example `pulls/7` or
+`graphql:PrdkitReviews`). `GH_STUB_PAGE_SIZE=1` exercises review cursor paging;
+`GH_STUB_ACTIVITY_PAGE_SIZE=1` pages the ascending activity stream and
+`GH_STUB_FAIL=activity-page-2` fails after a successful first page. A partial
+GraphQL stream stops with `hasNextPage:true`. Named operations are `PrdkitReviews` and
+`PrdkitViewer`. A JSON file under `routes/` overrides a route, replacing `/`, `?`, `&`, `=`
+and `:` with `_`; use it for malformed or non-advancing-cursor responses.
+
 `test_new_change_linked.sh` forces overlapping automatic allocations from two linked worktrees.
 Its private-copy negative control replaces the common lock with a per-worktree lock and must
 reproduce the duplicate number; synchronization markers avoid a scheduler-dependent race test.

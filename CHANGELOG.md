@@ -10,21 +10,15 @@ change by change.
 
 ### Changed
 
-- internal: coverage engine moved to review-coverage-lib.sh; no behaviour change
-
 - **Review verdicts bind content fingerprints, not commit ranges (breaking; closes #66 and #86).**
   A verdict used to name a hand-typed `<base sha>..<head sha>` range and coverage was proven from
   commit ancestry, so a base merge, an edit reverted before a base merge (#86), a narrow range
   starting at a record-only commit (#66), a rebase and a squash all voided reviews of unchanged
   work.
-  - New `record-review.sh` is the only writer of `**Review**:` lines: `round <n> ·
-    <from>..<to> · <reviewer> · PASS|FAIL · <counts> · <link>`, where each end is `start` (no
-    change) or `fp1:<sha256>`, the change's content: its delta from where it leaves the trusted
-    base, outside the record and the log, canonicalized by the new `review-fingerprint-lib.sh`.
-    Nobody types a fingerprint. It refuses an untrusted `--base`, an empty range and a record
-    without a `## State` section, and prints the line plus a `prdkit.review.v2` receipt
-    (`reviewer`, `from`, `to`, `head`, `verdict`, counts) for the report comment, which
-    `--verify-reports` matches on `from` and `to`.
+  - Receipt ends are `start` (no change) or `fp1:<sha256>`, the change's delta from where it
+    leaves the trusted base, outside its own record and log, canonicalized by
+    `review-fingerprint-lib.sh`. A blocking verdict may use `none`, which names no coverage.
+    The publisher computes the tokens; nobody types them.
   - `check-review.sh` links verdicts by content and replaces ancestry chaining: a verdict holds
     across record-only commits, a reverted edit, a rebase, a squash and a non-overlapping base
     merge, and lapses on a real fix or an overlapping base merge. Overlapping means the base's own
@@ -34,24 +28,87 @@ change by change.
     surroundings repeat in the file, the file is bound to its exact objects, so an edit moved to
     another identical block never shares a fingerprint; a conflict resolved by keeping the
     reviewed lines overlaps too. A failing
-    reviewer's narrow re-review of the fix carries the other approvals forward. The owner's T3
-    verdict binds only the L0/L1 spec, so it survives code fixes and rebases and lapses on an L0
-    or L1 edit. `--json` adds `fingerprint`. A criss-cross history (two merge bases) fails closed.
-  - Lines recorded before fingerprints stay readable, without a rewrite, while their commits are
-    present here (no longer only in the head's history): each end reads as that commit's content,
-    and a missing commit fails closed. v1 receipts still verify those lines. A blocking legacy line
-    is also resolved by the rule it was written under (a later clean PASS from the same reviewer
-    over a commit range whose head descends from the blocking head), so a change closed after its
-    code merged keeps its resolved FAILs resolved. A migration
-    (`init.sh --upgrade --migrate-reviews`) arrives with verdicts bound to their pull request.
-  - A blocking line whose end is a commit gone from the history now stands (it used to be
-    ignored) until a later clean PASS from the same reviewer re-reviews from `start`; returning to
-    earlier content or rewriting history never clears a FAIL, and a merge carrying only the record
-    and the log still fails on a standing FAIL (it exempts coverage only).
+    reviewer's narrow re-review of the fix carries the other approvals forward. `--json` adds
+    `fingerprint`. A criss-cross history (two merge bases) fails closed. The engine lives in
+    `review-coverage-lib.sh`; extracting it did not change the content-coverage rules.
   - `build-review-package.sh --since` accepts any earlier reviewed head except HEAD, also one a
     rebase or squash left out of HEAD's history, and prints `FINGERPRINT` and `SINCE_FINGERPRINT`
     in its JSON and index. The offline gate now also uses `mktemp`, `wc`, `sort` and a SHA-256
     tool (`sha256sum`, `shasum` or `openssl`).
+
+- **Verdicts are authenticated PR receipts (breaking; #69).** `publish-review.sh` replaces the
+  unreleased `record-review.sh`. It posts a submitted COMMENT review through a listed publisher,
+  then reads it back through GraphQL to verify its numeric author identity, review id, intact
+  body and null edit markers. Record text and pasted blocks never grant approval. `--from-report`
+  compares the report's final verdict/count lines; `--dry-run` encodes JSON with jq but makes no
+  host call. Publish logs retain the original payload outside working trees, under the absolute
+  Git common directory's `prdkit/receipts/`. They must never be maker-writable; symlinked log
+  components are refused. Old `.prdkit/cache/receipts/` logs are no longer read and are not migrated.
+- **The merge gate requires the host in every tier.** `check-review.sh --pr <url>` needs `gh`,
+  `jq` and complete API reads even for T0 and record-only changes: only the host can show that no
+  FAIL stands. Host unavailability means merging waits. `--receipts <snapshot>` and checks with
+  no source are unauthenticated local previews; a would-be pass exits **3**, never 0. JSON
+  `result` is `preview` whenever authority is not `host`, including blocked or unavailable
+  previews; consumers must also inspect problems and exit status (1 failure, 3 would-pass).
+  Snapshot
+  and structure-only paths remain gh/jq-free. Removed `--verify-reports`, `report_verification`
+  and the old report matcher. JSON now reports authority, receipt/blocker counts, legacy blockers
+  and native owner metadata.
+- **T3 uses the owner's native approval.** The latest decisive APPROVED review must bind the
+  checked head's L0/L1 slice; CHANGES_REQUESTED and DISMISSED are barriers. Code fixes and rebases
+  can keep approval; L0/L1 edits lapse it. The GraphQL approved commit must match the head
+  reconstructed strictly before submission from the activity log, including merge pushes and
+  deciding-window continuity. Same-second ties or aged-out activity fail closed and need a new
+  push (record-only is enough) followed by re-approval. Retention is unknown. A missing approved
+  commit names the fetch needed. Owner text, State lines, receipts and relays never count; T3
+  needs a PR the owner did not author.
+- **Verdicts are PR-scoped.** An earlier delivery's PASS never covers a new PR, even for equal
+  content. Standing FAILs carry from closed, unmerged PRs of the same head branch; other changes'
+  FAILs on this PR block too. Merged PRs supply only restatements. Renaming a head branch can
+  escape closed-PR carry; this remains a residual risk.
+- **Trusted receipt policy is required.** Merge `review-host: github`, numeric
+  `review-publishers`, personal numeric `review-owner` ids and `review-publisher-isolation` to
+  the default branch first. The kit's isolation choice is `required`: a publisher cannot also
+  author the PR. It proves account separation, not machine separation. Explicit `shared` warns
+  that receipts bind content, ordering and counts, not reviewer independence. Do not list the
+  shared `github-actions[bot]` account; prefer a reviewer-controlled App credential or a human.
+  Removing an id from `review-publishers` drops that publisher's receipts, FAILs included, on
+  current and closed source PRs; reconcile standing verdicts before rotating a publisher id.
+  The publisher must run `publish-review.sh` and its libraries from the trusted default branch
+  or a pinned kit install, never from a PR checkout. `--repo` points at a fetch-only clone; a
+  publisher CI job never runs PR-controlled code with the publisher key (for example a
+  `pull_request` job with secrets). Otherwise candidate code can steal the credential or forge
+  verdicts; account isolation does not prevent that.
+- **Receipt schema v3 only.** v1/v2 receipt readers, commit-token coverage and ancestry-based
+  legacy FAIL clearance are removed. Author typename plus database id authenticates a publisher,
+  never its login or report text. Any edit invalidates a receipt and blocks, even when its author
+  and submission time stay unchanged; any account with pull-request write access can cause this.
+  Submitted reviews cannot be deleted. The publisher restates the full original verdict from its
+  log, using the original review author's typename and numeric id and preserving the origin PR's
+  order and scope; a repair cannot erase a FAIL or grant new-PR
+  coverage. Losing the log can leave a permanent blocker.
+- **Closing requires `close-change.sh --pr <url>`.** It checks online before and after the local
+  closing commit and refuses previews. An unpushed record/log-only closing commit is permitted
+  only as a descendant with the same fingerprint as the PR head; online checks of an unrelated
+  or earlier `--head` report unavailable, even for equal content. Records carry no verdicts. The merged-without-
+  closing advisory now lists every default-branch leaf record without an outcome checkpoint,
+  including T0 and unreviewed records, rather than inferring PASS from text.
+- **1.x lines remain blockers, never converted approvals.** The gate scans active State review
+  lines using raw Git trees/blobs and complete branch history, including merge parents and
+  inherited records edited, moved or deleted by a carrier. FAIL, blocking counts and unreadable
+  lines stand until the same reviewer's clean native full PASS on this PR includes them in its
+  reviewed history; owner and unnamed blockers need valid native owner approval with the same
+  historical proof. A 1.x PASS, even one that cleared a FAIL under 1.x, grants nothing: open PRs
+  need fresh reviews. Blockers stand in every tier and preview mode through 2.x.
+  - For genuinely empty content, `--clears-legacy` allows a clean full PASS only for a matching
+    reviewer blocker, without an artificial delta or coverage edge. Adding content expires that
+    clearance without invalidating the receipt; a later qualifying full PASS clears normally.
+  - Rewriting pre-merge branch history can erase a newly introduced legacy line. Inherited
+    default-branch blockers remain protected. The candidate's own CI scripts remain the trust
+    boundary; trusted gate execution is not supplied here. PRs merged under 1.x retain 1.x rules.
+  - The separate transition follow-up adds `init.sh --upgrade --migrate-reviews`, a read-only
+    enforced/owed report and plain-upgrade refusal while 1.x lines exist. Those installer controls
+    are not included yet; this gate already enforces the blockers without them.
 
 - **`check-review.sh` reads its policy from the trusted integration base, never from the change
   or the caller (breaking; #88).** Local probes showed three ways a branch could pass unreviewed or
@@ -86,9 +143,8 @@ change by change.
     everything in it, and converting or deleting an unsafe entry would hide that change. The
     coverage diffs pass `--ignore-submodules=none`, so a submodule whose `.gitmodules` entry says
     `ignore = all` can no longer hide a gitlink change behind a record-only close.
-  - This is the first of three steps toward binding review to content: it changes no Review-line
-    or receipt format. Coverage across merges, rebases and record-only commits (#66, #86) and
-    native owner approval (#69) are not addressed here.
+  - These policy rules remain in force with content fingerprints and PR receipts; a branch cannot
+    change its own trusted policy or lower the tier through record-only metadata.
 - **Breaking: a closed change's log entry is its own file.** `close-change.sh` writes
   `specs/log/<id>.md`, one line `- <date> <id>: <text>`, instead of inserting that line at the
   top of `specs/log.md`. Two branches that each closed a change used to conflict in
@@ -185,7 +241,7 @@ change by change.
   section of `.prdkit/memory/config.md` and merge it to the integration branch.
 - An open record whose tier a branch commit lowered now fails: restore the higher tier, or review
   at it. An open change that edits `specs/product.md` or `specs/product/` below T3 needs T3 and
-  the owner's verdict.
+  the owner's native approval.
 - The default branch's constitution must hold exactly one well-formed Rigor line. Land a Rigor, registry or `review-t0-paths` change in its own pull request first.
 - If the integration branch holds `specs/log.md` as an executable file or a directory, every
   change that starts there fails until it holds a regular file; fix that on the branch first.

@@ -1,6 +1,7 @@
 # Optional settings
 
-Unset values use the defaults. Settings never grant authority or weaken checks.
+Optional unset values use the defaults. Review publisher policy must be configured explicitly
+on the trusted default branch before the online gate can pass.
 
 ## Configuration
 
@@ -24,3 +25,31 @@ paths, a trailing `/` naming a directory (for example `docs/, README.md`); no pa
 read from the trusted integration branch. A T0 change passes only when every path it changes,
 outside its record and the log, is a regular non-executable file under one of them, and never
 `.prdkit/`, another change record or the L0/L1 spec. Unset, T0 covers only the record and the log.
+
+The review gate also requires these trusted `## Configuration` entries (merge the real numeric
+identities first; these placeholders are not usable policy):
+
+```text
+- review-host: github
+- review-publishers: bot:<numeric account id>
+- review-owner: user:<numeric owner id>
+- review-publisher-isolation: required
+```
+
+`review-publishers` may list comma-separated `bot:` and `user:` numeric ids; `review-owner`
+lists personal `user:` ids. Use `gh api users/<login> --jq .id` or
+`gh api 'users/<slug>[bot]' --jq .id`. Do not list the shared `github-actions[bot]` identity:
+a branch can add workflows using it. `required` is the kit's isolation choice and rejects a
+publisher that also authored the PR; it proves account separation, not machine separation.
+Use a dedicated reviewer-only App credential, a human publisher, or explicitly choose `shared`.
+Shared mode warns that authenticated content/order/counts do not prove reviewer independence.
+
+For publication, run `publish-review.sh` from the trusted default branch or a pinned kit install,
+never a PR checkout; `--repo` names a fetch-only clone, whose code is never executed:
+
+```text
+bash /trusted-install/.prdkit/scripts/bash/publish-review.sh <change-id> --repo <fetch-only-clone> ...
+```
+
+A publisher CI job must never run PR-controlled code with the publisher key (for example a
+`pull_request` job with secrets).

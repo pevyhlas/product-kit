@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # close-change.sh — Close a reviewed change in its own PR with one commit: refuse unless
 # check-review.sh passes at HEAD, then write the change's log entry and delete its record.
-# Run it once the final Review line is committed and before the final push, so required checks
+# Run it once the required receipts are published and before the final push, so required checks
 # run once on the closed head. It commits in the current checkout only; it never pushes, merges
 # or removes a worktree (cleanup-change.sh does that after merge, or --closed for every closed change).
 #
-# Usage: close-change.sh [--base <rev>] [--date YYYY-MM-DD] [-m <message>] <change-id> "<log text>"
+# Usage: close-change.sh --pr <url> [--base <rev>] [--date YYYY-MM-DD] [-m <message>] <change-id> "<log text>"
 #   <log text> follows "- <date> <id>: " on the entry: "<intent> — <IDs> — <disposition> — <PR>",
 #   at most 300 characters. The entry is its own file, specs/log/<id>.md, so two branches that
 #   each close a change never conflict; compaction folds entries into specs/log.md (compact.md).
@@ -14,14 +14,14 @@ set -euo pipefail
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 source "$SCRIPT_DIR/spec-lib.sh"
-usage='Usage: close-change.sh [--base <rev>] [--date YYYY-MM-DD] [-m <message>] <change-id> "<intent> — <IDs> — <disposition> — <PR>" (at most 300 characters)'
-base_args=(); day=""; message=""; id=""; text=""; options=true
+usage='Usage: close-change.sh --pr <url> [--base <rev>] [--date YYYY-MM-DD] [-m <message>] <change-id> "<intent> — <IDs> — <disposition> — <PR>" (at most 300 characters)'
+base_args=(); pr=""; day=""; message=""; id=""; text=""; options=true
 while [ "$#" -gt 0 ]; do
     if $options; then
         case "$1" in
-            --base|--date|-m|--message)
+            --pr|--base|--date|-m|--message)
                 [ "$#" -gt 1 ] || { echo "$usage" >&2; exit 2; }
-                case "$1" in --base) base_args=(--base "$2") ;; --date) day="$2" ;; *) message="$2" ;; esac
+                case "$1" in --pr) pr="$2" ;; --base) base_args=(--base "$2") ;; --date) day="$2" ;; *) message="$2" ;; esac
                 shift 2; continue ;;
             --help|-h) echo "$usage"; exit 0 ;;
             --) options=false; shift; continue ;;
@@ -31,7 +31,7 @@ while [ "$#" -gt 0 ]; do
     if [ -z "$id" ]; then id="$1"; elif [ -z "$text" ]; then text="$1"; else echo "$usage" >&2; exit 2; fi
     shift
 done
-is_change_id "$id" && [ -n "$text" ] || { echo "$usage" >&2; exit 2; }
+is_change_id "$id" && [ -n "$text" ] && [ -n "$pr" ] || { echo "$usage" >&2; exit 2; }
 [ -n "$day" ] || day="$(spec_today)"
 spec_is_date "$day" || { echo "--date takes YYYY-MM-DD (got: $day)" >&2; exit 2; }
 refuse() { echo "close-change.sh: $*" >&2; exit 1; }
@@ -44,7 +44,7 @@ root="$(git rev-parse --show-toplevel 2>/dev/null)" || refuse "not inside a Git 
 path="specs/changes/$id.md"; log="specs/log.md"; entry="specs/log/$id.md"
 git -C "$root" cat-file -e "HEAD:$path" 2>/dev/null || refuse "no record $path at HEAD"
 git -C "$root" diff --quiet HEAD -- "$path" ||
-    refuse "$path has uncommitted edits: commit the final Review line first; the check reads committed state"
+    refuse "$path has uncommitted edits: commit the record edits first; the check reads committed state"
 git -C "$root" diff --cached --quiet || refuse "other changes are staged; commit or unstage them, so this commit holds only the record and its log entry"
 if [ -e "$root/$entry" ] || git -C "$root" cat-file -e "HEAD:$entry" 2>/dev/null ||
     { [ -f "$root/$log" ] && grep -q "^- [0-9-]* $id:" "$root/$log"; }; then
@@ -55,10 +55,10 @@ if [ -n "$default" ] && git -C "$root" cat-file -e "$default:$path" 2>/dev/null;
     refuse "$path is already on $default: a change merged with its record closes inside the next relevant PR, before that PR's final review (review.md, Closing)"
 fi
 
-check() { bash "$SCRIPT_DIR/check-review.sh" --repo "$root" --head HEAD ${base_args[@]+"${base_args[@]}"} "$id" 2>&1; }
+check() { bash "$SCRIPT_DIR/check-review.sh" --pr "$pr" --repo "$root" --head HEAD ${base_args[@]+"${base_args[@]}"} "$id" 2>&1; }
 if ! out="$(check)"; then
     printf '%s\n' "$out" >&2
-    refuse "check-review.sh does not pass at HEAD; commit the final passing Review line first"
+    refuse "check-review.sh does not pass at HEAD; publish the remaining verdicts first"
 fi
 
 if ! { mkdir -p "$root/specs/log" && printf -- '- %s %s: %s\n' "$day" "$id" "$text" > "$root/$entry"; } 2>/dev/null; then

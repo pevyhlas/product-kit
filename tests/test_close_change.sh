@@ -3,12 +3,14 @@
 # line; the merge gate notes a record still at the head, and status and doctor flag a reviewed
 # record that reached the default branch without closing. Programme parents stay quiet.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+source "$TESTS_DIR/review-fixtures.sh"
 
 PROJ="$(make_inited_project)"; track_tmp "$PROJ"
 PROJ="$(cd "$PROJ" && pwd -P)"
 B="$PROJ/.prdkit/scripts/bash"
 cd "$PROJ" || exit 1
 printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n' >> .prdkit/memory/agents.md
+receipt_policy "$PROJ"
 git add -A >/dev/null; git commit -qm installed >/dev/null
 DEFAULT="$(git symbolic-ref --short HEAD)"
 git update-ref "refs/remotes/origin/$DEFAULT" HEAD
@@ -39,13 +41,13 @@ branch_with_code 001-greet
 START="$(git merge-base HEAD "$DEFAULT")"; REVIEWED="$(git rev-parse HEAD)"
 run bash "$B/close-change.sh" 001-greet "warmer greeting — R-01 — #1"
 assert_eq 1 "$STATUS" "refuses before a passing Review line is recorded"
-assert_contains "$OUTPUT" "commit the final passing Review line first" "says what is missing"
+assert_contains "$OUTPUT" "publish the remaining verdicts first" "says what is missing"
 assert_eq "$REVIEWED" "$(git rev-parse HEAD)" "nothing committed on refusal"
 assert_eq '' "$(git status --porcelain)" "nothing staged or written on refusal"
 pass_line code "$START" "$REVIEWED" >> specs/changes/001-greet.md
 run bash "$B/close-change.sh" 001-greet "warmer greeting — R-01 — #1"
 assert_eq 1 "$STATUS" "refuses an uncommitted Review line"
-assert_contains "$OUTPUT" "commit the final Review line first" "the check reads committed state"
+assert_contains "$OUTPUT" "commit the record edits first" "the check reads committed state"
 git commit -qam "001-greet: review PASS" >/dev/null
 VERDICT="$(git rev-parse HEAD)"
 run bash "$B/check-review.sh" 001-greet
@@ -264,7 +266,7 @@ git commit -qam "003-owner: verdicts" >/dev/null
 run bash "$B/close-change.sh" 003-owner "owner-shaped — R-01 — #4"
 assert_eq 0 "$STATUS" "owner approval of the reviewed head survives the closing commit: $OUTPUT"
 
-it "status and doctor flag a reviewed record that merged without closing; parents stay quiet"
+it "status and doctor flag merged-open records including T0 and unreviewed ones; parents stay quiet"
 branch_with_code 004-left; pass_line code "$(git merge-base HEAD "$DEFAULT")" "$(git rev-parse HEAD)" >> specs/changes/004-left.md
 git commit -qam "004-left: review PASS" >/dev/null
 git checkout -q "$DEFAULT"; git merge -q --squash 004-left >/dev/null; git commit -qm "004-left (#5)" >/dev/null
@@ -278,14 +280,14 @@ record 011-child T1 "\`012-prog\`"
 git add -A >/dev/null; git commit -qm "records on the default branch" >/dev/null
 git update-ref "refs/remotes/origin/$DEFAULT" HEAD
 run bash "$B/status.sh"
-assert_contains "$OUTPUT" "merged without closing: reviewed and on origin/$DEFAULT" "status flags the left record"
-assert_eq 1 "$(printf '%s\n' "$OUTPUT" | grep -c 'merged without closing')" "only that record: parents (also named in backticks), children and unreviewed records are quiet"
+assert_contains "$OUTPUT" "merged without closing: record on origin/$DEFAULT" "status flags the left record"
+assert_eq 5 "$(printf '%s\n' "$OUTPUT" | grep -c 'merged without closing')" "all leaf records, including T0 and unreviewed ones; parents and checkpoints are quiet"
 run bash "$B/status.sh" --json
 assert_contains "$OUTPUT" '"id":"004-left","title":"004-left"' "JSON row"
 assert_contains "$OUTPUT" '"merged_unclosed":true' "JSON flag"
 run bash "$B/doctor.sh"
-assert_contains "$OUTPUT" "advisory: Merged without closing: 004-left passed review" "doctor advises"
-assert_not_contains "$OUTPUT" "005-programme passed" "a programme with a checkpoint is quiet"
+assert_contains "$OUTPUT" "advisory: Merged without closing: 004-left, 007-child, 008-planned, 010-tzero, 011-child records" "doctor advises for all leaf records"
+assert_not_contains "$OUTPUT" "005-programme" "a programme with a checkpoint is quiet"
 assert_not_contains "$OUTPUT" "006-parent" "a parent named by a child is quiet"
 git checkout -q -b 009-next
 run bash "$B/close-change.sh" 004-left "left open — R-01 — #5"
@@ -295,12 +297,13 @@ run bash "$B/close-change.sh" 010-tzero "unreviewed — #7"
 assert_eq 1 "$STATUS" "a merged T0 record is refused too, before check-review could pass it"
 assert_contains "$OUTPUT" "is already on origin/$DEFAULT" "the default-branch refusal comes first"
 
-it "a branch that closes the left record is not flagged by doctor or status"
+it "closing the left record removes only its advisory, not other open leaves"
 git rm -q specs/changes/004-left.md
 printf -- '- 2026-11-09 004-left: left open — R-01 — #5; closed in #8\r\n' >> specs/log.md
 git add specs/log.md; git commit -qm "close 004-left in the next PR" >/dev/null
 run bash "$B/doctor.sh"
-assert_not_contains "$OUTPUT" "Merged without closing" "doctor reads the checkout, not only the default branch"
+assert_not_contains "$OUTPUT" "004-left" "doctor reads the checkout, not only the default branch"
+assert_contains "$OUTPUT" 'Merged without closing: 007-child, 008-planned, 010-tzero, 011-child records' 'other open leaves remain'
 run bash "$B/status.sh"
-assert_not_contains "$OUTPUT" "merged without closing" "status agrees"
+assert_eq 4 "$(printf '%s\n' "$OUTPUT" | grep -c 'merged without closing')" "status agrees that only one record closed"
 finish

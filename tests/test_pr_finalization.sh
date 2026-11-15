@@ -2,9 +2,11 @@
 # One carrier record reviews a final child plus its programme. No sibling-record exemptions,
 # missing owner verdicts or unresolved inherited failures are hidden by same-PR cleanup.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+source "$TESTS_DIR/review-fixtures.sh"
 PROJ="$(make_inited_project)"; track_tmp "$PROJ"
 cd "$PROJ" || exit 1
 printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| integration | reviewer |\n' >> .prdkit/memory/agents.md
+receipt_policy "$PROJ"
 CHECK="$PROJ/.prdkit/scripts/bash/check-review.sh"
 mkdir -p specs/changes src
 cat > specs/changes/001-programme.md <<'EOF'
@@ -54,7 +56,7 @@ git add specs/changes/002-final-child.md; git commit -qm 'combined independent p
 it "the combined tier still requires owner approval"
 run bash "$CHECK" --base origin/main 002-final-child
 assert_eq 1 "$STATUS" "owner gate not lost with parent deletion"
-assert_contains "$OUTPUT" "T3 needs the owner's verdict" "owner missing"
+assert_contains "$OUTPUT" "T3 needs the owner's native approval" "owner missing"
 
 printf '**Review**: round 2 · %s..%s · owner · PASS · fixture:owner-words\n' "$BASE" "$PREPARED" >> specs/changes/002-final-child.md
 git add specs/changes/002-final-child.md; git commit -qm 'owner verdict on combined scope'

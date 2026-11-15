@@ -7,6 +7,10 @@ never edits `specs/`, and a one-time cutover between changes, which an agent doe
 
 ## Before you upgrade
 
+If continuing to 2.0, `record-review.sh` and `review-reports-lib.sh` are also retired.
+Use `publish-review.sh` and the online `check-review.sh --pr <url>` receipt gate instead;
+see [the review workflow](../workflows/review.md) for native owner approval and legacy blockers.
+
 - **CI calls to removed helpers.** 1.0 removes `artifact-lib.sh`, `check-artifacts.sh`,
   `check-canon.sh`, `check-implement-gates.sh`, `check-prerequisites.sh`, `check-signoff.sh`,
   `cleanup-feature.sh`, `create-new-feature.sh`, `evidence-fingerprint.sh`, `evidence-lib.sh`,

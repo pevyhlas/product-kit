@@ -12,5 +12,9 @@ grep -Eiq 'after.*deploy|future.*deploy|next.*(check|observ)' .eval-state/pr.md 
 test "$(git symbolic-ref --short HEAD)" = "$(cat .eval-state/branch)" || fail 'moved to another branch'
 source "$PK_ROOT/tests/evals/fixture.sh"
 test -z "$(git diff "$(cat .eval-state/start)" -- "${FIXTURE_CANON[@]}")" || fail 'canonical promise or maturity changed'
-bash .prdkit/scripts/bash/check-review.sh 001-greeting >/dev/null || fail 'same-PR close breaks review compatibility'
+source "$PK_ROOT/tests/lib.sh"
+cd "$FIXTURE"
+use_gh_stub "$FIXTURE/.eval-state/host"
+fx_pr 7 "$(git rev-parse HEAD)" "$(jq -cn --arg base "$(git symbolic-ref --short refs/remotes/origin/HEAD | sed 's|^origin/||')" '{base:{ref:$base}}')"
+bash .prdkit/scripts/bash/check-review.sh --pr https://github.com/owner/repo/pull/7 001-greeting >/dev/null || fail 'same-PR close breaks review compatibility'
 echo 'ASSERT PASS: same-PR close with explicit runtime unknown and intact canon'

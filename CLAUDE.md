@@ -15,8 +15,8 @@ find scripts tests -name '*.sh' -print0 | xargs -0 shellcheck --exclude=SC1091  
 
 CI runs exactly these three on a GitHub-hosted Ubuntu 24.04 runner, with a pinned,
 checksum-verified ShellCheck 0.11.0. CI also checks jq availability (the tests use it).
-Opt-in GitHub report verification requires gh and jq; offline review checks retain their
-Bash/standard-utilities contract.
+Online review gating and publication require gh and jq. Snapshot/structure previews retain
+their Bash/standard-utilities contract and never authorize merging (preview pass is exit 3).
 Linux CI additionally runs the adoption-gate and doctor suites with checksum-pinned Debian 12
 mawk (1.3.4 20200120), whose regex engine lacks interval-expression support.
 Installer, upgrade, change, status, doctor and adoption-gate suites

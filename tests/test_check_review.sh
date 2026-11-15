@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # check-review.sh passes a change only when its recorded independent review covers the head being
 # merged: PASS verdicts, nothing blocking for the rigor, the reviewed content unchanged outside
-# the record and the log, the tier's reviewers present. These fixtures record commit ranges, the
-# format before content fingerprints, which the check still reads (test_review_fingerprint.sh
-# covers the fingerprint lines record-review.sh writes). It reads committed state, so a closing commit that deletes the
+# the record and the log, the tier's reviewers present. Historical commit-range recipes here
+# become real publisher receipts through review-fixtures.sh; the gate never reads those ranges
+# as verdicts. It reads committed structure, so a closing commit that deletes the
 # record still checks against the record's last version. Its policy (Rigor, registry, T0 paths)
 # comes from the trusted integration base, and a branch cannot lower its own tier.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+source "$TESTS_DIR/review-fixtures.sh"
 
 PROJ="$(make_inited_project)"; track_tmp "$PROJ"
 PROJ="$(cd "$PROJ" && pwd -P)"
@@ -14,6 +15,7 @@ CHECK="$PROJ/.prdkit/scripts/bash/check-review.sh"
 cd "$PROJ" || exit 1
 printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n| security | reviewer |\n| docs | reviewer |\n| design | reviewer |\n' >> .prdkit/memory/agents.md
 printf '\n## Configuration\n- review-integration-branches: origin/develop\n' > .prdkit/memory/config.md
+receipt_policy "$PROJ"
 git add -A >/dev/null; git commit -qm installed >/dev/null
 DEFAULT="$(git symbolic-ref --short HEAD)"
 git update-ref "refs/remotes/origin/$DEFAULT" HEAD
@@ -38,7 +40,8 @@ record() { # tier, then State review lines
     git add specs/changes/001-greet.md; git commit -qm "record" >/dev/null
 }
 verdict() { # reviewer verdict counts [range]
-    printf '**Review**: round 1 · %s · %s · %s · %s · https://example.invalid/pr/1#c1' "${4:-$BASE..$REVIEWED}" "$1" "$2" "$3"
+    # Coverage recipes are not active legacy verdicts; dedicated scan tests combine both.
+    printf '**Receipt fixture**: round 1 · %s · %s · %s · %s · https://example.invalid/pr/1#c1' "${4:-$BASE..$REVIEWED}" "$1" "$2" "$3"
 }
 CLEAN='0 critical, 0 high, 0 medium, 0 low'
 
@@ -56,7 +59,7 @@ it "code changed after the reviewed head fails"
 echo 'warmer' > src/app.txt; git commit -qam "after review" >/dev/null
 run bash "$CHECK"
 assert_eq 1 "$STATUS" "fails"
-assert_contains "$OUTPUT" "changed since the reviewed head $REVIEWED: src/app.txt" "names the unreviewed path"
+assert_contains "$OUTPUT" "reviewed content differs at: src/app.txt" "names the unreviewed path"
 git reset -q --hard HEAD~1
 
 it "tracked execution-plan deletion needs coverage; same-PR finalization does not exempt it"
@@ -82,7 +85,7 @@ for range in "$BASE..HEAD" "$BASE..001-greet" "$BASE..HEAD~1" "$BASE..@" "$REVIE
     run bash "$CHECK"
     assert_eq 1 "$STATUS" "range $range refused"
 done
-assert_contains "$OUTPUT" "is not a content fingerprint (fp1:…) or a commit hash; record verdicts with record-review.sh, never a name that moves" "says why"
+assert_contains "$OUTPUT" "invalid receipt token forms" "says why"
 
 it "a three-dot range reads as two-dot; an empty range or one that skips the change's start fails"
 record T1 "$(verdict code PASS "$CLEAN" "$BASE...$REVIEWED")"
@@ -91,7 +94,7 @@ assert_eq 0 "$STATUS" "three dots accepted"
 record T1 "$(verdict code PASS "$CLEAN" "$REVIEWED..$REVIEWED")"
 run bash "$CHECK"
 assert_eq 1 "$STATUS" "empty range fails"
-assert_contains "$OUTPUT" "the range $REVIEWED..$REVIEWED is empty" "says why"
+assert_contains "$OUTPUT" " is empty" "says why"
 echo 'more' > src/more.txt; git add src/more.txt; git commit -qm "more code" >/dev/null; LAST="$(git rev-parse --short HEAD)"
 record T1 "$(verdict code PASS "$CLEAN" "$REVIEWED..$LAST")"
 run bash "$CHECK"
@@ -206,7 +209,7 @@ record T1 "$(verdict code PASS "$CLEAN" "$BASE..$L0_HEAD")"
 run bash "$CHECK"
 assert_eq 1 "$STATUS" "a T1 record with an L0 edit fails"
 assert_contains "$OUTPUT" "its floor is T3, from its L0 edit (specs/product/requirements.md)" "names the L0 path"
-assert_contains "$OUTPUT" "T3 needs the owner's verdict too" "the owner gate applies"
+assert_contains "$OUTPUT" "T3 needs the owner's native approval too" "the owner gate applies"
 git reset -q --hard "$REVIEWED"
 
 it "the record's tier where the change left the base is a floor, even after the base closed it"
@@ -310,10 +313,10 @@ done
 it "missing counts or a missing review fail; the tier must be named"
 record T1 "$(verdict code PASS 'looks fine')"
 run bash "$CHECK"
-assert_contains "$OUTPUT" "? critical finding(s) block" "unreadable counts are not zero"
+assert_contains "$OUTPUT" "invalid verdict or finding counts" "unreadable counts are not zero"
 record T2
 run bash "$CHECK"
-assert_contains "$OUTPUT" "T2 needs a recorded independent review; none found in State" "no review"
+assert_contains "$OUTPUT" "T2 needs a recorded independent review; publish a receipt on this PR" "no review"
 record "" "$(verdict code PASS "$CLEAN")"
 run bash "$CHECK"
 assert_contains "$OUTPUT" "The record names no review tier" "tier required"
@@ -321,7 +324,7 @@ assert_contains "$OUTPUT" "The record names no review tier" "tier required"
 it "an example verdict inside a comment or code fence is never counted"
 record T1 '<!-- example:' "$(verdict code PASS "$CLEAN")" '-->' '```' "$(verdict code PASS "$CLEAN")" '```'
 run bash "$CHECK"
-assert_contains "$OUTPUT" "T1 needs a recorded independent review; none found in State" "examples ignored"
+assert_contains "$OUTPUT" "T1 needs a recorded independent review; publish a receipt on this PR" "examples ignored"
 
 it "a self-declared T0 on code fails: T0 is checked against the trusted review-t0-paths"
 record T0
@@ -398,13 +401,13 @@ it "a branch may raise its tier but never lower it, even by a record-only commit
 record T3 "$(verdict design PASS "$CLEAN")"
 run bash "$CHECK"
 assert_eq 1 "$STATUS" "T3 without the owner fails"
-assert_contains "$OUTPUT" "T3 needs the owner's verdict too" "owner required"
+assert_contains "$OUTPUT" "T3 needs the owner's native approval too" "owner required"
 sed -i.bak 's/\*\*Tier\*\*: T3/**Tier**: T1/' specs/changes/001-greet.md && rm -f specs/changes/001-greet.md.bak
 git commit -qam "lower the tier after review" >/dev/null
 run bash "$CHECK" --json
 assert_eq 1 "$STATUS" "a record-only T3-to-T1 commit does not drop the owner gate"
 assert_contains "$OUTPUT" "The record claims T1, but its floor is T3, from commit" "names the lowering"
-assert_contains "$OUTPUT" "T3 needs the owner's verdict too" "the owner gate stands"
+assert_contains "$OUTPUT" "T3 needs the owner's native approval too" "the owner gate stands"
 assert_contains "$OUTPUT" '"tier":"T3"' "the effective tier is the floor"
 git reset -q --hard HEAD~1
 sed -i.bak 's/\*\*Tier\*\*: T3/**Tier**: T1 <!-- **Tier**: T0 -->/' specs/changes/001-greet.md && rm -f specs/changes/001-greet.md.bak
@@ -431,7 +434,7 @@ git update-ref "refs/remotes/origin/$DEFAULT" "$TRUSTED_TIP"
 it "T3 also needs the owner's verdict, which carries no counts and covers the L0 and L1 spec"
 record T3 "$(verdict design PASS "$CLEAN")"
 run bash "$CHECK"
-assert_contains "$OUTPUT" "T3 needs the owner's verdict too" "owner required"
+assert_contains "$OUTPUT" "T3 needs the owner's native approval too" "owner required"
 OWNED="$REVIEWED"
 record T3 "$(verdict design PASS "$CLEAN")" "**Review**: round 1 · $BASE..$OWNED · owner · PASS · https://example.invalid/pr/1#c2"
 run bash "$CHECK"
@@ -441,14 +444,14 @@ REVIEWED="$(git rev-parse --short HEAD)"
 record T3 "$(verdict design PASS "$CLEAN")" "**Review**: round 1 · $BASE..$OWNED · owner · PASS · https://example.invalid/pr/1#c2"
 run bash "$CHECK"
 assert_eq 1 "$STATUS" "an L0 edit after the owner's head fails"
-assert_contains "$OUTPUT" "the L0/L1 spec changed since the owner's head $OWNED: specs/product.md" "names the spec file"
+assert_contains "$OUTPUT" "the L0/L1 spec changed since the owner's native approval" "requires fresh approval of the spec edit"
 git reset -q --hard "$OWNED"; REVIEWED="$OWNED"
 mkdir -p specs/product/journeys; echo '# J-01 Ask (hypothesis)' > specs/product/journeys/j-01-ask.md
 git add specs/product; git commit -qm "journey after the owner" >/dev/null
 REVIEWED="$(git rev-parse --short HEAD)"
 record T3 "$(verdict design PASS "$CLEAN")" "**Review**: round 1 · $BASE..$OWNED · owner · PASS · https://example.invalid/pr/1#c2"
 run bash "$CHECK"
-assert_contains "$OUTPUT" "the L0/L1 spec changed since the owner's head $OWNED: specs/product/journeys/j-01-ask.md" "a journey file is L0"
+assert_contains "$OUTPUT" "the L0/L1 spec changed since the owner's native approval" "a journey file is L0"
 git reset -q --hard "$OWNED"; REVIEWED="$OWNED"
 
 it "a scoped re-review covers an older reviewer's head when its range starts at or before it"
@@ -461,7 +464,7 @@ assert_eq 0 "$STATUS" "the delta review covers the security head"
 record T2 "$(verdict security PASS "$CLEAN")" "$(verdict code PASS "$CLEAN" "$FIX1..$FIX2")"
 run bash "$CHECK"
 assert_eq 1 "$STATUS" "a delta starting after the older head leaves a gap"
-assert_contains "$OUTPUT" "security (round 1): changed since the reviewed head $REVIEWED: src/fix.txt" "names the gap"
+assert_contains "$OUTPUT" "security: reviewed content differs at: src/fix.txt" "names the gap"
 record T1 "$(verdict code FAIL '0 critical, 1 high, 0 medium, 0 low')" "$(verdict code PASS "$CLEAN" "$REVIEWED..$FIX2")"
 run bash "$CHECK"
 assert_eq 0 "$STATUS" "one reviewer's FAIL, then a scoped PASS of the fix, passes"
@@ -476,7 +479,7 @@ assert_eq 0 "$STATUS" "the chain also covers another reviewer's older head"
 record T1 "$(verdict code FAIL '1 critical, 0 high, 0 medium, 0 low' "$REVIEWED..$FIX2")" "$(verdict code PASS "$CLEAN")"
 run bash "$CHECK"
 assert_eq 1 "$STATUS" "a FAIL round its reviewer never passed past covers nothing"
-assert_contains "$OUTPUT" "changed since the reviewed head $REVIEWED" "the failed code is unreviewed"
+assert_contains "$OUTPUT" "changed since the reviewed content" "the failed code is unreviewed"
 record T2 "$(verdict code PASS "$CLEAN")" "$(verdict security FAIL '1 critical, 0 high, 0 medium, 0 low' "$REVIEWED..$FIX2")" \
     "$(verdict security PASS "$CLEAN")"
 run bash "$CHECK"
@@ -486,7 +489,7 @@ record T2 "$(verdict code PASS "$CLEAN" "$BASE..$FIX2")" "$(verdict security FAI
 run bash "$CHECK"
 assert_eq 1 "$STATUS" "a FAIL is not carried to the head by another reviewer's PASS"
 # A full re-review clears the FAIL, but of older content: it carries security nowhere near this head.
-assert_contains "$OUTPUT" "security (round 1): changed since the reviewed head $REVIEWED: src/fix.txt" "security's re-reviewed content is not this head's"
+assert_contains "$OUTPUT" "security: reviewed content differs at: src/fix.txt" "security's re-reviewed content is not this head's"
 assert_not_contains "$OUTPUT" "PASS 001-greet" "the failed step never links"
 record T1 "$(verdict code PASS "$CLEAN" "$BASE..$FIX2")" "$(verdict code FAIL '1 critical, 0 high, 0 medium, 0 low' "$BASE..$FIX2")" \
     "$(verdict code PASS "$CLEAN")"
@@ -531,7 +534,7 @@ assert_eq 1 "$STATUS" "the change's own branch as base fails"
 assert_contains "$OUTPUT" "is already in 001-greet" "says why"
 TRUNK="$(mktemp -d)"; track_tmp "$TRUNK"
 ( cd "$TRUNK" && git init -q && git config user.name test && git config user.email test@example.invalid &&
-  git checkout -q -b trunk && mkdir -p .prdkit/memory && printf '# Capabilities\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n' > .prdkit/memory/agents.md && printf -- '- **Rigor**: light\n' > .prdkit/memory/constitution.md && echo base > base.txt && git add base.txt .prdkit && git commit -qm base &&
+  git checkout -q -b trunk && mkdir -p .prdkit/memory && printf '# Capabilities\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n' > .prdkit/memory/agents.md && printf -- '- **Rigor**: light\n' > .prdkit/memory/constitution.md && receipt_policy "$TRUNK" && echo base > base.txt && git add base.txt .prdkit && git commit -qm base &&
   git checkout -q -b 008-solo && mkdir -p src specs/changes && echo solo > src/solo.txt && git add src && git commit -qm code ) >/dev/null 2>&1
 SOLO_BASE="$(git -C "$TRUNK" rev-parse --short trunk)"; SOLO_HEAD="$(git -C "$TRUNK" rev-parse --short HEAD)"
 printf '# Change: Solo\n\n**Tier**: T1\n\n## State\n\n**Review**: round 1 · %s..%s · code · PASS · %s · https://example.invalid/pr/8#c1\n' \
@@ -595,11 +598,11 @@ run bash "$CHECK" 001-greet
 assert_eq 1 "$STATUS" "a recorded FAIL still fails"
 git checkout -q "$DEFAULT"; git branch -q -D 001-close
 git checkout -q -b 001-close
-sed -i.bak '/^\*\*Review\*\*:/d' specs/changes/001-greet.md && rm -f specs/changes/001-greet.md.bak
+sed -i.bak '/^\*\*Review\*\*:/d; /^\*\*Receipt fixture\*\*:/d' specs/changes/001-greet.md && rm -f specs/changes/001-greet.md.bak
 git commit -qam "no verdicts" >/dev/null
 run bash "$CHECK" 001-greet
 assert_eq 0 "$STATUS" "a record-only close passes"
-assert_contains "$OUTPUT" "a T1 record with no verdict, so its code merged unreviewed" "but says the code had no verdict"
+assert_contains "$OUTPUT" "no covering receipt needed on this PR" "earlier PR coverage is not inferred from this PR's receipts"
 # An integration branch other than the default one, named as a remote-tracking --base, is trusted.
 git checkout -q -b develop "$DEFAULT"; echo d > dev.txt; git add dev.txt; git commit -qm develop >/dev/null
 git update-ref refs/remotes/origin/develop develop
@@ -639,7 +642,7 @@ git checkout -q -b side HEAD~3; echo other > other.txt; git add other.txt; git c
 REVIEWED="$(git rev-parse --short HEAD)"; git checkout -q 001-greet
 record T1 "$(verdict code PASS "$CLEAN")"
 run bash "$CHECK"
-assert_contains "$OUTPUT" "code (round 1): changed since the reviewed head $REVIEWED: other.txt" "foreign content refused"
+assert_contains "$OUTPUT" "code: reviewed content differs at: other.txt" "foreign content refused"
 
 it "a 0.x feature without a record is told it becomes one at the cutover"
 mkdir -p specs/features/002-legacy; echo '# Legacy' > specs/features/002-legacy/spec.md

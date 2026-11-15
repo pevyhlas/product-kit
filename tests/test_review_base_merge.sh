@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Review provenance across base updates: exact branch deltas, not commit-message heuristics.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+source "$TESTS_DIR/review-fixtures.sh"
 
 SEED="$(make_inited_project)"; track_tmp "$SEED"
 printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n| security | reviewer |\n' >> "$SEED/.prdkit/memory/agents.md"
 printf '\n## Configuration\n- review-integration-branches: origin/integration\n' > "$SEED/.prdkit/memory/config.md"
+receipt_policy "$SEED"
 mkdir -p "$SEED/src" "$SEED/docs" "$SEED/specs"
 printf 'base source\n' > "$SEED/src/owned.txt"
 printf 'base contract\n' > "$SEED/specs/product.md"
@@ -124,7 +126,7 @@ git add src/owned.txt; git commit -qm 'resolve by keeping reviewed bytes'
 assert_eq '' "$(git diff --name-only "$REVIEWED" HEAD -- src)" 'source bytes equal reviewed head'
 check
 assert_eq 1 "$STATUS" 'resolution still requires coverage'
-assert_contains "$OUTPUT" "code (round 1): changed since the reviewed head $REVIEWED: src/owned.txt" 'the resolution changed the reviewed hunk against the new base'
+assert_contains "$OUTPUT" "code: reviewed content differs at: src/owned.txt" 'the resolution changed the reviewed hunk against the new base'
 MERGED="$(git rev-parse HEAD)"
 printf '\n**Review**: round 2 · %s..%s · code · PASS · %s · https://example.invalid/review/6\n' "$REVIEWED" "$MERGED" "$CLEAN" >> "$RECORD"
 git add "$RECORD"; git commit -qm 'review integration decision'
@@ -156,7 +158,7 @@ printf '\n**Review**: round 2 · %s..%s · code · PASS · %s · https://example
 git add "$RECORD"; git commit -qm 'code review after resolution'
 check
 assert_eq 1 "$STATUS" 'code review cannot replace owner approval for L0 integration'
-assert_contains "$OUTPUT" "L0/L1 spec changed since the owner's head" 'owner gap named'
+assert_contains "$OUTPUT" "L0/L1 spec changed since the owner's native approval" 'owner gap named'
 
 it "an arbitrary local base cannot manufacture a trusted import"
 start_case
@@ -176,6 +178,7 @@ start_case
 git checkout -qb unreviewed-side "$BASE"
 printf 'unreviewed side source\n' > src/side.txt
 printf '# Settings\n## Configuration\n- review-integration-branches: origin/side-work\n' > .prdkit/memory/config.md
+receipt_policy "$PROJ"
 git add src/side.txt .prdkit/memory/config.md; git commit -qm 'side source and self-authorizing policy'
 SIDE="$(git rev-parse HEAD)"
 git -c protocol.file.allow=always push -q origin HEAD:refs/heads/side-work
