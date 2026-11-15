@@ -61,11 +61,33 @@ gate; assert_eq 0 "$STATUS" "$OUTPUT"
 
 it 'a second trusted integration ref cannot SIGPIPE a dry-run default-base match'
 fresh
-git show "$BASE:.prdkit/memory/config.md" | sed '/^## Configuration$/a\
-- review-integration-branches: origin/develop' | trusted_edit refs/remotes/origin/main .prdkit/memory/config.md
+# GNU sed adds a newline after unterminated a\ text; BSD sed joins it to the next
+# input line. Model BSD's output on Linux too, so reintroducing that edit fails.
+BSD_SED="$(mktemp -d)"; track_tmp "$BSD_SED"
+REAL_SED="$(command -v sed)"; REAL_AWK="$(command -v awk)"; export REAL_SED REAL_AWK
+cat > "$BSD_SED/sed" <<'EOF'
+#!/usr/bin/env bash
+if [ "$#" -eq 1 ] && [ "$1" = $'/^## Configuration$/a\\\n- review-integration-branches: origin/develop' ]; then
+    exec "$REAL_AWK" '{ print; if ($0 == "## Configuration") printf "%s", "- review-integration-branches: origin/develop" }'
+fi
+exec "$REAL_SED" "$@"
+EOF
+chmod +x "$BSD_SED/sed"
+add_integration_ref() {
+    # The template and test policy each have a Configuration section. Add the key
+    # only once, or duplicate-key rejection would silently remove the second ref.
+    git show "$BASE:.prdkit/memory/config.md" | awk '
+        { print; if ($0 == "## Configuration" && !added) { print "- review-integration-branches: origin/develop"; added=1 } }
+    ' | trusted_edit refs/remotes/origin/main .prdkit/memory/config.md
+}
+PATH="$BSD_SED:$PATH" add_integration_ref
 post --dry-run
 assert_eq 0 "$STATUS" "$OUTPUT"
 assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
+assert_eq 1 "$(git show refs/remotes/origin/main:.prdkit/memory/config.md | awk "$SPEC_SKIP_AWK"'
+    { if (spec_skip($0)) next } /^- review-host: github$/ { n++ } END { print n+0 }
+')" 'the fixture keeps the active host key on its own line'
+assert_eq $'refs/remotes/origin/main\nrefs/remotes/origin/develop' "$(spec_trusted_refs "$PROJ")" 'the fixture really adds a second trusted ref'
 
 it 'a failed POST keeps the write-ahead payload and never reports publication'
 fresh

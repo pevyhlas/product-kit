@@ -87,6 +87,44 @@ assert_eq 1 "$STATUS"
 assert_contains "$RC_ERROR" 'contains NUL bytes'
 review_receipts_policy "$PROJ" "$BASE"
 
+it 'trusted policy read failures are not empty or valid policy, even after valid output'
+POLICY_GIT="$(mktemp -d)"; track_tmp "$POLICY_GIT"
+POLICY_REAL_GIT="$(command -v git)"; export POLICY_REAL_GIT
+cat > "$POLICY_GIT/git" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$POLICY_GIT_LOG"
+case "${3:-}" in
+    ls-tree) [ "$POLICY_READ_FAILURE" != tree ] || exit 128 ;;
+    show)
+        case "${4:-}" in *:.prdkit/memory/config.md)
+            case "$POLICY_READ_FAILURE" in
+                empty-output) exit 128 ;;
+                valid-output) "$POLICY_REAL_GIT" "$@"; exit 128 ;;
+            esac ;;
+        esac ;;
+esac
+exec "$POLICY_REAL_GIT" "$@"
+EOF
+chmod +x "$POLICY_GIT/git"
+for failure in empty-output valid-output tree; do
+    if PATH="$POLICY_GIT:$PATH" POLICY_READ_FAILURE="$failure" POLICY_GIT_LOG="$POLICY_GIT/calls" \
+        review_receipts_policy "$PROJ" "$BASE"; then STATUS=0; else STATUS=$?; fi
+    assert_eq 1 "$STATUS" "$failure fails closed"
+    assert_contains "$RC_ERROR" 'cannot be read' "$failure is a read error, not a missing policy key"
+done
+
+it 'only a tree-proven absent policy file reads as empty, without invoking git show'
+EMPTY_TREE="$(git mktree < /dev/null)"
+ABSENT_POLICY="$(git commit-tree "$EMPTY_TREE" -p "$BASE" -m 'absent receipt policy')"
+: > "$POLICY_GIT/calls"
+if PATH="$POLICY_GIT:$PATH" POLICY_READ_FAILURE=empty-output POLICY_GIT_LOG="$POLICY_GIT/calls" \
+    review_receipts_policy "$PROJ" "$ABSENT_POLICY"; then STATUS=0; else STATUS=$?; fi
+assert_eq 1 "$STATUS" 'absence still fails required policy validation'
+assert_contains "$RC_ERROR" 'review-publisher-isolation must be required or shared'
+assert_not_contains "$RC_ERROR" 'cannot be read' 'absence is not an object read failure'
+assert_not_contains "$(cat "$POLICY_GIT/calls")" ' show ' 'no failed show is used to infer absence'
+review_receipts_policy "$PROJ" "$BASE"
+
 it 'a listed numeric Bot author authenticates a valid v3 review'
 receipt 7
 fetch

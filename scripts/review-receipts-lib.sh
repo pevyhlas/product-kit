@@ -15,13 +15,18 @@
 # shellcheck disable=SC2034,SC2016 # Public outputs and literal jq variables.
 
 review_receipts_policy() {
-    local root="$1" at="$2" key value kind item list
+    local root="$1" at="$2" key value kind item list entry
     RC_ERROR=""; RC_PUBLISHERS=""; RC_OWNERS=""; RC_ISOLATION=""; RC_NOTES=()
     if [ -z "$at" ] || ! git -C "$root" rev-parse --verify "$at^{commit}" >/dev/null 2>&1; then
         RC_ERROR='No trusted receipt policy commit; establish origin/HEAD with its history fetched'; return 1
     fi
+    # Only a successful tree lookup can prove absence. A failed show (even after
+    # printing valid policy bytes) must propagate through pipefail, not become empty input.
+    entry="$(git -C "$root" ls-tree "$at" -- .prdkit/memory/config.md 2>/dev/null)" || {
+        RC_ERROR='Trusted receipt policy .prdkit/memory/config.md cannot be read'; return 1
+    }
     for key in review-host review-publishers review-owner review-publisher-isolation; do
-        value="$(set -o pipefail; { git -C "$root" show "$at:.prdkit/memory/config.md" 2>/dev/null || true; } | review_text_stream | awk "$SPEC_SKIP_AWK"'
+        value="$(set -o pipefail; { if [ -n "$entry" ]; then git -C "$root" show "$at:.prdkit/memory/config.md" 2>/dev/null; fi; } | review_text_stream | awk "$SPEC_SKIP_AWK"'
             { if (spec_skip($0)) next }
             /^## / { section = $0; next }
             section == "## Configuration" && index($0, "- " key ":") == 1 {
