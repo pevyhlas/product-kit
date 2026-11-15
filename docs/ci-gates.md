@@ -158,7 +158,11 @@ when its provenance commits are local; authenticated tokens survive an absent re
 unmerged PRs of the same head branch. Earlier deliveries never grant coverage. Merged PRs supply
 only restatements; repairs retain the origin PR's position and scope. See the
 [review workflow](../workflows/review.md#repairing-an-edited-or-invalid-receipt) for publisher
-logs and recovery. API errors, missing `gh`/`jq` and partial/non-advancing pages are
+logs and recovery. Logs live outside working trees under the absolute Git common directory,
+`$(git -C <fetch-clone> rev-parse --git-common-dir)/prdkit/receipts/`, and must never be
+maker-writable. Symlinked log components are refused; old `.prdkit/cache/receipts/` logs are
+neither read nor migrated. A repair must have the original review author's typename and numeric id.
+API errors, missing `gh`/`jq` and partial/non-advancing pages are
 `authority:"unavailable"`, exit 1, never an empty list.
 
 The owner's native approval is not a receipt. The activity guard requests ascending order,

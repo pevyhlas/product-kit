@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Publish one immutable-content v3 verdict as a submitted COMMENT review. Never edit a record.
-# A restatement reads the original verdict from cache, not from the possibly corrupted host body:
+# A restatement reads the publisher's Git-directory log, never checkout files or the edited body:
 #   publish-review.sh --pr URL --restates REVIEW_ID --receipt-id ID [--restates-pr ORIGIN_PR]
 # Offline --dry-run needs jq to encode/validate JSON, but never invokes gh or writes the log.
 set -euo pipefail
@@ -60,7 +60,19 @@ normalize_counts() {
     jq -ner --arg c "$1" '$c|split(",")|map(sub("^0+";"")|if .=="" then "0" else . end|tonumber) |
         if all(.[];type=="number" and .>=0 and floor==.) then map(tostring)|join(",") else error("counts") end'
 }
-log_root="$root/.prdkit/cache/receipts"
+git_dir="$(git -C "$root" rev-parse --git-common-dir)" || refuse 'cannot locate the shared Git directory'
+case "$git_dir" in /*) ;; *) git_dir="$root/$git_dir" ;; esac
+git_dir="$(CDPATH="" cd "$git_dir" && pwd -P)" || refuse 'cannot resolve the shared Git directory'
+log_root="$git_dir/prdkit/receipts"
+check_log_path() { # path below prdkit/receipts; every component must be publisher-owned, not a link
+    local remaining="prdkit/receipts/$1" component path="$git_dir"
+    while [ -n "$remaining" ]; do
+        component="${remaining%%/*}"
+        if [ "$component" = "$remaining" ]; then remaining=""; else remaining="${remaining#*/}"; fi
+        path="$path/$component"
+        [ ! -L "$path" ] || refuse "symlinked publisher log component: $path"
+    done
+}
 if [ -n "$restates" ]; then
     [[ "$restates" =~ ^[1-9][0-9]*$ && "$receipt_id" =~ ^[0-9a-f]{32}$ ]] || refuse 'restatement needs a numeric --restates review id and --receipt-id (32 hex)'
     if [ -n "$reviewer$verdict$counts$report$head_ref$since_ref$from_report" ] || $clears_legacy; then
@@ -70,6 +82,7 @@ if [ -n "$restates" ]; then
     [[ "$origin" =~ ^[1-9][0-9]*$ ]] || refuse 'invalid --restates-pr'
     [ -z "$restates_pr" ] || [ "$origin" != "$number" ] || refuse '--restates-pr is present only when origin and posting PR differ'
     log="$log_root/$origin/$receipt_id.json"
+    check_log_path "$origin/$receipt_id.json"
     [ -f "$log" ] && [ ! -L "$log" ] || refuse "no original publisher log: $log"
     if ! jq -se --arg repo "$host_repo" --argjson origin "$origin" --arg id "$receipt_id" '
         length==1 and (.[0] | .schema=="prdkit.review.v3" and .id==$id and (.repo|ascii_downcase)==($repo|ascii_downcase) and .pr==$origin and
@@ -147,6 +160,12 @@ _receipts_row_valid || refuse 'the publish payload has invalid v3 token/identity
 _receipts_consistency "$root" "$change" "$from" "$to" "$rhead" "$since" "$base" "$base_at" || refuse "$RC_ERROR"
 payload="$(jq -c . "$work/payload.json")"
 body="$(printf '<!-- prdkit-review\n%s\n-->\n\n%s %s: %s\nReport: %s\n' "$payload" "$reviewer" "$(jq -r .change "$work/payload.json")" "$verdict" "$(jq -r .report "$work/payload.json")")"
+check_log_path "$number/$receipt_id.json"
+check_log_path "$number/reviews"
+# The host review id is not known until POST. Reject existing symlink targets before posting.
+for entry in "$log_root/$number/reviews/"*; do
+    [ ! -L "$entry" ] || refuse "symlinked publisher log component: $entry"
+done
 if $dry_run; then printf '%s\n' "$body"; exit 0; fi
 command -v gh >/dev/null 2>&1 || refuse 'posting a review needs gh'
 gh api --hostname github.com "repos/$host_repo/pulls/$number" > "$work/pr.json" 2>/dev/null || refuse 'could not read the destination PR'
@@ -157,6 +176,7 @@ printf '%s\n' "$RC_PUBLISHERS" | awk -F : -v id="$viewer" '$2==id { found=1 } EN
 if [ "$RC_ISOLATION" = required ] && [ "$(jq -r .user.id "$work/pr.json")" = "$viewer" ]; then refuse 'publisher also authored this PR (isolation required)'; fi
 # Write ahead: even a POST timeout or an edited/unreadable read-back must not lose the repair log.
 mkdir -p "$log_root/$number" || refuse 'cannot create the publisher log'
+check_log_path "$number/$receipt_id.json"
 log="$log_root/$number/$receipt_id.json"
 if [ ! -e "$log" ]; then cp "$work/payload.json" "$log" || refuse 'cannot retain the publish payload'
 elif [ -z "$restates" ]; then refuse 'receipt id already exists in the publish log'; fi
@@ -165,6 +185,7 @@ if ! gh api --hostname github.com --method POST "repos/$host_repo/pulls/$number/
     refuse "POST failed or its result is unknown; the payload is retained at $log; inspect the PR before retrying"
 fi
 review="$(jq -er '.id|tostring|select(test("^[1-9][0-9]*$"))' "$work/posted.json")" || refuse "POST returned no review id; payload retained at $log"
+check_log_path "$number/reviews/$review.json"
 if ! mkdir -p "$log_root/$number/reviews" || ! cp "$work/payload.json" "$log_root/$number/reviews/$review.json"; then refuse 'review posted but could not retain its review-id log'; fi
 url="https://github.com/$host_repo/pull/$number#pullrequestreview-$review"
 _receipts_reviews "$host_repo" "$number" "$work" || refuse "review $url was posted but GraphQL read-back failed: $RC_ERROR; payload retained at $log"

@@ -154,6 +154,17 @@ assert_eq 2 "$RC_INVALID" 'a visible original id must match'
 reset_host; receipt 7; receipt 7 '.restates="1001"'; fetch
 assert_eq 1 "$RC_INVALID" 'restatement cannot remove a valid receipt'
 
+it 'a different listed publisher cannot restate another publishers invalid receipt'
+for author in '{"__typename":"Bot","databaseId":1004,"login":"other[bot]"}' '{"__typename":"User","databaseId":1001,"login":"other"}'; do
+    reset_host; RC_PUBLISHERS=$'bot:1001\nbot:1004\nuser:1001'
+    receipt 7 '.verdict="FAIL"' '{"editor":{"login":"admin"}}'
+    receipt 7 '.id="00000000000000000000000000000001"|.restates="1001"' "$(jq -cn --argjson author "$author" '{author:$author}')"
+    fetch
+    assert_eq 2 "$RC_INVALID" 'original invalid receipt and unauthorized restatement both block'
+    assert_contains "$(problems)" 'same id and publisher'
+    assert_contains "$(problems)" 'edited receipt'
+done
+
 it 'foreign changes block without granting checked-change coverage'
 reset_host; receipt 7 '.change="002-sibling"|.verdict="FAIL"'; receipt 7 '.reviewer="security"'; fetch
 assert_contains "$(problems)" 'code 002-sibling blocking verdict stands'

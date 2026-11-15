@@ -41,7 +41,9 @@ change by change.
   then reads it back through GraphQL to verify its numeric author identity, review id, intact
   body and null edit markers. Record text and pasted blocks never grant approval. `--from-report`
   compares the report's final verdict/count lines; `--dry-run` encodes JSON with jq but makes no
-  host call. Publish logs under `.prdkit/cache/receipts/` retain the original payload for repair.
+  host call. Publish logs retain the original payload outside working trees, under the absolute
+  Git common directory's `prdkit/receipts/`. They must never be maker-writable; symlinked log
+  components are refused. Old `.prdkit/cache/receipts/` logs are no longer read and are not migrated.
 - **The merge gate requires the host in every tier.** `check-review.sh --pr <url>` needs `gh`,
   `jq` and complete API reads even for T0 and record-only changes: only the host can show that no
   FAIL stands. Host unavailability means merging waits. `--receipts <snapshot>` and checks with
@@ -72,7 +74,8 @@ change by change.
   never its login or report text. Any edit invalidates a receipt and blocks, even when its author
   and submission time stay unchanged; any account with pull-request write access can cause this.
   Submitted reviews cannot be deleted. The publisher restates the full original verdict from its
-  log, preserving the origin PR's order and scope; a repair cannot erase a FAIL or grant new-PR
+  log, using the original review author's typename and numeric id and preserving the origin PR's
+  order and scope; a repair cannot erase a FAIL or grant new-PR
   coverage. Losing the log can leave a permanent blocker.
 - **Closing requires `close-change.sh --pr <url>`.** It checks online before and after the local
   closing commit and refuses previews. An unpushed record/log-only closing commit is permitted

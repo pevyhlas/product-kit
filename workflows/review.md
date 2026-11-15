@@ -79,8 +79,12 @@ receipts and record lines never approve; an owner-authored T3 PR needs a differe
 
 ### Repairing an edited or invalid receipt
 
-Keep the publisher log in `.prdkit/cache/receipts/<pr>/<receipt-id>.json`. Restate the **full
-original verdict**, never reconstruct it from a corrupted host body:
+Keep the publisher log outside every working tree, under the absolute Git common directory:
+`$(git -C <fetch-clone> rev-parse --git-common-dir)/prdkit/receipts/<pr>/<receipt-id>.json`.
+It must **never be maker-writable**; protect it with the publisher credential. Symlinked log
+components are refused. Old `.prdkit/cache/receipts/` logs are never read or migrated.
+Only the original review author's typename and numeric id may restate it. Restate the **full
+original verdict**, never reconstruct it from a corrupted, maker-editable host body:
 
 ```bash
 bash .prdkit/scripts/bash/publish-review.sh --pr <posting-pr-url> \

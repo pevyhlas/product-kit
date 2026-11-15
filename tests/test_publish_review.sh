@@ -26,6 +26,7 @@ printf '# Change\n**Tier**: T1\n## State\n' > specs/changes/001-reviewed.md
 printf implementation > source.txt
 git add -A; git commit -qm implementation; A="$(git rev-parse HEAD)"
 PR=https://github.com/owner/repo/pull/7
+LOG_ROOT="$PROJ/.git/prdkit/receipts"
 fresh() {
     git reset -q --hard "$A"; git update-ref refs/remotes/origin/main "$BASE"
     use_gh_stub; fx_pr 7 "$A"
@@ -53,9 +54,9 @@ assert_eq false "$(jq 'has("commit_id")' "$GH_STUB_DIR/post-request.json")"
 assert_contains "$(cat "$GH_STUB_DIR/requests")" 'query PrdkitReviews'
 assert_not_contains "$(cat "$GH_STUB_DIR/requests")" 'pulls/7/reviews/1001' 'REST is never used to validate a review'
 RECEIPT_ID="$(payload | jq -r .id)"
-assert_file ".prdkit/cache/receipts/7/$RECEIPT_ID.json"
-assert_eq "$RECEIPT_ID" "$(jq -r .id ".prdkit/cache/receipts/7/$RECEIPT_ID.json")"
-assert_eq "$RECEIPT_ID" "$(jq -r .id .prdkit/cache/receipts/7/reviews/1001.json)" 'review-id log points to the posted verdict'
+assert_file "$LOG_ROOT/7/$RECEIPT_ID.json"
+assert_eq "$RECEIPT_ID" "$(jq -r .id "$LOG_ROOT/7/$RECEIPT_ID.json")"
+assert_eq "$RECEIPT_ID" "$(jq -r .id "$LOG_ROOT/7/reviews/1001.json")" 'review-id log points to the posted verdict'
 gate; assert_eq 0 "$STATUS" "$OUTPUT"
 
 it 'a second trusted integration ref cannot SIGPIPE a dry-run default-base match'
@@ -105,7 +106,7 @@ run env GH_STUB_FAIL=graphql:PrdkitReviews bash "$PUB" 001-reviewed --pr "$PR" -
 assert_eq 1 "$STATUS"
 assert_contains "$OUTPUT" 'was posted but GraphQL read-back failed'
 saved="$(jq -r '.body|split("\n")[1]|fromjson|.id' "$GH_STUB_DIR/post-request.json")"
-assert_file ".prdkit/cache/receipts/7/$saved.json"
+assert_file "$LOG_ROOT/7/$saved.json"
 
 it 'from-report reads the final two lines and refuses disagreeing CLI verdict/counts'
 fresh
@@ -135,10 +136,10 @@ sha_tool=sha256sum; command -v sha256sum >/dev/null 2>&1 || sha_tool=shasum
 for cmd in bash dirname git sed awk tr head tail grep cat mktemp rm mv mkdir wc sort jq od "$sha_tool"; do
     ln -s "$(command -v "$cmd")" "$TOOLS/$cmd"
 done
-logs_before="$(find .prdkit/cache/receipts -type f | sort)"
+logs_before="$(find "$LOG_ROOT" -type f | sort)"
 run env PATH="$TOOLS" bash "$PUB" 001-reviewed --pr "$PR" --reviewer code --verdict PASS --counts 0,0,0,0 --report https://example.invalid/report --head HEAD --dry-run
 assert_eq 0 "$STATUS" "$OUTPUT"
-assert_eq "$logs_before" "$(find .prdkit/cache/receipts -type f | sort)"
+assert_eq "$logs_before" "$(find "$LOG_ROOT" -type f | sort)"
 assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
 
 it 'read-back rejects wrong typename/id, edits and changed body, retaining the log'
@@ -151,7 +152,7 @@ for overrides in '{"author":{"__typename":"User","databaseId":1001}}' \
     assert_contains "$OUTPUT" 'was posted but'
     assert_contains "$(cat "$GH_STUB_DIR/requests")" '--method POST'
     saved="$(jq -r '.body|split("\n")[1]|fromjson|.id' "$GH_STUB_DIR/post-request.json")"
-    assert_file ".prdkit/cache/receipts/7/$saved.json" 'write-ahead log survives failed verification'
+    assert_file "$LOG_ROOT/7/$saved.json" 'write-ahead log survives failed verification'
 done
 
 it 'GraphQL must return the exact POST review database id'
@@ -163,7 +164,7 @@ post
 assert_eq 1 "$STATUS"
 assert_contains "$OUTPUT" 'GraphQL author, id, edit state or body did not verify'
 saved="$(jq -r '.body|split("\n")[1]|fromjson|.id' "$GH_STUB_DIR/post-request.json")"
-assert_file ".prdkit/cache/receipts/7/$saved.json"
+assert_file "$LOG_ROOT/7/$saved.json"
 
 it 'required isolation refuses before POST, while viewer User still matches the bot numeric id'
 fresh; fx_pr 7 "$A" '{"user":{"id":1001},"author":{"databaseId":1001,"__typename":"Bot"}}'
@@ -191,6 +192,60 @@ assert_eq "$original" "$(payload | jq -c 'del(.restates,.restates_pr)|.pr=7')"
 run bash "$CHECK" --json --pr https://github.com/owner/repo/pull/8 001-reviewed
 assert_eq 1 "$STATUS" 'identical restatement retries keep the original FAIL'
 assert_contains "$OUTPUT" '"invalid_receipts":0' 'a repeated faithful repair is a no-op, not a new invalid receipt'
+
+it 'tracked and planted old in-tree logs are never used for restatement'
+for kind in planted tracked; do
+    fresh; missing=00000000000000000000000000009999
+    mkdir -p .prdkit/cache/receipts/7
+    printf '{"id":"%s","verdict":"PASS"}\n' "$missing" > ".prdkit/cache/receipts/7/$missing.json"
+    if [ "$kind" = tracked ]; then git add -f ".prdkit/cache/receipts/7/$missing.json"; git commit -qm forged; fi
+    run bash "$PUB" --pr "$PR" --restates 1001 --receipt-id "$missing"
+    assert_eq 1 "$STATUS" "$kind old log is not publisher state"
+    assert_contains "$OUTPUT" 'no original publisher log'
+    assert_not_contains "$(cat "$GH_STUB_DIR/requests")" '--method POST'
+    rm -f ".prdkit/cache/receipts/7/$missing.json"
+done
+
+it 'editing FAIL and planting a tracked PASS log cannot produce host-authority PASS'
+fresh; post --verdict FAIL --counts 0,1,0,0
+assert_eq 0 "$STATUS" "$OUTPUT"; saved="$(payload | jq -r .id)"
+jq '.[0].body=(.[0].body|split("\n")|.[1]|fromjson|.verdict="PASS"|.high=0|"<!-- prdkit-review\n"+tojson+"\n-->") |
+    .[0].lastEditedAt="2026-01-03T00:00:00Z"' "$GH_STUB_DIR/reviews/7.json" > .git/edited
+mv .git/edited "$GH_STUB_DIR/reviews/7.json"
+gate; assert_eq 1 "$STATUS" 'an edited FAIL remains invalid'
+mkdir -p .prdkit/cache/receipts/7
+jq '.verdict="PASS"|.high=0' "$LOG_ROOT/7/$saved.json" > ".prdkit/cache/receipts/7/$saved.json"
+git add -f ".prdkit/cache/receipts/7/$saved.json"; git commit -qm 'planted old publisher log'
+run bash "$PUB" --pr "$PR" --restates 1001 --receipt-id "$saved"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq 'FAIL/1' "$(payload | jq -r '[.verdict,.high]|join("/")')" 'repair uses the publisher-owned original, not the planted PASS'
+git rm -q -f ".prdkit/cache/receipts/7/$saved.json"; git commit -qm 'remove planted log'
+gate; assert_eq 1 "$STATUS" 'restatement cannot launder FAIL into host PASS'
+assert_contains "$OUTPUT" '"authority":"host"'
+assert_contains "$OUTPUT" '"invalid_receipts":0'
+assert_contains "$OUTPUT" 'verdict FAIL, not PASS'
+
+it 'every symlinked publisher-log component is refused before posting'
+fresh; post --verdict FAIL
+assert_eq 0 "$STATUS" "$OUTPUT"; saved="$(payload | jq -r .id)"
+for component in "$PROJ/.git/prdkit" "$LOG_ROOT" "$LOG_ROOT/7" "$LOG_ROOT/7/$saved.json" "$LOG_ROOT/7/reviews" "$LOG_ROOT/7/reviews/1001.json"; do
+    mv "$component" "$component.saved"
+    ln -s "$component.saved" "$component"
+    : > "$GH_STUB_DIR/requests"
+    run bash "$PUB" --pr "$PR" --restates 1001 --receipt-id "$saved"
+    assert_eq 1 "$STATUS" "$component is not a trusted log path"
+    assert_contains "$OUTPUT" 'symlinked publisher log component'
+    assert_not_contains "$(cat "$GH_STUB_DIR/requests")" '--method POST'
+    rm "$component"; mv "$component.saved" "$component"
+done
+
+it 'linked worktrees share the absolute Git-common-dir publisher log'
+fresh; LINKED="$(mktemp -d)"; track_tmp "$LINKED"
+git worktree add -q --detach "$LINKED" "$A"
+post --repo "$LINKED"
+assert_eq 0 "$STATUS" "$OUTPUT"; saved="$(payload | jq -r .id)"
+assert_file "$LOG_ROOT/7/$saved.json"
+assert_eq file "$([ -f "$LINKED/.git" ] && printf file)" 'linked checkout uses a gitfile, not a separate publisher log'
 
 it 'real empty-content publishing clears a merged-open legacy FAIL with no artificial delta'
 git reset -q --hard "$BASE"; git update-ref refs/remotes/origin/main "$BASE"
