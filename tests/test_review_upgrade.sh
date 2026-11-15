@@ -78,6 +78,9 @@ for rigor in none two light/full full: 'full,' fullx; do
     assert_contains "$OUTPUT" 'must hold exactly one Rigor line' 'exact parser diagnosis'
     assert_contains "$OUTPUT" 'full — medium blocks' 'repair uses a space, not a colon'
     assert_contains "$OUTPUT" 'merge that in its own PR first' 'fix trusted policy first'
+    if [ "$rigor" = full: ]; then
+        assert_contains "$OUTPUT" 'Found: "- **Rigor**: full: medium blocks"' 'exact prescribed offending-line text'
+    fi
     unchanged
     upgrade
     assert_eq 0 "$STATUS" 'plain upgrade warns, does not impose migration Rigor prerequisite'
@@ -90,6 +93,7 @@ it 'P3 refuses missing and malformed trusted policy, not a branch-local proposed
 for key in review-host review-publishers review-owner review-publisher-isolation; do
     for value in missing invalid; do
         transition_project
+        VALID_POLICY="$(cat "$PROJ/.prdkit/memory/config.md")"
         awk -v key="$key" -v value="$value" 'index($0,"- " key ":")==1 { if(value=="invalid") print "- " key ": invalid"; next } { print }' \
             "$PROJ/.prdkit/memory/config.md" > "$PROJ/config.next"
         mv "$PROJ/config.next" "$PROJ/.prdkit/memory/config.md"
@@ -98,6 +102,11 @@ for key in review-host review-publishers review-owner review-publisher-isolation
         assert_eq 1 "$STATUS" "$key $value refuses"
         assert_contains "$OUTPUT" 'P3:' 'trusted policy diagnosis'
         assert_contains "$OUTPUT" 'Merge all four well-formed receipt policy keys' 'merge-first instruction'
+        printf '%s\n' "$VALID_POLICY" > "$PROJ/.prdkit/memory/config.md"
+        commit_fixture proposed
+        upgrade --migrate-reviews --dry-run
+        assert_eq 1 "$STATUS" 'branch-local proposed repair is not trusted policy'
+        assert_contains "$OUTPUT" 'P3:' 'policy_at still governs after a local fix'
     done
 done
 
@@ -173,12 +182,15 @@ for kind in ignored committed retired managed; do
         before_manifest="$(cat "$PROJ/.prdkit/.manifest")"
         before_command="$(cat "$PROJ/.claude/commands/prdkit.md")"
         before_status="$(git -C "$PROJ" status --porcelain --untracked-files=all)"
+        if [ -f "$PROJ/.prdkit/.install-state" ]; then before_state="$(cat "$PROJ/.prdkit/.install-state")"; else before_state=absent; fi
         upgrade --migrate-reviews
         assert_eq 1 "$STATUS" "$kind customization refuses on $attempt upgrade"
         assert_contains "$OUTPUT" 'nothing was written' 'refusal precedes mutation'
         assert_eq "$before_manifest" "$(cat "$PROJ/.prdkit/.manifest")" 'manifest untouched'
         assert_eq "$before_command" "$(cat "$PROJ/.claude/commands/prdkit.md")" 'early command untouched'
         assert_eq "$before_status" "$(git -C "$PROJ" status --porcelain --untracked-files=all)" 'entire target status unchanged'
+        if [ -f "$PROJ/.prdkit/.install-state" ]; then after_state="$(cat "$PROJ/.prdkit/.install-state")"; else after_state=absent; fi
+        assert_eq "$before_state" "$after_state" 'no marker is created or advanced before refusal'
     done
 done
 
@@ -306,6 +318,86 @@ for flag in plain migrate; do
         assert_not_contains "$(cat "$GH_STUB_DIR/requests")" POST 'interruption/retry never posts'
     done
 done
+
+it 'a symlink-mode retry after manifest publication renders the same complete manifest'
+transition_project
+run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --symlink
+assert_eq 0 "$STATUS" "$OUTPUT"
+commit_fixture symlinks
+printf '\nNew symlink-source bytes\n' >> "$PROJ/.product-kit/commands/prdkit.md"
+commit_fixture source
+run env PATH="$FAULTS:$PATH" FAULT_ROOT="$PROJ" FAULT_PHASE=published bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --migrate-reviews
+assert_eq 1 "$([ "$STATUS" -ne 0 ] && echo 1 || echo 0)" 'publication really interrupted'
+upgrade --migrate-reviews
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_symlink "$PROJ/.claude/commands/prdkit.md" 'retry keeps command mode'
+
+it 'retry refuses an outside-managed edit even when it matches awk newline normalization'
+transition_project
+printf '\nOutside bytes without final newline' >> "$PROJ/AGENTS.md"
+commit_fixture outside
+printf '\n' >> "$PROJ/AGENTS.md"
+printf 'source-version: 2.0.0\n' > "$PROJ/.prdkit/.install-state"
+upgrade --migrate-reviews --dry-run
+assert_eq 1 "$STATUS" 'outside bytes must equal HEAD exactly'
+assert_contains "$OUTPUT" 'outside the managed section' 'outside-byte diagnosis'
+
+it 'retry accepts a rendered managed section, including a resolved root-file target'
+for mode in regular alias; do
+    transition_project
+    if [ "$mode" = alias ]; then mv "$PROJ/AGENTS.md" "$PROJ/CLAUDE.md"; ln -s CLAUDE.md "$PROJ/AGENTS.md"; fi
+    sed 's/## Product-Kit workflow/## Product-Kit workflow upgraded/' "$PROJ/.product-kit/scripts/install-lib.sh" > "$PROJ/source.next"
+    mv "$PROJ/source.next" "$PROJ/.product-kit/scripts/install-lib.sh"
+    commit_fixture source
+    sed 's/## Product-Kit workflow/## Product-Kit workflow upgraded/' "$PROJ/AGENTS.md" > "$PROJ/agents.next"
+    cat "$PROJ/agents.next" > "$PROJ/AGENTS.md"; rm "$PROJ/agents.next"
+    printf 'source-version: 2.0.0\n' > "$PROJ/.prdkit/.install-state"
+    upgrade --migrate-reviews --dry-run
+    assert_eq 0 "$STATUS" "$mode rendered section: $OUTPUT"
+done
+
+it 'a real managed-section replacement preserves a suffix without a final newline through retry'
+transition_project
+printf '\nOutside bytes without final newline' >> "$PROJ/AGENTS.md"
+sed 's/## Product-Kit workflow/## Product-Kit workflow upgraded/' "$PROJ/.product-kit/scripts/install-lib.sh" > "$PROJ/source.next"
+mv "$PROJ/source.next" "$PROJ/.product-kit/scripts/install-lib.sh"
+commit_fixture source
+run env PATH="$FAULTS:$PATH" FAULT_ROOT="$PROJ" FAULT_PHASE=published bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --migrate-reviews
+assert_eq 1 "$([ "$STATUS" -ne 0 ] && echo 1 || echo 0)" 'managed section was installed before interruption'
+assert_eq e "$(tail -c 1 "$PROJ/AGENTS.md")" 'consumer final byte was not normalized'
+upgrade --migrate-reviews
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq e "$(tail -c 1 "$PROJ/AGENTS.md")" 'retry keeps consumer final byte'
+
+it 'a failed constitution read cannot masquerade as valid Rigor after printing policy bytes'
+transition_project
+GIT_FAULT="$(mktemp -d)"; track_tmp "$GIT_FAULT"
+REAL_GIT="$(command -v git)"; export REAL_GIT
+cat > "$GIT_FAULT/git" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in *' show '*':.prdkit/memory/constitution.md '*) "$REAL_GIT" "$@"; exit 71 ;; esac
+exec "$REAL_GIT" "$@"
+EOF
+chmod +x "$GIT_FAULT/git"
+run env PATH="$GIT_FAULT:$PATH" bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --migrate-reviews --dry-run
+assert_eq 1 "$STATUS" 'object failure refuses despite valid-looking output'
+assert_contains "$OUTPUT" 'cannot be read completely' 'object failure is not absence or valid policy'
+
+it 'open PR fresh reviews exclude PASS lines in untouched unrelated default-branch records'
+transition_project
+use_gh_stub
+mkdir -p "$PROJ/specs/changes"
+printf '# Unrelated\n## State\n**Review**: round 1 · old · security · PASS · %s · text\n' "$CLEAN" > "$PROJ/specs/changes/003-unrelated.md"
+commit_fixture inherited; trusted_tip
+BASE_BRANCH="$(git -C "$PROJ" symbolic-ref --short HEAD)"
+git -C "$PROJ" checkout -qb 002-open
+printf '# Open\n## State\n%s\n' "$PASS" > "$PROJ/specs/changes/002-open.md"
+commit_fixture open
+fx_pr 7 "$(git -C "$PROJ" rev-parse HEAD)" '{"head":{"ref":"002-open"}}'
+git -C "$PROJ" checkout -q "$BASE_BRANCH"
+upgrade --migrate-reviews --dry-run --json
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq '["code"]' "$(printf '%s' "$OUTPUT" | jq -c '.open_prs[0].reviews_owed')" 'unrelated inherited PASS creates no review obligation on this PR'
 
 it 'end to end: upgrade, re-review an open 1.x PR, then close a merged-open legacy record'
 transition_project

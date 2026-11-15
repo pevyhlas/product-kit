@@ -566,6 +566,8 @@ list_retired_ci_calls() {
 
 # --- --check: read-only drift report ----------------------------------------
 if upgrade_source_2 && { $UPGRADE || $CHECK; }; then
+    spec_objects_local "$TARGET" || { echo 'Cannot read trusted policy without fetching missing objects; nothing was written.' >&2; exit 1; }
+    export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
     upgrade_policy_context
     upgrade_rigor_diagnosis || { if $MIGRATE_REVIEWS; then exit 1; fi; }
 fi
@@ -1000,11 +1002,7 @@ write_agents_section() {
             return 0
         fi
         tmp="$(mktemp)" || { rm -f "$sec"; return 1; }
-        awk -v b="$AGENTS_BEGIN" -v e="$AGENTS_END" -v f="$sec" '
-            $0 == b { while ((getline l < f) > 0) print l; skip = 1; next }
-            $0 == e { skip = 0; next }
-            !skip   { print }
-        ' "$agents_file" > "$tmp" || { rm -f "$tmp" "$sec"; return 1; }
+        render_agents_replacement "$agents_file" "$sec" "$tmp" || { rm -f "$tmp" "$sec"; return 1; }
         if [ "$(hash_file "$tmp")" = "$(hash_file "$agents_file")" ]; then
             rm -f "$tmp" "$sec"
             echo current

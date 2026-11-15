@@ -54,6 +54,23 @@ managed_agents_section() {
     ' "$1"
 }
 
+# Replace only the managed bytes. awk prints a final newline even when the original
+# suffix had none; retain that suffix byte-for-byte rather than changing consumer text.
+render_agents_replacement() { # input section-file output (distinct from input)
+    local size tmp
+    awk -v b="$AGENTS_BEGIN" -v e="$AGENTS_END" -v f="$2" '
+        $0 == b { while ((getline l < f) > 0) print l; skip = 1; next }
+        $0 == e { skip = 0; next }
+        !skip { print }
+    ' "$1" > "$3" || return 1
+    if [ -n "$(tail -c 1 "$1")" ] && [ "$(tail -n 1 "$1")" != "$AGENTS_END" ]; then
+        size="$(wc -c < "$3" | tr -d '[:space:]')" || return 1
+        tmp="$(mktemp "$3.suffix.XXXXXX")" || return 1
+        if head -c "$((size - 1))" "$3" > "$tmp" && cat "$tmp" > "$3"; then rm -f "$tmp"
+        else rm -f "$tmp"; return 1; fi
+    fi
+}
+
 install_manifest_value() {
     awk -v prefix="$2: " 'index($0,prefix) == 1 {
         count++; value=substr($0,length(prefix)+1)

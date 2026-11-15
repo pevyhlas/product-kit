@@ -21,23 +21,31 @@ upgrade_policy_context() {
 }
 
 upgrade_rigor_diagnosis() {
-    local root="$TARGET" lines entry
+    local root="$TARGET" lines entry input
     UP_RIGOR=unknown
-    if [ -n "$UP_POLICY_AT" ]; then UP_RIGOR="$(read_rigor "$UP_POLICY_AT")"; fi
-    [ "$UP_RIGOR" = unknown ] || return 0
     lines='(none)'
     if [ -n "$UP_POLICY_AT" ]; then
         entry="$(git -C "$TARGET" ls-tree "$UP_POLICY_AT" -- .prdkit/memory/constitution.md)" || return 1
         if [ -n "$entry" ]; then
-            lines="$(git -C "$TARGET" show "$UP_POLICY_AT:.prdkit/memory/constitution.md" | tr -d '\r' |
-                awk '{ line=$0; if (sub(/^[-*[:space:]]*[Rr]igor\**:\**[[:space:]]*/, "", line)) print NR ": " $0 }')" || return 1
+            input="$(mktemp)" || return 1
+            if ! git -C "$TARGET" show "$UP_POLICY_AT:.prdkit/memory/constitution.md" > "$input" || ! review_file_without_nul "$input"; then
+                rm -f "$input"
+                echo 'The default branch constitution cannot be read completely as text; nothing was written.' >&2
+                return 1
+            fi
+            # Keep the gate parser unchanged, but do not let its historical absent-file
+            # fallback mask a failed object read that printed usable-looking partial bytes.
+            UP_RIGOR="$(read_rigor "$UP_POLICY_AT")"
+            lines="$(tr -d '\r' < "$input" |
+                awk '{ line=$0; if (sub(/^[-*[:space:]]*[Rr]igor\**:\**[[:space:]]*/, "", line)) { printf "%s\"%s\"", sep, $0; sep="; " } }')"
+            rm -f "$input"
             [ -n "$lines" ] || lines='(none)'
         fi
     fi
+    [ "$UP_RIGOR" = unknown ] || return 0
     cat >&2 <<EOF
 The default branch's constitution must hold exactly one Rigor line whose value is light or
-full, followed by a space or the end of the line. Found:
-$lines
+full, followed by a space or the end of the line. Found: $lines
 (a colon after the value is not accepted). Write it as "- **Rigor**: full — medium blocks" and
 merge that in its own PR first, then rerun.
 EOF
@@ -191,9 +199,7 @@ upgrade_render_expected() { # caller-owned work directory -> head/, rendered/, p
             render_agents_section > "$work/section" || return 1
             if grep -qF "$AGENTS_BEGIN" "$work/rendered/$dest"; then
                 managed_agents_section "$work/rendered/$dest" >/dev/null || return 1
-                awk -v b="$AGENTS_BEGIN" -v e="$AGENTS_END" -v f="$work/section" '
-                    $0==b { while((getline l < f)>0) print l; skip=1; next }
-                    $0==e { skip=0; next } !skip { print }' "$work/rendered/$dest" > "$work/next" || return 1
+                render_agents_replacement "$work/rendered/$dest" "$work/section" "$work/next" || return 1
                 cat "$work/next" > "$work/rendered/$dest" || return 1
             elif [ -f "$work/head/$dest" ]; then
                 trailing="$(tail -c 1 "$work/rendered/$dest")"
@@ -214,8 +220,13 @@ upgrade_render_expected() { # caller-owned work directory -> head/, rendered/, p
         if has_harness agents; then printf 'agents-section: %s\n' "$(render_agents_section | install_hash_stream)"; fi
         while IFS=$'\t' read -r src rel; do
             dest="$work/rendered/$rel"
-            [ -e "$dest" ] || continue
-            cur="$(hash_file "$dest")"; kit="$(hash_file "$src")"
+            kit="$(hash_file "$src")"
+            if [ -L "$dest" ]; then
+                case "$rel" in
+                    .claude/commands/*|.opencode/commands/*) cur="$kit" ;;
+                    *) [ -e "$TARGET/$rel" ] || continue; cur="$(hash_file "$TARGET/$rel")" ;;
+                esac
+            else [ -e "$dest" ] || continue; cur="$(hash_file "$dest")"; fi
             hash="$kit"
             if [ "$cur" != "$kit" ]; then rec="$(recorded_hash "$rel")"; hash="${rec:-$kit}"; fi
             printf '%s  %s\n' "$hash" "$rel"
@@ -227,7 +238,7 @@ upgrade_render_expected() { # caller-owned work directory -> head/, rendered/, p
 }
 
 upgrade_checkout_clean() (
-    local status version work rel allowed
+    local status version work rel allowed agents
     status="$(git -C "$TARGET" status --porcelain --untracked-files=all)" || return 1
     [ -n "$status" ] || return 0
     version="$(install_manifest_value "$PRDKIT_DIR/.install-state" source-version 2>/dev/null)" || version=""
@@ -237,6 +248,8 @@ upgrade_checkout_clean() (
     work="$(mktemp -d)" || return 1
     trap 'rm -rf "$work"' EXIT
     upgrade_render_expected "$work" || return 1
+    agents="$(root_file_path AGENTS.md 2>/dev/null)" || agents=''
+    agents="${agents#"$TARGET"/}"
     git -C "$TARGET" ls-files --modified --deleted --others --exclude-standard -z > "$work/dirty" || return 1
     while IFS= read -r -d '' rel; do
         case "$rel" in specs/changes/*) allowed=false ;; *) allowed=true ;; esac
@@ -246,11 +259,30 @@ upgrade_checkout_clean() (
         if ! $allowed; then
             echo "P1: not a validated installer-owned intermediate state: $rel; nothing was written." >&2; return 1
         fi
+        if has_harness agents && [ "$rel" = "$agents" ] && [ -f "$work/head/$rel" ] &&
+            managed_agents_section "$work/head/$rel" >/dev/null; then
+            upgrade_agents_outside "$TARGET/$rel" > "$work/outside-current" || return 1
+            upgrade_agents_outside "$work/head/$rel" > "$work/outside-head" || return 1
+            if ! cmp -s "$work/outside-current" "$work/outside-head"; then
+                echo "P1: AGENTS.md changed outside the managed section: $rel; nothing was written." >&2; return 1
+            fi
+        fi
         if ! upgrade_same_file "$TARGET/$rel" "$work/head/$rel" && ! upgrade_same_file "$TARGET/$rel" "$work/rendered/$rel"; then
             echo "P1: not a validated intermediate state (bytes, type or mode): $rel; nothing was written." >&2; return 1
         fi
     done < "$work/dirty"
 )
+
+upgrade_agents_outside() { # raw bytes outside the one validated managed block
+    local offsets prefix suffix
+    managed_agents_section "$1" >/dev/null || return 1
+    offsets="$(LC_ALL=C awk -v b="$AGENTS_BEGIN" -v e="$AGENTS_END" '
+        BEGIN { bytes=0; first=0 }
+        $0==b { first=bytes } { bytes+=length($0)+1 } $0==e { after=bytes }
+        END { print first, after+1 }' "$1")" || return 1
+    read -r prefix suffix <<< "$offsets"
+    head -c "$prefix" "$1" && tail -c "+$suffix" "$1"
+}
 
 # Inspect the entire planned overwrite/delete set, including ignored files. Git cleanliness
 # alone is not ownership: a committed customization is still the project's work.
@@ -329,6 +361,19 @@ upgrade_host_repo() {
     printf '%s\n' "$url"
 }
 
+upgrade_pr_pass_changes() { # head base checked-change inventory work -> affected change ids
+    local head="$1" base="$2" checked="$3" inventory="$4" ll_work="$5" ll_root="$TARGET" start identity change path old
+    local LL_ENTRY
+    mkdir -p "$ll_work" || return 1
+    start="$(review_merge_base "$TARGET" "$base" "$head")" || return 1
+    while IFS=$'\037' read -r identity change path old; do
+        if [ "$change" = "$checked" ]; then printf '%s\n' "$change"; continue; fi
+        _legacy_entry "$start" "$path" || return 1; old="$LL_ENTRY"
+        _legacy_entry "$head" "$path" || return 1
+        [ "$old" = "$LL_ENTRY" ] || printf '%s\n' "$change"
+    done < "$inventory"
+}
+
 upgrade_transition_report() (
     local work change path repo pr head base checked ref canonical available note
     command -v jq >/dev/null 2>&1 || { echo 'The 2.0 transition report requires jq; nothing was written.' >&2; return 1; }
@@ -373,11 +418,13 @@ upgrade_transition_report() (
             if $available; then
                 upgrade_inventory_json "$work/pr-inventory" > "$work/pr-inventory.json" || return 1
                 upgrade_blockers_json "$work/pr-blockers" "$work/pr-inventory.json" > "$work/pr-blockers.json" || return 1
-            else printf '[]\n' > "$work/pr-inventory.json"; printf '[]\n' > "$work/pr-blockers.json"; fi
+                upgrade_pr_pass_changes "$head" "$canonical" "$checked" "$work/pr-inventory" "$work/cache" > "$work/pass-changes" || return 1
+                jq -Rn '[inputs]|unique' < "$work/pass-changes" > "$work/pass-changes.json" || return 1
+            else printf '[]\n' > "$work/pr-inventory.json"; printf '[]\n' > "$work/pr-blockers.json"; printf '[]\n' > "$work/pass-changes.json"; fi
             printf '%s' "$pr" | jq -c --argjson available "$available" --arg checked "$checked" \
-                --slurpfile inventory "$work/pr-inventory.json" --slurpfile blockers "$work/pr-blockers.json" '
+                --slurpfile inventory "$work/pr-inventory.json" --slurpfile blockers "$work/pr-blockers.json" --slurpfile changes "$work/pass-changes.json" '
                 {number,url:(.html_url // ""),head:.head.sha,base:.base.ref,checked_change:$checked,scan_available:$available,
-                 legacy_blockers:$blockers[0],reviews_owed:([$inventory[0][]|select(.verdict=="PASS")|.reviewer] + [$blockers[0][].reviewer] | unique),
+                 legacy_blockers:$blockers[0],reviews_owed:([$inventory[0][]|select(.verdict=="PASS")|select(.change as $c | $changes[0]|index($c)!=null)|.reviewer] + [$blockers[0][].reviewer] | unique),
                  note:(if $available then "" else "Legacy scan unavailable: fetch this PR head and its complete history locally, then rerun; no network fetch was attempted." end)}' \
                 >> "$work/prs.jsonl" || return 1
         done < "$work/open.jsonl"
