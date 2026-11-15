@@ -318,13 +318,24 @@ review_legacy_json() {
 # Read-only diagnostics for remaining 1.x debt. Both the checkout commit and the
 # trusted default tip are inspected; no host access or jq is required.
 review_legacy_record_findings() (
-    local root="$1" work at refs default rigor=unknown change path identity reviewer reason ignored
+    local root="$1" work at refs default rigor=unknown change path identity reviewer reason ignored policy
+    export GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1
+    if ! spec_objects_local "$root"; then
+        echo 'Legacy 1.x scan unavailable: this Git cannot refuse missing-object fetches in a partial clone'; return 1
+    fi
     work="$(mktemp -d)" || { echo 'Legacy 1.x scan unavailable: cannot allocate scratch storage'; return 1; }
     trap 'rm -rf "$work"' EXIT
     set -o pipefail
     refs="$(spec_trusted_refs "$root")" || return 1
     default="$(printf '%s\n' "$refs" | sed -n 1p)"
-    if [ -n "$default" ]; then rigor="$(read_rigor "$default")"; fi
+    if [ -n "$default" ]; then
+        for policy in config.md constitution.md; do
+            if ! git -C "$root" show "$default:.prdkit/memory/$policy" > "$work/policy" 2>/dev/null; then
+                echo "Legacy 1.x scan unavailable: trusted .prdkit/memory/$policy is not completely available locally"; return 1
+            fi
+        done
+        rigor="$(read_rigor "$default")"
+    fi
     { git -C "$root" rev-parse --verify HEAD; [ -z "$default" ] || git -C "$root" rev-parse --verify "$default"; } > "$work/refs" || return 1
     LC_ALL=C sort -u "$work/refs" > "$work/tips" || return 1
     : > "$work/findings" || return 1

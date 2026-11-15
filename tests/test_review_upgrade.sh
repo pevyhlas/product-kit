@@ -573,4 +573,29 @@ run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --check
 for path in specs/changes/001-work.md specs/changes/archive/001-work.md; do assert_contains "$OUTPUT" "Legacy 1.x blocking lines: $path (code: legacy FAIL)" 'check includes each full record path'; done
 run bash "$PROJ/.prdkit/scripts/bash/doctor.sh" --json
 for path in specs/changes/001-work.md specs/changes/archive/001-work.md; do assert_contains "$OUTPUT" "Legacy 1.x blocking lines: $path (code: legacy FAIL)" 'doctor includes each full record path'; done
+it 'F5: public doctor reports missing promisor policy as unavailable without fetching or storing objects'
+transition_project
+upgrade --migrate-reviews
+assert_eq 0 "$STATUS" "$OUTPUT"
+commit_fixture upgraded; trusted_tip
+PROMISOR="$(mktemp -d)"; track_tmp "$PROMISOR"
+git -c protocol.file.allow=always clone -q --bare --no-hardlinks "$PROJ" "$PROMISOR" || exit 1
+missing="$(git -C "$PROJ" rev-parse HEAD:.prdkit/memory/constitution.md)"
+git -C "$PROMISOR" cat-file -e "$missing" || exit 1
+object="$PROJ/.git/objects/${missing:0:2}/${missing:2}"
+assert_file "$object" 'missing-policy fixture starts with a loose blob'
+git -C "$PROJ" config remote.origin.url "$PROMISOR"
+git -C "$PROJ" config remote.origin.promisor true
+git -C "$PROJ" config remote.origin.partialclonefilter blob:none
+git -C "$PROJ" config extensions.partialclone origin
+rm "$object"
+TRACE="$(mktemp)"; track_tmp "$TRACE"
+before="$(tree_snapshot "$PROJ/.git/objects")"
+run env GIT_TRACE="$TRACE" bash "$PROJ/.prdkit/scripts/bash/doctor.sh" --json --strict
+assert_eq 1 "$STATUS" 'strict doctor cannot call unavailable debt evidence clean'
+assert_contains "$OUTPUT" 'Legacy 1.x scan unavailable' 'missing policy is explicitly unavailable'
+assert_not_contains "$(cat "$TRACE")" ' fetch ' 'doctor never launches a fetch'
+assert_not_contains "$(cat "$TRACE")" upload-pack 'doctor never contacts even the local promisor'
+assert_eq "$before" "$(tree_snapshot "$PROJ/.git/objects")" 'doctor leaves the object store byte-identical'
+if [ -e "$object" ]; then _no 'missing policy blob stays missing'; else _ok 'missing policy blob stays missing'; fi
 finish
