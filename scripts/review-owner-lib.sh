@@ -6,7 +6,7 @@
 # shellcheck disable=SC2034,SC2016 # Public outputs and literal jq variables.
 
 review_owner_capture() { # receipt work directory; RC_FILE currently contains R/X rows
-    local work="$1" repo ref review time state commit confirmed reason row
+    local work="$1" repo ref encoded_ref review time state commit confirmed reason row
     # Owner identity is checked against the review author, never the installation viewer.
     if ! jq -r --arg owners "$RC_OWNERS" '.reviews | map(select(.author.__typename=="User" and
         (.state=="APPROVED" or .state=="CHANGES_REQUESTED" or .state=="DISMISSED"))) |
@@ -16,10 +16,11 @@ review_owner_capture() { # receipt work directory; RC_FILE currently contains R/
         "$work/source-$RC_PR.json" > "$work/owners"; then RC_ERROR='could not read owner reviews'; return 1; fi
     if grep -q $'\037APPROVED\037' "$work/owners"; then
         if ! repo="$(jq -er '.head.repo.full_name' "$work/pr.json")" ||
-            ! ref="$(jq -er '.head.ref | "refs/heads/"+. | @uri' "$work/pr.json")"; then
+            ! ref="$(jq -er '.head.ref | "refs/heads/"+.' "$work/pr.json")"; then
             RC_ERROR='missing head repository/ref for owner activity'; return 1
         fi
-        if ! gh api --hostname github.com --paginate "repos/$repo/activity?ref=$ref&direction=asc" > "$work/activity-pages" 2>/dev/null ||
+        encoded_ref="$(printf '%s' "$ref" | jq -sRr @uri)" || return 1
+        if ! gh api --hostname github.com --paginate "repos/$repo/activity?ref=$encoded_ref&direction=asc" > "$work/activity-pages" 2>/dev/null ||
             ! jq -se 'length>0 and all(.[];type=="array" and all(.[];
                 (.id|tostring|test("^[1-9][0-9]*$")) and (.timestamp|type)=="string" and
                 (.timestamp|test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
@@ -28,7 +29,7 @@ review_owner_capture() { # receipt work directory; RC_FILE currently contains R/
             RC_ERROR='could not read the complete owner activity log'; return 1
         fi
         # Stable timestamp order preserves the API's ascending order for older same-second pushes.
-        jq -s '[.[][]] | sort_by(.timestamp)' "$work/activity-pages" > "$work/activity.json" || return 1
+        jq -s --arg ref "$ref" '[.[][] | select(.ref==$ref)] | sort_by(.timestamp)' "$work/activity-pages" > "$work/activity.json" || return 1
     fi
     while IFS=$'\037' read -r review time state commit; do
         [ -n "$review" ] || continue

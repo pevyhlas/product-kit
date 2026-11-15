@@ -88,6 +88,14 @@ assert_eq 0 "$RC_INVALID"
 assert_eq '' "$(problems)"
 assert_eq 1 "$(wc -l < "$RC_COVERAGE" | tr -d ' ')"
 assert_contains "$(cat "$GH_STUB_DIR/requests")" 'graphql' 'reviews read through GraphQL'
+assert_contains "$(cat "$GH_STUB_DIR/requests")" '-f owner=owner -f name=repo -F number=7' 'GraphQL names stay strings while the PR number is typed'
+
+it 'receipt submission times must be canonical whole-second UTC values'
+for submitted in '2026-01-02T00:00:00.5Z' '2026-01-02T00:00:00+00:00' 'not-a-timestamp'; do
+    reset_host; receipt 7 . "$(jq -cn --arg time "$submitted" '{submittedAt:$time}')"; fetch failure
+    assert_eq 1 "$STATUS" "$submitted is not safe for host ordering"
+    assert_contains "$RC_ERROR" 'incomplete or non-advancing review pages'
+done
 
 it 'typename plus database id, not login or body, authenticates a publisher'
 for override in '{"author":{"__typename":"User","databaseId":1001,"login":"publisher[bot]"}}' \
@@ -382,4 +390,12 @@ for tamper in owner token fingerprint sequence; do
     fi
     assert_eq '' "$(cat "$GH_STUB_DIR/requests")" 'tampered replay still makes no host call'
 done
+
+it 'snapshot receipt submission times also fail closed without gh or jq'
+awk -F '\037' -v OFS='\037' 'NR==2 { $5="2026-01-02T00:00:00.5Z" } { print }' "$SNAPSHOT" > "$WORK/bad-time"
+OFFLINE_WORK="$(mktemp -d)"; track_tmp "$OFFLINE_WORK"
+if PATH="$TOOLS" review_receipts_read "$WORK/bad-time" "$OFFLINE_WORK"; then STATUS=0; else STATUS=$?; fi
+assert_eq 1 "$STATUS"
+assert_contains "$RC_ERROR" 'malformed receipt snapshot'
+assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
 finish

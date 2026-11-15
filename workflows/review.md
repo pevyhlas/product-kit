@@ -73,6 +73,8 @@ Prefer a dedicated publisher App whose key exists only on a reviewer-controlled 
 job, or a human publisher. `required` rejects a publisher that authored this PR; account
 separation alone does not prove separate machines or credentials. Explicit `shared` warns that
 receipts bind content, order and counts, not reviewer independence.
+Removing an id from `review-publishers` drops that publisher's receipts, **FAILs included**,
+on both current and closed source PRs. Reconcile its standing verdicts before rotating the id.
 
 T3 needs the owner's latest decisive native review: APPROVED counts, CHANGES_REQUESTED or
 DISMISSED is a barrier, and COMMENTED is ignored. The approved commit's L0/L1 slice must match
@@ -173,7 +175,10 @@ follow-ups go to the parent's row or the spec, evidence stays on the PR. One fil
 change means two branches that each close a change never conflict in the log; compaction folds
 the entries into `specs/log.md` ([compact.md](compact.md)). Push both commits together, so
 required checks run on the closed head; the helper accepts an unpushed closing commit only when
-its fingerprint equals the PR head and refuses an offline preview. The PR, not the record,
+it descends from the PR head and its fingerprint equals it, and refuses an offline preview.
+JSON `result` is `preview` whenever authority is not `host`, including unavailable or blocked
+previews; inspect authority, problems and the exit code (1 failure, 3 would-pass preview).
+The PR, not the record,
 carries any handoff to whoever merges. Do not change scope,
 acceptance or policy after review without reviewing the affected changes. Later defects use
 ordinary linked fix changes, which inherit the failing outcome's attempts, limits and holds

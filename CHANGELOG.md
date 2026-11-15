@@ -47,7 +47,10 @@ change by change.
 - **The merge gate requires the host in every tier.** `check-review.sh --pr <url>` needs `gh`,
   `jq` and complete API reads even for T0 and record-only changes: only the host can show that no
   FAIL stands. Host unavailability means merging waits. `--receipts <snapshot>` and checks with
-  no source are unauthenticated local previews; a would-be pass exits **3**, never 0. Snapshot
+  no source are unauthenticated local previews; a would-be pass exits **3**, never 0. JSON
+  `result` is `preview` whenever authority is not `host`, including blocked or unavailable
+  previews; consumers must also inspect problems and exit status (1 failure, 3 would-pass).
+  Snapshot
   and structure-only paths remain gh/jq-free. Removed `--verify-reports`, `report_verification`
   and the old report matcher. JSON now reports authority, receipt/blocker counts, legacy blockers
   and native owner metadata.
@@ -69,6 +72,8 @@ change by change.
   author the PR. It proves account separation, not machine separation. Explicit `shared` warns
   that receipts bind content, ordering and counts, not reviewer independence. Do not list the
   shared `github-actions[bot]` account; prefer a reviewer-controlled App credential or a human.
+  Removing an id from `review-publishers` drops that publisher's receipts, FAILs included, on
+  current and closed source PRs; reconcile standing verdicts before rotating a publisher id.
   The publisher must run `publish-review.sh` and its libraries from the trusted default branch
   or a pinned kit install, never from a PR checkout. `--repo` points at a fetch-only clone; a
   publisher CI job never runs PR-controlled code with the publisher key (for example a
@@ -84,7 +89,8 @@ change by change.
   coverage. Losing the log can leave a permanent blocker.
 - **Closing requires `close-change.sh --pr <url>`.** It checks online before and after the local
   closing commit and refuses previews. An unpushed record/log-only closing commit is permitted
-  only with the same fingerprint as the PR head. Records carry no verdicts. The merged-without-
+  only as a descendant with the same fingerprint as the PR head; online checks of an unrelated
+  or earlier `--head` report unavailable, even for equal content. Records carry no verdicts. The merged-without-
   closing advisory now lists every default-branch leaf record without an outcome checkpoint,
   including T0 and unreviewed records, rather than inferring PASS from text.
 - **1.x lines remain blockers, never converted approvals.** The gate scans active State review

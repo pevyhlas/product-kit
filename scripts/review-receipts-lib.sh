@@ -59,12 +59,13 @@ _receipts_reviews() { # repo PR output-directory; validate the entire GraphQL st
         } pageInfo { hasNextPage endCursor } }
       } }
     }'
-    if ! gh api graphql --hostname github.com --paginate -f query="$query" -F owner="${repo%/*}" -F name="${repo#*/}" -F number="$number" > "$work/pages-$number" 2>/dev/null; then
+    if ! gh api graphql --hostname github.com --paginate -f query="$query" -f owner="${repo%/*}" -f name="${repo#*/}" -F number="$number" > "$work/pages-$number" 2>/dev/null; then
         RC_ERROR="could not read every review on PR $number"; return 1
     fi
     if ! jq -se --argjson number "$number" '
         def actor: type == "object" and (.login|type)=="string" and
             (.__typename|type)=="string" and (.databaseId|type)=="number";
+        def timestamp: type=="string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$");
         length > 0 and all(.[]; (.errors // [] | length)==0 and
             (.data.repository.pullRequest as $p | $p.number == $number and
              ($p.author|actor) and ($p.headRefOid|test("^[0-9a-f]{40}$")) and ($p.baseRefName|type)=="string" and
@@ -74,7 +75,7 @@ _receipts_reviews() { # repo PR output-directory; validate the entire GraphQL st
                  has("author") and has("commit") and has("state") and has("submittedAt") and
                  has("lastEditedAt") and has("editor") and (.fullDatabaseId|tostring|test("^[1-9][0-9]*$")) and
                  (.url|type)=="string" and (.body|type)=="string" and
-                 (.state=="PENDING" or (.submittedAt|type)=="string")))) and
+                  (.state=="PENDING" or (.submittedAt|timestamp))))) and
         (.[-1].data.repository.pullRequest.reviews.pageInfo.hasNextPage == false) and
         ([.[].data.repository.pullRequest | del(.reviews)] | unique | length)==1 and
         ([range(0;length-1) as $i | .[$i].data.repository.pullRequest.reviews.pageInfo |
@@ -260,10 +261,12 @@ review_receipts_read() { # snapshot work; no gh or jq, including on errors
     RC_ERROR=""; RC_IGNORED=0; RC_NOTES=(); RC_FILE="$work/receipts"
     if [ ! -f "$file" ] || ! LC_ALL=C awk -F '\037' '
         function digits(s) { return s ~ /^[0-9]+$/ }
+        # Spell out digits for older mawk as well as BSD awk (no interval dependency).
+        function timestamp(s) { return s ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/ }
         NR==1 { if (NF!=9 || $1!="prdkit-receipts 1") bad=1; next }
-        $1=="R" { if (NF!=21 || !digits($2) || !digits($3) || !digits($4) || ($21!="0" && $21!="1") || $2<=last) bad=1; last=$2; next }
+        $1=="R" { if (NF!=21 || !digits($2) || !digits($3) || !digits($4) || !timestamp($5) || ($21!="0" && $21!="1") || $2<=last) bad=1; last=$2; next }
         $1=="X" { if (NF!=5 || !digits($2) || !digits($3) || !digits($4) || $5=="" || $2<=last) bad=1; last=$2; next }
-        $1=="O" { if (NF!=6 || !digits($2) || $4 !~ /^(APPROVED|CHANGES_REQUESTED|DISMISSED)$/) bad=1; next }
+        $1=="O" { if (NF!=6 || !digits($2) || !timestamp($3) || $4 !~ /^(APPROVED|CHANGES_REQUESTED|DISMISSED)$/) bad=1; next }
         { bad=1 } END { exit (bad || NR==0) }' "$file"; then RC_ERROR='malformed receipt snapshot'; return 1; fi
     IFS= read -r header < "$file" || { RC_ERROR='empty receipt snapshot'; return 1; }
     IFS=$'\037' read -r magic repo pr prhead created base fetched isolation author <<< "$header"

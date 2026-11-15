@@ -186,7 +186,10 @@ bash .prdkit/scripts/bash/check-review.sh --receipts receipts.txt <change-id>  #
 
 Snapshots are writable, unauthenticated, US-separated normalized rows, readable with awk and
 without gh/jq. They re-run local policy, fingerprints, coverage, owner slice and legacy history.
-JSON reports `authority:"snapshot"`; no source reports `authority:"none"`. Human output prints
+JSON reports `authority:"snapshot"`; no source reports `authority:"none"`. Whenever authority is
+not `host` (including `unavailable`), JSON `result` is `preview`, even when problems exist.
+Consumers must inspect authority, problems and exit status: exit 1 is failure and 3 is a
+would-pass preview; only a host-authority pass exits 0. Human output prints
 PREVIEW and fetch time. A would-be pass in either mode exits **3**, not merge authority. JSON
 also reports `pr`, `pr_head`, `head_is_pr_head`, `publisher_isolation`, receipt/ignored/invalid/
 carried counts, `legacy_blockers`, native `owner` metadata and `reviews[].receipt` URLs.
@@ -233,8 +236,9 @@ Without `--base` the check uses `origin/HEAD`; it no longer falls back to `origi
 `base_trusted` and `policy_at`. Name the actual PR target; a stacked branch whose target is not a
 configured integration branch cannot pass until that target is configured. Only receipts on
 this PR cover its checked change; earlier PASSes never carry. The change id defaults to the
-current branch. If `--head` differs from the PR head, only fingerprint-identical metadata changes
-are allowed, so an unpushed closing commit can be checked. Merge using the actual PR head.
+current branch. Online, the PR head must be a local ancestor of `--head`, otherwise authority is
+unavailable. A differing descendant must also be fingerprint-identical, so an unpushed closing
+commit can be checked. Merge using the actual PR head.
 
 It authenticates recorded verdicts; it does not review, and it never grants merge authority. Where the
 plan offers no branch protection, the merging agent's run is the gate. CI can run it as a

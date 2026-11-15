@@ -20,12 +20,10 @@ _legacy_record() { # ls-tree entry -> LL_PATH / LL_BLOB; accepts executable regu
     case "$meta" in '100644 blob '*|'100755 blob '*) ;; *) return 1 ;; esac
     case "$LL_PATH" in specs/changes/*.md) return 0 ;; *) return 1 ;; esac
 }
-_legacy_entry() { # tree-file path -> LL_ENTRY, empty for an absent path
-    local entry
+_legacy_entry() { # commit literal-path -> LL_ENTRY, empty for an absent path
     LL_ENTRY=""
-    while IFS= read -r -d '' entry; do
-        if [ "${entry#*$'\t'}" = "$2" ]; then LL_ENTRY="$entry"; break; fi
-    done < "$1"
+    git -C "$ll_root" ls-tree -z "$1" -- ":(top,literal)$2" > "$ll_work/entry" || return 1
+    IFS= read -r -d '' LL_ENTRY < "$ll_work/entry" || true
 }
 _legacy_lines() { # blob -> LL_LINES: active line text, never raw-text matching across sections
     LL_LINES="$ll_work/lines-$1"
@@ -71,7 +69,8 @@ _legacy_emit() { # path lines-file -> append blockers; range/link/fingerprint fi
 
 review_legacy_collect() ( # subshell contains Git environment and scratch outputs
     local ll_root="$1" checked="$2" base="$3" head="$4" ll_rigor="$5" ll_work="$6" output="$7"
-    local start entry record_path blob parent fork commit parents bases status start_tree head_tree tree parent_tree fork_tree
+    local start entry record_path blob parent fork commit parents bases status start_tree tree fork_tree unchanged
+    local parent_blobs=()
     local LL_TREE LL_ENTRY LL_PATH LL_BLOB LL_LINES ll_rows
     export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
     set -o pipefail
@@ -82,12 +81,11 @@ review_legacy_collect() ( # subshell contains Git environment and scratch output
     ll_rows="$(mktemp "$ll_work/rows.XXXXXX")" || return 1
     start="$(review_merge_base "$ll_root" "$base" "$head")" || return 1
     _legacy_tree "$start" || return 1; start_tree="$LL_TREE"
-    _legacy_tree "$head" || return 1; head_tree="$LL_TREE"
     # (1) Checked record, and (2) inherited records not kept identical by path/mode/blob.
     while IFS= read -r -d '' entry; do
         _legacy_record "$entry" || continue
         record_path="$LL_PATH"; blob="$LL_BLOB"
-        _legacy_entry "$head_tree" "$record_path"
+        _legacy_entry "$head" "$record_path" || return 1
         if [ "$record_path" = "specs/changes/$checked.md" ] || [ "$entry" != "$LL_ENTRY" ]; then
             _legacy_lines "$blob" && _legacy_emit "$record_path" "$LL_LINES" || return 1
         fi
@@ -111,13 +109,19 @@ review_legacy_collect() ( # subshell contains Git environment and scratch output
         while IFS= read -r -d '' entry; do
             _legacy_record "$entry" || continue
             record_path="$LL_PATH"; blob="$LL_BLOB"
-            cat "$ll_work/fork-lines" > "$ll_work/excluded" || return 1
+            parent_blobs=(); unchanged=false
             for parent in $parents; do
-                _legacy_tree "$parent" || return 1; parent_tree="$LL_TREE"
-                _legacy_entry "$parent_tree" "$record_path"
+                _legacy_entry "$parent" "$record_path" || return 1
                 if _legacy_record "$LL_ENTRY"; then
-                    _legacy_lines "$LL_BLOB" && cat "$LL_LINES" >> "$ll_work/excluded" || return 1
+                    if [ "$LL_BLOB" = "$blob" ]; then unchanged=true; break; fi
+                    parent_blobs+=("$LL_BLOB")
                 fi
+            done
+            # An identical eligible record in any parent contains every parsed line already.
+            $unchanged && continue
+            cat "$ll_work/fork-lines" > "$ll_work/excluded" || return 1
+            for parent in ${parent_blobs[@]+"${parent_blobs[@]}"}; do
+                _legacy_lines "$parent" && cat "$LL_LINES" >> "$ll_work/excluded" || return 1
             done
             _legacy_lines "$blob" || return 1
             LC_ALL=C awk 'FILENAME==ARGV[1] { seen[$0]=1; next } !($0 in seen)' \

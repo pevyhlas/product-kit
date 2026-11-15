@@ -54,6 +54,7 @@ publish 7
 online --save-receipts .git/receipts
 assert_eq 0 "$STATUS" "$OUTPUT"
 assert_contains "$OUTPUT" '"authority":"host"'
+assert_contains "$OUTPUT" '"result":"pass"' 'only host authority reports a JSON pass'
 assert_contains "$OUTPUT" '"receipt":"https://github.com/owner/repo/pull/7#pullrequestreview-1001"'
 assert_not_contains "$OUTPUT" report_verification
 
@@ -80,6 +81,7 @@ it 'snapshots are jq-free preview passes, never host authority'
 run bash "$CHECK" --json --receipts .git/receipts 001-reviewed
 assert_eq 3 "$STATUS" "$OUTPUT"
 assert_contains "$OUTPUT" '"authority":"snapshot"'
+assert_contains "$OUTPUT" '"result":"preview"' 'a successful snapshot is not a JSON pass'
 assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
 
 run bash "$CHECK" --receipts .git/receipts 001-reviewed
@@ -88,6 +90,7 @@ assert_contains "$OUTPUT" fetched=
 run bash "$CHECK" --json 001-reviewed
 assert_eq 1 "$STATUS" 'no source grants no coverage'
 assert_contains "$OUTPUT" '"authority":"none"'
+assert_contains "$OUTPUT" '"result":"preview"' 'even a failing structure-only check is a preview'
 assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
 
 it 'offline gate modes use only standard tools; either missing online tool fails unavailable'
@@ -110,6 +113,7 @@ for missing in gh jq; do
     run env PATH="$TOOLS" bash "$CHECK" --json --pr "$PR" 001-reviewed
     assert_eq 1 "$STATUS" "missing $missing cannot pass"
     assert_contains "$OUTPUT" '"authority":"unavailable"'
+    assert_contains "$OUTPUT" '"result":"preview"' 'unavailable is never a JSON pass or fail verdict'
     assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
 done
 
@@ -155,6 +159,28 @@ assert_eq 1 "$STATUS"
 assert_contains "$OUTPUT" 'the PR merges into other, not --base main'
 fx_pr 7 "$(git rev-parse HEAD)"
 PR_HEAD="$(git rev-parse HEAD)"
+
+it 'online --head must descend from the PR head, not merely carry equal content'
+TWIN="$(printf 'equal-content sibling\n' | git commit-tree "$(git rev-parse "$PR_HEAD^{tree}")" -p "$BASE")"
+for unrelated in "$TWIN" "$HEAD_SHA"; do
+    assert_eq "$FP" "$(review_fingerprint "$PROJ" 001-reviewed "$BASE" "$unrelated")" 'fixture has identical reviewed content'
+    online --head "$unrelated"
+    assert_eq 1 "$STATUS" 'equal content cannot replace PR history'
+    assert_contains "$OUTPUT" '"authority":"unavailable"'
+    assert_contains "$OUTPUT" '"result":"preview"'
+    assert_contains "$OUTPUT" 'is not a local ancestor of --head'
+done
+
+it 'an unavailable PR-head object produces clean preview JSON and a fetch remedy'
+fx_pr 7 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+online
+assert_eq 1 "$STATUS"
+assert_eq preview "$(printf '%s' "$OUTPUT" | jq -r .result)" 'Git diagnostics do not corrupt the JSON channel'
+assert_contains "$OUTPUT" '"authority":"unavailable"'
+assert_contains "$OUTPUT" 'fetch the PR head'
+fx_pr 7 "$PR_HEAD"
+
+it 'a descendant with unpublished code still fails content binding'
 printf 'unreviewed\n' >> source.txt; git commit -qam 'unpublished code'
 online
 assert_eq 1 "$STATUS"

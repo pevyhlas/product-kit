@@ -158,6 +158,23 @@ fx_owner_review 7 DISMISSED "$A" '{"submittedAt":"2026-01-03T00:00:00Z"}'
 online; assert_eq 1 "$STATUS" 'a dismissed later approval is a barrier to the earlier one'
 assert_eq DISMISSED "$(printf '%s' "$OUTPUT" | jq -r .owner.state)"
 
+it 'activity for another ref cannot cause a submission tie or witness this branch'
+fresh; approve
+fx_activity "$A" "$A" '{"ref":"refs/heads/other","timestamp":"2026-01-02T00:00:00Z"}'
+online; assert_eq 0 "$STATUS" "$OUTPUT"
+fresh; approve
+jq 'map(.ref="refs/heads/other")' "$GH_STUB_DIR/activity.json" > .git/activity
+mv .git/activity "$GH_STUB_DIR/activity.json"
+online; assert_eq 1 "$STATUS" 'another refs push cannot confirm this approval'
+assert_contains "$OUTPUT" 'cannot be confirmed as the PR head'
+
+it 'owner submission times with fractions, offsets or malformed text fail closed'
+for submitted in '2026-01-02T00:00:00.5Z' '2026-01-02T00:00:00+00:00' 'not-a-timestamp'; do
+    fresh; approve "$A" "$(jq -cn --arg time "$submitted" '{submittedAt:$time}')"
+    online; assert_eq 1 "$STATUS" "$submitted cannot order the owner review"
+    assert_contains "$OUTPUT" '"authority":"unavailable"'
+done
+
 it 'activity pagination reads the deciding entry on page two and rejects a later page error'
 fresh; approve
 fx_activity "$A" "$A" '{"activity_type":"pr_merge","timestamp":"2026-01-01T12:00:00Z"}'
@@ -220,6 +237,13 @@ assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
 run env PATH="$TOOLS" bash "$CHECK" --json 001-reviewed
 assert_eq 1 "$STATUS" 'no source cannot approve or supply independent coverage'
 assert_contains "$OUTPUT" '"authority":"none"'
+assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
+
+it 'owner snapshot submission times are validated offline too'
+awk -F '\037' -v OFS='\037' '$1=="O" { $3="2026-01-02T00:00:00.5Z" } { print }' .git/owner-offline > .git/owner-bad-time
+run env PATH="$TOOLS" bash "$CHECK" --json --receipts .git/owner-bad-time 001-reviewed
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'malformed receipt snapshot'
 assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
 
 it 'inherited owner and unnamed blockers clear on T0, record-only closing and a new carrier'

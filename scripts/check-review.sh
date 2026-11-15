@@ -135,7 +135,15 @@ if [ -n "$pr_url" ] || [ -n "$receipts_file" ]; then
             else problems+=("${RC_ERROR:-malformed receipt snapshot}"); fi
         fi
         if $receipt_ready; then
-            pr_head="$RC_PR_HEAD"; [ "$pr_head" != "$head" ] || head_is_pr_head=true
+            pr_head="$RC_PR_HEAD"
+            if [ "$authority" = host ] && { ! spec_objects_local "$root" ||
+                ! GIT_NO_LAZY_FETCH=1 git -C "$root" merge-base --is-ancestor "$pr_head" "$head" 2>/dev/null; }; then
+                problems+=("PR head $pr_head is not a local ancestor of --head $head; fetch the PR head and check it or a metadata-only descendant")
+                authority=unavailable; receipt_ready=false
+            fi
+        fi
+        if $receipt_ready; then
+            [ "$pr_head" != "$head" ] || head_is_pr_head=true
             [ "$RC_BASE" = "${base_canonical#refs/remotes/origin/}" ] ||
                 problems+=("the PR merges into $RC_BASE, not --base ${base_canonical#refs/remotes/origin/}")
             if ! $head_is_pr_head; then
@@ -438,8 +446,9 @@ if [ "$result" = pass ] && [ "$record_at" = "$head" ]; then
     case $'\n'"$(spec_unclosed_changes "$root" "$head")"$'\n' in *$'\n'"$id"$'\n'*) record_open=true ;; esac
 fi
 if $json; then
+    json_result="$result"; [ "$authority" = host ] || json_result=preview
     printf '{"result":"%s","change":"%s","head":"%s","fingerprint":"%s","base":"%s","base_trusted":%s,"policy_at":"%s","record_only":%s,"record_open":%s,"tier":"%s","rigor":"%s","record_at":"%s","reviews":[' \
-        "$result" "$id" "$head" "$head_fp" "$(json_escape "$base_ref")" "$base_trusted" "$policy_at" "$record_only" "$record_open" "$tier" "$rigor" "$(json_escape "$record_at")"
+        "$json_result" "$id" "$head" "$head_fp" "$(json_escape "$base_ref")" "$base_trusted" "$policy_at" "$record_only" "$record_open" "$tier" "$rigor" "$(json_escape "$record_at")"
     sep=""
     for row in ${rows[@]+"${rows[@]}"}; do
         IFS="$(printf '\037')" read -r reviewer round from to verdict critical high medium low receipt_url <<< "$row"
