@@ -106,9 +106,12 @@ change by change.
   - Rewriting pre-merge branch history can erase a newly introduced legacy line. Inherited
     default-branch blockers remain protected. The candidate's own CI scripts remain the trust
     boundary; trusted gate execution is not supplied here. PRs merged under 1.x retain 1.x rules.
-  - The separate transition follow-up adds `init.sh --upgrade --migrate-reviews`, a read-only
-    enforced/owed report and plain-upgrade refusal while 1.x lines exist. Those installer controls
-    are not included yet; this gate already enforces the blockers without them.
+  - `init.sh --upgrade --migrate-reviews` checks trusted policy and a clean, record-untouched
+    upgrade branch, reports enforced blockers and fresh reviews owed, then installs 2.0 without
+    publishing or changing a record. `--dry-run [--json]` reports without installing. Plain 2.0
+    upgrade refuses while active 1.x lines exist at the trusted tip or checkout. First upgrades
+    and same-source interrupted-install retries refuse customized overwrite/delete destinations,
+    ignored and committed edits included. `--check` and doctor list remaining blocker records.
 
 - **`check-review.sh` reads its policy from the trusted integration base, never from the change
   or the caller (breaking; #88).** Local probes showed three ways a branch could pass unreviewed or
@@ -234,6 +237,16 @@ change by change.
 
 ### Adoption
 
+- Follow [Migrating to 2.0](docs/migrating-to-2.0.md): merge the receipt policy and a well-formed
+  Rigor line under 1.x first, make a clean `--upgrade --migrate-reviews` PR without record edits,
+  then merge the upgraded default branch into each open PR and obtain fresh native reviews.
+  The publisher must already work before the upgrade PR needs receipts. The report requires jq;
+  missing gh or an unavailable API only omits open PRs with a note. Missing local PR history is
+  explicitly unavailable, never fetched or treated as no blockers.
+- Budget the deliberate review cost: a 1.x FAIL that 1.x later cleared still requires that
+  reviewer's clean native full PASS on a PR changing or closing the record, until a qualifying
+  PR removes the line. A native owner approval clears owner or unnamed legacy blockers; deleting
+  record text alone clears nothing. No 1.x PASS is converted. The scan stays through 2.x.
 - In CI, establish `origin/HEAD` (`git remote set-head origin --auto`, as the documented step
   does) and pass the pull request's target as `--base origin/<target>`. A stacked branch needs its
   target listed in `review-integration-branches` on the default branch.

@@ -21,7 +21,7 @@
 #   --upgrade       Refresh kit-owned files (commands + scripts, always), auto-update
 #                   unmodified templates/memory, add new files. Consumer edits to
 #                   templates/memory are preserved and listed; edits to kit-owned
-#                   commands/scripts are overwritten (and called out in the output).
+#                   commands/scripts are refused on 2.0 upgrades (older sources overwrite).
 #   --migrate-reviews  With --upgrade to 2.0: accept fresh native reviews, report 1.x blockers
 #   --dry-run       With --upgrade --migrate-reviews: preflight and report only; install nothing
 #   --json          With --dry-run: machine-readable transition report
