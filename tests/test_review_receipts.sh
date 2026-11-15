@@ -200,6 +200,12 @@ reset_host; fx_closed_pr 6 "$HEAD_SHA"; receipt 6 '.verdict="FAIL"'; receipt 6; 
 assert_eq 0 "$RC_CARRIED" 'origin resolves its own FAIL before carry'
 reset_host; fx_closed_pr 6 "$HEAD_SHA" '{"merged_at":"2026-01-03T00:00:00Z"}'; receipt 6 '.verdict="FAIL"'; fetch
 assert_eq '' "$(problems)" 'ordinary merged receipts are ignored'
+reset_host
+fx_pr 7 "$HEAD_SHA" '{"head":{"ref":"feature&other=#fragment","label":"owner:feature&other=#fragment"}}'
+fx_closed_pr 6 "$HEAD_SHA" '{"head":{"ref":"feature&other=#fragment","label":"owner:feature&other=#fragment"}}'
+receipt 6 '.verdict="FAIL"'; fetch
+assert_eq 1 "$RC_CARRIED" 'query metacharacters in a ref cannot hide its closed source'
+assert_contains "$(cat "$GH_STUB_DIR/requests")" 'head=owner%3Afeature%26other%3D%23fragment' 'the head filter is URL encoded'
 
 it 'restatements keep origin scope and survive a merged carrier'
 for merge in null '"2026-01-04T00:00:00Z"'; do

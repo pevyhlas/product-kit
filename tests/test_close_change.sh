@@ -3,12 +3,14 @@
 # line; the merge gate notes a record still at the head, and status and doctor flag a reviewed
 # record that reached the default branch without closing. Programme parents stay quiet.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+source "$TESTS_DIR/review-fixtures.sh"
 
 PROJ="$(make_inited_project)"; track_tmp "$PROJ"
 PROJ="$(cd "$PROJ" && pwd -P)"
 B="$PROJ/.prdkit/scripts/bash"
 cd "$PROJ" || exit 1
 printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n' >> .prdkit/memory/agents.md
+receipt_policy "$PROJ"
 git add -A >/dev/null; git commit -qm installed >/dev/null
 DEFAULT="$(git symbolic-ref --short HEAD)"
 git update-ref "refs/remotes/origin/$DEFAULT" HEAD
@@ -39,7 +41,7 @@ branch_with_code 001-greet
 START="$(git merge-base HEAD "$DEFAULT")"; REVIEWED="$(git rev-parse HEAD)"
 run bash "$B/close-change.sh" 001-greet "warmer greeting — R-01 — #1"
 assert_eq 1 "$STATUS" "refuses before a passing Review line is recorded"
-assert_contains "$OUTPUT" "commit the final passing Review line first" "says what is missing"
+assert_contains "$OUTPUT" "publish the remaining verdicts first" "says what is missing"
 assert_eq "$REVIEWED" "$(git rev-parse HEAD)" "nothing committed on refusal"
 assert_eq '' "$(git status --porcelain)" "nothing staged or written on refusal"
 pass_line code "$START" "$REVIEWED" >> specs/changes/001-greet.md

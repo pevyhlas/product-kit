@@ -91,7 +91,8 @@ case "${GH_STUB_PARTIAL:-}" in
 esac
 case "$route" in
     pulls\?state=closed\&head=*)
-        jq -s --arg head "${route#*head=}" '[.[] | select(.state == "closed" and ((.head.label // "owner:feature") == $head))]' \
+        jq -s --arg head "${route#*head=}" '[.[] | (.head.label // "owner:feature") as $label |
+            select(.state == "closed" and ($label == $head or (($label | @uri) == $head)))]' \
             "$GH_STUB_DIR"/pulls/*.json | emit ;;
     pulls/[0-9]*/reviews/[0-9]*)
         number="${route#pulls/}"; number="${number%%/*}"; review_id="${route##*/}"

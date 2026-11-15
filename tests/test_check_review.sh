@@ -7,6 +7,7 @@
 # record still checks against the record's last version. Its policy (Rigor, registry, T0 paths)
 # comes from the trusted integration base, and a branch cannot lower its own tier.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+source "$TESTS_DIR/review-fixtures.sh"
 
 PROJ="$(make_inited_project)"; track_tmp "$PROJ"
 PROJ="$(cd "$PROJ" && pwd -P)"
@@ -14,6 +15,7 @@ CHECK="$PROJ/.prdkit/scripts/bash/check-review.sh"
 cd "$PROJ" || exit 1
 printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n| security | reviewer |\n| docs | reviewer |\n| design | reviewer |\n' >> .prdkit/memory/agents.md
 printf '\n## Configuration\n- review-integration-branches: origin/develop\n' > .prdkit/memory/config.md
+receipt_policy "$PROJ"
 git add -A >/dev/null; git commit -qm installed >/dev/null
 DEFAULT="$(git symbolic-ref --short HEAD)"
 git update-ref "refs/remotes/origin/$DEFAULT" HEAD
@@ -56,7 +58,7 @@ it "code changed after the reviewed head fails"
 echo 'warmer' > src/app.txt; git commit -qam "after review" >/dev/null
 run bash "$CHECK"
 assert_eq 1 "$STATUS" "fails"
-assert_contains "$OUTPUT" "changed since the reviewed head $REVIEWED: src/app.txt" "names the unreviewed path"
+assert_contains "$OUTPUT" "reviewed content differs at: src/app.txt" "names the unreviewed path"
 git reset -q --hard HEAD~1
 
 it "tracked execution-plan deletion needs coverage; same-PR finalization does not exempt it"
@@ -82,7 +84,7 @@ for range in "$BASE..HEAD" "$BASE..001-greet" "$BASE..HEAD~1" "$BASE..@" "$REVIE
     run bash "$CHECK"
     assert_eq 1 "$STATUS" "range $range refused"
 done
-assert_contains "$OUTPUT" "is not a content fingerprint (fp1:…) or a commit hash; record verdicts with record-review.sh, never a name that moves" "says why"
+assert_contains "$OUTPUT" "invalid receipt token forms" "says why"
 
 it "a three-dot range reads as two-dot; an empty range or one that skips the change's start fails"
 record T1 "$(verdict code PASS "$CLEAN" "$BASE...$REVIEWED")"
@@ -91,7 +93,7 @@ assert_eq 0 "$STATUS" "three dots accepted"
 record T1 "$(verdict code PASS "$CLEAN" "$REVIEWED..$REVIEWED")"
 run bash "$CHECK"
 assert_eq 1 "$STATUS" "empty range fails"
-assert_contains "$OUTPUT" "the range $REVIEWED..$REVIEWED is empty" "says why"
+assert_contains "$OUTPUT" " is empty" "says why"
 echo 'more' > src/more.txt; git add src/more.txt; git commit -qm "more code" >/dev/null; LAST="$(git rev-parse --short HEAD)"
 record T1 "$(verdict code PASS "$CLEAN" "$REVIEWED..$LAST")"
 run bash "$CHECK"
@@ -310,7 +312,7 @@ done
 it "missing counts or a missing review fail; the tier must be named"
 record T1 "$(verdict code PASS 'looks fine')"
 run bash "$CHECK"
-assert_contains "$OUTPUT" "? critical finding(s) block" "unreadable counts are not zero"
+assert_contains "$OUTPUT" "invalid verdict or finding counts" "unreadable counts are not zero"
 record T2
 run bash "$CHECK"
 assert_contains "$OUTPUT" "T2 needs a recorded independent review; none found in State" "no review"
@@ -461,7 +463,7 @@ assert_eq 0 "$STATUS" "the delta review covers the security head"
 record T2 "$(verdict security PASS "$CLEAN")" "$(verdict code PASS "$CLEAN" "$FIX1..$FIX2")"
 run bash "$CHECK"
 assert_eq 1 "$STATUS" "a delta starting after the older head leaves a gap"
-assert_contains "$OUTPUT" "security (round 1): changed since the reviewed head $REVIEWED: src/fix.txt" "names the gap"
+assert_contains "$OUTPUT" "security: reviewed content differs at: src/fix.txt" "names the gap"
 record T1 "$(verdict code FAIL '0 critical, 1 high, 0 medium, 0 low')" "$(verdict code PASS "$CLEAN" "$REVIEWED..$FIX2")"
 run bash "$CHECK"
 assert_eq 0 "$STATUS" "one reviewer's FAIL, then a scoped PASS of the fix, passes"
@@ -476,7 +478,7 @@ assert_eq 0 "$STATUS" "the chain also covers another reviewer's older head"
 record T1 "$(verdict code FAIL '1 critical, 0 high, 0 medium, 0 low' "$REVIEWED..$FIX2")" "$(verdict code PASS "$CLEAN")"
 run bash "$CHECK"
 assert_eq 1 "$STATUS" "a FAIL round its reviewer never passed past covers nothing"
-assert_contains "$OUTPUT" "changed since the reviewed head $REVIEWED" "the failed code is unreviewed"
+assert_contains "$OUTPUT" "changed since the reviewed content" "the failed code is unreviewed"
 record T2 "$(verdict code PASS "$CLEAN")" "$(verdict security FAIL '1 critical, 0 high, 0 medium, 0 low' "$REVIEWED..$FIX2")" \
     "$(verdict security PASS "$CLEAN")"
 run bash "$CHECK"
@@ -486,7 +488,7 @@ record T2 "$(verdict code PASS "$CLEAN" "$BASE..$FIX2")" "$(verdict security FAI
 run bash "$CHECK"
 assert_eq 1 "$STATUS" "a FAIL is not carried to the head by another reviewer's PASS"
 # A full re-review clears the FAIL, but of older content: it carries security nowhere near this head.
-assert_contains "$OUTPUT" "security (round 1): changed since the reviewed head $REVIEWED: src/fix.txt" "security's re-reviewed content is not this head's"
+assert_contains "$OUTPUT" "security: reviewed content differs at: src/fix.txt" "security's re-reviewed content is not this head's"
 assert_not_contains "$OUTPUT" "PASS 001-greet" "the failed step never links"
 record T1 "$(verdict code PASS "$CLEAN" "$BASE..$FIX2")" "$(verdict code FAIL '1 critical, 0 high, 0 medium, 0 low' "$BASE..$FIX2")" \
     "$(verdict code PASS "$CLEAN")"
@@ -531,7 +533,7 @@ assert_eq 1 "$STATUS" "the change's own branch as base fails"
 assert_contains "$OUTPUT" "is already in 001-greet" "says why"
 TRUNK="$(mktemp -d)"; track_tmp "$TRUNK"
 ( cd "$TRUNK" && git init -q && git config user.name test && git config user.email test@example.invalid &&
-  git checkout -q -b trunk && mkdir -p .prdkit/memory && printf '# Capabilities\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n' > .prdkit/memory/agents.md && printf -- '- **Rigor**: light\n' > .prdkit/memory/constitution.md && echo base > base.txt && git add base.txt .prdkit && git commit -qm base &&
+  git checkout -q -b trunk && mkdir -p .prdkit/memory && printf '# Capabilities\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n' > .prdkit/memory/agents.md && printf -- '- **Rigor**: light\n' > .prdkit/memory/constitution.md && receipt_policy "$TRUNK" && echo base > base.txt && git add base.txt .prdkit && git commit -qm base &&
   git checkout -q -b 008-solo && mkdir -p src specs/changes && echo solo > src/solo.txt && git add src && git commit -qm code ) >/dev/null 2>&1
 SOLO_BASE="$(git -C "$TRUNK" rev-parse --short trunk)"; SOLO_HEAD="$(git -C "$TRUNK" rev-parse --short HEAD)"
 printf '# Change: Solo\n\n**Tier**: T1\n\n## State\n\n**Review**: round 1 · %s..%s · code · PASS · %s · https://example.invalid/pr/8#c1\n' \
@@ -639,7 +641,7 @@ git checkout -q -b side HEAD~3; echo other > other.txt; git add other.txt; git c
 REVIEWED="$(git rev-parse --short HEAD)"; git checkout -q 001-greet
 record T1 "$(verdict code PASS "$CLEAN")"
 run bash "$CHECK"
-assert_contains "$OUTPUT" "code (round 1): changed since the reviewed head $REVIEWED: other.txt" "foreign content refused"
+assert_contains "$OUTPUT" "code: reviewed content differs at: other.txt" "foreign content refused"
 
 it "a 0.x feature without a record is told it becomes one at the cutover"
 mkdir -p specs/features/002-legacy; echo '# Legacy' > specs/features/002-legacy/spec.md

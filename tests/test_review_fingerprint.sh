@@ -5,6 +5,7 @@
 # fix, an overlapping base merge, or a binary, mode or link change. record-review.sh writes every
 # line here; check-review.sh only reads them.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+source "$TESTS_DIR/review-fixtures.sh"
 
 PROJ="$(make_inited_project)"; track_tmp "$PROJ"
 PROJ="$(cd "$PROJ" && pwd -P)"
@@ -12,6 +13,7 @@ cd "$PROJ" || exit 1
 CHECK="$PROJ/.prdkit/scripts/bash/check-review.sh"
 RECORD="$PROJ/.prdkit/scripts/bash/record-review.sh"
 printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n| security | reviewer |\n| design | reviewer |\n' >> .prdkit/memory/agents.md
+receipt_policy "$PROJ"
 mkdir -p src assets specs
 i=1; while [ "$i" -le 30 ]; do echo "line $i"; i=$((i + 1)); done > src/app.txt
 printf 'notes\n' > src/other.txt
@@ -285,13 +287,13 @@ check
 assert_eq 0 "$STATUS" "and survives a rebase while its commits are here: $OUTPUT"
 set_line src/app.txt 15 'line fifteen, changed again'; git commit -qam fix >/dev/null
 check
-assert_contains "$OUTPUT" "code (round 1): changed since the reviewed head $REVIEWED: src/app.txt" "a later fix names the path"
+assert_contains "$OUTPUT" "code: reviewed content differs at: src/app.txt" "a later fix names the path"
 git reset -q --hard HEAD~1
 sed "s/$REVIEWED/0123456789abcdef0123456789abcdef01234567/" "specs/changes/$ID.md" > .git/rec && cp .git/rec "specs/changes/$ID.md"
 git commit -qam gone >/dev/null
 check
 assert_eq 1 "$STATUS" "fails closed"
-assert_contains "$OUTPUT" "code (round 1): commit 0123456789abcdef0123456789abcdef01234567 is not here: a range recorded before content fingerprints needs its commits; fetch them or record a new verdict with record-review.sh" "exact message"
+assert_contains "$OUTPUT" "invalid receipt token forms" "commit-shaped tokens are no longer receipt tokens"
 done_with
 
 it "the owner's approval survives a code fix and a rebase, and lapses on an L0 edit"
@@ -394,6 +396,7 @@ legacy_line() { # verdict from to
     [ "$1" = PASS ] || counts='0 critical, 1 high, 0 medium, 0 low'
     printf '**Review**: round 1 · %s..%s · code · %s · %s · %s\n' "$2" "$3" "$1" "$counts" "$LINK" >> "specs/changes/$ID.md"
     git commit -qam "legacy $1 $2..$3" >/dev/null
+    receipt_host . "$ID" "$(git rev-parse HEAD)"
 }
 close_after_merge() { # the code merged with its record open; a record-only PR closes it
     git update-ref "$TRUSTED" HEAD
@@ -418,10 +421,10 @@ begin 023-legacy-stands
 S="$(git rev-parse --short "$TIP")"; B="$(git rev-parse --short HEAD~1)"
 set_line src/app.txt 16 'line sixteen, fixed'; git commit -qam fix >/dev/null; C="$(git rev-parse --short HEAD)"
 legacy_line FAIL "$S" "$C"
-legacy_line PASS "$S" "$B"
+legacy_line PASS "$B" "$B"
 close_after_merge
 assert_eq 1 "$STATUS" "a later PASS on an older commit does not resolve a legacy FAIL after merge"
-assert_contains "$OUTPUT" "code (round 1): its FAIL at ${C:0:12} stands: no later clean PASS from code reaches that content" "exact message"
+assert_contains "$OUTPUT" "stands: no later clean PASS from code reaches that content" "a later PASS on older content does not clear the FAIL"
 done_with
 
 finish

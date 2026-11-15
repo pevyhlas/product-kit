@@ -1,46 +1,10 @@
 #!/usr/bin/env bash
-# check-review.sh — Before merging a change, check that its recorded independent review covers
-# the head being merged. Reads committed state only: the change record's tier and its State
-# `**Review**:` lines, and the policy (Rigor, reviewer registry, T0 paths) at the tip of the
-# trusted default branch, never the head's own copy, with local git. Needs no network and no model
-# credentials, so the merging agent and CI can both run it. It checks recorded verdicts; it does
-# not review, and it never grants merge authority.
-#
-# A record line, one per verdict, written by record-review.sh and appended in order; a later line
-# supersedes the same reviewer's earlier one whatever its round number:
-#   **Review**: round <n> · <from>..<to> · <reviewer> · PASS|FAIL · <c> critical, <h> high, <m> medium, <l> low · <link>
-# Each end is `start` (no change) or fp1:<sha256>, the change's content: its delta from where it
-# leaves --base to a revision, outside the record and the log (review-fingerprint-lib.sh). A line
-# recorded before fingerprints names commit hashes, read as those commits' content while they are
-# here. The owner's line (reviewer `owner`, T3) binds the L0/L1 spec's content only; it needs PASS,
-# may omit the counts, which are not read, and its link is the last field. The record is read at
-# the head, or, when the closing commit deleted it, from the last commit that still had it.
-#
-# Coverage is by content, never ancestry. Every non-blocking PASS links its two contents. A
-# blocking line (a FAIL, or counts that block for the Rigor or cannot be read) stands until a later
-# clean PASS from the same reviewer over a non-empty range starts at `start` or at content
-# reachable from the failed content through that reviewer's own later lines; only then (the
-# latter) does it link. A blocking line recorded before fingerprints is also resolved by the old
-# rule: a later clean PASS over a commit range whose head descends from the blocking head.
-# A content is covered when links lead from it to the head's content: so a
-# verdict survives record-only commits, reverts, rebases, squashes and base merges that leave the
-# reviewed hunks and their 3 context lines alone. Each reviewer's latest content must be covered,
-# and for T1-T3 so must `start`. A merge carrying only the record and the log from a trusted start
-# (a change closed after its code merged) skips coverage. T1-T3 need one independent verdict, T3
-# the owner's too, whose L0/L1 content must equal the head's.
-# The tier is the record's one **Tier** field and never lower than any tier the record named on
-# the trusted branches, at the change's start or at a commit of the branch, nor below T3 for an L0
-# edit; T0 holds only when every changed path outside the record and the log is a regular file
-# under the trusted config's review-t0-paths.
-# A pass whose record is still at the head, with no child or outcome checkpoint, adds a note:
-# if the PR completes the change, close it before merge (close-change.sh). It never fails.
-# --verify-reports --pr <url> compares each linked report with its line; an unavailable or
-# mismatching report fails the check.
-#
-# Usage: check-review.sh [--json] [--head <rev>] [--base <rev>] [--repo <dir>] [<change-id>]
-#   <change-id> defaults to the current branch name; --base to origin/HEAD, and any --base must
-#   be origin/HEAD's target or a review-integration-branches entry in its committed config.
-#   Exit 0 pass, 1 fail, 2 usage.
+# check-review.sh — Host receipts are the independent verdict authority. Trusted policy, tier,
+# fingerprints and structure still come from committed Git state. The coverage engine is unchanged.
+# Online --pr enumerates this PR and closed-source blockers in every tier. --receipts revalidates
+# an untrusted snapshot without gh/jq. With no source, only structure and coverage needs are known.
+# Exit 0 host pass, 1 fail, 2 usage, 3 preview pass. Owner State handling is temporary in phase A.
+# shellcheck disable=SC2034 # Coverage inputs and normalized row fields cross sourced interfaces.
 set -euo pipefail
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
@@ -49,14 +13,17 @@ source "$SCRIPT_DIR/review-policy-lib.sh"
 source "$SCRIPT_DIR/review-fingerprint-lib.sh"
 # shellcheck source=scripts/review-coverage-lib.sh
 source "$SCRIPT_DIR/review-coverage-lib.sh"
+# shellcheck source=scripts/review-receipts-lib.sh
+source "$SCRIPT_DIR/review-receipts-lib.sh"
 json=false; head_ref=HEAD; base_ref=""; repo=.; id=""
-verify_reports=false; pr_url=""; report_verification=not-requested
-usage='Usage: check-review.sh [--json] [--head <rev>] [--base <rev>] [--repo <dir>] [--verify-reports --pr <url>] [<change-id>]'
+pr_url=""; receipts_file=""; save_receipts=""
+usage='Usage: check-review.sh [--json] [--head <rev>] [--base <rev>] [--repo <dir>] [--pr <url> [--save-receipts <file>] | --receipts <file>] [<change-id>]'
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --json) json=true ;;
-        --verify-reports) verify_reports=true ;;
         --pr) shift; [ "$#" -gt 0 ] || { echo "$usage" >&2; exit 2; }; pr_url="$1" ;;
+        --receipts) shift; [ "$#" -gt 0 ] || { echo "$usage" >&2; exit 2; }; receipts_file="$1" ;;
+        --save-receipts) shift; [ "$#" -gt 0 ] || { echo "$usage" >&2; exit 2; }; save_receipts="$1" ;;
         --head) shift; [ "$#" -gt 0 ] || { echo "$usage" >&2; exit 2; }; head_ref="$1" ;;
         --base) shift; [ "$#" -gt 0 ] || { echo "$usage" >&2; exit 2; }; base_ref="$1" ;;
         --repo) shift; [ "$#" -gt 0 ] || { echo "$usage" >&2; exit 2; }; repo="$1" ;;
@@ -66,7 +33,7 @@ while [ "$#" -gt 0 ]; do
     esac
     shift
 done
-if { $verify_reports && [ -z "$pr_url" ]; } || { ! $verify_reports && [ -n "$pr_url" ]; }; then echo "$usage" >&2; exit 2; fi
+if { [ -n "$pr_url" ] && [ -n "$receipts_file" ]; } || { [ -n "$save_receipts" ] && [ -z "$pr_url" ]; }; then echo "$usage" >&2; exit 2; fi
 root="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null)" || { echo "Not inside a Git checkout: $repo" >&2; exit 2; }
 [ -n "$id" ] || id="$(git -C "$root" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
 is_change_id "$id" || { echo "Expected a change id such as 004-export-csv (got: ${id:-none}); pass it explicitly" >&2; exit 2; }
@@ -98,6 +65,11 @@ $base_trusted || import_base=""
 problems=(); rows=(); tier=""; rigor=""; record_at=""; record_only=false; start=""; notes=()
 sep37="$(printf '\037')"; head_fp=""; fp_ready=false
 v_line=(); v_rev=(); v_round=(); v_from=(); v_to=(); v_verdict=(); v_c=(); v_h=(); v_m=(); v_l=(); v_link=()
+v_receipt=(); v_receipt_head=()
+authority=none; pr_head=""; head_is_pr_head=false; publisher_isolation=""
+[ -z "$receipts_file" ] || authority=snapshot
+RC_PR=""; RC_PR_HEAD=""; RC_FETCHED=""; RC_IGNORED=0; RC_INVALID=0; RC_CARRIED=0; RC_RECEIPTS=0
+receipt_ready=false
 # Fingerprints are computed against the trusted base: --base, or, only to word the problems of a
 # refused --base, the trusted default branch.
 fp_base=""
@@ -119,6 +91,7 @@ registry_at="$policy_at"; registry=""
 if [ -n "$registry_at" ]; then
     registry="$( { git -C "$root" show "$registry_at:.prdkit/memory/agents.md" 2>/dev/null || true; } | review_registry)"
 fi
+[ -n "$registry_at" ] || problems+=("No trusted integration-baseline registry: establish origin/HEAD and fetch its shared history before checking reviewer eligibility")
 # Rigor: exactly one Rigor line, an empty one included, whose value is light or full followed by
 # nothing or a space; anything else (none, two, light/full, light1) is unknown, which fails.
 read_rigor() { # rev -> light|full|unknown
@@ -135,6 +108,51 @@ if [ -n "$policy_at" ]; then
     rigor="$(read_rigor "$policy_at")"
     [ "$rigor" != unknown ] ||
         problems+=("The trusted base's constitution must name exactly one Rigor, light or full (- **Rigor**: light); fix .prdkit/memory/constitution.md on the integration branch")
+fi
+# Enumerate blockers even when structural checks fail, at T0, and for record-only changes.
+if [ -z "$pr_url" ] && [ -z "$receipts_file" ] && [ -n "$policy_at" ]; then
+    if review_receipts_policy "$root" "$policy_at"; then publisher_isolation="$RC_ISOLATION"
+    else problems+=("$RC_ERROR"); fi
+fi
+if [ -n "$pr_url" ] || [ -n "$receipts_file" ]; then
+    RC_RIGOR="$rigor"
+    if ! review_receipts_policy "$root" "$policy_at"; then
+        problems+=("$RC_ERROR"); [ -z "$pr_url" ] || authority=unavailable
+    else
+        publisher_isolation="$RC_ISOLATION"
+        if [ -n "$pr_url" ]; then
+            authority=unavailable
+            if review_receipts_fetch "$pr_url" "$root" "$fp_cache/receipts-work"; then authority=host; receipt_ready=true
+            else problems+=("${RC_ERROR:-could not read receipts completely}"); fi
+        else
+            authority=snapshot
+            if review_receipts_read "$receipts_file" "$fp_cache/receipts-work"; then receipt_ready=true
+            else problems+=("${RC_ERROR:-malformed receipt snapshot}"); fi
+        fi
+        if $receipt_ready; then
+            pr_head="$RC_PR_HEAD"; [ "$pr_head" != "$head" ] || head_is_pr_head=true
+            [ "$RC_BASE" = "${base_canonical#refs/remotes/origin/}" ] ||
+                problems+=("the PR merges into $RC_BASE, not --base ${base_canonical#refs/remotes/origin/}")
+            if ! $head_is_pr_head; then
+                if ! checked_fp="$(review_fingerprint "$root" "$id" "$fp_base" "$head")" ||
+                    ! pr_fp="$(review_fingerprint "$root" "$id" "$fp_base" "$pr_head")" || [ "$checked_fp" != "$pr_fp" ]; then
+                    problems+=("PR head does not match the content of --head; use --head <PR head>")
+                fi
+            fi
+            if review_receipts_scope "$id" "$rigor" "$registry" "$fp_cache/receipts-work" "$root"; then
+                problems+=(${RC_PROBLEMS[@]+"${RC_PROBLEMS[@]}"})
+                notes+=(${RC_NOTES[@]+"${RC_NOTES[@]}"})
+                if [ -n "$save_receipts" ] && ! review_receipts_write "$save_receipts"; then problems+=("$RC_ERROR"); fi
+            else
+                problems+=("${RC_ERROR:-could not resolve receipt scope}")
+                [ "$authority" != host ] || authority=unavailable
+                receipt_ready=false
+            fi
+        fi
+    fi
+fi
+if [ "$publisher_isolation" = shared ] && [ "$authority" != host ]; then
+    notes+=("Publisher isolation is shared: authentication does not establish the reviewer's independence.")
 fi
 # Every **Tier** field in a record on stdin, one per line: T0-T3, or ? when its whole value (up to
 # the next · or the end of the line, in optional backticks) is not exactly one tier: T1/T3, T1-T3,
@@ -325,13 +343,17 @@ else
     if $base_trusted && [ -n "$start" ] && [ "$start" != "$head" ] && [ -z "$(changed_since "$start")" ]; then
         record_only=true
     fi
-    # The verdict list, parsed once from State in record order: line, reviewer, round, from, to,
-    # verdict, critical, high, medium, low, link. Coverage consumes only this list.
+    # Retain only the owner State adapter during phase A. Independent verdicts below come from
+    # the validated receipt list in host order, never from these record lines.
     v_line=(); v_rev=(); v_round=(); v_from=(); v_to=(); v_verdict=(); v_c=(); v_h=(); v_m=(); v_l=(); v_link=()
     while IFS="$(printf '\037')" read -r line reviewer round from to verdict critical high medium low link; do
         [ -n "$line" ] || continue
+        # TODO(c1c-owner): replace only this temporary owner State adapter with §3 native approval.
+        [ "$reviewer" = owner ] || continue
         v_line+=("$line"); v_rev+=("$reviewer"); v_round+=("$round"); v_from+=("$from"); v_to+=("$to")
         v_verdict+=("$verdict"); v_c+=("$critical"); v_h+=("$high"); v_m+=("$medium"); v_l+=("$low"); v_link+=("$link")
+        v_receipt+=("")
+        v_receipt_head+=("")
     done < <(printf '%s\n' "$record" | awk "$SPEC_SKIP_AWK"'
         { gsub(/[\035-\037]/, " "); if (spec_skip($0)) next }
         function trim(s) { gsub(/`/, "", s); gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
@@ -350,6 +372,17 @@ else
             link = (n > (reviewer == "owner" ? 4 : 5)) ? trim(f[n]) : ""
             print NR "\037" reviewer "\037" trim(f[1]) "\037" from "\037" to "\037" verdict "\037" count(f[5], "critical") "\037" count(f[5], "high") "\037" count(f[5], "medium") "\037" count(f[5], "low") "\037" link
         }')
+    if $receipt_ready; then
+        while IFS="$sep37" read -r kind seq origin review submitted receipt_id change reviewer from to receipt_head since receipt_base base_at verdict critical high medium low link carried; do
+            [ "$kind" = R ] || continue
+            ordinal=1
+            for prior in ${v_rev[@]+"${v_rev[@]}"}; do [ "$prior" != "$reviewer" ] || ordinal=$((ordinal+1)); done
+            v_line+=("$seq"); v_rev+=("$reviewer"); v_round+=("round $ordinal"); v_from+=("$from"); v_to+=("$to")
+            v_verdict+=("$verdict"); v_c+=("$critical"); v_h+=("$high"); v_m+=("$medium"); v_l+=("$low"); v_link+=("$link")
+            v_receipt+=("https://github.com/$RC_REPO/pull/$origin#pullrequestreview-$review")
+            v_receipt_head+=("$receipt_head")
+        done < "$RC_COVERAGE"
+    fi
     # Each reviewer's latest line, in order of first appearance.
     order=(); latest=()
     for i in ${v_rev[@]+"${!v_rev[@]}"}; do
@@ -358,19 +391,34 @@ else
         if [ -z "$found" ]; then order+=("${v_rev[i]}"); latest+=("$i"); else latest[found]="$i"; fi
     done
     for i in ${latest[@]+"${latest[@]}"}; do
-        rows+=("${v_rev[i]}$sep37${v_round[i]}$sep37${v_from[i]}$sep37${v_to[i]}$sep37${v_verdict[i]}$sep37${v_c[i]}$sep37${v_h[i]}$sep37${v_m[i]}$sep37${v_l[i]}")
+        rows+=("${v_rev[i]}$sep37${v_round[i]}$sep37${v_from[i]}$sep37${v_to[i]}$sep37${v_verdict[i]}$sep37${v_c[i]}$sep37${v_h[i]}$sep37${v_m[i]}$sep37${v_l[i]}$sep37${v_receipt[i]}")
     done
     case "$claims" in *$'\n'*) ;; *) [ -n "$tier" ] || problems+=("The record names no review tier (**Tier**: T0–T3)") ;; esac
     for i in ${v_rev[@]+"${!v_rev[@]}"}; do
         [ "${v_rev[i]}" != owner ] || continue
         if [ -z "$registry_at" ]; then
-            problems+=("$path:${v_line[i]}: No trusted integration-baseline registry: establish origin/HEAD and fetch its shared history before checking reviewer eligibility")
+            problems+=("${v_receipt[i]}: No trusted integration-baseline registry: establish origin/HEAD and fetch its shared history before checking reviewer eligibility")
         fi
         eligibility="$(review_eligibility "$registry" "${v_rev[i]}")"
-        [ "$eligibility" = reviewer ] || problems+=("$path:${v_line[i]}: reviewer '${v_rev[i]}' is $eligibility in the integration-baseline registry; register an eligible identity in agents.md before using it")
+        [ "$eligibility" = reviewer ] || problems+=("${v_receipt[i]}: reviewer '${v_rev[i]}' is $eligibility in the integration-baseline registry; register an eligible identity in agents.md before using it")
     done
 
+    coverage_record_only="$record_only"
+    [ "$tier" != T0 ] || record_only=true
     review_coverage_evaluate
+    record_only="$coverage_record_only"
+    # Keep actionable path diagnostics when the publisher's provenance commit is still local.
+    # These are diagnostics only; authenticated tokens, never the commits, decide coverage.
+    if $fp_ready; then
+        for i in ${latest[@]+"${latest[@]}"}; do
+            if [ "${v_rev[i]}" = owner ] || [ -z "${v_receipt_head[i]}" ] || ! review_is_fp "${v_to[i]}"; then continue; fi
+            if ! covered "${v_to[i]}" && content_of "${v_receipt_head[i]}" full; then
+                # shellcheck disable=SC2154 # Stream paths are outputs of the coverage library.
+                affected="$(review_stream_paths "$content_stream" "$head_stream" | tr '\n' ' ' | sed 's/ $//')"
+                [ -z "$affected" ] || problems+=("${v_rev[i]}: reviewed content differs at: $affected")
+            fi
+        done
+    fi
     if [ "$tier" = T0 ] && ! $record_only && [ -n "$policy_at" ]; then
         # The tier is checked, not taken as the record's claim.
         if [ -z "$start" ]; then
@@ -391,36 +439,6 @@ else
     review_coverage_require_start
 fi
 
-if $verify_reports; then
-    report_verification=not-run
-    if [ "${#problems[@]}" -eq 0 ]; then
-        source "$SCRIPT_DIR/review-reports-lib.sh"
-        if review_reports_context "$pr_url" "$head"; then
-            report_verification=matched
-            for i in ${v_rev[@]+"${!v_rev[@]}"}; do
-                from="${v_from[i]}"; to="${v_to[i]}"; at="$path:${v_line[i]}"
-                # A fingerprint line matches a v2 receipt with exactly the recorded ends; a line
-                # recorded before fingerprints, a v1 receipt with both commits' full hashes.
-                if { [ "$from" = start ] || review_is_fp "$from"; } && review_is_fp "$to"; then
-                    review_report_match_v2 "${v_link[i]}" "${v_rev[i]}" "$from" "$to" "${v_verdict[i]}" "${v_c[i]}" "${v_h[i]}" "${v_m[i]}" "${v_l[i]}" ||
-                        { problems+=("$at: $RR_ERROR"); report_verification="$RR_STATE"; }
-                    continue
-                fi
-                from="$( { is_sha "$from" && git -C "$root" rev-parse --verify --quiet "$from^{commit}"; } || true)"
-                to="$( { is_sha "$to" && git -C "$root" rev-parse --verify --quiet "$to^{commit}"; } || true)"
-                # Superseded verdicts whose commits are unavailable still cannot be authenticated.
-                if [ -z "$from" ] || [ -z "$to" ]; then
-                    problems+=("$at: report range is unavailable for verification"); report_verification=failed; continue
-                fi
-                if ! review_report_match "${v_link[i]}" "${v_rev[i]}" "$from" "$to" "${v_verdict[i]}" "${v_c[i]}" "${v_h[i]}" "${v_m[i]}" "${v_l[i]}"; then
-                    problems+=("$at: $RR_ERROR"); report_verification="$RR_STATE"
-                fi
-            done
-        else
-            problems+=("$RR_ERROR"); report_verification="$RR_STATE"
-        fi
-    fi
-fi
 result=pass; [ "${#problems[@]}" -eq 0 ] || result=fail
 # Advisory: a reviewed PR-scoped record still at this head would merge open (review.md, Closing).
 record_open=false
@@ -432,13 +450,15 @@ if $json; then
         "$result" "$id" "$head" "$head_fp" "$(json_escape "$base_ref")" "$base_trusted" "$policy_at" "$record_only" "$record_open" "$tier" "$rigor" "$(json_escape "$record_at")"
     sep=""
     for row in ${rows[@]+"${rows[@]}"}; do
-        IFS="$(printf '\037')" read -r reviewer round from to verdict critical high medium low <<< "$row"
-        printf '%s{"reviewer":"%s","round":"%s","range":"%s","verdict":"%s","critical":"%s","high":"%s","medium":"%s","low":"%s"}' "$sep" \
+        IFS="$(printf '\037')" read -r reviewer round from to verdict critical high medium low receipt_url <<< "$row"
+        printf '%s{"reviewer":"%s","round":"%s","range":"%s","verdict":"%s","critical":"%s","high":"%s","medium":"%s","low":"%s","receipt":"%s"}' "$sep" \
             "$(json_escape "$reviewer")" "$(json_escape "$round")" "$(json_escape "$from..$to")" "$(json_escape "$verdict")" \
-            "$(json_escape "$critical")" "$(json_escape "$high")" "$(json_escape "$medium")" "$(json_escape "$low")"
+            "$(json_escape "$critical")" "$(json_escape "$high")" "$(json_escape "$medium")" "$(json_escape "$low")" "$(json_escape "$receipt_url")"
         sep=,
     done
-    printf '],"registry_at":"%s","report_verification":"%s","problems":%s}\n' "$registry_at" "$report_verification" "$(json_array ${problems[@]+"${problems[@]}"})"
+    printf '],"registry_at":"%s","authority":"%s","pr":"%s","pr_head":"%s","head_is_pr_head":%s,"publisher_isolation":"%s","legacy_blockers":[],"receipts":%s,"ignored_receipts":%s,"invalid_receipts":%s,"carried_blockers":%s,"owner":{"review":null,"state":null,"commit":null,"head_at_submission":null},"problems":%s}\n' \
+        "$registry_at" "$authority" "$(json_escape "${pr_url:-${RC_PR:+https://github.com/$RC_REPO/pull/$RC_PR}}")" "$pr_head" "$head_is_pr_head" "$publisher_isolation" \
+        "$RC_RECEIPTS" "$RC_IGNORED" "$RC_INVALID" "$RC_CARRIED" "$(json_array ${problems[@]+"${problems[@]}"})"
 elif [ "$result" = pass ]; then
     if $record_only; then
         note=""
@@ -450,15 +470,12 @@ elif [ "$result" = pass ]; then
         printf 'PASS %s at %s: %s, Rigor %s; %s recorded verdict(s) cover this head.\n' "$id" "$head" "$tier" "$rigor" "${#rows[@]}"
     fi
     for note in ${notes[@]+"${notes[@]}"}; do printf '%s\n' "$note"; done
-    ! $record_open || printf 'Note: %s is still at this head; if this PR completes the change, close it before merge: .prdkit/scripts/bash/close-change.sh %s "<log line>" (review.md, Closing).\n' "$path" "$id"
+    ! $record_open || printf 'Note: %s is still at this head; if this PR completes the change, close it before merge: .prdkit/scripts/bash/close-change.sh --pr <url> %s "<log line>" (review.md, Closing).\n' "$path" "$id"
 else
     printf 'FAIL %s at %s:\n' "$id" "$head"
     for problem in "${problems[@]}"; do printf '  %s\n' "$problem"; done
     for note in ${notes[@]+"${notes[@]}"}; do printf '%s\n' "$note"; done
 fi
-if ! $json && [ "${#rows[@]}" -gt 0 ]; then
-    if [ "$report_verification" = not-requested ]; then
-        printf 'Report links unverified (offline default); use --verify-reports --pr <url> for report consistency checks.\n'
-    else printf 'Report verification: %s (matching metadata does not prove reviewer independence).\n' "$report_verification"; fi
-fi
-[ "$result" = pass ]
+if ! $json && [ "$authority" != host ]; then printf 'PREVIEW: authority=%s fetched=%s; only an online check can certify that no blocker stands.\n' "$authority" "${RC_FETCHED:-none}"; fi
+[ "$result" = pass ] || exit 1
+[ "$authority" = host ] || exit 3

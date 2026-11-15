@@ -56,7 +56,7 @@ _receipts_reviews() { # repo PR output-directory; validate the entire GraphQL st
         } pageInfo { hasNextPage endCursor } }
       } }
     }'
-    if ! gh api graphql --paginate -f query="$query" -F owner="${repo%/*}" -F name="${repo#*/}" -F number="$number" > "$work/pages-$number" 2>/dev/null; then
+    if ! gh api graphql --hostname github.com --paginate -f query="$query" -F owner="${repo%/*}" -F name="${repo#*/}" -F number="$number" > "$work/pages-$number" 2>/dev/null; then
         RC_ERROR="could not read every review on PR $number"; return 1
     fi
     if ! jq -se --argjson number "$number" '
@@ -89,6 +89,9 @@ _receipts_consistency() { # root change from to head since base base_at -> RC_ER
     local root="$1" change="$2" from="$3" to="$4" head="$5" since="$6" base="$7" base_at="$8" fp
     RC_ERROR=""
     git check-ref-format "$base" >/dev/null 2>&1 || { RC_ERROR='invalid base ref'; return 1; }
+    if ! spec_objects_local "$root"; then
+        RC_ERROR='receipt provenance cannot be checked without fetching from the promisor remote on this Git version'; return 1
+    fi
     # Absent provenance is permitted; tokens remain authenticated. Never fetch it implicitly.
     if ! GIT_NO_LAZY_FETCH=1 git -C "$root" cat-file -e "$base_at^{commit}" 2>/dev/null; then return 0; fi
     if [ "$to" != none ] && GIT_NO_LAZY_FETCH=1 git -C "$root" cat-file -e "$head^{commit}" 2>/dev/null; then
@@ -118,7 +121,7 @@ review_receipts_fetch() { # URL root work; policy already read; caller supplies 
     fi
     RC_PR_HEAD="$(jq -r .head.sha "$work/pr.json")"; RC_BASE="$(jq -r .base.ref "$work/pr.json")"
     RC_PR_AUTHOR="$(jq -r .user.id "$work/pr.json")"; RC_PR_CREATED="$(jq -r .created_at "$work/pr.json")"
-    RC_FETCHED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; head_label="$(jq -r .head.label "$work/pr.json")"
+    RC_FETCHED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; head_label="$(jq -r '.head.label | @uri' "$work/pr.json")"
     if ! gh api --hostname github.com --paginate "repos/$RC_REPO/pulls?state=closed&head=$head_label" > "$work/closed" 2>/dev/null ||
         ! jq -se 'length>0 and all(.[]; type=="array" and all(.[]; (.number|type)=="number" and has("merged_at") and .state=="closed"))' "$work/closed" >/dev/null 2>&1; then
         RC_ERROR='could not enumerate closed source PRs completely'; return 1
@@ -295,7 +298,7 @@ review_receipts_scope() { # change rigor registry work root; local checks also r
     local n k j candidate clear block scope start_fp scoped
     local rs=() origins=() changes=() reviewers=() froms=() tos=() blocks=() seqs=() links=()
     RC_PROBLEMS=(); RC_COVERAGE="$work/coverage"; RC_INVALID=0; RC_CARRIED=0; RC_RECEIPTS=0
-    : > "$RC_COVERAGE"
+    : > "$RC_COVERAGE" || { RC_ERROR='cannot write receipt coverage'; return 1; }
     scoped="$(mktemp "$work/scoped.XXXXXX")" || { RC_ERROR='cannot allocate scoped receipts'; return 1; }
     while IFS= read -r row; do
         IFS=$'\037' read -r type seq origin review time receipt_id change reviewer from to rhead since base base_at verdict c h m l report carried <<< "$row"
@@ -363,8 +366,9 @@ review_receipts_scope() { # change rigor registry work root; local checks also r
         if [ "${origins[k]}" = "$RC_PR" ] && [ "${changes[k]}" = "$checked" ]; then printf '%s\n' "${rs[k]}" >> "$RC_COVERAGE"; fi
     done
     # X rows were collected separately; retain the immutable host sequence across both kinds.
-    LC_ALL=C sort -t $'\037' -k2,2n "$scoped" > "$work/scoped-sorted"
-    mv "$work/scoped-sorted" "$scoped"
+    if ! LC_ALL=C sort -t $'\037' -k2,2n "$scoped" > "$work/scoped-sorted" || ! mv "$work/scoped-sorted" "$scoped"; then
+        RC_ERROR='cannot order scoped receipts'; return 1
+    fi
     RC_FILE="$scoped"
     RC_RECEIPTS="$(awk -F '\037' '$1=="R" { n++ } END { print n+0 }' "$RC_FILE")"
     RC_ERROR=""
