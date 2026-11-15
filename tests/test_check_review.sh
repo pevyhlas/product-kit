@@ -40,7 +40,8 @@ record() { # tier, then State review lines
     git add specs/changes/001-greet.md; git commit -qm "record" >/dev/null
 }
 verdict() { # reviewer verdict counts [range]
-    printf '**Review**: round 1 · %s · %s · %s · %s · https://example.invalid/pr/1#c1' "${4:-$BASE..$REVIEWED}" "$1" "$2" "$3"
+    # Coverage recipes are not active legacy verdicts; dedicated scan tests combine both.
+    printf '**Receipt fixture**: round 1 · %s · %s · %s · %s · https://example.invalid/pr/1#c1' "${4:-$BASE..$REVIEWED}" "$1" "$2" "$3"
 }
 CLEAN='0 critical, 0 high, 0 medium, 0 low'
 
@@ -597,7 +598,7 @@ run bash "$CHECK" 001-greet
 assert_eq 1 "$STATUS" "a recorded FAIL still fails"
 git checkout -q "$DEFAULT"; git branch -q -D 001-close
 git checkout -q -b 001-close
-sed -i.bak '/^\*\*Review\*\*:/d' specs/changes/001-greet.md && rm -f specs/changes/001-greet.md.bak
+sed -i.bak '/^\*\*Review\*\*:/d; /^\*\*Receipt fixture\*\*:/d' specs/changes/001-greet.md && rm -f specs/changes/001-greet.md.bak
 git commit -qam "no verdicts" >/dev/null
 run bash "$CHECK" 001-greet
 assert_eq 0 "$STATUS" "a record-only close passes"

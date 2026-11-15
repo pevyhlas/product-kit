@@ -15,6 +15,8 @@ source "$SCRIPT_DIR/review-fingerprint-lib.sh"
 source "$SCRIPT_DIR/review-coverage-lib.sh"
 # shellcheck source=scripts/review-receipts-lib.sh
 source "$SCRIPT_DIR/review-receipts-lib.sh"
+# shellcheck source=scripts/review-legacy-lib.sh
+source "$SCRIPT_DIR/review-legacy-lib.sh"
 json=false; head_ref=HEAD; base_ref=""; repo=.; id=""
 pr_url=""; receipts_file=""; save_receipts=""
 usage='Usage: check-review.sh [--json] [--head <rev>] [--base <rev>] [--repo <dir>] [--pr <url> [--save-receipts <file>] | --receipts <file>] [<change-id>]'
@@ -153,6 +155,14 @@ if [ -n "$pr_url" ] || [ -n "$receipts_file" ]; then
 fi
 if [ "$publisher_isolation" = shared ] && [ "$authority" != host ]; then
     notes+=("Publisher isolation is shared: authentication does not establish the reviewer's independence.")
+fi
+# Legacy history is local evidence in every mode and tier, even when the checked
+# record is absent or the host is unavailable. It never joins the coverage arrays.
+legacy_receipts=""; LL_BLOCKERS=(); LL_EMPTY_ALLOWED=()
+if $receipt_ready; then legacy_receipts="$RC_FILE"; fi
+if [ -n "$fp_base" ]; then
+    review_legacy_resolve "$root" "$id" "$fp_base" "$head" "$rigor" "$registry" "$fp_cache/legacy" "$legacy_receipts" "$RC_PR" || true
+    problems+=(${LL_PROBLEMS[@]+"${LL_PROBLEMS[@]}"})
 fi
 # Every **Tier** field in a record on stdin, one per line: T0-T3, or ? when its whole value (up to
 # the next · or the end of the line, in optional backticks) is not exactly one tier: T1/T3, T1-T3,
@@ -350,6 +360,8 @@ else
         [ -n "$line" ] || continue
         # TODO(c1c-owner): replace only this temporary owner State adapter with §3 native approval.
         [ "$reviewer" = owner ] || continue
+        # Owner FAIL/unreadable lines are resolved only by the legacy scan, never coverage.
+        [ "$verdict" = PASS ] || continue
         v_line+=("$line"); v_rev+=("$reviewer"); v_round+=("$round"); v_from+=("$from"); v_to+=("$to")
         v_verdict+=("$verdict"); v_c+=("$critical"); v_h+=("$high"); v_m+=("$medium"); v_l+=("$low"); v_link+=("$link")
         v_receipt+=("")
@@ -375,6 +387,9 @@ else
     if $receipt_ready; then
         while IFS="$sep37" read -r kind seq origin review submitted receipt_id change reviewer from to receipt_head since receipt_base base_at verdict critical high medium low link carried; do
             [ "$kind" = R ] || continue
+            clearance_only=false
+            for allowed in ${LL_EMPTY_ALLOWED[@]+"${LL_EMPTY_ALLOWED[@]}"}; do [ "$seq" != "$allowed" ] || clearance_only=true; done
+            $clearance_only && continue
             ordinal=1
             for prior in ${v_rev[@]+"${v_rev[@]}"}; do [ "$prior" != "$reviewer" ] || ordinal=$((ordinal+1)); done
             v_line+=("$seq"); v_rev+=("$reviewer"); v_round+=("round $ordinal"); v_from+=("$from"); v_to+=("$to")
@@ -456,9 +471,9 @@ if $json; then
             "$(json_escape "$critical")" "$(json_escape "$high")" "$(json_escape "$medium")" "$(json_escape "$low")" "$(json_escape "$receipt_url")"
         sep=,
     done
-    printf '],"registry_at":"%s","authority":"%s","pr":"%s","pr_head":"%s","head_is_pr_head":%s,"publisher_isolation":"%s","legacy_blockers":[],"receipts":%s,"ignored_receipts":%s,"invalid_receipts":%s,"carried_blockers":%s,"owner":{"review":null,"state":null,"commit":null,"head_at_submission":null},"problems":%s}\n' \
+    printf '],"registry_at":"%s","authority":"%s","pr":"%s","pr_head":"%s","head_is_pr_head":%s,"publisher_isolation":"%s","legacy_blockers":%s,"receipts":%s,"ignored_receipts":%s,"invalid_receipts":%s,"carried_blockers":%s,"owner":{"review":null,"state":null,"commit":null,"head_at_submission":null},"problems":%s}\n' \
         "$registry_at" "$authority" "$(json_escape "${pr_url:-${RC_PR:+https://github.com/$RC_REPO/pull/$RC_PR}}")" "$pr_head" "$head_is_pr_head" "$publisher_isolation" \
-        "$RC_RECEIPTS" "$RC_IGNORED" "$RC_INVALID" "$RC_CARRIED" "$(json_array ${problems[@]+"${problems[@]}"})"
+        "$(review_legacy_json)" "$RC_RECEIPTS" "$RC_IGNORED" "$RC_INVALID" "$RC_CARRIED" "$(json_array ${problems[@]+"${problems[@]}"})"
 elif [ "$result" = pass ]; then
     if $record_only; then
         note=""

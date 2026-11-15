@@ -46,14 +46,20 @@ begin() { # id [tier]: a fresh change from the original base: line 15 edited, th
     git add specs/changes; git commit -qm "$ID: record" >/dev/null
 }
 rec() { # record-review.sh arguments after the id; commits the record when it succeeds
+    # Keep the old writer/round tests, but mark FAIL recipes as receipt-only before
+    # committing: these scenarios test native coverage, not legacy full-PASS clearance.
+    sed 's/^\*\*Receipt fixture\*\*:/\*\*Review\*\*:/' "specs/changes/$ID.md" > .git/recipe
+    cp .git/recipe "specs/changes/$ID.md"
     run bash "$RECORD" "$ID" --link "$LINK" "$@"
+    sed '/ · FAIL · /s/^\*\*Review\*\*:/\*\*Receipt fixture\*\*:/' "specs/changes/$ID.md" > .git/recipe
+    cp .git/recipe "specs/changes/$ID.md"
     [ "$STATUS" -ne 0 ] || git commit -qam "review line" >/dev/null
 }
 pass() { rec --reviewer "$1" --verdict PASS --counts 0,0,0,0 --head "${2:-HEAD}" ${3:+--since "$3"}; }
 fail() { rec --reviewer "$1" --verdict FAIL --counts 0,1,0,0 --head "${2:-HEAD}" ${3:+--since "$3"}; }
 check() { run bash "$CHECK" "$ID"; }
 last_to() { # the to fingerprint of the record's last Review line
-    grep '^\*\*Review\*\*:' "specs/changes/$ID.md" | tail -n 1 | awk -F ' · ' '{ sub(/^.*\.\./, "", $2); print $2 }'
+    grep -E '^\*\*(Review|Receipt fixture)\*\*:' "specs/changes/$ID.md" | tail -n 1 | awk -F ' · ' '{ sub(/^.*\.\./, "", $2); print $2 }'
 }
 shown() { local hex="${1#fp1:}"; printf '%s…' "${hex:0:12}"; }
 json_fp() { run bash "$CHECK" --json "$ID"; printf '%s' "$OUTPUT" | sed -n 's/.*"fingerprint":"\([^"]*\)".*/\1/p'; }
@@ -390,7 +396,7 @@ assert_eq 1 "$STATUS" "record-only exempts coverage, not a standing FAIL"
 assert_contains "$OUTPUT" "code (round 3): its FAIL at $(shown "$FAILED_TO") stands: no later clean PASS from code reaches that content" "exact message"
 done_with
 
-it "a legacy FAIL resolved under the commit-range rule stays resolved when the change closes after merge"
+it "a legacy FAIL needs native full PASS; narrow ancestry clearance no longer suffices, including after merge"
 legacy_line() { # verdict from to
     local counts='0 critical, 0 high, 0 medium, 0 low'
     [ "$1" = PASS ] || counts='0 critical, 1 high, 0 medium, 0 low'
@@ -411,9 +417,10 @@ for shape in full narrow; do
     set_line src/app.txt 16 'line sixteen, fixed'; git commit -qam fix >/dev/null; C="$(git rev-parse --short HEAD)"
     if [ "$shape" = full ]; then legacy_line PASS "$S" "$C"; else legacy_line PASS "$B" "$C"; fi
     check
-    assert_eq 0 "$STATUS" "$shape: the gate passes before merge: $OUTPUT"
+    expected=0; [ "$shape" != narrow ] || expected=1
+    assert_eq "$expected" "$STATUS" "$shape: only native full PASS clears the legacy blocker before merge: $OUTPUT"
     close_after_merge
-    assert_eq 0 "$STATUS" "$shape: the record-only close passes after the base advances: $OUTPUT"
+    assert_eq "$expected" "$STATUS" "$shape: record-only close retains the same legacy full-PASS requirement: $OUTPUT"
     assert_contains "$OUTPUT" '"record_only":true' "$shape: record-only"
     done_with
 done

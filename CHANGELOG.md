@@ -10,6 +10,14 @@ change by change.
 
 ### Changed
 
+- **Legacy review blockers survive record edits, transfers and deletion (#69).** The gate scans
+  active State review lines using Git trees and blobs, including branch history and every merge
+  parent. Legacy PASS text grants no independent coverage. A blocker needs its reviewer's clean
+  full PASS receipt on this PR, with a historical scan proving the review included it; an
+  empty-content full PASS can clear a record-only closing change without adding a coverage edge.
+  Blockers apply in every tier and preview mode. Owner and unnamed blockers fail closed pending
+  the native owner adapter. JSON lists blocker identities, origins, reasons and clearance state.
+
 - internal: coverage engine moved to review-coverage-lib.sh; no behaviour change
 
 - **Review verdicts bind content fingerprints, not commit ranges (breaking; closes #66 and #86).**

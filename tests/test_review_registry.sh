@@ -96,7 +96,7 @@ record unknown "$LINK" "$REVIEWED" "**Review**: round 2 · $BASE..$REVIEWED · c
 check
 assert_eq 1 "$STATUS" 'latest valid verdict cannot hide a fabricated earlier receipt'
 assert_contains "$OUTPUT" "reviewer 'unknown' is unregistered" 'superseded offending receipt retained'
-record code "$LINK" "$REVIEWED" "**Review**: round 1 · $BASE..$REVIEWED · maker · FAIL · 0 critical, 1 high, 0 medium, 0 low · $LINK"
+record code "$LINK" "$REVIEWED" "**Receipt fixture**: round 1 · $BASE..$REVIEWED · maker · FAIL · 0 critical, 1 high, 0 medium, 0 low · $LINK"
 check
 assert_eq 1 "$STATUS" 'maker failure is not silently dropped'
 assert_contains "$OUTPUT" 'stands: no later clean PASS' 'standing failure remains visible'
