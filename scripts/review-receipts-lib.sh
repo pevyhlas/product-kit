@@ -215,9 +215,9 @@ review_receipts_fetch() { # URL root work; policy already read; caller supplies 
           ($all;
            ($r.payload.restates_pr // $r.origin) as $origin |
            ([range(0;length) as $i | select(.[$i].origin==$origin and .[$i].review==$r.payload.restates) | $i][0]) as $i |
-           if $i!=null and .[$i].error!="" and .[$i].seq<$r.seq and
+           if $i!=null and (.[$i].error!="" or (.[$i].repaired==true and .[$i].payload==($r.payload|del(.restates,.restates_pr)|.pr=$origin))) and .[$i].seq<$r.seq and
               (.[$i].raw_id==null or .[$i].raw_id==$r.payload.id) then
-               .[$i] = (.[$i] + {error:"",payload:($r.payload|del(.restates,.restates_pr)|.pr=$origin),raw_id:$r.payload.id}) |
+               .[$i] = (.[$i] + {error:"",repaired:true,payload:($r.payload|del(.restates,.restates_pr)|.pr=$origin),raw_id:$r.payload.id}) |
                map(if .seq==$r.seq then .consumed=true else . end)
            else map(if .seq==$r.seq then .error="restatement does not replace an earlier invalid receipt with the same id" else . end) end) |
         map(select(.consumed!=true)) |

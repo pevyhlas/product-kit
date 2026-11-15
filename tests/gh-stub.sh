@@ -111,16 +111,20 @@ case "$route" in
                 event="$(printf '%s' "$payload" | jq -er .event)"
             fi
             [ "$event" = COMMENT ] || exit 1
+            if [ -n "$input" ]; then printf '%s\n' "$payload" > "$GH_STUB_DIR/post-request.json"
+            else jq -n --arg body "$body" --arg event "$event" '{event:$event,body:$body}' > "$GH_STUB_DIR/post-request.json"; fi
             # COMMENT reviews are accepted on closed PRs too (probe §9.6).
             [ -f "$GH_STUB_DIR/pulls/$number.json" ] || exit 1
             next_id="$(jq -s '[.[][] | .fullDatabaseId | tonumber] | (max // 1000) + 1' "$GH_STUB_DIR"/reviews/*.json)"
+            post_overrides="${GH_STUB_POST_OVERRIDES:-}"; [ -n "$post_overrides" ] || post_overrides='{}'
             jq -n --slurpfile reviews "$GH_STUB_DIR/reviews/$number.json" \
                 --slurpfile pr "$GH_STUB_DIR/pulls/$number.json" --slurpfile author "$GH_STUB_DIR/publisher.json" \
                 --argjson id "$next_id" \
+                --argjson overrides "$post_overrides" \
                 --arg body "$body" --argjson number "$number" --arg time "${GH_STUB_NOW:-2026-01-02T12:00:00Z}" '
-                {fullDatabaseId:($id|tostring),url:("https://github.com/owner/repo/pull/"+($number|tostring)+"#pullrequestreview-"+($id|tostring)),
+                 ({fullDatabaseId:($id|tostring),url:("https://github.com/owner/repo/pull/"+($number|tostring)+"#pullrequestreview-"+($id|tostring)),
                  body:$body,state:"COMMENTED",submittedAt:$time,lastEditedAt:null,editor:null,
-                 author:$author[0],commit:{oid:$pr[0].head.sha}}' > "$GH_STUB_DIR/posted.json"
+                  author:$author[0],commit:{oid:$pr[0].head.sha}} * $overrides)' > "$GH_STUB_DIR/posted.json"
             jq --slurpfile review "$GH_STUB_DIR/posted.json" '. + $review' "$GH_STUB_DIR/reviews/$number.json" > "$GH_STUB_DIR/next.json"
             mv "$GH_STUB_DIR/next.json" "$GH_STUB_DIR/reviews/$number.json"
             jq '{id:.fullDatabaseId,body,state,submitted_at:.submittedAt,commit_id:.commit.oid,
