@@ -39,6 +39,33 @@ assert_eq 1 "$COUNT"
 DIGEST="$(printf 'prdkit-legacy\000001-original\000%s' "$FAIL" | review_sha256)"
 assert_eq "${DIGEST:0:32}" "${FOUND%%$'\037'*}" 'identity is the specified NUL-domain SHA-256 prefix'
 
+it 'named reviewers and owner PASS survive both NUL-sentinel awk behaviors'
+AWK_SHIM="$(mktemp -d)"; track_tmp "$AWK_SHIM"
+REAL_AWK="$(command -v awk)"; export REAL_AWK
+cat > "$AWK_SHIM/awk" <<'EOF'
+#!/usr/bin/env bash
+# Model one-true-awk returning an empty string for its NUL sentinel on Linux too.
+args=()
+for arg in "$@"; do
+    arg="${arg//sprintf\(\"%c\",0\)/\"\"}"
+    args+=("$arg")
+done
+exec "$REAL_AWK" "${args[@]}"
+EOF
+chmod +x "$AWK_SHIM/awk"
+for mode in native empty-nul; do
+    fresh; record "$A" "$FAIL"
+    printf '**Review**: round 2 · ignored · owner · PASS\n' >> "$A"
+    commit "$mode"
+    if [ "$mode" = empty-nul ]; then
+        run env PATH="$AWK_SHIM:$PATH" awk 'BEGIN { print length(sprintf("%c",0)) }'
+        assert_eq 0 "$OUTPUT" 'the shim exercises an empty sentinel'
+        PATH="$AWK_SHIM:$PATH" scan
+    else scan; fi
+    assert_eq 1 "$COUNT" 'owner PASS adds no blocker'
+    assert_eq code "$(printf '%s\n' "$FOUND" | awk -F '\037' '{ print $3 }')" 'named reviewer remains code, never unnamed'
+done
+
 it 'untouched inherited siblings are excluded, changed/deleted/moved/type-replaced siblings are included'
 for operation in untouched edit delete move symlink submodule executable; do
     fresh; record "$A" "$FAIL"; commit inherited; BASE="$(git rev-parse HEAD)"

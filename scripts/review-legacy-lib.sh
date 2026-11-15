@@ -43,10 +43,11 @@ _legacy_emit() { # path lines-file -> append blockers; range/link/fingerprint fi
     local change="${1##*/}" display_change number reviewer reason digest
     change="${change%.md}"
     LC_ALL=C awk -v rigor="$ll_rigor" '
+        BEGIN { nul=sprintf("%c",0) }
         function trim(s) { gsub(/`/, "", s); gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
         function count(s,k, v) { if (!match(s,"[0-9]+ " k)) return "?"; v=substr(s,RSTART,RLENGTH); sub(/ .*/,"",v); return v }
         { gsub(/[\035-\037]/, " "); sub(/^\*\*Review\*\*:[[:space:]]*/, ""); n=split($0,f," · ")
-          r=n>=3 ? tolower(trim(f[3])) : ""; if (r=="" || index(r,sprintf("%c",0))) r="(unnamed)"
+          r=n>=3 ? tolower(trim(f[3])) : ""; if (r=="" || (nul!="" && index(r,nul))) r="(unnamed)"
           verdict=toupper(trim(f[4])); c=count(f[5],"critical"); h=count(f[5],"high"); m=count(f[5],"medium"); l=count(f[5],"low")
           if (r=="owner") { if (verdict=="PASS") next; reason="owner legacy verdict is not a readable PASS" }
           else if (verdict=="FAIL") reason="legacy FAIL"
