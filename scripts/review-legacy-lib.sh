@@ -318,7 +318,7 @@ review_legacy_json() {
 # Read-only diagnostics for remaining 1.x debt. Both the checkout commit and the
 # trusted default tip are inspected; no host access or jq is required.
 review_legacy_record_findings() (
-    local root="$1" work at refs default rigor=unknown change path identity reviewer reason ignored policy
+    local root="$1" work at refs default rigor=unknown change record_path identity reviewer reason ignored policy
     export GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1
     if ! spec_objects_local "$root"; then
         echo 'Legacy 1.x scan unavailable: this Git cannot refuse missing-object fetches in a partial clone'; return 1
@@ -344,13 +344,13 @@ review_legacy_record_findings() (
             echo 'Legacy 1.x scan unavailable: fetch the complete local history and record blobs before checking'; return 1
         fi
         awk -F '\037' 'NF { print $3 }' "$work/inventory" | LC_ALL=C sort -u > "$work/paths" || return 1
-        while IFS= read -r path; do
-            change="${path##*/}"; change="${change%.md}"
-            if ! review_legacy_collect "$root" "$change" "$at" "$at" "$rigor" "$work/cache" "$work/blockers" "$path"; then
+        while IFS= read -r record_path; do
+            change="${record_path##*/}"; change="${change%.md}"
+            if ! review_legacy_collect "$root" "$change" "$at" "$at" "$rigor" "$work/cache" "$work/blockers" "$record_path"; then
                 echo 'Legacy 1.x scan unavailable: fetch the complete local history and record blobs before checking'; return 1
             fi
             while IFS=$'\037' read -r identity ignored reviewer reason; do
-                printf 'Legacy 1.x blocking lines: %s (%s: %s)\n' "$path" "$reviewer" "$reason" >> "$work/findings" || return 1
+                printf 'Legacy 1.x blocking lines: %s (%s: %s)\n' "$record_path" "$reviewer" "$reason" >> "$work/findings" || return 1
             done < "$work/blockers"
         done < "$work/paths"
     done < "$work/tips"
