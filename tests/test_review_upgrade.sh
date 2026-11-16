@@ -599,12 +599,47 @@ assert_eq 1 "$STATUS" 'ignored PASS record refuses plain upgrade'
 assert_contains "$OUTPUT" 'checkout record specs/changes/001-ignored.md' 'refusal identifies the ignored record'
 assert_contains "$OUTPUT" 'nothing was written' 'refusal precedes install'
 assert_eq "$before" "$(tree_snapshot "$PROJ")" 'ignored record and complete target remain unchanged'
+it 'R2-M1: a nested-only record cannot borrow a top-level blocker for reports or diagnostics'
+transition_project
+use_gh_stub
+mkdir -p "$PROJ/specs/changes/archive"
+printf '# Nested only\n## State\n%s\n' "$FAIL" > "$PROJ/specs/changes/archive/001-work.md"
+commit_fixture nested; trusted_tip
+assert_eq absent "$([ -e "$PROJ/specs/changes/001-work.md" ] && echo present || echo absent)" 'the nested-only fixture has no top-level fallback'
+upgrade --migrate-reviews --dry-run --json
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq 1 "$(printf '%s' "$OUTPUT" | jq '.records|length')" 'JSON contains exactly the nested record'
+assert_eq specs/changes/archive/001-work.md "$(printf '%s' "$OUTPUT" | jq -r '.records[0].path')" 'JSON keeps the nested-only record path'
+assert_eq 1 "$(printf '%s' "$OUTPUT" | jq .totals.records_with_blockers)" 'nested-only blocker contributes to totals'
+assert_eq 1 "$(printf '%s' "$OUTPUT" | jq '.records[0].legacy_blockers|length')" 'nested-only collector returns its blocker'
+assert_eq code "$(printf '%s' "$OUTPUT" | jq -r '.records[0].legacy_blockers[0].reviewer')" 'nested-only blocker belongs to code'
+assert_eq specs/changes/archive/001-work.md "$(printf '%s' "$OUTPUT" | jq -r '.records[0].legacy_blockers[0].path')" 'nested-only blocker location comes from its actual scan'
+assert_eq 3 "$(printf '%s' "$OUTPUT" | jq '.records[0].legacy_blockers[0].line')" 'nested-only blocker keeps its raw line number'
+upgrade --migrate-reviews --dry-run
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_contains "$OUTPUT" 'Record specs/changes/archive/001-work.md:' 'text report names the nested-only record'
+assert_contains "$OUTPUT" 'code at line 3: legacy FAIL' 'text report includes the nested-only blocker, not just inventory'
+upgrade --migrate-reviews
+assert_eq 0 "$STATUS" "$OUTPUT"
+: > "$GH_STUB_DIR/requests"
+run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --check
+assert_contains "$OUTPUT" 'Legacy 1.x blocking lines: specs/changes/archive/001-work.md (code: legacy FAIL)' 'check enumerates the nested-only blocker'
+assert_eq '' "$(cat "$GH_STUB_DIR/requests")" 'nested-only check makes no host request'
+: > "$GH_STUB_DIR/requests"
+run bash "$PROJ/.prdkit/scripts/bash/doctor.sh" --json
+assert_contains "$OUTPUT" 'Legacy 1.x blocking lines: specs/changes/archive/001-work.md (code: legacy FAIL)' 'doctor enumerates the nested-only blocker'
+assert_eq '' "$(cat "$GH_STUB_DIR/requests")" 'nested-only doctor makes no host request'
+
 it 'F4: nested records and duplicate basenames retain their paths and blocker identities'
 transition_project
 use_gh_stub
 mkdir -p "$PROJ/specs/changes/archive"
-printf '# Top\n## State\n%s\n' "$FAIL" > "$PROJ/specs/changes/001-work.md"
-printf '# Nested\n\n## State\n%s\n%s\n' "$FAIL" "$PASS" > "$PROJ/specs/changes/archive/001-work.md"
+# The shared line proves identity stability; exclusive blockers make substituting
+# either record's scan for the other observable in both reports and diagnostics.
+TOP_ONLY_FAIL="**Review**: round 3 · top-only · owner · FAIL · $CLEAN · text"
+NESTED_ONLY_FAIL="**Review**: round 3 · nested-only · security · FAIL · $CLEAN · text"
+printf '# Top\n## State\n%s\n%s\n' "$FAIL" "$TOP_ONLY_FAIL" > "$PROJ/specs/changes/001-work.md"
+printf '# Nested\n\n## State\n%s\n%s\n%s\n' "$FAIL" "$PASS" "$NESTED_ONLY_FAIL" > "$PROJ/specs/changes/archive/001-work.md"
 commit_fixture records; trusted_tip
 upgrade --migrate-reviews --dry-run --json
 assert_eq 0 "$STATUS" "$OUTPUT"
@@ -614,18 +649,29 @@ assert_eq '["specs/changes/001-work.md","specs/changes/archive/001-work.md"]' "$
 assert_eq '[3,4]' "$(printf '%s' "$OUTPUT" | jq -c '[.records[].legacy_blockers[0].line]')" 'raw line locations are scoped by path'
 assert_eq '[0,1]' "$(printf '%s' "$OUTPUT" | jq -c '[.records[].pass_lines]')" 'PASS counts do not combine duplicate basenames'
 assert_eq 1 "$(printf '%s' "$OUTPUT" | jq '[.records[].legacy_blockers[0].id]|unique|length')" 'identical basename/text retains the existing blocker identity'
+assert_eq '[["code","owner"],["code","security"]]' "$(printf '%s' "$OUTPUT" | jq -c '[.records[]|[.legacy_blockers[].reviewer]]')" 'each duplicate-basename record returns its own exclusive blocker'
+assert_eq '[[3,4],[4,6]]' "$(printf '%s' "$OUTPUT" | jq -c '[.records[]|[.legacy_blockers[].line]]')" 'exclusive blocker line evidence cannot come from the other record'
+assert_eq 3 "$(printf '%s' "$OUTPUT" | jq '[.records[].legacy_blockers[].id]|unique|length')" 'shared and exclusive blocker identities are all collected'
 upgrade --migrate-reviews --dry-run
 assert_eq 0 "$STATUS" "$OUTPUT"
 for path in specs/changes/001-work.md specs/changes/archive/001-work.md; do assert_contains "$OUTPUT" "Record $path:" 'text report retains record path'; done
+assert_contains "$OUTPUT" 'security at line 6: legacy FAIL' 'text report includes exclusive nested evidence'
+assert_contains "$OUTPUT" 'owner at line 4: owner legacy verdict is not a readable PASS' 'text report includes exclusive top-level evidence'
 upgrade --migrate-reviews
 assert_eq 0 "$STATUS" "$OUTPUT"
 : > "$GH_STUB_DIR/requests"
 run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --check
 for path in specs/changes/001-work.md specs/changes/archive/001-work.md; do assert_contains "$OUTPUT" "Legacy 1.x blocking lines: $path (code: legacy FAIL)" 'check includes each full record path'; done
+assert_contains "$OUTPUT" 'Legacy 1.x blocking lines: specs/changes/archive/001-work.md (security: legacy FAIL)' 'check cannot substitute top-level evidence for the nested scan'
+assert_contains "$OUTPUT" 'Legacy 1.x blocking lines: specs/changes/001-work.md (owner: owner legacy verdict is not a readable PASS)' 'check preserves the exclusive top-level blocker'
+assert_not_contains "$OUTPUT" 'Legacy 1.x blocking lines: specs/changes/archive/001-work.md (owner:' 'check does not misattribute top-level evidence to the nested record'
 assert_eq '' "$(cat "$GH_STUB_DIR/requests")" 'nested check stays completely offline'
 : > "$GH_STUB_DIR/requests"
 run bash "$PROJ/.prdkit/scripts/bash/doctor.sh" --json
 for path in specs/changes/001-work.md specs/changes/archive/001-work.md; do assert_contains "$OUTPUT" "Legacy 1.x blocking lines: $path (code: legacy FAIL)" 'doctor includes each full record path'; done
+assert_contains "$OUTPUT" 'Legacy 1.x blocking lines: specs/changes/archive/001-work.md (security: legacy FAIL)' 'doctor cannot substitute top-level evidence for the nested scan'
+assert_contains "$OUTPUT" 'Legacy 1.x blocking lines: specs/changes/001-work.md (owner: owner legacy verdict is not a readable PASS)' 'doctor preserves the exclusive top-level blocker'
+assert_not_contains "$OUTPUT" 'Legacy 1.x blocking lines: specs/changes/archive/001-work.md (owner:' 'doctor does not misattribute top-level evidence to the nested record'
 assert_eq '' "$(cat "$GH_STUB_DIR/requests")" 'nested doctor stays completely offline'
 it 'F5: public doctor reports missing promisor policy as unavailable without fetching or storing objects'
 transition_project
