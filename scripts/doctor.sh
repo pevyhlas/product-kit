@@ -13,6 +13,9 @@ source "$SCRIPT_DIR/context-budget-lib.sh"
 source "$SCRIPT_DIR/agent-tiers-lib.sh"
 source "$SCRIPT_DIR/spec-lib.sh"
 source "$SCRIPT_DIR/diagnostics-lib.sh"
+source "$SCRIPT_DIR/review-policy-lib.sh"
+source "$SCRIPT_DIR/review-fingerprint-lib.sh"
+source "$SCRIPT_DIR/review-legacy-lib.sh"
 json=false; strict=false; inventory=false
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -32,6 +35,13 @@ git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 && in_git=true
 while IFS= read -r finding; do
     [ -z "$finding" ] || findings+=("$finding")
 done < <(install_findings "$root")
+installed_version="$(install_manifest_value "$root/.prdkit/.manifest" version 2>/dev/null)" || installed_version=''
+case "$installed_version" in
+    2.*|3.*)
+        while IFS= read -r advisory; do
+            [ -z "$advisory" ] || advisories+=("$advisory")
+        done < <(review_legacy_record_findings "$root") ;;
+esac
 for file in "$root"/specs/changes/*.md; do
     [ -f "$file" ] || continue
     while IFS= read -r advisory; do

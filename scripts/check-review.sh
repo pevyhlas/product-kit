@@ -98,15 +98,6 @@ fi
 [ -n "$registry_at" ] || problems+=("No trusted integration-baseline registry: establish origin/HEAD and fetch its shared history before checking reviewer eligibility")
 # Rigor: exactly one Rigor line, an empty one included, whose value is light or full followed by
 # nothing or a space; anything else (none, two, light/full, light1) is unknown, which fails.
-read_rigor() { # rev -> light|full|unknown
-    { git -C "$root" show "$1:.prdkit/memory/constitution.md" 2>/dev/null || true; } | tr -d '\r' | awk '
-        { line = $0 }
-        sub(/^[-*[:space:]]*[Rr]igor\**:\**[[:space:]]*/, "", line) { n++; value = tolower(line) }
-        END {
-            if (n == 1 && value ~ /^(light|full)([[:space:]]|$)/) { sub(/[[:space:]].*/, "", value); print value }
-            else print "unknown"
-        }'
-}
 rigor=unknown
 if [ -n "$policy_at" ]; then
     rigor="$(read_rigor "$policy_at")"

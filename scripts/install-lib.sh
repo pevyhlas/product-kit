@@ -8,6 +8,14 @@ install_hash_stream() {
     else shasum -a 256 | cut -d ' ' -f 1; fi
 }
 
+# BSD head rejects -c 0. An empty prefix still opens its input so a missing or
+# unreadable file fails rather than silently becoming successful empty evidence.
+install_head_bytes() { # nonnegative count file
+    case "$1" in ''|*[!0-9]*) return 1 ;; esac
+    if [ "$1" -eq 0 ]; then : < "$2"
+    else head -c "$1" "$2"; fi
+}
+
 render_agents_section() {
     printf '%s\n' "$AGENTS_BEGIN"
     cat <<'EOF'
@@ -52,6 +60,23 @@ managed_agents_section() {
         $0 == end { ends++; if(!section) bad=1; section=0 }
         END { if(starts != 1 || ends != 1 || section || bad) exit 1 }
     ' "$1"
+}
+
+# Replace only the managed bytes. awk prints a final newline even when the original
+# suffix had none; retain that suffix byte-for-byte rather than changing consumer text.
+render_agents_replacement() { # input section-file output (distinct from input)
+    local size tmp
+    awk -v b="$AGENTS_BEGIN" -v e="$AGENTS_END" -v f="$2" '
+        $0 == b { while ((getline l < f) > 0) print l; skip = 1; next }
+        $0 == e { skip = 0; next }
+        !skip { print }
+    ' "$1" > "$3" || return 1
+    if [ -n "$(tail -c 1 "$1")" ] && [ "$(tail -n 1 "$1")" != "$AGENTS_END" ]; then
+        size="$(wc -c < "$3" | tr -d '[:space:]')" || return 1
+        tmp="$(mktemp "$3.suffix.XXXXXX")" || return 1
+        if install_head_bytes "$((size - 1))" "$3" > "$tmp" && cat "$tmp" > "$3"; then rm -f "$tmp"
+        else rm -f "$tmp"; return 1; fi
+    fi
 }
 
 install_manifest_value() {

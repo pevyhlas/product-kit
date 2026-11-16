@@ -17,7 +17,7 @@ jobs:
   portable-helpers-macos:
     name: portable helpers (macOS)
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -57,6 +57,7 @@ jobs:
           /bin/bash tests/test_review_gate.sh
           /bin/bash tests/test_review_legacy_scan.sh
           /bin/bash tests/test_review_legacy_gate.sh
+          /bin/bash tests/test_review_upgrade.sh
           /bin/bash tests/test_review_owner.sh
           /bin/bash tests/test_publish_review.sh
           /bin/bash tests/test_review_package.sh

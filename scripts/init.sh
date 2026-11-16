@@ -21,7 +21,10 @@
 #   --upgrade       Refresh kit-owned files (commands + scripts, always), auto-update
 #                   unmodified templates/memory, add new files. Consumer edits to
 #                   templates/memory are preserved and listed; edits to kit-owned
-#                   commands/scripts are overwritten (and called out in the output).
+#                   commands/scripts are refused on 2.0 upgrades (older sources overwrite).
+#   --migrate-reviews  With --upgrade to 2.0: accept fresh native reviews, report 1.x blockers
+#   --dry-run       With --upgrade --migrate-reviews: preflight and report only; install nothing
+#   --json          With --dry-run: machine-readable transition report
 #   --with NAME     Also install an optional subsystem (agent-tiers: render-agents.sh and the
 #                   neutral agent-definition template). The manifest records the choice and
 #                   later runs keep it; a project that uses agent tiers (.prdkit/agents/*.md
@@ -48,6 +51,12 @@ SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PK_ROOT="$(CDPATH="" cd "$SCRIPT_DIR/.." && pwd -P)"
 source "$SCRIPT_DIR/install-lib.sh"
 source "$SCRIPT_DIR/spec-lib.sh"
+source "$SCRIPT_DIR/common.sh"
+source "$SCRIPT_DIR/review-policy-lib.sh"
+source "$SCRIPT_DIR/review-fingerprint-lib.sh"
+source "$SCRIPT_DIR/review-receipts-lib.sh"
+source "$SCRIPT_DIR/review-legacy-lib.sh"
+source "$SCRIPT_DIR/review-upgrade-lib.sh"
 
 PK_VERSION="unknown"
 [ -f "$PK_ROOT/VERSION" ] && PK_VERSION="$(head -n 1 "$PK_ROOT/VERSION" | tr -d '[:space:]')"
@@ -62,12 +71,17 @@ TARGET=""
 HARNESS_RAW=""
 WITH_RAW=""
 WITHOUT_RAW=""
+MIGRATE_REVIEWS=false; DRY_RUN=false; JSON=false
+IGNORE_ENTRIES=".prdkit/ledger/ .prdkit/cache/ .prdkit/retrospective/ .worktrees/ .prdkit/.install-lock .prdkit/.install-state"
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --copy) MODE_COPY=true; MODE_EXPLICIT=true ;;
         --symlink) MODE_COPY=false; MODE_EXPLICIT=true ;;
         --upgrade) UPGRADE=true ;;
+        --migrate-reviews) MIGRATE_REVIEWS=true ;;
+        --dry-run) DRY_RUN=true ;;
+        --json) JSON=true ;;
         --check) CHECK=true ;;
         --force) FORCE=true ;;
         --harness)
@@ -94,6 +108,13 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+if { $MIGRATE_REVIEWS && { ! $UPGRADE || ! upgrade_source_2; }; } ||
+    { $DRY_RUN && ! $MIGRATE_REVIEWS; } || { $JSON && ! $DRY_RUN; } ||
+    { $CHECK && { $MIGRATE_REVIEWS || $DRY_RUN; }; }; then
+    echo 'Usage: init.sh --upgrade --migrate-reviews [--dry-run [--json]] (requires kit 2.0 or newer)' >&2
+    exit 2
+fi
 
 # --- Resolve target project root ---
 if [ -z "$TARGET" ]; then
@@ -544,6 +565,12 @@ list_retired_ci_calls() {
 }
 
 # --- --check: read-only drift report ----------------------------------------
+if upgrade_source_2 && { $UPGRADE || $CHECK; }; then
+    spec_objects_local "$TARGET" || { echo 'Cannot read trusted policy without fetching missing objects; nothing was written.' >&2; exit 1; }
+    export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
+    upgrade_policy_context
+    upgrade_rigor_diagnosis || { if $MIGRATE_REVIEWS; then exit 1; fi; }
+fi
 if $CHECK; then
     incomplete=false
     if [ -e "$PRDKIT_DIR/.install-state" ] || [ -L "$PRDKIT_DIR/.install-state" ]; then
@@ -557,6 +584,10 @@ if $CHECK; then
     fi
     echo "Product-Kit check — kit version $PK_VERSION, installed $(head -n 1 "$MANIFEST")"
     echo
+    installed_version="$(install_manifest_value "$MANIFEST" version 2>/dev/null)" || installed_version=''
+    if upgrade_source_2 || upgrade_version_2 "$installed_version"; then
+        review_legacy_record_findings "$TARGET" || true
+    fi
 
     OUTDATED=()
     MODIFIED=()
@@ -710,6 +741,12 @@ containment_problems() {
         if [ -d "$TARGET/$rel" ] && [ ! -L "$TARGET/$rel" ]; then printf '%s is a directory where the kit installs a file\n' "$rel"; fi
     done < <(list_kit_files; printf 'manifest\t.prdkit/.manifest\nmanifest\t.prdkit/.manifest.tmp\nstate\t.prdkit/.install-state\nlock\t.prdkit/.install-lock\n')
     [ ! -L "$PRDKIT_DIR/.install-state" ] || printf '.prdkit/.install-state is a symlink\n'
+    for rel in AGENTS.md .gitignore; do
+        [ "$rel" != AGENTS.md ] || has_harness agents || continue
+        if src="$(root_file_path "$rel")" && [ -d "$src" ]; then
+            printf '%s resolves to a directory where the installer edits a root file\n' "$rel"
+        fi
+    done
 }
 PROBLEMS="$(containment_problems)"
 if [ -n "$PROBLEMS" ]; then
@@ -717,6 +754,15 @@ if [ -n "$PROBLEMS" ]; then
     printf '%s\n' "$PROBLEMS" | sed 's/^/  /' >&2
     echo "The installer writes only into real directories inside the project. Replace each path above with a real directory (or move it aside), then re-run." >&2
     exit 1
+fi
+
+if upgrade_source_2 && $UPGRADE; then
+    upgrade_destinations_safe || exit 1
+    upgrade_preflight || exit 1
+    upgrade_no_overwrite || exit 1
+    if ! $MIGRATE_REVIEWS; then upgrade_plain_guard || exit 1; fi
+    if $MIGRATE_REVIEWS; then upgrade_transition_report || exit 1; fi
+    if $DRY_RUN; then exit 0; fi
 fi
 
 # Serialize writes, with a retained phase marker rather than pretending the whole install is
@@ -957,11 +1003,7 @@ write_agents_section() {
             return 0
         fi
         tmp="$(mktemp)" || { rm -f "$sec"; return 1; }
-        awk -v b="$AGENTS_BEGIN" -v e="$AGENTS_END" -v f="$sec" '
-            $0 == b { while ((getline l < f) > 0) print l; skip = 1; next }
-            $0 == e { skip = 0; next }
-            !skip   { print }
-        ' "$agents_file" > "$tmp" || { rm -f "$tmp" "$sec"; return 1; }
+        render_agents_replacement "$agents_file" "$sec" "$tmp" || { rm -f "$tmp" "$sec"; return 1; }
         if [ "$(hash_file "$tmp")" = "$(hash_file "$agents_file")" ]; then
             rm -f "$tmp" "$sec"
             echo current
@@ -1059,7 +1101,6 @@ fi
 # ignored and never enters a routine add. Seeding them here means no later command has to mutate a tracked
 # .gitignore mid-run (which would dirty the tree it is about to check). A symlinked .gitignore is
 # edited at its target only while that stays inside the project.
-IGNORE_ENTRIES=".prdkit/ledger/ .prdkit/cache/ .prdkit/retrospective/ .worktrees/ .prdkit/.install-lock .prdkit/.install-state"
 record_progress ignore .gitignore
 if GITIGNORE="$(root_file_path .gitignore)"; then
     for ignore_entry in $IGNORE_ENTRIES; do

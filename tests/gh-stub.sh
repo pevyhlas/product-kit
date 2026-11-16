@@ -96,6 +96,11 @@ case "${GH_STUB_PARTIAL:-}" in
     "$route"|"$endpoint"|"$alias_route") printf '%s\n' '{"incomplete":'; exit ;;
 esac
 case "$route" in
+    pulls\?state=open\&per_page=100)
+        open_files=("$GH_STUB_DIR"/pulls/*.json)
+        if [ -f "${open_files[0]}" ]; then
+            jq -s '[.[] | select(.state == "open")]' "${open_files[@]}" | emit
+        else printf '[]\n' | emit; fi ;;
     pulls\?state=closed\&head=*)
         jq -s --arg head "${route#*head=}" '[.[] | (.head.label // "owner:feature") as $label |
             select(.state == "closed" and ($label == $head or (($label | @uri) == $head)))]' \
