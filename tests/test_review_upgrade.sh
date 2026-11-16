@@ -685,4 +685,31 @@ for kind in missing duplicate extra wrong-path executable; do
     assert_contains "$OUTPUT" 'not a valid installer marker' 'metadata-specific refusal'
     assert_eq "$before" "$(tree_snapshot "$PROJ")" 'invalid marker and target bytes unchanged'
 done
+it 'F7: a failing second constitution read cannot substitute partial bytes for validated policy'
+for fault_output in empty partial; do
+    transition_project
+    printf -- '# Constitution\n- **Rigor**: full\n- **Rigor**: light\n' > "$PROJ/.prdkit/memory/constitution.md"
+    commit_fixture malformed; trusted_tip
+    SECOND_READ="$(mktemp -d)"; track_tmp "$SECOND_READ"
+    cat > "$SECOND_READ/git" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in *' show '*':.prdkit/memory/constitution.md '*)
+    n=0; [ ! -f "$RIGOR_COUNTER" ] || read -r n < "$RIGOR_COUNTER"
+    n=$((n+1)); printf '%s\n' "$n" > "$RIGOR_COUNTER"
+    if [ "$n" -eq 2 ]; then
+        if [ "$RIGOR_FAULT_OUTPUT" = partial ]; then printf -- '# Constitution\n- **Rigor**: full\n'; fi
+        exit 71
+    fi ;;
+esac
+exec "$REAL_GIT" "$@"
+EOF
+    chmod +x "$SECOND_READ/git"
+    before="$(tree_snapshot "$PROJ")"
+    run env PATH="$SECOND_READ:$PATH" RIGOR_COUNTER="$SECOND_READ/count" RIGOR_FAULT_OUTPUT="$fault_output" \
+        bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --migrate-reviews --dry-run --json
+    assert_eq 1 "$STATUS" "$fault_output second-read fault cannot make malformed complete policy pass"
+    assert_contains "$OUTPUT" 'must hold exactly one Rigor line' 'validated complete policy, not a second read, decides Rigor'
+    assert_eq 1 "$(cat "$SECOND_READ/count")" 'the second constitution read is eliminated'
+    assert_eq "$before" "$(tree_snapshot "$PROJ")" 'failed Rigor prerequisite writes nothing'
+done
 finish

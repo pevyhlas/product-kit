@@ -33,9 +33,9 @@ upgrade_rigor_diagnosis() {
                 echo 'The default branch constitution cannot be read completely as text; nothing was written.' >&2
                 return 1
             fi
-            # Keep the gate parser unchanged, but do not let its historical absent-file
-            # fallback mask a failed object read that printed usable-looking partial bytes.
-            UP_RIGOR="$(read_rigor "$UP_POLICY_AT")"
+            # Parse exactly the bytes whose complete read and text shape succeeded.
+            # The shared grammar is unchanged; no second Git read can replace them.
+            UP_RIGOR="$(read_rigor_text < "$input")"
             lines="$(tr -d '\r' < "$input" |
                 awk '{ line=$0; if (sub(/^[-*[:space:]]*[Rr]igor\**:\**[[:space:]]*/, "", line)) { printf "%s\"%s\"", sep, $0; sep="; " } }')"
             rm -f "$input"
