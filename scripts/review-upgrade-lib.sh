@@ -320,24 +320,53 @@ upgrade_render_expected() { # caller-owned work directory -> head/, rendered/, p
     } > "$work/rendered/.prdkit/.manifest"
     printf '.prdkit/.manifest.tmp\0' >> "$work/paths" || return 1
     upgrade_head_file .prdkit/.manifest.tmp "$work/head/.prdkit/.manifest.tmp" "$work/head-links/.prdkit/.manifest.tmp" || return 1
-    cp "$work/rendered/.prdkit/.manifest" "$work/rendered/.prdkit/.manifest.tmp"
+    cp "$work/rendered/.prdkit/.manifest" "$work/rendered/.prdkit/.manifest.tmp" || return 1
+    printf '.prdkit/.install-state\0' >> "$work/paths" || return 1
+    if [ -f "$PRDKIT_DIR/.install-state" ] && [ ! -L "$PRDKIT_DIR/.install-state" ]; then
+        cp "$PRDKIT_DIR/.install-state" "$work/rendered/.prdkit/.install-state" || return 1
+    fi
+}
+
+upgrade_marker_valid() { # rendered work; only metadata the installer actually emits
+    local marker="$PRDKIT_DIR/.install-state" phase path version allowed=false rel
+    [ -f "$marker" ] && [ ! -L "$marker" ] && [ ! -x "$marker" ] && review_file_without_nul "$marker" || return 1
+    if git -C "$TARGET" ls-files --error-unmatch -- .prdkit/.install-state >/dev/null 2>&1; then return 1; fi
+    awk '/^(phase|path|source-version): / { n++; next } { bad=1 } END { exit bad || n!=3 }' "$marker" || return 1
+    phase="$(install_manifest_value "$marker" phase)" && path="$(install_manifest_value "$marker" path)" &&
+        version="$(install_manifest_value "$marker" source-version)" || return 1
+    [ "$version" = "$PK_VERSION" ] || return 1
+    case "$phase:$path" in
+        prepare:.prdkit|managed-section:AGENTS.md|ignore:.gitignore|manifest:.prdkit/.manifest) return 0 ;;
+        file:*) awk -F '\t' -v p="$path" '$2==p { found=1 } END { exit !found }' "$1/files"; return ;;
+        retire:*)
+            [[ "$path" =~ $KIT_FILE_RE || "$path" =~ $INSTALLED_RE ]] || return 1
+            if awk -F '\t' -v p="$path" '$2==p { found=1 } END { exit !found }' "$1/files"; then return 1; fi
+            while IFS= read -r -d '' rel; do [ "$rel" != "$path" ] || allowed=true; done < "$1/paths"
+            $allowed ;;
+        *) return 1 ;;
+    esac
 }
 
 upgrade_checkout_clean() (
-    local status version work rel allowed agents
-    status="$(git -C "$TARGET" status --porcelain --untracked-files=all)" || return 1
-    [ -n "$status" ] || return 0
-    version="$(install_manifest_value "$PRDKIT_DIR/.install-state" source-version 2>/dev/null)" || version=""
-    if [ "$version" != "$PK_VERSION" ] || ! git -C "$TARGET" diff --cached --quiet HEAD --; then
-        echo 'P1: checkout must be clean (staged, unstaged and untracked files included); nothing was written.' >&2; return 1
-    fi
+    local status entry version work rel allowed agents
     work="$(mktemp -d)" || return 1
     trap 'rm -rf "$work"' EXIT
+    GIT_OPTIONAL_LOCKS=0 git -C "$TARGET" status --porcelain=v1 -z --untracked-files=all --ignore-submodules=none > "$work/status" || return 1
+    if [ ! -s "$work/status" ] && [ ! -e "$PRDKIT_DIR/.install-state" ]; then return 0; fi
+    version="$(install_manifest_value "$PRDKIT_DIR/.install-state" source-version 2>/dev/null)" || version=""
+    if [ "$version" != "$PK_VERSION" ] || ! git -C "$TARGET" diff --cached --quiet --ignore-submodules=none HEAD --; then
+        echo 'P1: checkout must be clean (staged, unstaged and untracked files included); nothing was written.' >&2; return 1
+    fi
     upgrade_render_expected "$work" || return 1
+    if ! upgrade_marker_valid "$work"; then
+        echo 'P1: .prdkit/.install-state is not a valid installer marker for this source; nothing was written.' >&2; return 1
+    fi
     agents="$(root_file_path AGENTS.md 2>/dev/null)" || agents=''
     agents="${agents#"$TARGET"/}"
-    git -C "$TARGET" ls-files --modified --deleted --others --exclude-standard -z > "$work/dirty" || return 1
-    while IFS= read -r -d '' rel; do
+    while IFS= read -r -d '' entry; do
+        status="${entry:0:2}"; rel="${entry:3}"
+        case "$status" in *R*|*C*) echo "P1: renamed/copied dirty path is not an installer intermediate: $rel; nothing was written." >&2; return 1 ;; esac
+        if [ "$rel" = .prdkit/.install-state ]; then continue; fi
         case "$rel" in specs/changes/*) allowed=false ;; *) allowed=true ;; esac
         $allowed || { echo "P1: records must always be clean: $rel" >&2; return 1; }
         allowed=false
@@ -356,7 +385,7 @@ upgrade_checkout_clean() (
         if ! upgrade_same_file "$TARGET/$rel" "$work/head/$rel" "$work/head-links/$rel" && ! upgrade_same_file "$TARGET/$rel" "$work/rendered/$rel" "$work/rendered-links/$rel"; then
             echo "P1: not a validated intermediate state (bytes, type or mode): $rel; nothing was written." >&2; return 1
         fi
-    done < "$work/dirty"
+    done < "$work/status"
 )
 
 upgrade_agents_outside() { # raw bytes outside the one validated managed block

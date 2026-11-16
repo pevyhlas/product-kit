@@ -30,6 +30,9 @@ EOF
     commit_fixture policy; trusted_tip
 }
 upgrade() { run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade "$@"; }
+retry_marker() {
+    printf 'phase: %s\npath: %s\nsource-version: %s\n' "${2:-file}" "${1:-.claude/commands/prdkit.md}" "${3:-2.0.0}" > "$PROJ/.prdkit/.install-state"
+}
 # Hash every filesystem entry, including ignored/untracked entries, links and empty
 # directories. Git metadata is not checkout content. No traversal through symlinks.
 tree_snapshot() (
@@ -159,13 +162,13 @@ for kind in pristine unrelated edited staged outside wrong-source mode; do
     printf '\nNew version\n' >> "$PROJ/.product-kit/commands/prdkit.md"
     commit_fixture source
     cp "$PROJ/.product-kit/commands/prdkit.md" "$PROJ/.claude/commands/prdkit.md"
-    printf 'source-version: 2.0.0\nphase: file\n' > "$PROJ/.prdkit/.install-state"
+    retry_marker
     case "$kind" in
         unrelated) printf edit > "$PROJ/unrelated" ;;
         edited) printf edit >> "$PROJ/.claude/commands/prdkit-inbox.md" ;;
         staged) git -C "$PROJ" add .claude/commands/prdkit.md ;;
         outside) printf '\nOutside edit\n' >> "$PROJ/AGENTS.md" ;;
-        wrong-source) printf 'source-version: 2.0.1\n' > "$PROJ/.prdkit/.install-state" ;;
+        wrong-source) retry_marker .claude/commands/prdkit.md file 2.0.1 ;;
         mode) chmod +x "$PROJ/.claude/commands/prdkit.md" ;;
     esac
     upgrade --migrate-reviews --dry-run
@@ -197,7 +200,7 @@ for kind in ignored committed retired managed; do
                 mv "$PROJ/agents.next" "$PROJ/CLAUDE.md"
                 commit_fixture customization ;;
         esac
-        if [ "$attempt" = retry ]; then printf 'source-version: 2.0.0\n' > "$PROJ/.prdkit/.install-state"; fi
+        if [ "$attempt" = retry ]; then retry_marker; fi
         before_manifest="$(cat "$PROJ/.prdkit/.manifest")"
         before_command="$(cat "$PROJ/.claude/commands/prdkit.md")"
         before_status="$(git -C "$PROJ" status --porcelain --untracked-files=all)"
@@ -326,17 +329,22 @@ exec "$REAL_RM" "$@"
 EOF
 chmod +x "$FAULTS/mv" "$FAULTS/rm"
 for flag in plain migrate; do
-    for phase in template published; do
+    for phase in template published template-unignored; do
         transition_project
+        if [ "$phase" = template-unignored ]; then
+            grep -vxF '.prdkit/.install-state' "$PROJ/.gitignore" > "$PROJ/ignore.next"
+            mv "$PROJ/ignore.next" "$PROJ/.gitignore"
+        fi
         printf '\nNew command bytes\n' >> "$PROJ/.product-kit/commands/prdkit.md"
         printf '\nNew template bytes\n' >> "$PROJ/.product-kit/templates/change-template.md"
         commit_fixture source
         args=(); [ "$flag" != migrate ] || args=(--migrate-reviews)
-        run env PATH="$FAULTS:$PATH" FAULT_ROOT="$PROJ" FAULT_PHASE="$phase" bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade "${args[@]}"
+        run env PATH="$FAULTS:$PATH" FAULT_ROOT="$PROJ" FAULT_PHASE="${phase%-unignored}" bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade "${args[@]}"
         assert_eq 1 "$([ "$STATUS" -ne 0 ] && echo 1 || echo 0)" "$phase fails at a real boundary"
         assert_contains "$OUTPUT" 'Incomplete install' 'interruption stays explicit'
         assert_contains "$(cat "$PROJ/.claude/commands/prdkit.md")" 'New command bytes' 'tracked command really was replaced'
         assert_file "$PROJ/.prdkit/.install-state" 'same-source marker retained'
+        if [ "$phase" = template-unignored ]; then assert_contains "$(git -C "$PROJ" status --porcelain)" '?? .prdkit/.install-state' 'retry really encounters an unignored marker'; fi
         upgrade "${args[@]}"
         assert_eq 0 "$STATUS" "real same-source retry ($flag/$phase): $OUTPUT"
         assert_contains "$(cat "$PROJ/.prdkit/templates/change-template.md")" 'New template bytes' 'retry installs complete target'
@@ -362,7 +370,7 @@ transition_project
 printf '\nOutside bytes without final newline' >> "$PROJ/AGENTS.md"
 commit_fixture outside
 printf '\n' >> "$PROJ/AGENTS.md"
-printf 'source-version: 2.0.0\n' > "$PROJ/.prdkit/.install-state"
+retry_marker
 upgrade --migrate-reviews --dry-run
 assert_eq 1 "$STATUS" 'outside bytes must equal HEAD exactly'
 assert_contains "$OUTPUT" 'outside the managed section' 'outside-byte diagnosis'
@@ -376,7 +384,7 @@ for mode in regular alias; do
     commit_fixture source
     sed 's/## Product-Kit workflow/## Product-Kit workflow upgraded/' "$PROJ/AGENTS.md" > "$PROJ/agents.next"
     cat "$PROJ/agents.next" > "$PROJ/AGENTS.md"; rm "$PROJ/agents.next"
-    printf 'source-version: 2.0.0\n' > "$PROJ/.prdkit/.install-state"
+    retry_marker
     upgrade --migrate-reviews --dry-run
     assert_eq 0 "$STATUS" "$mode rendered section: $OUTPUT"
 done
@@ -598,4 +606,83 @@ assert_not_contains "$(cat "$TRACE")" ' fetch ' 'doctor never launches a fetch'
 assert_not_contains "$(cat "$TRACE")" upload-pack 'doctor never contacts even the local promisor'
 assert_eq "$before" "$(tree_snapshot "$PROJ/.git/objects")" 'doctor leaves the object store byte-identical'
 if [ -e "$object" ]; then _no 'missing policy blob stays missing'; else _ok 'missing policy blob stays missing'; fi
+it 'F6: every dirty local submodule is refused under both retry forms without changing any evidence'
+for module_kind in tracked untracked source; do
+    for flag in plain migrate; do
+        transition_project
+        MODULE_SOURCE="$(mktemp -d)"; track_tmp "$MODULE_SOURCE"
+        if [ "$module_kind" = source ]; then
+            cp -R "$PROJ/.product-kit/." "$MODULE_SOURCE/"
+            module=.product-kit
+        else printf 'Tracked module bytes\n' > "$MODULE_SOURCE/tracked"; module=vendor/probe; fi
+        git -C "$MODULE_SOURCE" init -q
+        git -C "$MODULE_SOURCE" config user.name test
+        git -C "$MODULE_SOURCE" config user.email t@example.com
+        git -C "$MODULE_SOURCE" add -A && git -C "$MODULE_SOURCE" commit -qm source || exit 1
+        if [ "$module_kind" = source ]; then git -C "$PROJ" rm -qr .product-kit || exit 1; fi
+        git -C "$PROJ" -c protocol.file.allow=always submodule add -q "$MODULE_SOURCE" "$module" || exit 1
+        commit_fixture submodule; trusted_tip
+        case "$module_kind" in
+            tracked) printf 'Dirty tracked bytes\n' >> "$PROJ/$module/tracked" ;;
+            untracked) printf 'Untracked module bytes\n' > "$PROJ/$module/untracked" ;;
+            source) printf '\nUncommitted source command\n' >> "$PROJ/$module/commands/prdkit.md" ;;
+        esac
+        retry_marker
+        assert_contains "$(git -C "$PROJ" status --porcelain --ignore-submodules=none)" "$module" 'porcelain really reports the dirty submodule'
+        before="$(tree_snapshot "$PROJ")"
+        index_before="$(git hash-object "$PROJ/.git/index")"
+        module_index="$(git -C "$PROJ/$module" rev-parse --absolute-git-dir)/index"
+        module_index_before="$(git hash-object "$module_index")"
+        manifest_before="$(git hash-object "$PROJ/.prdkit/.manifest")"; marker_before="$(git hash-object "$PROJ/.prdkit/.install-state")"
+        args=(); [ "$flag" != migrate ] || args=(--migrate-reviews)
+        upgrade "${args[@]}"
+        assert_eq 1 "$STATUS" "$module_kind submodule refuses under $flag"
+        assert_contains "$OUTPUT" "installer-owned intermediate state: $module" 'P1 refuses the actual porcelain entry'
+        assert_eq "$before" "$(tree_snapshot "$PROJ")" 'all checkout and module bytes unchanged'
+        assert_eq "$index_before" "$(git hash-object "$PROJ/.git/index")" 'root index bytes unchanged'
+        assert_eq "$module_index_before" "$(git hash-object "$module_index")" 'module index bytes unchanged'
+        assert_eq "$manifest_before" "$(git hash-object "$PROJ/.prdkit/.manifest")" 'manifest bytes unchanged'
+        assert_eq "$marker_before" "$(git hash-object "$PROJ/.prdkit/.install-state")" 'marker bytes unchanged'
+    done
+done
+
+it 'F6: preserved conffile bytes, type and mode independently exercise P1 content validation'
+for kind in bytes type mode; do
+    transition_project
+    printf '\nRendered command\n' >> "$PROJ/.product-kit/commands/prdkit.md"
+    commit_fixture source
+    cp "$PROJ/.product-kit/commands/prdkit.md" "$PROJ/.claude/commands/prdkit.md"
+    retry_marker
+    case "$kind" in
+        bytes) printf '\nUser conffile bytes\n' >> "$PROJ/.prdkit/templates/change-template.md" ;;
+        type) rm "$PROJ/.prdkit/templates/change-template.md"; ln -s product-template.md "$PROJ/.prdkit/templates/change-template.md" ;;
+        mode) chmod +x "$PROJ/.prdkit/templates/change-template.md" ;;
+    esac
+    before="$(tree_snapshot "$PROJ")"
+    upgrade --migrate-reviews --dry-run
+    assert_eq 1 "$STATUS" "$kind mismatch refuses independently of conffile preservation"
+    assert_contains "$OUTPUT" 'not a validated intermediate state (bytes, type or mode): .prdkit/templates/change-template.md' 'P1 comparison is the refusal, not the overwrite check'
+    assert_eq "$before" "$(tree_snapshot "$PROJ")" 'mismatched conffile remains unchanged'
+done
+
+it 'F9: unignored runtime metadata is accepted only as a complete same-source installer marker'
+for kind in missing duplicate extra wrong-path executable; do
+    transition_project
+    grep -vxF '.prdkit/.install-state' "$PROJ/.gitignore" > "$PROJ/ignore.next"
+    mv "$PROJ/ignore.next" "$PROJ/.gitignore"
+    commit_fixture ignore
+    retry_marker
+    case "$kind" in
+        missing) printf 'source-version: 2.0.0\n' > "$PROJ/.prdkit/.install-state" ;;
+        duplicate) printf 'phase: file\n' >> "$PROJ/.prdkit/.install-state" ;;
+        extra) printf 'unrelated: data\n' >> "$PROJ/.prdkit/.install-state" ;;
+        wrong-path) retry_marker unrelated file ;;
+        executable) chmod +x "$PROJ/.prdkit/.install-state" ;;
+    esac
+    before="$(tree_snapshot "$PROJ")"
+    upgrade --migrate-reviews --dry-run
+    assert_eq 1 "$STATUS" "$kind marker refuses"
+    assert_contains "$OUTPUT" 'not a valid installer marker' 'metadata-specific refusal'
+    assert_eq "$before" "$(tree_snapshot "$PROJ")" 'invalid marker and target bytes unchanged'
+done
 finish
