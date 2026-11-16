@@ -307,13 +307,16 @@ commit_fixture upgraded
 mkdir -p "$PROJ/specs/changes"
 printf '# Clean\n## State\n%s\n' "$PASS" > "$PROJ/specs/changes/003-clean.md"
 commit_fixture clean
+: > "$GH_STUB_DIR/requests"
 run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --check
 assert_contains "$OUTPUT" 'Legacy 1.x blocking lines: specs/changes/001-merged-open.md (code: legacy FAIL)' 'check lists standing legacy debt'
 assert_not_contains "$OUTPUT" 'Legacy 1.x blocking lines: specs/changes/003-clean.md' 'clean PASS is not a blocker'
+assert_eq '' "$(cat "$GH_STUB_DIR/requests")" 'check makes no host request of any method'
+: > "$GH_STUB_DIR/requests"
 run bash "$PROJ/.prdkit/scripts/bash/doctor.sh" --json
 assert_contains "$OUTPUT" 'Legacy 1.x blocking lines: specs/changes/001-merged-open.md' 'doctor JSON advisory names record'
 assert_not_contains "$OUTPUT" 'Legacy 1.x blocking lines: specs/changes/003-clean.md' 'doctor never turns PASS into a blocker'
-assert_not_contains "$(cat "$GH_STUB_DIR/requests")" POST 'diagnostics do not publish'
+assert_eq '' "$(cat "$GH_STUB_DIR/requests")" 'doctor makes no host request of any method'
 it 'real interrupted installs retry only validated same-source states under both upgrade flags'
 REAL_MV="$(command -v mv)"; REAL_RM="$(command -v rm)"; export REAL_MV REAL_RM
 FAULTS="$(mktemp -d)"; track_tmp "$FAULTS"
@@ -577,10 +580,14 @@ assert_eq 0 "$STATUS" "$OUTPUT"
 for path in specs/changes/001-work.md specs/changes/archive/001-work.md; do assert_contains "$OUTPUT" "Record $path:" 'text report retains record path'; done
 upgrade --migrate-reviews
 assert_eq 0 "$STATUS" "$OUTPUT"
+: > "$GH_STUB_DIR/requests"
 run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --check
 for path in specs/changes/001-work.md specs/changes/archive/001-work.md; do assert_contains "$OUTPUT" "Legacy 1.x blocking lines: $path (code: legacy FAIL)" 'check includes each full record path'; done
+assert_eq '' "$(cat "$GH_STUB_DIR/requests")" 'nested check stays completely offline'
+: > "$GH_STUB_DIR/requests"
 run bash "$PROJ/.prdkit/scripts/bash/doctor.sh" --json
 for path in specs/changes/001-work.md specs/changes/archive/001-work.md; do assert_contains "$OUTPUT" "Legacy 1.x blocking lines: $path (code: legacy FAIL)" 'doctor includes each full record path'; done
+assert_eq '' "$(cat "$GH_STUB_DIR/requests")" 'nested doctor stays completely offline'
 it 'F5: public doctor reports missing promisor policy as unavailable without fetching or storing objects'
 transition_project
 upgrade --migrate-reviews
@@ -599,12 +606,14 @@ git -C "$PROJ" config extensions.partialclone origin
 rm "$object"
 TRACE="$(mktemp)"; track_tmp "$TRACE"
 before="$(tree_snapshot "$PROJ/.git/objects")"
+: > "$GH_STUB_DIR/requests"
 run env GIT_TRACE="$TRACE" bash "$PROJ/.prdkit/scripts/bash/doctor.sh" --json --strict
 assert_eq 1 "$STATUS" 'strict doctor cannot call unavailable debt evidence clean'
 assert_contains "$OUTPUT" 'Legacy 1.x scan unavailable' 'missing policy is explicitly unavailable'
 assert_not_contains "$(cat "$TRACE")" ' fetch ' 'doctor never launches a fetch'
 assert_not_contains "$(cat "$TRACE")" upload-pack 'doctor never contacts even the local promisor'
 assert_eq "$before" "$(tree_snapshot "$PROJ/.git/objects")" 'doctor leaves the object store byte-identical'
+assert_eq '' "$(cat "$GH_STUB_DIR/requests")" 'unavailable doctor makes no host request'
 if [ -e "$object" ]; then _no 'missing policy blob stays missing'; else _ok 'missing policy blob stays missing'; fi
 it 'F6: every dirty local submodule is refused under both retry forms without changing any evidence'
 for module_kind in tracked untracked source; do
@@ -711,5 +720,38 @@ EOF
     assert_contains "$OUTPUT" 'must hold exactly one Rigor line' 'validated complete policy, not a second read, decides Rigor'
     assert_eq 1 "$(cat "$SECOND_READ/count")" 'the second constitution read is eliminated'
     assert_eq "$before" "$(tree_snapshot "$PROJ")" 'failed Rigor prerequisite writes nothing'
+done
+it 'F8: force never authorizes customized 2.0 command, memory or template overwrites'
+for kind in committed ignored memory template; do
+    for attempt in first retry; do
+        transition_project
+        case "$kind" in
+            committed)
+                dest=.claude/commands/prdkit.md
+                printf '\nUser command\n' >> "$PROJ/$dest"
+                commit_fixture customization ;;
+            ignored)
+                dest=.claude/commands/prdkit.md
+                printf '\n%s\n' "$dest" >> "$PROJ/.gitignore"
+                git -C "$PROJ" rm --cached -q "$dest"
+                commit_fixture ignore
+                printf '\nIgnored user command\n' >> "$PROJ/$dest" ;;
+            memory)
+                dest=.prdkit/memory/constitution.md
+                printf '\nUser policy must survive\n' >> "$PROJ/$dest"
+                commit_fixture customization ;;
+            template)
+                dest=.prdkit/templates/change-template.md
+                printf '\nUser template must survive\n' >> "$PROJ/$dest"
+                commit_fixture customization ;;
+        esac
+        if [ "$attempt" = retry ]; then retry_marker; fi
+        before="$(tree_snapshot "$PROJ")"
+        upgrade --migrate-reviews --force
+        assert_eq 1 "$STATUS" "$kind force overwrite refuses on $attempt"
+        assert_contains "$OUTPUT" "Customized overwrite/delete destination: $dest" 'specific customization refusal survives --force'
+        assert_contains "$OUTPUT" 'nothing was written' 'force refusal precedes mutation'
+        assert_eq "$before" "$(tree_snapshot "$PROJ")" 'force preserves every target entry and byte'
+    done
 done
 finish
