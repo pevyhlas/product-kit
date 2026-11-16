@@ -2,6 +2,29 @@
 # The 2.0 review transition uses committed, local history and the host stub only.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 use_gh_stub
+source "$PK_ROOT/scripts/install-lib.sh"
+
+# Run the whole suite with BSD's zero-byte restriction, including the existing
+# byte-zero managed sections, resolved aliases and interrupted-install fixtures.
+BSD_HEAD="$(mktemp -d)"; track_tmp "$BSD_HEAD"
+BSD_REAL_HEAD="$(command -v head)"; export BSD_REAL_HEAD
+BSD_HEAD_ZERO_LOG="$BSD_HEAD/zero-calls"; export BSD_HEAD_ZERO_LOG
+: > "$BSD_HEAD_ZERO_LOG"
+cat > "$BSD_HEAD/head" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = -c ] && [ "${2:-}" = 0 ]; then
+    printf 'head -c 0\n' >> "$BSD_HEAD_ZERO_LOG"
+    echo 'head: illegal byte count -- 0' >&2
+    exit 1
+fi
+if [ "${1:-}" = -c ] && [ "${BSD_HEAD_READ_FAIL:-false}" = true ]; then
+    echo 'head: injected read failure' >&2
+    exit 73
+fi
+exec "$BSD_REAL_HEAD" "$@"
+EOF
+chmod +x "$BSD_HEAD/head"
+export PATH="$BSD_HEAD:$PATH"
 
 commit_fixture() { git -C "$PROJ" add -A && git -C "$PROJ" commit -qm "$1" || exit 1; }
 trusted_tip() {
@@ -56,6 +79,22 @@ unchanged() {
     assert_eq "$BEFORE" "$(git -C "$PROJ" status --porcelain --untracked-files=all)" 'refusal leaves all target paths unchanged'
     if [ -e "$PROJ/.prdkit/.install-state" ]; then _no 'no phase marker created'; else _ok 'no phase marker created'; fi
 }
+
+it 'BSD byte-prefix reads handle zero and propagate actual read failures'
+printf x > "$BSD_HEAD/one-byte"
+run head -c 0 "$BSD_HEAD/one-byte"
+assert_eq 1 "$STATUS" 'the shim really rejects GNU-compatible head -c 0'
+assert_contains "$OUTPUT" 'illegal byte count -- 0' 'BSD rejection reproduced on Linux'
+: > "$BSD_HEAD_ZERO_LOG"
+run install_head_bytes 0 "$BSD_HEAD/one-byte"
+assert_eq 0 "$STATUS" 'install-lib reads an empty prefix of a one-byte file portably'
+assert_eq '' "$OUTPUT" 'an empty prefix emits no bytes'
+run install_head_bytes 0 "$BSD_HEAD/missing"
+if [ "$STATUS" -ne 0 ]; then _ok 'zero-length reads still reject missing input'; else _no 'missing input was accepted as empty evidence'; fi
+# shellcheck disable=SC2016 # The child shell expands its own positional arguments.
+run env BSD_HEAD_READ_FAIL=true bash -c 'source "$1/scripts/install-lib.sh"; install_head_bytes 1 "$2"' _ "$PK_ROOT" "$BSD_HEAD/one-byte"
+assert_eq 73 "$STATUS" 'positive head read errors propagate without an empty fallback'
+assert_eq x "$(cat "$BSD_HEAD/one-byte")" 'byte-prefix reads preserve input bytes'
 
 it 'migration flags are explicit and only available on a 2.0 source'
 transition_project
@@ -754,4 +793,5 @@ for kind in committed ignored memory template; do
         assert_eq "$before" "$(tree_snapshot "$PROJ")" 'force preserves every target entry and byte'
     done
 done
+assert_eq '' "$(cat "$BSD_HEAD_ZERO_LOG")" 'all upgrade and install-lib paths avoided head -c 0 under the BSD shim'
 finish

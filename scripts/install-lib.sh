@@ -8,6 +8,14 @@ install_hash_stream() {
     else shasum -a 256 | cut -d ' ' -f 1; fi
 }
 
+# BSD head rejects -c 0. An empty prefix still opens its input so a missing or
+# unreadable file fails rather than silently becoming successful empty evidence.
+install_head_bytes() { # nonnegative count file
+    case "$1" in ''|*[!0-9]*) return 1 ;; esac
+    if [ "$1" -eq 0 ]; then : < "$2"
+    else head -c "$1" "$2"; fi
+}
+
 render_agents_section() {
     printf '%s\n' "$AGENTS_BEGIN"
     cat <<'EOF'
@@ -66,7 +74,7 @@ render_agents_replacement() { # input section-file output (distinct from input)
     if [ -n "$(tail -c 1 "$1")" ] && [ "$(tail -n 1 "$1")" != "$AGENTS_END" ]; then
         size="$(wc -c < "$3" | tr -d '[:space:]')" || return 1
         tmp="$(mktemp "$3.suffix.XXXXXX")" || return 1
-        if head -c "$((size - 1))" "$3" > "$tmp" && cat "$tmp" > "$3"; then rm -f "$tmp"
+        if install_head_bytes "$((size - 1))" "$3" > "$tmp" && cat "$tmp" > "$3"; then rm -f "$tmp"
         else rm -f "$tmp"; return 1; fi
     fi
 }

@@ -396,7 +396,7 @@ upgrade_agents_outside() { # raw bytes outside the one validated managed block
         $0==b { first=bytes } { bytes+=length($0)+1 } $0==e { after=bytes }
         END { print first, after+1 }' "$1")" || return 1
     read -r prefix suffix <<< "$offsets"
-    head -c "$prefix" "$1" && tail -c "+$suffix" "$1"
+    install_head_bytes "$prefix" "$1" && tail -c "+$suffix" "$1"
 }
 
 # Inspect the entire planned overwrite/delete set, including ignored files. Git cleanliness
