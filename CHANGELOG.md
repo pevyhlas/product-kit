@@ -10,6 +10,15 @@ change by change.
 
 ### Changed
 
+- **Targeted review packages (#106).** Later packages distinguish native retained coverage,
+  review actions and conditional prospective carry through an optional advisory scope map.
+  The existing gate exports additive diagnostics without changing its verdicts or JSON fields.
+  Equal reviewed content refuses before round allocation, including omitted `--since` with a
+  completed binding; concurrent identical requests cannot create duplicate rounds. Object-bound
+  child context includes referenced blocks, complete bounds and required parent obligations,
+  not a whole-parent default. Structural previews remain usable without host tools; unknown
+  authority/context and every existing blocker remain explicit. See `docs/review-packages.md`.
+
 - **Review verdicts bind content fingerprints, not commit ranges (breaking; closes #66 and #86).**
   A verdict used to name a hand-typed `<base sha>..<head sha>` range and coverage was proven from
   commit ancestry, so a base merge, an edit reverted before a base merge (#86), a narrow range
