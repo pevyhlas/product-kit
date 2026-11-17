@@ -23,6 +23,17 @@ close, duplicate inbox identities/fields/option keys and mismatched answer revis
 the rest are advisories that `--strict` fails. The kit's `scripts/init.sh --check` reports
 installation drift. Never repair during diagnosis or read a clean report as readiness.
 
+Text and JSON (`budget_excess_reading_lines`, a nonnegative integer) report the total
+reading lines over budget: sum `max(reading lines - budget, 0)` over the files checked
+for reading budgets, not the number of advisories or the files' whole lengths. The same
+100-character accounting drives each Budget advisory; byte-based agent context budgets
+are separate. Compaction due is an advisory at ten closes since the latest compaction
+line, in either log order, plus every pending `specs/log/<id>.md` entry.
+
+The "Merged without closing" advisory needs full Git history and the default-branch ref.
+CI checkouts running this check must fetch full history (for example, `fetch-depth: 0`
+with `actions/checkout`), not infer a clean result from a shallow checkout.
+
 Ordinary text and JSON also separate installed kit version (manifest), observed spec layout and
 layout-derived migration state. `required` means legacy 0.x; `incomplete` means competing canons
 or spec forms; `not-indicated` means current layout only; `unknown` means no recognized spec.

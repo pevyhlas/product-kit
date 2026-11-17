@@ -86,12 +86,14 @@ mixed="$(spec_mixed_forms "$root")"
 
 # --- Reading budgets (never targets; never drop an item to fit) -------------------------------
 # A line counts once per 100 characters (spec_reading_lines), so a long row cannot dodge one.
+budget_excess_reading_lines=0
 budget_fix() { # limit remedy path...
     local limit="$1" fix="$2" path reading lines size; shift 2
     for path in "$@"; do
         [ -f "$path" ] || continue
         read -r reading lines <<< "$(spec_reading_lines "$path")"
         [ "$reading" -gt "$limit" ] || continue
+        budget_excess_reading_lines=$((budget_excess_reading_lines + reading - limit))
         size="$lines lines that read"; [ "$lines" != 1 ] || size="1 line that reads"
         if [ "$reading" = "$lines" ]; then size="${size% that read*}"; else size="$size as $reading at 100 characters a line"; fi
         advisories+=("Budget: ${path#"$root"/} has $size, over its $limit-line reading budget; $fix")
@@ -120,6 +122,14 @@ budget 200 "$root"/specs/parts/*.md "$root"/specs/parts/*/*.md
 budget_fix 150 "condense its older entries into specs/archive.md at the next compaction (compact.md)" "$root"/specs/log.md
 budget_fix 150 "incorporate answered items (spec.md, Resolve owner answers), review the rest with the owner (/prdkit-inbox), and keep each item's context in the files it links" "$root"/specs/inbox.md
 budget_fix 150 "remove lifted or expired holds and waivers, and DEPLOY and ATTEST lines a newer one supersedes; git keeps them" "$root"/specs/records.md
+
+# Share status's log-order and entry-file accounting; compaction is due at ten closes.
+read -r closed_since last_pass <<< "$(spec_compaction "$root")"
+if [ "$closed_since" -ge 10 ]; then
+    since="and no pass recorded in specs/log.md"
+    [ -z "$last_pass" ] || since="since the last pass ($last_pass)"
+    advisories+=("Compaction due: $closed_since changes closed $since (.prdkit/workflows/compact.md, Compaction)")
+fi
 
 # --- IDs ---------------------------------------------------------------------------------------
 items="$(spec_items "$root")"
@@ -727,11 +737,13 @@ if $json; then
     printf '{"result":"%s","findings":%s,"advisories":%s,"trace":{%s},"strict":%s,"readiness":"not-evaluated"' \
         "$result" "$(json_array ${findings[@]+"${findings[@]}"})" "$(json_array ${advisories[@]+"${advisories[@]}"})" "$trace_json" "$strict"
     printf ',"adoption":%s' "$(diagnostic_adoption "$root")"
+    printf ',"budget_excess_reading_lines":%s' "$budget_excess_reading_lines"
     if $inventory; then printf ',"configuration":%s' "$(diagnostic_configuration "$root")"; fi
     printf '}\n'
 else
     printf 'Product-Kit doctor: %s\n' "$result"
     diagnostic_adoption "$root" --text
+    printf 'Reading lines over budget (total): %s\n' "$budget_excess_reading_lines"
     for reason in ${findings[@]+"${findings[@]}"}; do printf '  %s\n' "$reason"; done
     for reason in ${advisories[@]+"${advisories[@]}"}; do printf '  advisory: %s\n' "$reason"; done
     [ "${#advisories[@]}" -eq 0 ] || printf 'Advisories do not fail doctor; --strict makes them failing findings.\n'

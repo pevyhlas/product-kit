@@ -46,25 +46,7 @@ later="$(if [ -n "$stage_now" ]; then
 fi)"
 changes="$(spec_open_changes "$root")"
 leftover="$(spec_leftover_features "$root")"
-# Compaction is due every ten closed changes (compact.md): the change entries in specs/log.md
-# newer than its latest `- <date> compaction:` line, or all of them when none is: "<count> [<date>]".
-# Newer is above that line in a newest-first log and below it in an oldest-first one, the order
-# compaction folds in (spec_log_newest_first); within the log, position counts, not dates. Every
-# entry file (specs/log/<id>.md) is newer: compaction folds them all.
-compaction=""
-if [ -f "$root/specs/log.md" ]; then
-    newest_first=0; if spec_log_newest_first "$root/specs/log.md"; then newest_first=1; fi
-    compaction="$(LC_ALL=C awk -v newest_first="$newest_first" '
-        /^- [0-9-]+ compaction:/ { if (!seen++) { above = c; top = $2 }; c = 0; last = $2; next }
-        /^- [0-9-]+ [0-9][0-9][0-9][0-9]*-[a-z0-9-]*:/ { c++ }
-        END {
-            if (!seen) print c + 0
-            else if (newest_first) print above + 0, top
-            else print c + 0, last
-        }' "$root/specs/log.md")"
-fi
-read -r closed_since last_pass <<< "${compaction:-0}"
-closed_since=$((closed_since + $(spec_log_files "$root" | LC_ALL=C awk '/^- [0-9-]+ [0-9][0-9][0-9][0-9]*-[a-z0-9-]*:/ { c++ } END { print c + 0 }')))
+read -r closed_since last_pass <<< "$(spec_compaction "$root")"
 inbox="$(spec_inbox "$root")"
 records="$(spec_records "$root")"
 

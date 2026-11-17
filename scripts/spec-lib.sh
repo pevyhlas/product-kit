@@ -244,6 +244,28 @@ spec_log_newest_first() { # log file
         END { exit !(n && first >= last) }' "$1" 2>/dev/null
 }
 
+# Compaction is due every ten closed changes (compact.md). Return "<count> [<date>]":
+# entries newer than the latest compaction line, or all entries if no pass is recorded.
+# Within log.md position counts, not dates, in either log order. Every entry file is
+# newer: compaction folds them all. Keep status and doctor on this same accounting.
+spec_compaction() { # root
+    local root="$1" compaction="" newest_first=0 closed_since last_pass
+    if [ -f "$root/specs/log.md" ]; then
+        if spec_log_newest_first "$root/specs/log.md"; then newest_first=1; fi
+        compaction="$(LC_ALL=C awk -v newest_first="$newest_first" '
+            /^- [0-9-]+ compaction:/ { if (!seen++) { above = c; top = $2 }; c = 0; last = $2; next }
+            /^- [0-9-]+ [0-9][0-9][0-9][0-9]*-[a-z0-9-]*:/ { c++ }
+            END {
+                if (!seen) print c + 0
+                else if (newest_first) print above + 0, top
+                else print c + 0, last
+            }' "$root/specs/log.md")"
+    fi
+    read -r closed_since last_pass <<< "${compaction:-0}"
+    closed_since=$((closed_since + $(spec_log_files "$root" | LC_ALL=C awk '/^- [0-9-]+ [0-9][0-9][0-9][0-9]*-[a-z0-9-]*:/ { c++ } END { print c + 0 }')))
+    printf '%s %s\n' "$closed_since" "$last_pass"
+}
+
 # 0.x feature folder names (NNN-slug) in a commit's tree, or deleted in the last 20 commits that
 # deleted anything under specs/features or specs/archive: git keeps what the cutover removed.
 # No lazy fetch in a partial clone; a missing object reads as nothing.

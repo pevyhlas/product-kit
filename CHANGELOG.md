@@ -10,6 +10,12 @@ change by change.
 
 ### Changed
 
+- **Doctor reports reading-budget excess and overdue compaction.** Text and `--json`
+  add the total reading lines over budget (`budget_excess_reading_lines`), independently
+  of advisory count. Doctor shares status's compaction accounting, including pending
+  log entry files, and advises at ten closes. CI guidance requires full history for
+  the "Merged without closing" advisory.
+
 - **Review verdicts bind content fingerprints, not commit ranges (breaking; closes #66 and #86).**
   A verdict used to name a hand-typed `<base sha>..<head sha>` range and coverage was proven from
   commit ancestry, so a base merge, an edit reverted before a base merge (#86), a narrow range
