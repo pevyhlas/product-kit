@@ -172,10 +172,15 @@ git -C .product-kit replace -d "$PIN" >/dev/null
 
 it 'explicit pin and manifest-hash restrictions remain binding'
 cp .prdkit/memory/config.md .git/config.saved
+sed 's/^## Configuration$/## Configuration — local restrictions/' .git/config.saved > .prdkit/memory/config.md
+printf -- '- adoption-pin: %s\n- adoption-manifest-sha256: %s\n' "$PIN" "$(install_hash_stream < .prdkit/.manifest)" >> .prdkit/memory/config.md
+check_source
+assert_eq 0 "$STATUS" "matching explicit restrictions: $OUTPUT"
+sed 's/^## Configuration$/## Configuration — local restrictions/' .git/config.saved > .prdkit/memory/config.md
 printf -- '- adoption-pin: %s\n' "$OLD_PIN" >> .prdkit/memory/config.md
 reject_source
 assert_contains "$OUTPUT" 'Kit pin drift' 'explicit pin never ignored'
-cp .git/config.saved .prdkit/memory/config.md
+sed 's/^## Configuration$/## Configuration — local restrictions/' .git/config.saved > .prdkit/memory/config.md
 printf -- '- adoption-manifest-sha256: %064d\n' 0 >> .prdkit/memory/config.md
 reject_source
 assert_contains "$OUTPUT" 'Manifest hash drift' 'explicit hash never ignored'

@@ -43,7 +43,7 @@ install_candidate_read() { # root revision-or-empty path (raw blob, no link foll
 
 install_config_value() { # config-file key (duplicates are not valid restrictions)
     awk -v key="$2" '
-        /^##[[:space:]]/ { section=($0 ~ /^##[[:space:]]*Configuration[[:space:]]*$/); next }
+        /^##[[:space:]]/ { section=($0 ~ /^##[[:space:]]*Configuration/); next }
         section {
             line=$0; sub(/^-?[[:space:]]*/, "", line)
             if(index(line,key ":") == 1) {
