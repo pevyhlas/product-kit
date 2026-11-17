@@ -31,6 +31,7 @@ review_plan_prepare() {
              ($d.scope_blockers|type)=="array" and all($d.scope_blockers[];
                  [.reviewer,.change,.origin_pr,.to,.receipt]|all(.[];string)) and
              ($d.references|type)=="array" and all($d.references[];string) and
+             ($d.current_reviewers|type)=="array" and all($d.current_reviewers[];string) and
              ($d.problem_classes|type)=="array" and all($d.problem_classes[];string) and
              ($d.problem_classes|length)==(.problems|length))' "$PACKAGE_SCRATCH/gate.json" >/dev/null 2>&1 &&
             { [ "$GATE_STATUS" = 0 ] || [ "$GATE_STATUS" = 1 ]; }; then GATE_VALID=true; fi
@@ -51,10 +52,11 @@ review_plan_prepare() {
         [ "$before" = "$after" ] && [ "$before" = "$(git -C "$REPO_ROOT" hash-object --no-filters "$PACKAGE_SCRATCH/plan.json")" ] ||
             { echo "ERROR: review plan changed while copying" >&2; exit 1; }
         if ! review_file_without_nul "$PACKAGE_SCRATCH/plan.json" ||
-        ! jq -e --arg change "$CHANGE_ID" --arg head "$HEAD_SHA" --arg since "$SINCE" --arg base "$FP_REF" \
+        ! jq -se --arg change "$CHANGE_ID" --arg head "$HEAD_SHA" --arg since "$SINCE" --arg base "$FP_REF" \
             --arg at "$FP_BASE_AT" --arg policy "$POLICY_AT" --arg pr "$PR_URL" '
             def text: type=="string" and length>0 and (test("[\\x00-\\x1f\\x7f]")|not);
             def strings: type=="array" and length>0 and all(.[];text) and (unique|length)==length;
+            length==1 and (.[0]|type)=="object" and (.[0] |
             .change==$change and .head==$head and .since==$since and .base_ref==$base and
             .base_at==$at and .policy_at==$policy and .pr==$pr and
             (.reviewers|type)=="array" and (.reviewers|length)>0 and
@@ -67,7 +69,7 @@ review_plan_prepare() {
                 (.receipt|text) and (.finding|text)) and
             ((.context // [])|type)=="array" and all((.context // [])[];
                 (.path|text) and (.selector|text) and (.reason|text)) and
-            ((.context // [])|unique_by([.path,.selector])|length)==((.context // [])|length)' "$PACKAGE_SCRATCH/plan.json" >/dev/null; then
+            ((.context // [])|unique_by([.path,.selector])|length)==((.context // [])|length))' "$PACKAGE_SCRATCH/plan.json" >/dev/null; then
             echo "ERROR: invalid/stale advisory plan binding or incomplete fields; no round allocated" >&2; exit 1
         fi
         local p
@@ -155,10 +157,12 @@ review_plan_write() {
         def eligible($id): any($d.registry[]; .reviewer==$id and .eligibility=="reviewer");
         def ref($r): $r=="new-change" or ($d.references|index($r)!=null);
         ([ $p.reviewers[] | select(.action=="review" and eligible(.id)) | .id ]) as $affected |
-        ([ $d.standing[].reviewer, $d.scope_blockers[].reviewer ]) as $blockers |
-        ([ $d.latest[] | select(.eligibility=="reviewer" and .clean and .end_covered and (.standing|not)) ]) as $retained |
+        ([ $d.standing[].reviewer, $d.scope_blockers[].reviewer,
+            ($g.legacy_blockers[]|select(.cleared==false)|.reviewer) ] | unique) as $blockers |
+        ([ $d.latest[] | . as $r | select(.eligibility=="reviewer" and .clean and .end_covered and
+            (.standing|not) and ($blockers|index($r.reviewer)|not)) ]) as $retained |
         ([ $p.reviewers[].id ]) as $ids |
-        ([ $d.latest[].reviewer, $blockers[] ] | unique) as $prior |
+        ([ $d.current_reviewers[], $d.latest[].reviewer, $blockers[] ] | unique) as $prior |
         ([$prior[] | select(. as $id | $ids|index($id)|not)]) as $missing |
         ([$p.reviewers[] | select(eligible(.id)|not) | .id]) as $ineligible |
         ([$p.reviewers[] | . as $r | select(.action=="unaffected" and
@@ -180,6 +184,7 @@ review_plan_write() {
             all($d.standing[] | select(.reviewer==$id); .to==$since)) ]) as $delta_reviewers |
         ([ $d.latest[] | . as $r | select($scope and $since!="" and
             .eligibility=="reviewer" and .clean and (.standing|not) and (.end_covered|not) and
+            ($blockers|index($r.reviewer)|not) and
             ($reaches|index("start"))!=null and ($reaches|index($r.reviewer))!=null and
             any($p.reviewers[]; .id==$r.reviewer and .action=="unaffected") and
             ($delta_reviewers|length)>0) |

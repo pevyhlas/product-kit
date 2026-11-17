@@ -83,7 +83,7 @@ host_content_bound=false
 [ -z "$receipts_file" ] || authority=snapshot
 RC_PR=""; RC_PR_HEAD=""; RC_FETCHED=""; RC_IGNORED=0; RC_INVALID=0; RC_CARRIED=0; RC_RECEIPTS=0
 receipt_ready=false
-RC_SCOPE_BLOCKERS=(); RC_REFERENCES=(); coverage_standing=(); coverage_clean=(); coverage_end=(); coverage_eligible=()
+RC_SCOPE_BLOCKERS=(); RC_REFERENCES=(); RC_CURRENT_REVIEWERS=(); coverage_standing=(); coverage_clean=(); coverage_end=(); coverage_eligible=()
 e_from=(); e_to=(); latest=()
 # Fingerprints are computed against the trusted base: --base, or, only to word the problems of a
 # refused --base, the trusted default branch.
@@ -511,8 +511,9 @@ if $json; then
             printf '%s{"reviewer":"%s","change":"%s","origin_pr":"%s","to":"%s","receipt":"%s"}' "$sep" \
                 "$(json_escape "$reviewer")" "$change" "$origin" "$to" "https://github.com/$RC_REPO/pull/$origin#pullrequestreview-$review"; sep=,
         done
-        printf '],"references":%s,"current_pr":"%s","problem_classes":%s}' \
-            "$(json_array ${RC_REFERENCES[@]+"${RC_REFERENCES[@]}"})" "$RC_PR" "$(json_array ${d_classes[@]+"${d_classes[@]}"})"
+        printf '],"references":%s,"current_reviewers":%s,"current_pr":"%s","problem_classes":%s}' \
+            "$(json_array ${RC_REFERENCES[@]+"${RC_REFERENCES[@]}"})" \
+            "$(json_array ${RC_CURRENT_REVIEWERS[@]+"${RC_CURRENT_REVIEWERS[@]}"})" "$RC_PR" "$(json_array ${d_classes[@]+"${d_classes[@]}"})"
     fi
     printf '}\n'
 elif [ "$result" = pass ]; then

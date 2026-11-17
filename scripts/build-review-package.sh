@@ -168,6 +168,20 @@ safe_path() { # relative path, with no traversal, control characters or symlink 
         rest="${rest#*/}"
     done
 }
+# Repeated explicit requests are one immutable snapshot, not conflicting inventory entries.
+unique_snapshot_paths() {
+    local candidate previous found
+    SNAPSHOT_PATHS=()
+    for candidate in "$@"; do
+        found=false
+        for previous in ${SNAPSHOT_PATHS[@]+"${SNAPSHOT_PATHS[@]}"}; do
+            [ "$candidate" != "$previous" ] || found=true
+        done
+        if ! $found; then SNAPSHOT_PATHS+=("$candidate"); fi
+    done
+}
+unique_snapshot_paths ${CONTEXT[@]+"${CONTEXT[@]}"}; CONTEXT=(${SNAPSHOT_PATHS[@]+"${SNAPSHOT_PATHS[@]}"})
+unique_snapshot_paths ${EVIDENCE[@]+"${EVIDENCE[@]}"}; EVIDENCE=(${SNAPSHOT_PATHS[@]+"${SNAPSHOT_PATHS[@]}"})
 for p in ${CONTEXT[@]+"${CONTEXT[@]}"}; do
     safe_path "$p" || { echo "ERROR: unsafe context path: $p" >&2; exit 1; }
     # Reject tree entries and symlinks even if the current checkout differs from HEAD.
@@ -204,8 +218,8 @@ if [ -n "$SINCE" ]; then
 fi
 
 PACKAGE_SCRATCH="$(mktemp -d)"
-LOCK_DIR=""
-trap 'if [ -n "$LOCK_DIR" ]; then rmdir "$LOCK_DIR"; fi; rm -rf "$PACKAGE_SCRATCH"' EXIT
+LOCK_PATH=""
+trap 'if [ -n "$LOCK_PATH" ]; then rm -f "$LOCK_PATH"; fi; rm -rf "$PACKAGE_SCRATCH"' EXIT
 review_plan_prepare
 for p in ${EVIDENCE[@]+"${EVIDENCE[@]}"}; do
     safe_path "$p" && [ -f "$REPO_ROOT/$p" ] && [ -r "$REPO_ROOT/$p" ] || {
@@ -219,9 +233,12 @@ safe_path ".prdkit/cache/evidence/$CHANGE_ID/reviews" || { echo "ERROR: symlinke
 # Serialize completed-binding comparison AND assembly. Busy is retry-later, never permission
 # to allocate another identical round. Interrupted packages remain numbered and untouched.
 mkdir -p "$REVIEW_DIR"
-LOCK_DIR="$REVIEW_DIR/.allocation-lock"
-if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-    LOCK_DIR=""; echo "ERROR: package allocation busy; reuse the in-progress package or retry after it finishes" >&2; exit 1
+LOCK_PATH="$REVIEW_DIR/.allocation-lock"
+# Bash's exclusive noclobber create is portable and does not depend on a mkdir utility's
+# concurrent existing-directory handling. Existing files, symlinks and old lock directories
+# all refuse; never reclaim another request's lock or discard interrupted evidence.
+if ! (set -C; : > "$LOCK_PATH") 2>/dev/null; then
+    LOCK_PATH=""; echo "ERROR: package allocation busy; reuse the in-progress package or retry after it finishes" >&2; exit 1
 fi
 ROUND=1; COMPLETED=0; COMPLETED_HEAD=""
 for d in "$REVIEW_DIR"/round-*/; do
@@ -383,6 +400,20 @@ reviewer consumes captured bounds/results and returns its report as text when it
 Full diff remains available; use the focused delta and affected obligations for a re-review.
 EOF
 inventory index.md "package navigation and limitations"
+# Validate final artifacts, not just hashes recorded before later assembly steps.
+inventory_seen=()
+while IFS=$'\t' read -r file bytes oid source; do
+    [ "$file" != file ] || continue
+    for prior in ${inventory_seen[@]+"${inventory_seen[@]}"}; do
+        [ "$prior" != "$file" ] || { echo "ERROR: duplicate artifact $file; incomplete round retained" >&2; exit 1; }
+    done
+    inventory_seen+=("$file")
+    if [ ! -f "$PACKAGE_DIR/$file" ] || [ -L "$PACKAGE_DIR/$file" ] ||
+        [ "$bytes" != "$(wc -c < "$PACKAGE_DIR/$file" | tr -d ' ')" ] ||
+        [ "$oid" != "$(git -C "$REPO_ROOT" hash-object --no-filters "$PACKAGE_DIR/$file")" ]; then
+        echo "ERROR: final artifact integrity failed for $file ($source); incomplete round retained" >&2; exit 1
+    fi
+done < "$PACKAGE_DIR/manifest.tsv"
 # Completion is written LAST, never to an interrupted round. It is a comparison binding, not
 # approval: later calls recompute the prior head's content from immutable objects.
 comparison=unknown; [ -z "$FINGERPRINT" ] || comparison=known

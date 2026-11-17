@@ -57,19 +57,31 @@ context_object() { # rev path -> blob; never dereference a symlink/tree/submodul
 }
 
 context_span() { # rev path first last obligation reason
-    local rev="$1" path="$2" first="$3" last="$4" obligation="$5" reason="$6" blob name
+    local rev="$1" path="$2" first="$3" last="$4" obligation="$5" reason="$6" blob name=""
+    local artifact source_rev source_path source_blob source_first source_last rest fresh=false
     if ! blob="$(context_object "$rev" "$path")" ||
         ! GIT_NO_LAZY_FETCH=1 git -C "$REPO_ROOT" cat-file blob "$blob" > "$CTX_TMP/blob" ||
         ! review_file_without_nul "$CTX_TMP/blob"; then
         context_gap "$obligation" "missing/unsafe/unreadable context $rev:$path"; return
     fi
     [ "$last" != all ] || last="$(awk 'END { print NR }' "$CTX_TMP/blob")"
-    name="context/sections/$CTX_N.txt"; CTX_N=$((CTX_N+1))
-    mkdir -p "$PACKAGE_DIR/context/sections"
-    if [ "$last" = 0 ]; then
-        first=0; : > "$PACKAGE_DIR/$name"
-        context_gap "$obligation" "empty required context $rev:$path"
-    else sed -n "${first},${last}p" "$CTX_TMP/blob" > "$PACKAGE_DIR/$name"; fi
+    [ "$last" != 0 ] || first=0
+    # Reuse exact spans, recording every obligation below. Explicit snapshots live exclusively
+    # under context/<repo-path>; generated files must never share that namespace.
+    while IFS=$'\t' read -r artifact source_rev source_path source_blob source_first source_last rest; do
+        if [ "$source_rev" = "$rev" ] && [ "$source_path" = "$path" ] && [ "$source_blob" = "$blob" ] &&
+            [ "$source_first" = "$first" ] && [ "$source_last" = "$last" ]; then name="$artifact"; break; fi
+    done < "$PACKAGE_DIR/context-manifest.tsv"
+    if [ -z "$name" ]; then
+        name="context-sections/$CTX_N.txt"; CTX_N=$((CTX_N+1)); fresh=true
+        mkdir -p "$PACKAGE_DIR/context-sections"
+        if [ -e "$PACKAGE_DIR/$name" ] || [ -L "$PACKAGE_DIR/$name" ]; then
+            echo "ERROR: generated context artifact collision: $name; incomplete round retained" >&2; exit 1
+        fi
+        if [ "$last" = 0 ]; then
+            : > "$PACKAGE_DIR/$name"; context_gap "$obligation" "empty required context $rev:$path"
+        else sed -n "${first},${last}p" "$CTX_TMP/blob" > "$PACKAGE_DIR/$name"; fi
+    fi
     case "$obligation" in parent|checkpoint|child-row|parent-obligation)
         awk "$SPEC_SKIP_AWK $SPEC_ID_AWK"'
             { if (!spec_skip($0)) spec_ids($0, "") }' "$PACKAGE_DIR/$name" |
@@ -78,7 +90,7 @@ context_span() { # rev path first last obligation reason
             context_gap parent-link "selected parent obligation contains a link; supply its required captured context explicitly"
         fi ;;
     esac
-    inventory "$name" "$rev:$path:$first-$last"
+    if $fresh; then inventory "$name" "$rev:$path:$first-$last"; fi
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$rev" "$path" "$blob" "$first" "$last" \
         "$(spec_field "$obligation")" "$(spec_field "$reason")" >> "$PACKAGE_DIR/context-manifest.tsv"
 }
@@ -132,7 +144,10 @@ review_context_build() {
     # Materialize canon from H; bounds scope alone may use the recovered historical child.
     # No checkout, index, hooks or candidate helper is used.
     printf 'path\tsource_rev\tsource_blob\n' > "$PACKAGE_DIR/bounds-inputs.tsv"
-    while IFS= read -r path; do
+    if ! git -C "$REPO_ROOT" ls-tree -r -z --name-only "$HEAD_SHA" -- specs > "$CTX_TMP/spec-paths"; then
+        context_gap canon "cannot completely enumerate spec entries"
+    fi
+    while IFS= read -r -d '' path; do
         case "$path" in specs/*.md) ;; *) continue ;; esac
         case "$path" in specs/changes/*|specs/log/*) continue ;; esac
         if blob="$(context_object "$HEAD_SHA" "$path")"; then
@@ -141,8 +156,8 @@ review_context_build() {
                 ! review_file_without_nul "$CTX_TMP/material/$path"; then
                 context_gap canon "unreadable/non-text input $path"; rm -f "$CTX_TMP/material/$path"
             fi
-        else context_gap canon "unsafe spec input $path"; fi
-    done < <(git -C "$REPO_ROOT" -c core.quotepath=true ls-tree -r --name-only "$HEAD_SHA" -- specs)
+        else context_gap canon "unsafe spec input $(printf '%q' "$path")"; fi
+    done < "$CTX_TMP/spec-paths"
     if [ -n "$record_rev" ]; then
         context_span "$record_rev" "$record" 1 all child "actual record (historical when source_rev differs from HEAD)"
         mkdir -p "$CTX_TMP/material/specs/changes"
@@ -223,7 +238,6 @@ review_context_build() {
         # unsupported forms remain gaps, never a guessed section.
         while IFS=$'\037' read -r path line target; do
             [ -n "$target" ] || continue
-            [ "$target" != "specs/changes/$parent.md" ] || continue
             count="$(sed -n "${line}p" "$CTX_TMP/material/$record" | awk '{ n=gsub(/]\(/,"&"); print n }')"
             if [ "$count" != 1 ]; then context_gap link "multiple/unsupported links at child line $line; select explicit context"; continue; fi
             anchor="$(sed -n "${line}p" "$CTX_TMP/material/$record" | sed -n 's/.*](.*#\([^ )]*\)).*/\1/p')"
@@ -237,12 +251,15 @@ review_context_build() {
     fi
     # Changed canon: include complete changed sections; additions without supported headings
     # stay visible as gaps as well as in the unabridged diff.
-    while IFS= read -r path; do
+    if ! git -C "$REPO_ROOT" diff -z --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" > "$CTX_TMP/changed-paths"; then
+        context_gap changed-spec "cannot completely enumerate changed canon"
+    fi
+    while IFS= read -r -d '' path; do
         case "$path" in specs/changes/*|specs/log*|specs/archive*) continue ;; specs/*) ;; *) continue ;; esac
         if blob="$(context_object "$HEAD_SHA" "$path")"; then
             context_span "$HEAD_SHA" "$path" 1 all changed-spec "changed canon, unabridged"
-        else context_gap changed-spec "deleted/unsafe changed canon $path; inspect full diff"; fi
-    done < <(git -C "$REPO_ROOT" diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA")
+        else context_gap changed-spec "deleted/unsafe changed canon $(printf '%q' "$path"); inspect full diff"; fi
+    done < "$CTX_TMP/changed-paths"
     for path in ${CONTEXT[@]+"${CONTEXT[@]}"}; do
         blob="$(context_object "$HEAD_SHA" "$path")"
         count="$(awk 'END { print NR }' "$PACKAGE_DIR/context/$path")"; a=1

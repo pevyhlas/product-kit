@@ -26,11 +26,16 @@ are recorded in `context-gaps.txt`, not silently discarded. Whole-file explicit 
 remain available. Selections are structural context, never proof of semantic completeness.
 The reviewer needs no shell or network when the package is inside its allowed read boundary.
 
+Explicit whole-file snapshots remain under `context/<repo-relative-path>`; generated spans
+use the disjoint `context-sections/` namespace. Repeated exact spans share an artifact while
+retaining each obligation's provenance. Final artifact bytes/hashes are checked before completion.
+Spec enumeration uses literal NUL-delimited Git paths; rejected entries remain named gaps.
+
 Equal fingerprints refuse with **no round needed** before allocating a round or changing old
 artifacts. Omitting `--since` also compares the latest completed, comparable package's actual
 head, recomputing content from Git objects, not trusting its saved digest. Interrupted rounds
 retain evidence and numbering; their existence does not prove completion. A completion binding
-is written last. Allocation/comparison/assembly share an atomic directory lock; a busy call
+is written last. Allocation/comparison/assembly share an exclusive Bash noclobber lock file; a busy call
 refuses rather than opening another round. An interrupted lock requires explicit reconciliation;
 never erase failure evidence. Unknown fingerprints do not mean equal or changed: targeted
 requests fail before allocation, while ordinary full structural previews remain available.
@@ -54,6 +59,10 @@ For a reduced **advisory** recommendation add `--review-plan PATH` with `--pr` a
 JSON is data, never sourced. This minimal contract uses **whole changed entries**, not a hunk
 schema. Supply every prior reviewer and every additional applicable concern under existing
 project policy; concern selection remains the lead's judgment, not mandatory generic ceremony.
+Exactly one JSON object is accepted, and that same copied object is consumed. Prior current-PR
+identities include valid receipts for other changes, without granting those receipts coverage.
+Standing native, scope or uncleared legacy blockers exclude the identity from retained and
+prospective classifications; cleared historical rows do not become new blockers.
 
 ```json
 {

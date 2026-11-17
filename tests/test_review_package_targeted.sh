@@ -5,6 +5,7 @@ set -euo pipefail
 # shellcheck disable=SC2153 # STATUS/OUTPUT are assigned by the sourced fixture runner.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 source "$TESTS_DIR/review-fixtures.sh"
+source "$TESTS_DIR/review-package-fixtures.sh"
 STATUS=0; OUTPUT=""
 P="$(make_inited_project)"; track_tmp "$P"; cd "$P"
 BUILD="$PK_ROOT/scripts/build-review-package.sh"; CHECK="$PK_ROOT/scripts/check-review.sh"
@@ -138,7 +139,7 @@ assert_contains "$(printf '%s' "$j" | jq -r '.prospective_carry[0].condition')" 
 it "Child context has immutable provenance, complete bounds/items/checkpoint/row, not whole parent"
 assert_contains "$(cat "$PKG/context-manifest.tsv")" "$F2" 'head binding'
 assert_contains "$(cat "$PKG/context-manifest.tsv")" "$(git rev-parse "$F2:specs/changes/$ID.md")" 'actual child blob'
-combined="$(cat "$PKG"/context/sections/*.txt)"
+combined="$(cat "$PKG"/context-sections/*.txt)"
 assert_contains "$combined" 'Whole bound body.' 'complete bound body'
 assert_contains "$combined" 'Nested obligation.' 'complete referenced item includes nested body'
 assert_contains "$combined" 'Original goal; architecture' 'checkpoint'
@@ -215,10 +216,10 @@ it "Stale plan refuses before allocation"
 advance stale-binding
 write_plan
 jq '.head="0000000000000000000000000000000000000000"' .git/plan.json > .git/next.json; mv .git/next.json .git/plan.json
-before="$(find .prdkit/cache/evidence/001-targeted/reviews -type f | LC_ALL=C sort)"
+before="$(package_snapshot .prdkit/cache/evidence/001-targeted/reviews)"
 receipt_raw_run bash "$BUILD" "$ID" "$BASE" --since "$F1" --pr https://github.com/owner/repo/pull/7 --review-plan .git/plan.json
 assert_eq 1 "$STATUS" 'stale binding refused'
-assert_eq "$before" "$(find .prdkit/cache/evidence/001-targeted/reviews -type f | LC_ALL=C sort)" 'no artifact mutation'
+assert_eq "$before" "$(package_snapshot .prdkit/cache/evidence/001-targeted/reviews)" 'no artifact mutation (path/mode/size/hash/directories)'
 
 it "Unpublished code, unavailable/partial host and snapshots cannot certify retention"
 advance unpublished
@@ -303,7 +304,7 @@ assert_eq 1 "$STATUS" 'symlink cannot masquerade as whole context'
 printf 'dirty worktree\n' > specs/parts/p1.md
 advance dirty-control
 package
-assert_not_contains "$(cat "$PKG"/context/sections/*.txt)" 'dirty worktree' 'committed canon only'
+assert_not_contains "$(cat "$PKG"/context-sections/*.txt)" 'dirty worktree' 'committed canon only'
 git rm -q "specs/changes/$ID.md"
 mkdir -p specs/log; printf -- '- 2026-01-03 %s: closed\n' "$ID" > "specs/log/$ID.md"
 git add specs/log; git commit -qm 'synthetic close'

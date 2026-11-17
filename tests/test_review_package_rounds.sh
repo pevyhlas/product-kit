@@ -5,6 +5,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 source "$PK_ROOT/scripts/common.sh"
 source "$PK_ROOT/scripts/spec-lib.sh"
 source "$PK_ROOT/scripts/review-fingerprint-lib.sh"
+source "$TESTS_DIR/review-package-fixtures.sh"
 STATUS=0; OUTPUT=""
 SCRIPT="$PK_ROOT/scripts/build-review-package.sh"
 P="$(mktemp -d)"; track_tmp "$P"; cd "$P"
@@ -20,7 +21,7 @@ sed 's/line 15/changed fifteen/' src/app.txt > src/new; mv src/new src/app.txt; 
 F1="$(git rev-parse HEAD)"
 first="$(bash "$SCRIPT" 001-equal "$BASE")"; PKG="$(printf '%s' "$first" | jq -r .PACKAGE_DIR)"
 ROOT="$(dirname "$PKG")"
-snapshot() { find "$ROOT" -type f -exec git hash-object --no-filters {} \; | LC_ALL=C sort; }
+snapshot() { package_snapshot "$ROOT"; }
 before="$(snapshot)"
 equal() {
     run bash "$SCRIPT" 001-equal "$1" ${2:+--since "$2"}
@@ -100,4 +101,53 @@ assert_eq 0 "$STATUS" 'whole-file empty context supported'
 pkg="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
 assert_eq 0 "$(wc -c < "$pkg/context/empty.txt" | tr -d ' ')" 'empty snapshot retained'
 assert_contains "$(cat "$pkg/context-manifest.tsv")" "$(git rev-parse HEAD:empty.txt)" 'empty blob provenance'
+
+it "Targeted unreadable current/since/completed content refuses before artifact mutation"
+# Selectively deny one old blob, not all object reads: the other comparisons remain usable.
+BADGIT="$(mktemp -d)"; track_tmp "$BADGIT"
+REAL_GIT="$(command -v git)"; export REAL_GIT
+cat > "$BADGIT/git" <<'EOF'
+#!/usr/bin/env bash
+previous=""; blob=false
+for arg in "$@"; do
+    if [ "$previous" = cat-file ] && [ "$arg" = blob ]; then blob=true
+    elif $blob; then [ "$arg" != "$DENIED_BLOB" ] || exit 128; blob=false; fi
+    previous="$arg"
+done
+exec "$REAL_GIT" "$@"
+EOF
+chmod +x "$BADGIT/git"
+OLD="$(git rev-parse HEAD)"
+OLD_BLOB="$(git rev-parse HEAD:src/app.txt)"
+printf 'selective current\n' >> src/app.txt; git commit -qam 'selective object fixture'
+CURRENT_BLOB="$(git rev-parse HEAD:src/app.txt)"
+for denied in "$OLD_BLOB" "$CURRENT_BLOB"; do
+    before="$(snapshot)"
+    run env DENIED_BLOB="$denied" PATH="$BADGIT:$PATH" bash "$SCRIPT" 001-equal "$TIP" --since "$OLD"
+    assert_eq 1 "$STATUS" 'targeted unreadable object refused'
+    assert_contains "$OUTPUT" 'targeted comparison unknown' 'unknown, not equal/changed'
+    assert_eq "$before" "$(snapshot)" 'all paths/modes/bytes and directories unchanged'
+done
+run bash "$SCRIPT" 005-completed "$TIP"
+assert_eq 0 "$STATUS" 'completed-binding control assembled'
+old_package="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"; old_root="$(dirname "$old_package")"
+printf 'since version\n' >> src/app.txt; git commit -qam 'comparable since fixture'
+SINCE="$(git rev-parse HEAD)"
+printf 'head version\n' >> src/app.txt; git commit -qam 'comparable head fixture'
+before="$(package_snapshot "$old_root")"
+run env DENIED_BLOB="$CURRENT_BLOB" PATH="$BADGIT:$PATH" bash "$SCRIPT" 005-completed "$TIP" --since "$SINCE"
+assert_eq 1 "$STATUS" 'unreadable completed head refuses even though current/since are readable'
+assert_contains "$OUTPUT" 'completed package comparison unknown' 'completed recomputation stays unknown'
+assert_eq "$before" "$(package_snapshot "$old_root")" 'prior completion/report tree preserved without new round'
+
+it "Snapshot negative controls detect path swaps, modes and new directories"
+CONTROL="$(mktemp -d)"; track_tmp "$CONTROL"
+printf 'a\n' > "$CONTROL/one"; printf 'b\n' > "$CONTROL/two"
+before="$(package_snapshot "$CONTROL")"
+mv "$CONTROL/one" "$CONTROL/holding"; mv "$CONTROL/two" "$CONTROL/one"; mv "$CONTROL/holding" "$CONTROL/two"
+assert_eq different "$([ "$before" = "$(package_snapshot "$CONTROL")" ] && echo equal || echo different)" 'swapped bytes cannot pass'
+before="$(package_snapshot "$CONTROL")"; chmod u+x "$CONTROL/one"
+assert_eq different "$([ "$before" = "$(package_snapshot "$CONTROL")" ] && echo equal || echo different)" 'mode changes cannot pass'
+before="$(package_snapshot "$CONTROL")"; mkdir "$CONTROL/empty"
+assert_eq different "$([ "$before" = "$(package_snapshot "$CONTROL")" ] && echo equal || echo different)" 'empty directory allocation cannot pass'
 finish
