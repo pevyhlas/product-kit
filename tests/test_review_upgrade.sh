@@ -421,8 +421,8 @@ it 'retry accepts a rendered managed section, including a resolved root-file tar
 for mode in regular alias; do
     transition_project
     if [ "$mode" = alias ]; then mv "$PROJ/AGENTS.md" "$PROJ/CLAUDE.md"; ln -s CLAUDE.md "$PROJ/AGENTS.md"; fi
-    sed 's/## Product-Kit workflow/## Product-Kit workflow upgraded/' "$PROJ/.product-kit/scripts/install-lib.sh" > "$PROJ/source.next"
-    mv "$PROJ/source.next" "$PROJ/.product-kit/scripts/install-lib.sh"
+    sed 's/## Product-Kit workflow/## Product-Kit workflow upgraded/' "$PROJ/.product-kit/scripts/agents-section.md" > "$PROJ/source.next"
+    mv "$PROJ/source.next" "$PROJ/.product-kit/scripts/agents-section.md"
     commit_fixture source
     sed 's/## Product-Kit workflow/## Product-Kit workflow upgraded/' "$PROJ/AGENTS.md" > "$PROJ/agents.next"
     cat "$PROJ/agents.next" > "$PROJ/AGENTS.md"; rm "$PROJ/agents.next"
@@ -434,8 +434,8 @@ done
 it 'a real managed-section replacement preserves a suffix without a final newline through retry'
 transition_project
 printf '\nOutside bytes without final newline' >> "$PROJ/AGENTS.md"
-sed 's/## Product-Kit workflow/## Product-Kit workflow upgraded/' "$PROJ/.product-kit/scripts/install-lib.sh" > "$PROJ/source.next"
-mv "$PROJ/source.next" "$PROJ/.product-kit/scripts/install-lib.sh"
+sed 's/## Product-Kit workflow/## Product-Kit workflow upgraded/' "$PROJ/.product-kit/scripts/agents-section.md" > "$PROJ/source.next"
+mv "$PROJ/source.next" "$PROJ/.product-kit/scripts/agents-section.md"
 commit_fixture source
 run env PATH="$FAULTS:$PATH" FAULT_ROOT="$PROJ" FAULT_PHASE=published bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --migrate-reviews
 assert_eq 1 "$([ "$STATUS" -ne 0 ] && echo 1 || echo 0)" 'managed section was installed before interruption'

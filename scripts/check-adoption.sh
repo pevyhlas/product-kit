@@ -22,18 +22,30 @@
 # with projection drift once the tier map declares a shared tier baseline. When the kit
 # source IS readable, its VERSION and command set are cross-checked against the manifest.
 #
-# Exit 0: all applicable checks pass; 1: findings; 2: usage error.
+# --require-source selects strict installation proof instead of the source-less
+# manifest/tier-map lane below. --head REV implies it and reads committed consumer
+# objects only. Neither lane fetches, installs, edits policy or authorizes review.
+# Exit 0: all checks in the selected lane pass; 1: findings; 2: usage error.
 set -euo pipefail
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 source "$SCRIPT_DIR/install-lib.sh"
 source "$SCRIPT_DIR/agent-tiers-lib.sh"
+source "$SCRIPT_DIR/spec-lib.sh"
+source "$SCRIPT_DIR/install-source-lib.sh"
 
 json=false
+require_source=false
+head=''
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --json) json=true ;;
-        --help|-h) echo 'Usage: check-adoption.sh [--json]'; exit 0 ;;
+        --require-source) require_source=true ;;
+        --head)
+            shift
+            [ "$#" -gt 0 ] || { echo '--head requires a committed revision' >&2; exit 2; }
+            head="$1"; require_source=true ;;
+        --help|-h) echo 'Usage: check-adoption.sh [--json] [--require-source] [--head <commit>]'; exit 0 ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;
     esac
     shift
@@ -41,6 +53,31 @@ done
 
 root="$(get_repo_root)"
 require_consumer_root "$root" check-adoption.sh
+
+# Strict installation proof is a separate evidence lane from manifest-copy integrity.
+# --head reads only committed consumer objects (not index/worktree installation bytes);
+# source objects are read from the initialized local source repository, without execution.
+if $require_source; then
+    work="$(mktemp -d)" || exit 1
+    trap 'rm -rf "$work"' EXIT
+    install_source_verify "$root" "$head" "$work" > "$work/findings"
+    findings=()
+    while IFS= read -r finding; do [ -z "$finding" ] || findings+=("$finding"); done < "$work/findings"
+    result=fail; proof=failed
+    if [ "${#findings[@]}" -eq 0 ]; then result=pass; proof=verified; fi
+    if $json; then
+        printf '{"result":"%s","checks":1,"source_verification":"%s","source_revision":"%s","consumer_revision":"%s","scope":"installation","findings":%s}\n' \
+            "$result" "$proof" "$INSTALL_SOURCE_REVISION" "$INSTALL_CONSUMER_REVISION" \
+            "$(json_array ${findings[@]+"${findings[@]}"})"
+    else
+        for finding in ${findings[@]+"${findings[@]}"}; do printf '✗ %s\n' "$finding"; done
+        printf 'Pinned-source installation proof: %s (source %s; consumer %s; %s)\n' \
+            "$proof" "${INSTALL_SOURCE_REVISION:-unavailable}" "${INSTALL_CONSUMER_REVISION:-unavailable}" \
+            "$([ -n "$head" ] && echo committed || echo worktree)"
+    fi
+    [ "$result" = pass ]
+    exit
+fi
 CONFIG="$root/.prdkit/memory/config.md"
 MANIFEST="$root/.prdkit/.manifest"
 
@@ -182,7 +219,7 @@ note
 if $json; then
     result=fail
     [ "${#findings[@]}" -eq 0 ] && result=pass
-    printf '{"result":"%s","checks":%s,"findings":%s}\n' \
+    printf '{"result":"%s","checks":%s,"source_verification":"not-requested","findings":%s}\n' \
         "$result" "$checked" "$(json_array ${findings[@]+"${findings[@]}"})"
 else
     for finding in ${findings[@]+"${findings[@]}"}; do

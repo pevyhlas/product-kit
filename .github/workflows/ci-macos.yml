@@ -49,6 +49,7 @@ jobs:
           /bin/bash tests/test_agent_tiers.sh
           /bin/bash tests/test_context_budget.sh
           /bin/bash tests/test_adoption_gate.sh
+          /bin/bash tests/test_pinned_source.sh
           /bin/bash tests/test_check_review.sh
           /bin/bash tests/test_review_registry.sh
           /bin/bash tests/test_review_base_merge.sh

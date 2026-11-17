@@ -72,7 +72,7 @@ assert_eq 1 "$(grep -cxF '.prdkit/retrospective/' "$PROJ/.gitignore")" "entry pr
 it "manifest covers every installed file and includes workflow hashes"
 assert_contains "$(cat "$PROJ/.prdkit/.manifest")" "version: $(cat "$PK_ROOT/VERSION")" "version recorded"
 expected=0
-for file in "$PROJ"/.product-kit/commands/*.md "$PROJ"/.product-kit/workflows/*.md "$PROJ"/.product-kit/templates/*.md "$PROJ"/.product-kit/scripts/*.sh; do
+for file in "$PROJ"/.product-kit/commands/*.md "$PROJ"/.product-kit/workflows/*.md "$PROJ"/.product-kit/templates/*.md "$PROJ"/.product-kit/scripts/*.sh "$PROJ"/.product-kit/scripts/agents-section.md; do
     case "$(basename "$file")" in
         init.sh|render-agents.sh|agent-definition-template.md) ;;   # bootstrap; optional agent tiers
         *) expected=$((expected + 1)) ;;

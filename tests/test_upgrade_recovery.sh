@@ -65,9 +65,8 @@ for fault in copy interrupt kill retire agents manifest storage; do
     printf '\nNew pristine template.\n' >> "$PROJ/.product-kit/templates/change-template.md"
     rm "$PROJ/.product-kit/scripts/retired-probe.sh"
     # Change only the generated section, retaining the same delimiters.
-    printf '\n' >> "$PROJ/.product-kit/scripts/install-lib.sh"
-    sed 's/## Product-Kit workflow/## Product-Kit workflow updated/' "$PROJ/.product-kit/scripts/install-lib.sh" > "$PROJ/new-lib"
-    mv "$PROJ/new-lib" "$PROJ/.product-kit/scripts/install-lib.sh"
+    sed 's/## Product-Kit workflow/## Product-Kit workflow updated/' "$PROJ/.product-kit/scripts/agents-section.md" > "$PROJ/new-section"
+    mv "$PROJ/new-section" "$PROJ/.product-kit/scripts/agents-section.md"
     # shellcheck disable=SC2016 # The child expands its own PID, not the test runner's.
     run env PATH="$SHIMS:$PATH" FAULT="$fault" FAULT_ROOT="$PROJ" bash -c 'export INSTALL_PID=$$; exec bash "$1/.product-kit/scripts/init.sh" --target "$1" --upgrade' _ "$PROJ"
     if [ "$STATUS" -ne 0 ]; then _ok 'failed operation exits nonzero'; else _no "masked $fault failure"; fi

@@ -249,10 +249,7 @@ option_used() { # name -> 0 when the project's files already depend on the subsy
 # Kit files that belong to an optional subsystem, by kit-relative path: 0 when the file is core
 # or its subsystem is selected for this install.
 kit_file_wanted() {
-    case "$1" in
-        scripts/render-agents.sh|templates/agent-definition-template.md) has_option agent-tiers ;;
-        *) return 0 ;;
-    esac
+    install_file_selected "$1" "$OPTIONS"
 }
 RECORDED_OPTIONS=""
 if [ -f "$MANIFEST" ] && grep -q '^options: ' "$MANIFEST"; then
@@ -313,8 +310,7 @@ hash_file() {
     fi
 }
 
-# Memory files and the templates that seed them ("<template>:<memory file>").
-MEMORY_SEEDS="constitution-template.md:constitution.md agents-template.md:agents.md config-template.md:config.md"
+# Memory seed mapping is shared with the verifier in install-lib.sh.
 # Seeded memory files of removed subsystems (2.0: the execution ledger). Upgrade retires them like
 # a template, removing an unedited copy; any other memory file is project-owned and never deleted.
 RETIRED_MEMORY="task-ledger.md"
@@ -323,37 +319,13 @@ RETIRED_MEMORY="task-ledger.md"
 # This single list drives installation, the manifest, and --check, so the three
 # can never disagree about what "installed" means.
 list_kit_files() {
-    local src base pair
-    for src in "$PK_ROOT"/commands/prdkit*.md; do
+    local src rel
+    for src in "$PK_ROOT"/commands/prdkit*.md "$PK_ROOT"/workflows/*.md \
+        "$PK_ROOT"/scripts/*.sh "$PK_ROOT"/scripts/agents-section.md "$PK_ROOT"/templates/*.md; do
         [ -e "$src" ] || continue
-        if has_harness claude; then
-            printf '%s\t%s\n' "$src" ".claude/commands/$(basename "$src")"
-        fi
-        if has_harness opencode; then
-            printf '%s\t%s\n' "$src" ".opencode/commands/$(basename "$src")"
-        fi
-    done
-    for src in "$PK_ROOT"/workflows/*.md; do
-        [ -e "$src" ] || continue
-        printf '%s\t%s\n' "$src" ".prdkit/workflows/$(basename "$src")"
-    done
-    for src in "$PK_ROOT"/scripts/*.sh; do
-        [ -e "$src" ] || continue
-        base="$(basename "$src")"
-        [ "$base" = "init.sh" ] && continue   # the bootstrap itself is never installed
-        kit_file_wanted "scripts/$base" || continue
-        printf '%s\t%s\n' "$src" ".prdkit/scripts/bash/$base"
-    done
-    for src in "$PK_ROOT"/templates/*.md; do
-        [ -e "$src" ] || continue
-        kit_file_wanted "templates/$(basename "$src")" || continue
-        printf '%s\t%s\n' "$src" ".prdkit/templates/$(basename "$src")"
-    done
-    # Memory files are seeded from these templates.
-    for pair in $MEMORY_SEEDS; do
-        src="$PK_ROOT/templates/${pair%%:*}"
-        [ -e "$src" ] || continue
-        printf '%s\t%s\n' "$src" ".prdkit/memory/${pair##*:}"
+        while IFS= read -r rel; do
+            printf '%s\t%s\n' "$src" "$rel"
+        done < <(install_file_targets "${src#"$PK_ROOT"/}" "$HARNESSES" "$OPTIONS")
     done
 }
 
@@ -409,7 +381,7 @@ is_kit_command_link() {
 # since `*` also matches `/`. A directory the installer writes into must be a real directory
 # inside TARGET, and a kit-owned file is replaced rather than written through a symlink.
 NAME_RE='[A-Za-z0-9_][A-Za-z0-9_.-]*'
-KIT_FILE_RE="^\\.prdkit/(scripts/bash/$NAME_RE\\.sh|workflows/$NAME_RE\\.md|templates/$NAME_RE\\.md)\$"
+KIT_FILE_RE="^\\.prdkit/(scripts/bash/($NAME_RE\\.sh|agents-section\\.md)|workflows/$NAME_RE\\.md|templates/$NAME_RE\\.md)\$"
 INSTALLED_RE="^(\\.(claude|opencode)/commands/$NAME_RE\\.md|\\.prdkit/memory/$NAME_RE\\.md)\$"
 MEMORY_FILE_RE="^\\.prdkit/memory/$NAME_RE\\.md\$"
 
@@ -905,7 +877,7 @@ while IFS=$'\t' read -r src rel; do
             # symlink in its place) rather than writing through it.
             if file_locally_edited "$rel" "$src"; then KIT_OVERWRITTEN+=("$rel"); fi
             atomic_copy "$src" "$dest"
-            chmod +x "$dest"
+            case "$rel" in *.sh) chmod +x "$dest" ;; esac
             ;;
         .prdkit/workflows/*)
             if file_locally_edited "$rel" "$src"; then KIT_OVERWRITTEN+=("$dest"); fi

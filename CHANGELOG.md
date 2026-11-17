@@ -10,6 +10,15 @@ change by change.
 
 ### Changed
 
+- **Pinned-source installation proof (#103).** `check-adoption.sh --require-source`
+  compares installed kit-owned bytes, Git executable modes, command links and managed
+  sections with local source objects at the consumer's committed gitlink. `--head <commit>`
+  verifies committed installation objects independently of index/worktree substitutions.
+  Installer and verifier share the path mapping; customized conffiles and unmanaged text
+  remain project-owned. Explicit adoption pin/hash restrictions still bind. Strict failures
+  never fetch or install; source-less integrity checks report `source_verification:"not-requested"`.
+  This is installation proof, not review exemption, source provenance or release approval.
+
 - **Review verdicts bind content fingerprints, not commit ranges (breaking; closes #66 and #86).**
   A verdict used to name a hand-typed `<base sha>..<head sha>` range and coverage was proven from
   commit ancestry, so a base merge, an edit reverted before a base merge (#86), a narrow range

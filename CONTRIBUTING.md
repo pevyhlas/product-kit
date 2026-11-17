@@ -45,8 +45,9 @@ Rules the tests enforce:
   commands in `commands/`, `workflows/` or `templates/`; they defer to the consumer's
   constitution (`.prdkit/memory/constitution.md`).
 - **Consumer paths vs. repo paths.** Command files and workflows reference installed paths
-  (`.prdkit/scripts/bash/…`, `.prdkit/templates/…`, `.prdkit/workflows/…`). `scripts/init.sh`
-  maps this repository's files to them; keep it in sync when you add a file.
+  (`.prdkit/scripts/bash/…`, `.prdkit/templates/…`, `.prdkit/workflows/…`).
+  `scripts/install-lib.sh` shares the mapping between `scripts/init.sh` and pinned-source
+  verification; keep it in sync when you add a file.
 - **Adding or renaming a command** touches `commands/`, `docs/commands.md`, the README command
   table, the `EXPECTED` list in `tests/test_generalization.sh` and `CHANGELOG.md`.
 

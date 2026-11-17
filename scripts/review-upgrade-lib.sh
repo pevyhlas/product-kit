@@ -248,7 +248,7 @@ upgrade_render_expected() { # caller-owned work directory -> head/, rendered/, p
             cp -p "$work/head/$rel" "$dest" || return 1
         fi
         cp "$src" "$dest" || return 1
-        case "$rel" in .prdkit/scripts/bash/*) chmod +x "$dest" || return 1 ;; esac
+        case "$rel" in .prdkit/scripts/bash/*.sh) chmod +x "$dest" || return 1 ;; esac
     done < "$work/files"
     # Every retired recorded path is part of the planned deletion set, even after a retry
     # already deleted it. Project-owned customized retired conffiles remain untouched.

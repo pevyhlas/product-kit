@@ -11,7 +11,8 @@ doctor and offline review previews need no host credential; no helper needs a mo
 bash .prdkit/scripts/bash/check-adoption.sh
 ```
 
-Verifies the reviewed adoption contract on every PR:
+The default lane checks copy integrity against the install manifest and the configured
+adoption restrictions on every PR. It is **not pinned-source proof**:
 
 - the tracked kit submodule commit matches the recorded `adoption-pin`;
 - `.prdkit/.manifest` exists, its `version:` matches the kit source `VERSION`, and its
@@ -30,20 +31,70 @@ Verifies the reviewed adoption contract on every PR:
   model/variant and neutral body (`render-agents.sh --check` is the same check, and also
   runs on legacy literal maps when invoked directly).
 
-Record the expected values in the `## Configuration` section of
-`.prdkit/memory/config.md` and move them together on every kit bump:
+Consumers may impose additional restrictions in the `## Configuration` section of
+`.prdkit/memory/config.md`:
 
 ```
 - adoption-pin: <full 40-hex kit commit>
 - adoption-manifest-sha256: <sha256 of .prdkit/.manifest>
 ```
 
-Unset keys skip their check (the gate then still validates the manifest and command
+Unset keys skip their restriction (the gate then still validates the manifest and command
 surface). The gate is manifest-driven: the pin is read from the tracked gitlink and the
 expected surface from the manifest, so a `mode: copy` install passes CI with no submodule
 checkout at all (a `mode: symlink` install still needs the source present for its links
 to resolve). When the kit source is readable, its VERSION and shipped command set are
-cross-checked as well. `--json` emits `{result, checks, findings}`.
+cross-checked as well. `--json` includes `source_verification:"not-requested"` alongside
+`result`, `checks` and `findings`; a pass in this lane must not be treated as source proof.
+
+### Strict pinned-source installation proof
+
+```bash
+bash .prdkit/scripts/bash/check-adoption.sh --require-source --json
+bash .prdkit/scripts/bash/check-adoption.sh --head HEAD --json
+```
+
+These select the **installation-only** proof lane, not the default agent-tier/projection
+checks. Run the default lane too when those checks are required. The source path defaults to
+`.product-kit` (`adoption-source` can name another normalized repo-relative path). The exact
+source revision comes from that path's gitlink in the consumer's committed `HEAD`, never its
+index or the source checkout's current revision. `--head <commit>` instead reads that
+consumer commit's gitlink, manifest, configuration, installed blobs, Git modes and link text.
+It ignores unrelated index and working-tree substitutions; it does not certify dirty bytes.
+Without `--head`, installed files and restrictions come from the working tree.
+
+The verifier uses only local Git objects from the initialized source repository at that path:
+it does not fetch, initialize a submodule, install anything, or edit config, records or the
+index. Missing source repositories, commits, trees or required blobs fail strict verification.
+Git replacements are disabled. On Git versions that cannot suppress partial-clone lazy
+fetches, partial-clone object reads are refused.
+
+The shared installer mapping selects the expected paths from the pinned source tree, honoring
+harnesses and `agent-tiers`. Kit-owned helpers, workflows, commands and managed-section data
+must match those source blobs, independently of manifest hashes. Missing/extra kit paths,
+wrong Git executable modes, duplicate/missing manifest entries and wrong command links fail.
+Command symlinks must name the canonical relative source path; worktree proof also checks the
+bytes the links actually serve. Committed proof checks link text, not a mutable source checkout.
+The AGENTS.md managed section is compared with pinned data without executing source code;
+in-repository aliases work, and bytes outside the section remain project-owned.
+
+Customized memory/templates and customized retired conffiles remain project-owned. Expected
+conffiles must still exist, but their bytes, modes and prior pristine hashes need not match
+the new source. Retired kit-owned helpers/commands may not remain installed. Explicit
+`adoption-pin` and `adoption-manifest-sha256` restrictions still reject drift; the installer
+does not silently rewrite or ignore them.
+
+Only exit **0** with `source_verification:"verified"` establishes this source proof.
+JSON also reports `scope:"installation"`, `source_revision` and `consumer_revision`.
+Failure reports `source_verification:"failed"` with findings. This establishes byte/mode/link
+equality to the committed pin, **not** source provenance, publisher trust, review eligibility,
+release approval or permission to merge. Execute the checker and its libraries from a trusted
+installation when relying on its result; candidate-controlled verification code can lie.
+
+Once policy, publisher, release/source and committed-record prerequisites are prepared, a
+consumer without additional frozen pin/hash restrictions can apply an upgrade with one
+`bash .product-kit/scripts/init.sh --upgrade` command and verify it without copying hashes.
+This proof alone does not make the upgrade review-free or complete the release prerequisites.
 
 ## Review check — `check-review.sh`
 
