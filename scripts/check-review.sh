@@ -161,7 +161,12 @@ fi
 # Legacy history is local evidence in every mode and tier, even when the checked
 # record is absent or the host is unavailable. It never joins the coverage arrays.
 OWNER_VALID=false; OWNER_REVIEW=""; OWNER_STATE=""; OWNER_COMMIT=""; OWNER_HEAD_AT_SUBMISSION=""; OWNER_ERROR='the owner has no decisive native review on this PR'
-if $receipt_ready; then owner_native_approval_valid "$root" "$id" "$fp_base" "$head" || true; fi
+OWNER_ACTOR=""; OWNER_APPROVED_COMMIT=""; OWNER_BARRIERS=(); OWNER_PROBLEMS=()
+if $receipt_ready; then
+    owner_native_approval_valid "$root" "$id" "$fp_base" "$head" || true
+    if ! $OWNER_AVAILABLE; then problems+=("$OWNER_ERROR"); authority=unavailable; fi
+    problems+=(${OWNER_PROBLEMS[@]+"${OWNER_PROBLEMS[@]}"})
+fi
 legacy_receipts=""; LL_BLOCKERS=(); LL_EMPTY_VALID=(); LL_EMPTY_ALLOWED=()
 if $receipt_ready; then legacy_receipts="$RC_FILE"; fi
 if [ -n "$fp_base" ]; then
@@ -400,7 +405,7 @@ else
     review_coverage_evaluate
     owner="$OWNER_VALID"
     record_only="$coverage_record_only"
-    if [ "$tier" = T3 ] && ! $record_only && ! $owner; then problems+=("$OWNER_ERROR"); fi
+    if [ "$tier" = T3 ] && ! $record_only && ! $owner && [ "${#OWNER_PROBLEMS[@]}" -eq 0 ]; then problems+=("$OWNER_ERROR"); fi
     # Keep actionable path diagnostics when the publisher's provenance commit is still local.
     # These are diagnostics only; authenticated tokens, never the commits, decide coverage.
     if $fp_ready; then

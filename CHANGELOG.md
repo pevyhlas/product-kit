@@ -54,8 +54,17 @@ change by change.
   and structure-only paths remain gh/jq-free. Removed `--verify-reports`, `report_verification`
   and the old report matcher. JSON now reports authority, receipt/blocker counts, legacy blockers
   and native owner metadata.
-- **T3 uses the owner's native approval.** The latest decisive APPROVED review must bind the
-  checked head's L0/L1 slice; CHANGES_REQUESTED and DISMISSED are barriers. Code fixes and rebases
+- **Native owner barriers precede every coverage exemption.** CHANGES_REQUESTED blocks the
+  current PR at all tiers, record-only closure and renamed/deleted/missing carriers. DISMISSED
+  is a distinct revocation barrier. Each numeric owner actor must clear its own barrier with
+  a later valid native APPROVED review; another owner's approval, COMMENTED/PENDING, record
+  text and tier edits cannot clear it. Invalid later approval leaves the negative standing.
+  Otherwise exempt, event-free PRs need no positive owner approval. JSON preserves existing
+  fields and adds `owner.actor` and per-actor `owner.barriers` with review/state/reason.
+  Preview snapshots use `prdkit-receipts 2` with actor-bearing owner rows; old actorless
+  snapshots are refused and need fresh capture. Verdict receipt v3 and `fp1` are unchanged.
+- **T3 uses the owner's native approval.** The latest decisive APPROVED review, with no
+  standing owner barrier, must bind the checked head's L0/L1 slice. Code fixes and rebases
   can keep approval; L0/L1 edits lapse it. The GraphQL approved commit must match the head
   reconstructed strictly before submission from the activity log, including merge pushes and
   deciding-window continuity. Same-second ties or aged-out activity fail closed and need a new

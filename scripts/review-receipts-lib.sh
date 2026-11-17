@@ -257,7 +257,7 @@ review_receipts_write() { # destination; writer never changes RC_FILE
     local destination="$1" temp
     temp="$(mktemp "${destination}.XXXXXX")" || { RC_ERROR='cannot create snapshot'; return 1; }
     if ! {
-        printf 'prdkit-receipts 1\037repo=%s\037pr=%s\037pr_head=%s\037pr_created=%s\037base=%s\037fetched=%s\037isolation=%s\037pr_author=%s\n' \
+        printf 'prdkit-receipts 2\037repo=%s\037pr=%s\037pr_head=%s\037pr_created=%s\037base=%s\037fetched=%s\037isolation=%s\037pr_author=%s\n' \
             "$RC_REPO" "$RC_PR" "$RC_PR_HEAD" "$RC_PR_CREATED" "$RC_BASE" "$RC_FETCHED" "$RC_ISOLATION" "$RC_PR_AUTHOR"
         cat "$RC_FILE"
     } > "$temp" || ! mv "$temp" "$destination"; then rm -f "$temp"; RC_ERROR='cannot write snapshot'; return 1; fi
@@ -270,10 +270,11 @@ review_receipts_read() { # snapshot work; no gh or jq, including on errors
         function digits(s) { return s ~ /^[0-9]+$/ }
         # Spell out digits for older mawk as well as BSD awk (no interval dependency).
         function timestamp(s) { return s ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/ }
-        NR==1 { if (NF!=9 || $1!="prdkit-receipts 1") bad=1; next }
+        NR==1 { if (NF!=9 || $1!="prdkit-receipts 2") bad=1; next }
         $1=="R" { if (NF!=21 || !digits($2) || !digits($3) || !digits($4) || !timestamp($5) || ($21!="0" && $21!="1") || $2<=last) bad=1; last=$2; next }
         $1=="X" { if (NF!=5 || !digits($2) || !digits($3) || !digits($4) || $5=="" || $2<=last) bad=1; last=$2; next }
-        $1=="O" { if (NF!=6 || !digits($2) || !timestamp($3) || $4 !~ /^(APPROVED|CHANGES_REQUESTED|DISMISSED)$/) bad=1; next }
+        $1=="O" { if (NF!=7 || $2 !~ /^[1-9][0-9]*$/ || !timestamp($3) ||
+            $4 !~ /^(APPROVED|CHANGES_REQUESTED|DISMISSED)$/ || $7 !~ /^user:[1-9][0-9]*$/ || seen_owner[$2]++) bad=1; next }
         { bad=1 } END { exit (bad || NR==0) }' "$file"; then RC_ERROR='malformed receipt snapshot'; return 1; fi
     IFS= read -r header < "$file" || { RC_ERROR='empty receipt snapshot'; return 1; }
     IFS=$'\037' read -r magic repo pr prhead created base fetched isolation author <<< "$header"

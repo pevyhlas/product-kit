@@ -291,4 +291,243 @@ for reviewer in owner ''; do
         assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
     done
 done
+
+# These fixtures isolate PR-wide owner barriers from tier, scope and receipt errors.
+# No real host or approval is used; every review below belongs to the local stub.
+barrier_fixture() {
+    fresh; git reset -q --hard "$BASE"
+    CHANGE=001-reviewed; MODE="$1"
+    mkdir -p specs/changes docs
+    TIER="$MODE"
+    case "$MODE" in
+        record-only|closing|renamed|missing) TIER=T1 ;;
+    esac
+    if [ "$MODE" != missing ]; then
+        printf '# Record\n**Tier**: %s\n## State\n' "$TIER" > "specs/changes/$CHANGE.md"
+    fi
+    case "$MODE" in
+        T0|missing) printf documentation > docs/guide.md ;;
+        record-only|closing) ;;
+        *) printf implementation > source.txt ;;
+    esac
+    git add -A; git commit -qm delivery
+    if [ "$MODE" = closing ]; then
+        git rm -q "specs/changes/$CHANGE.md"
+        mkdir -p specs/log
+        printf -- '- 2026-01-01 %s: closed\n' "$CHANGE" > "specs/log/$CHANGE.md"
+        git add -A; git commit -qm closure
+    elif [ "$MODE" = renamed ]; then
+        git mv "specs/changes/$CHANGE.md" specs/changes/002-carrier.md
+        git commit -qm carrier; CHANGE=002-carrier
+    fi
+    AT="$(git rev-parse HEAD)"; use_gh_stub; fx_pr 7 "$AT"
+    fx_activity 0000000000000000000000000000000000000000 "$AT" '{"activity_type":"branch_creation","timestamp":"2026-01-01T00:00:00Z"}'
+    case "$MODE" in
+        T1|T2|T3|renamed)
+            FP="$(review_fingerprint "$PROJ" "$CHANGE" "$BASE" "$AT")"
+            BODY="$(jq -cn --arg head "$AT" --arg base "$BASE" --arg fp "$FP" --arg change "$CHANGE" '
+                {schema:"prdkit.review.v3",id:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",repo:"owner/repo",pr:7,
+                 change:$change,reviewer:"code",from:"start",to:$fp,head:$head,since:"",
+                 base:"refs/remotes/origin/main",base_at:$base,verdict:"PASS",
+                 critical:0,high:0,medium:0,low:0,report:"https://example.invalid/report"}')"
+            fx_review 7 "$(printf '<!-- prdkit-review\n%s\n-->\n' "$BODY")" ;;
+    esac
+}
+barrier_check() { run bash "$CHECK" --json --pr "$PR" "$@" "$CHANGE"; }
+barrier_assert() {
+    assert_eq 1 "$STATUS" "$OUTPUT"
+    assert_eq host "$(printf '%s' "$OUTPUT" | jq -r .authority)"
+    assert_eq "$1" "$(printf '%s' "$OUTPUT" | jq -r '.owner.barriers[0].state')"
+    assert_eq user:1003 "$(printf '%s' "$OUTPUT" | jq -r '.owner.barriers[0].actor')"
+    assert_contains "$OUTPUT" "$2"
+    assert_not_contains "$OUTPUT" 'needs a recorded independent review' 'clean coverage cannot mask the owner barrier'
+    assert_eq 0 "$(printf '%s' "$OUTPUT" | jq .invalid_receipts)"
+}
+
+it 'owner negatives block every tier, record-only closure, renamed and missing carriers'
+for MODE in T0 T1 T2 T3 record-only closing renamed missing; do
+    barrier_fixture "$MODE"
+    barrier_check
+    case "$MODE" in
+        T3) assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" "T3 needs the owner's native approval too" ;;
+        missing) assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'No change record' ;;
+        *) assert_eq 0 "$STATUS" "$MODE event-free control: $OUTPUT"; assert_eq '[]' "$(printf '%s' "$OUTPUT" | jq -c .problems)" ;;
+    esac
+    fx_owner_review 7 CHANGES_REQUESTED "$AT"
+    barrier_check --save-receipts .git/barrier-snapshot
+    barrier_assert CHANGES_REQUESTED 'changes requested, not PASS'
+    if [ "$MODE" = missing ]; then
+        assert_eq '' "$(printf '%s' "$OUTPUT" | jq -r .tier)" 'missing carrier is diagnosed separately'
+        assert_contains "$OUTPUT" 'No change record'
+    else
+        assert_eq "$TIER" "$(printf '%s' "$OUTPUT" | jq -r .tier)"
+    fi
+    assert_eq "$([ "$MODE" = record-only ] || [ "$MODE" = closing ] && echo true || echo false)" \
+        "$(printf '%s' "$OUTPUT" | jq -r .record_only)"
+    fx_owner_review 7 DISMISSED "$AT" '{"submittedAt":"2026-01-03T00:00:00Z"}'
+    barrier_check
+    barrier_assert DISMISSED 'latest owner review was dismissed'
+    assert_not_contains "$OUTPUT" 'changes requested, not PASS' 'dismissal has its own revocation reason'
+done
+
+it 'COMMENTED, PENDING, maker text and a tier rewrite cannot clear an owner barrier'
+barrier_fixture record-only
+fx_owner_review 7 CHANGES_REQUESTED "$AT"
+fx_owner_review 7 COMMENTED "$AT" '{"submittedAt":"2026-01-03T00:00:00Z"}'
+fx_owner_review 7 PENDING "$AT" '{"submittedAt":null}'
+printf '# Record\n**Tier**: T0\n## State\n**Review**: round 1 · ignored · owner · PASS\n' > specs/changes/001-reviewed.md
+git commit -qam metadata; AT="$(git rev-parse HEAD)"; fx_pr 7 "$AT"
+barrier_check
+barrier_assert CHANGES_REQUESTED 'changes requested, not PASS'
+assert_eq true "$(printf '%s' "$OUTPUT" | jq .record_only)"
+
+it 'later approval clears only the issuing actor, with numeric decisive ordering'
+barrier_fixture T1
+sed 's/review-owner: user:1003/review-owner: user:1003, user:1004/' .prdkit/memory/config.md |
+    trusted_edit refs/remotes/origin/main .prdkit/memory/config.md
+fx_owner_review 7 CHANGES_REQUESTED "$AT" '{"fullDatabaseId":"9999"}'
+fx_owner_review 7 APPROVED "$AT" '{"fullDatabaseId":"10000","author":{"databaseId":1004}}'
+barrier_check
+barrier_assert CHANGES_REQUESTED 'changes requested, not PASS'
+assert_eq user:1004 "$(printf '%s' "$OUTPUT" | jq -r .owner.actor)"
+fx_owner_review 7 APPROVED "$AT" '{"fullDatabaseId":"10001"}'
+jq reverse "$GH_STUB_DIR/reviews/7.json" > .git/reversed
+mv .git/reversed "$GH_STUB_DIR/reviews/7.json"
+barrier_check --save-receipts .git/multi-owner
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq '[]' "$(printf '%s' "$OUTPUT" | jq -c .owner.barriers)"
+fx_owner_review 7 DISMISSED "$AT" '{"fullDatabaseId":"10002","author":{"databaseId":1004}}'
+barrier_check
+assert_eq 1 "$STATUS"
+assert_eq '[["user:1004","10002","DISMISSED"]]' \
+    "$(printf '%s' "$OUTPUT" | jq -c '[.owner.barriers[]|[.actor,.review,.state]]')"
+fx_owner_review 7 APPROVED "$AT" '{"fullDatabaseId":"10003"}'
+barrier_check; assert_eq 1 "$STATUS" 'another actor still cannot clear the dismissal'
+fx_owner_review 7 APPROVED "$AT" '{"fullDatabaseId":"10004","author":{"databaseId":1004}}'
+barrier_check; assert_eq 0 "$STATUS" "$OUTPUT"
+
+it 'timestamps precede numeric ids and every issuing actor keeps its barrier'
+barrier_fixture T1
+sed 's/review-owner: user:1003/review-owner: user:1003, user:1004/' .prdkit/memory/config.md |
+    trusted_edit refs/remotes/origin/main .prdkit/memory/config.md
+fx_owner_review 7 CHANGES_REQUESTED "$AT" '{"fullDatabaseId":"10000"}'
+fx_owner_review 7 DISMISSED "$AT" '{"fullDatabaseId":"10001","author":{"databaseId":1004}}'
+barrier_check
+assert_eq 1 "$STATUS"
+assert_eq '[["user:1003","CHANGES_REQUESTED"],["user:1004","DISMISSED"]]' \
+    "$(printf '%s' "$OUTPUT" | jq -c '[.owner.barriers[]|[.actor,.state]]')"
+fx_owner_review 7 APPROVED "$AT" '{"fullDatabaseId":"9999","submittedAt":"2026-01-03T00:00:00Z"}'
+barrier_check
+assert_eq 1 "$STATUS"
+assert_eq '[["user:1004","DISMISSED"]]' "$(printf '%s' "$OUTPUT" | jq -c '[.owner.barriers[]|[.actor,.state]]')"
+fx_owner_review 7 APPROVED "$AT" '{"fullDatabaseId":"9998","submittedAt":"2026-01-04T00:00:00Z","author":{"databaseId":1004}}'
+barrier_check; assert_eq 0 "$STATUS" "$OUTPUT"
+
+it 'an invalid later approval cannot erase the earlier negative at an exempt tier'
+for INVALID in unwitnessed tie missing-object stale-slice self; do
+    barrier_fixture record-only
+    fx_owner_review 7 CHANGES_REQUESTED "$AT"
+    APPROVED_AT="$AT"
+    case "$INVALID" in
+        unwitnessed) printf '[]\n' > "$GH_STUB_DIR/activity.json" ;;
+        tie) fx_activity "$AT" "$AT" '{"timestamp":"2026-01-04T00:00:00Z"}' ;;
+        missing-object)
+            APPROVED_AT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            printf '[]\n' > "$GH_STUB_DIR/activity.json"
+            fx_activity 0000000000000000000000000000000000000000 "$APPROVED_AT" '{"activity_type":"branch_creation","timestamp":"2026-01-01T00:00:00Z"}'
+            fx_activity "$APPROVED_AT" "$AT" '{"timestamp":"2026-01-05T00:00:00Z"}' ;;
+        stale-slice)
+            printf '# Product\nLater slice.\n' > specs/product.md
+            git add specs/product.md; git commit -qm spec; LATER="$(git rev-parse HEAD)"
+            fx_activity "$AT" "$LATER" '{"timestamp":"2026-01-05T00:00:00Z"}'
+            fx_pr 7 "$LATER"
+            # Keep code coverage clean despite the L0-induced T3 requirement.
+            FP="$(review_fingerprint "$PROJ" "$CHANGE" "$BASE" "$LATER")"
+            BODY="$(jq -cn --arg head "$LATER" --arg base "$BASE" --arg fp "$FP" '
+                {schema:"prdkit.review.v3",id:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",repo:"owner/repo",pr:7,
+                 change:"001-reviewed",reviewer:"code",from:"start",to:$fp,head:$head,since:"",
+                 base:"refs/remotes/origin/main",base_at:$base,verdict:"PASS",
+                 critical:0,high:0,medium:0,low:0,report:"https://example.invalid/report"}')"
+            fx_review 7 "$(printf '<!-- prdkit-review\n%s\n-->\n' "$BODY")" ;;
+        self) fx_pr 7 "$AT" '{"user":{"id":1003},"author":{"databaseId":1003}}' ;;
+    esac
+    fx_owner_review 7 APPROVED "$APPROVED_AT" '{"submittedAt":"2026-01-04T00:00:00Z"}'
+    barrier_check
+    barrier_assert CHANGES_REQUESTED 'changes requested, not PASS'
+    assert_contains "$OUTPUT" 'later review' 'the invalid clearing attempt is diagnosed too'
+    case "$INVALID" in
+        unwitnessed|tie) assert_contains "$OUTPUT" 'cannot be confirmed as the PR head' ;;
+        missing-object) assert_contains "$OUTPUT" "the owner approved $APPROVED_AT, which is not here" ;;
+        stale-slice) assert_contains "$OUTPUT" 'L0/L1 spec changed' ;;
+        self) assert_contains "$OUTPUT" 'owner authored this PR' ;;
+    esac
+done
+
+it 'same-issuer valid approval clears the barrier without becoming independent coverage'
+barrier_fixture T0
+fx_owner_review 7 CHANGES_REQUESTED "$AT"
+fx_owner_review 7 APPROVED "$AT" '{"submittedAt":"2026-01-03T00:00:00Z"}'
+barrier_check --save-receipts .git/cleared-barrier
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq '[]' "$(printf '%s' "$OUTPUT" | jq -c .owner.barriers)"
+assert_eq '[]' "$(printf '%s' "$OUTPUT" | jq -c .reviews)"
+: > "$GH_STUB_DIR/requests"
+run env PATH="$TOOLS" bash "$CHECK" --json --receipts .git/cleared-barrier "$CHANGE"
+assert_eq 3 "$STATUS" "$OUTPUT"
+assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
+
+it 'native barriers use personal configured identities on this PR, not closed-PR approval'
+barrier_fixture T0
+fx_owner_review 7 CHANGES_REQUESTED "$AT" '{"author":{"__typename":"Bot"}}'
+fx_owner_review 7 CHANGES_REQUESTED "$AT" '{"author":{"databaseId":2003}}'
+barrier_check; assert_eq 0 "$STATUS" "$OUTPUT"
+fx_closed_pr 6 "$AT"
+fx_owner_review 6 CHANGES_REQUESTED "$AT"
+barrier_check; assert_eq 0 "$STATUS" 'no new cross-PR native barrier carry is invented'
+fx_owner_review 7 CHANGES_REQUESTED "$AT"
+fx_owner_review 6 APPROVED "$AT" '{"submittedAt":"2026-01-03T00:00:00Z"}'
+barrier_check
+barrier_assert CHANGES_REQUESTED 'changes requested, not PASS'
+
+it 'actorless old snapshots and duplicate owner ids cannot prove clearance'
+awk -F '\037' -v OFS='\037' 'NR==1 { $1="prdkit-receipts 1" } $1=="O" { NF=6 } { print }' \
+    .git/multi-owner > .git/old-owner
+: > "$GH_STUB_DIR/requests"
+run env PATH="$TOOLS" bash "$CHECK" --json --receipts .git/old-owner 001-reviewed
+assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'malformed receipt snapshot'
+assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
+barrier_fixture T0
+fx_owner_review 7 CHANGES_REQUESTED "$AT" '{"fullDatabaseId":"9001"}'
+fx_owner_review 7 APPROVED "$AT" '{"fullDatabaseId":"9001"}'
+barrier_check
+assert_eq 1 "$STATUS"
+assert_eq unavailable "$(printf '%s' "$OUTPUT" | jq -r .authority)"
+for TAMPER in actorless unlisted duplicate; do
+    awk -F '\037' -v OFS='\037' -v tamper="$TAMPER" '
+        $1=="O" {
+            if (tamper=="actorless") NF=6
+            if (tamper=="unlisted") $7="user:2003"
+            if (tamper=="duplicate") print
+        } { print }' .git/multi-owner > .git/tampered-owner
+    : > "$GH_STUB_DIR/requests"
+    run env PATH="$TOOLS" bash "$CHECK" --json --receipts .git/tampered-owner 001-reviewed
+    assert_eq 1 "$STATUS" "$TAMPER"
+    assert_not_contains "$OUTPUT" '"result":"pass"'
+    if [ "$TAMPER" = unlisted ]; then
+        assert_contains "$OUTPUT" 'has no configured actor identity'
+        assert_eq unavailable "$(printf '%s' "$OUTPUT" | jq -r .authority)"
+    else assert_contains "$OUTPUT" 'malformed receipt snapshot'; fi
+    assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
+done
+
+it 'missing or ambiguous owner authority is unavailable rather than event-free'
+for BROKEN in '.author=null' '.author.databaseId=null' '.state="FUTURE"' '.state=null'; do
+    barrier_fixture T0
+    fx_owner_review 7 CHANGES_REQUESTED "$AT"
+    jq "map($BROKEN)" "$GH_STUB_DIR/reviews/7.json" > .git/broken-owner
+    mv .git/broken-owner "$GH_STUB_DIR/reviews/7.json"
+    barrier_check
+    assert_eq 1 "$STATUS" "$BROKEN"
+    assert_eq unavailable "$(printf '%s' "$OUTPUT" | jq -r .authority)"
+done
 finish
