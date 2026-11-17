@@ -909,9 +909,24 @@ spec_trusted_refs() { # root
 # Reading an object a partial clone lacks would fetch it from the promisor remote. Git 2.45+
 # refuses under GIT_NO_LAZY_FETCH; with an older Git, callers skip object reads in a partial clone.
 spec_objects_local() { # root
-    { [ -z "$(git -C "$1" config --get extensions.partialclone 2>/dev/null)" ] &&
-        ! git -C "$1" config --get-regexp '^remote\..*\.promisor$' 2>/dev/null | grep -qi ' true$'; } ||
-        [ "$(git version 2>/dev/null | awk '{ split($3, v, "."); print v[1] * 1000 + v[2] }')" -ge 2045 ]
+    local value status entries partial=false version
+    if value="$(git -C "$1" config --get extensions.partialclone 2>/dev/null)"; then
+        [ -n "$value" ] || return 1
+        partial=true
+    else
+        status=$?; [ "$status" -eq 1 ] || return 1
+    fi
+    if entries="$(git -C "$1" config --bool --get-regexp '^remote\..*\.promisor$' 2>/dev/null)"; then
+        while IFS= read -r value; do
+            case "$value" in *' true') partial=true ;; *' false') ;; *) return 1 ;; esac
+        done <<< "$entries"
+    else
+        status=$?; [ "$status" -eq 1 ] || return 1
+    fi
+    $partial || return 0
+    version="$(git version 2>/dev/null)" || return 1
+    [[ "$version" =~ ^git[[:space:]]version[[:space:]]([0-9]+)\.([0-9]+) ]] || return 1
+    [ "$((10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]}))" -ge 2045 ]
 }
 
 # Records committed at <rev> with no child or outcome checkpoint keeping them open.

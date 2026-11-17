@@ -8,8 +8,11 @@ install_object_git() {
 }
 
 install_object_entry() { # repo revision literal-path -> mode type oid (or empty)
-    install_object_git -C "$1" ls-tree "$2" -- ":(literal)$3" |
-        awk -F '\t' -v path="$3" '$2 == path { print $1 }'
+    local entry
+    install_object_git -C "$1" ls-tree -z "$2" -- ":(literal)$3" |
+        while IFS= read -r -d '' entry; do
+            [ "${entry#*$'\t'}" != "$3" ] || printf '%s\n' "${entry%%$'\t'*}"
+        done
 }
 
 install_candidate_mode() { # root revision-or-empty path
@@ -43,7 +46,8 @@ install_candidate_read() { # root revision-or-empty path (raw blob, no link foll
 
 install_config_value() { # config-file key (duplicates are not valid restrictions)
     awk -v key="$2" '
-        /^##[[:space:]]/ { section=($0 ~ /^##[[:space:]]*Configuration/); next }
+        /^##[[:space:]]*Configuration/ { section=1; next }
+        /^##[[:space:]]/ { section=0; next }
         section {
             line=$0; sub(/^-?[[:space:]]*/, "", line)
             if(index(line,key ":") == 1) {
@@ -73,7 +77,7 @@ install_normalize_path() { # repo-relative path; reject escape, empty or absolut
 
 install_source_verify() { # consumer-root consumer-revision-or-empty scratch
     local root="$1" head="$2" work="$3" source pin restriction manifest_hash repo entry
-    local version harnesses options mode src dest oid smode expected actual line hash path n parent link
+    local version harnesses selection options mode src dest oid smode expected actual line hash path n parent link
     # Public result fields are consumed by check-adoption.sh, not this library.
     # shellcheck disable=SC2034
     INSTALL_SOURCE_REVISION=''
@@ -139,9 +143,13 @@ install_source_verify() { # consumer-root consumer-revision-or-empty scratch
         echo "Manifest version does not match pinned source $version"
     harnesses="$(install_manifest_value "$work/manifest" harnesses)" ||
         { echo 'Manifest must record exactly one harness selection'; return; }
+    selection=''
     for path in $harnesses; do
         case "$path" in claude|opencode|codex|agents) ;; *) echo "Unknown manifest harness: $path"; return ;; esac
+        selection="${selection:+$selection }$path"
     done
+    [ -n "$selection" ] || { echo 'Manifest must select a harness'; return; }
+    harnesses="$selection"
     case " $harnesses " in *' codex '*) case " $harnesses " in *' agents '*) ;; *)
         echo 'Codex selection must include agents'; return ;; esac ;; esac
     options="$(install_manifest_value "$work/manifest" options)" ||
@@ -231,24 +239,24 @@ install_source_verify() { # consumer-root consumer-revision-or-empty scratch
             echo "Invalid manifest entry: $line"; continue
         fi
         case "$path" in .prdkit/templates/*|.prdkit/memory/*) continue ;; esac
-        awk -F '\t' -v p="$path" '$3 == p { found=1 } END { exit !found }' "$work/mapping" ||
+        LC_ALL=C PRDKIT_INSTALL_PATH="$path" awk -F '\t' '$3 == ENVIRON["PRDKIT_INSTALL_PATH"] { found=1 } END { exit !found }' "$work/mapping" ||
             echo "Unexpected installed manifest path: $path"
     done < "$work/manifest"
     if [ -n "$head" ]; then
-        install_object_git -C "$root" ls-tree -r --name-only "$head" -- .prdkit/scripts/bash/ .prdkit/workflows/ \
+        install_object_git -C "$root" ls-tree -r -z --name-only "$head" -- .prdkit/scripts/bash/ .prdkit/workflows/ \
             .claude/commands/ .opencode/commands/ > "$work/installed-paths" ||
             echo 'Unable to inventory committed installation'
     else
         : > "$work/installed-paths"
         for parent in .prdkit/scripts/bash .prdkit/workflows .claude/commands .opencode/commands; do
-            [ ! -d "$root/$parent" ] || find "$root/$parent" ! -path "$root/$parent" -prune -print |
-                while IFS= read -r path; do printf '%s\n' "${path#"$root"/}"; done >> "$work/installed-paths"
+            [ ! -d "$root/$parent" ] || find "$root/$parent" ! -path "$root/$parent" -prune -print0 |
+                while IFS= read -r -d '' path; do printf '%s\0' "${path#"$root"/}"; done >> "$work/installed-paths"
         done
     fi
-    while IFS= read -r path; do
+    while IFS= read -r -d '' path; do
         case "$path" in .claude/commands/*|.opencode/commands/*)
             case "${path##*/}" in prdkit*.md) ;; *) continue ;; esac ;; esac
-        awk -F '\t' -v p="$path" '$3 == p { found=1 } END { exit !found }' "$work/mapping" ||
+        LC_ALL=C PRDKIT_INSTALL_PATH="$path" awk -F '\t' '$3 == ENVIRON["PRDKIT_INSTALL_PATH"] { found=1 } END { exit !found }' "$work/mapping" ||
             echo "Unexpected kit-owned installed path: $path"
     done < "$work/installed-paths"
     for path in .prdkit/.install-state .prdkit/.install-lock; do

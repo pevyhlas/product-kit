@@ -50,10 +50,13 @@ render_agents_section() {
 }
 
 managed_agents_section() {
+    local newline=1
     [ -f "$1" ] || return 1
-    awk -v begin="$AGENTS_BEGIN" -v end="$AGENTS_END" '
+    # A line printer must not invent a terminator that the managed bytes did not have.
+    if [ -n "$(tail -c 1 "$1")" ] && [ "$(tail -n 1 "$1")" = "$AGENTS_END" ]; then newline=0; fi
+    LC_ALL=C awk -v begin="$AGENTS_BEGIN" -v end="$AGENTS_END" -v newline="$newline" '
         $0 == begin { starts++; if(section || ends) bad=1; section=1 }
-        section { print }
+        section { if($0 == end && !newline) printf "%s", $0; else print }
         $0 == end { ends++; if(!section) bad=1; section=0 }
         END { if(starts != 1 || ends != 1 || section || bad) exit 1 }
     ' "$1"
