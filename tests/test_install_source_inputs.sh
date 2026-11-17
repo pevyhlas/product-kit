@@ -94,4 +94,105 @@ printf '\nProject-owned suffix without newline' >> "$FIXTURE/AGENTS.md"
 fixture_commit
 fixture_check --head HEAD
 assert_eq 0 "$STATUS" 'unmanaged suffix terminator does not affect managed bytes'
+
+it 'managed text is validated before a utility can normalize its bytes'
+BYTE_CASE="$(mktemp -d)"; track_tmp "$BYTE_CASE"
+mkdir "$BYTE_CASE/bin"
+BYTE_REAL_AWK="$(command -v awk)"
+BYTE_ORIGINAL_PATH="$PATH"
+export BYTE_REAL_AWK BYTE_CASE
+cat > "$BYTE_CASE/bin/awk" <<'EOF'
+#!/usr/bin/env bash
+last="${!#}"
+case "$last" in
+    */agents|*/AGENTS.md)
+        printf 'managed awk input\n' >> "$BYTE_CASE/managed-calls"
+        if [ "${BYTE_EMULATION:-false}" = true ]; then
+            temp="$(mktemp)" || exit 1
+            trap 'rm -f "$temp"' EXIT
+            # Fixture emulation only: numeric od input never asks awk to read NUL.
+            # Discard the first zero byte and remainder of that record, preserving LF.
+            LC_ALL=C od -An -v -tu1 "$last" | LC_ALL=C "$BYTE_REAL_AWK" '
+                { for(i=1;i<=NF;i++) {
+                    if($i==0) skip=1
+                    else if($i==10) { printf "\n"; skip=0 }
+                    else if(!skip) printf "%c", $i
+                } }' > "$temp" || exit 1
+            args=("$@"); args[$(($# - 1))]="$temp"
+            LC_ALL=C "$BYTE_REAL_AWK" "${args[@]}"
+            exit "$?"
+        fi ;;
+esac
+exec "$BYTE_REAL_AWK" "$@"
+EOF
+chmod +x "$BYTE_CASE/bin/awk"
+{
+    printf 'Project-owned prefix.\n'
+    cat "$KIT/scripts/agents-section.md"
+    printf '\nProject-owned suffix without newline'
+} > "$BYTE_CASE/clean"
+{
+    printf 'Project-owned prefix.\n'
+    while IFS= read -r line; do
+        printf '%s' "$line"
+        [ "$line" != '## Product-Kit workflow' ] || printf '\000additional bytes'
+        printf '\n'
+    done < "$KIT/scripts/agents-section.md"
+    printf '\nProject-owned suffix without newline'
+} > "$BYTE_CASE/altered"
+raw_size="$(wc -c < "$BYTE_CASE/altered" | tr -d '[:space:]')"
+kept_size="$(LC_ALL=C tr -d '\000' < "$BYTE_CASE/altered" | wc -c | tr -d '[:space:]')"
+assert_eq "$((kept_size + 1))" "$raw_size" 'independent byte count proves the fixture contains NUL'
+run cmp -s "$BYTE_CASE/clean" "$BYTE_CASE/altered"
+assert_eq 1 "$STATUS" 'altered managed input differs as raw bytes'
+
+for tool in awk mawk nawk gawk; do
+    if ! BYTE_REAL_AWK="$(PATH="$BYTE_ORIGINAL_PATH" command -v "$tool")"; then
+        printf 'OBSERVATION: %s unavailable; not exercised\n' "$tool"
+        continue
+    fi
+    export BYTE_REAL_AWK
+    printf 'before\000after\n' > "$BYTE_CASE/probe"
+    LC_ALL=C "$BYTE_REAL_AWK" '{print}' "$BYTE_CASE/probe" > "$BYTE_CASE/probe-result"
+    if cmp -s "$BYTE_CASE/probe" "$BYTE_CASE/probe-result"; then
+        printf 'OBSERVATION: local %s (%s) retained probe bytes\n' "$tool" "$BYTE_REAL_AWK"
+    else
+        printf 'OBSERVATION: local %s (%s) changed probe bytes\n' "$tool" "$BYTE_REAL_AWK"
+    fi
+    export PATH="$BYTE_CASE/bin:$BYTE_ORIGINAL_PATH" BYTE_EMULATION=false
+    cp "$BYTE_CASE/clean" "$FIXTURE/AGENTS.md"; fixture_commit
+    fixture_check
+    assert_eq 0 "$STATUS" "clean text with local $tool: $OUTPUT"
+    fixture_check --head HEAD
+    assert_eq 0 "$STATUS" "committed clean text with local $tool: $OUTPUT"
+    cp "$BYTE_CASE/altered" "$FIXTURE/AGENTS.md"; fixture_commit
+    before="$(install_hash_stream < "$FIXTURE/AGENTS.md")"
+    for lane in worktree committed; do
+        : > "$BYTE_CASE/managed-calls"
+        args=(); [ "$lane" != committed ] || args=(--head HEAD)
+        fixture_reject ${args[@]+"${args[@]}"}
+        assert_eq '' "$(cat "$BYTE_CASE/managed-calls")" 'byte refusal precedes managed awk input'
+    done
+    assert_eq "$before" "$(install_hash_stream < "$FIXTURE/AGENTS.md")" 'refusal leaves all input bytes unchanged'
+    export PATH="$BYTE_ORIGINAL_PATH"
+done
+
+it 'a deliberately truncating utility model cannot establish source proof'
+BYTE_REAL_AWK="$(command -v awk)"; export BYTE_REAL_AWK
+export PATH="$BYTE_CASE/bin:$BYTE_ORIGINAL_PATH" BYTE_EMULATION=true
+cp "$BYTE_CASE/altered" "$FIXTURE/AGENTS.md"
+# Independent positive control: this model really hides the altered body bytes.
+cat "$BYTE_CASE/clean" > "$BYTE_CASE/normalized-expected"; printf '\n' >> "$BYTE_CASE/normalized-expected"
+awk '{print}' "$FIXTURE/AGENTS.md" > "$BYTE_CASE/normalized"
+run cmp -s "$BYTE_CASE/normalized-expected" "$BYTE_CASE/normalized"
+assert_eq 0 "$STATUS" 'fixture emulation actually truncates the altered record'
+fixture_commit
+for lane in worktree committed; do
+    : > "$BYTE_CASE/managed-calls"
+    args=(); [ "$lane" != committed ] || args=(--head HEAD)
+    fixture_reject ${args[@]+"${args[@]}"}
+    assert_eq '' "$(cat "$BYTE_CASE/managed-calls")" 'independent byte guard runs before the lossy model'
+done
+export PATH="$BYTE_ORIGINAL_PATH"
+unset BYTE_EMULATION
 finish

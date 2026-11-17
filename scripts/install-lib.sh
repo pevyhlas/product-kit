@@ -52,6 +52,9 @@ render_agents_section() {
 managed_agents_section() {
     local newline=1
     [ -f "$1" ] || return 1
+    # Validate raw text before tail, shell strings or awk can discard input bytes.
+    # Load the shared byte-safe contract in isolation for standalone library callers too.
+    (source "$(dirname "${BASH_SOURCE[0]}")/common.sh" && review_file_without_nul "$1") || return 1
     # A line printer must not invent a terminator that the managed bytes did not have.
     if [ -n "$(tail -c 1 "$1")" ] && [ "$(tail -n 1 "$1")" = "$AGENTS_END" ]; then newline=0; fi
     LC_ALL=C awk -v begin="$AGENTS_BEGIN" -v end="$AGENTS_END" -v newline="$newline" '
