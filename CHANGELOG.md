@@ -10,6 +10,20 @@ change by change.
 
 ### Changed
 
+- **CI completion bounds (#114).** Linux/native-macOS job caps are 45/90 minutes so the
+  expanded verification suites, legacy-AWK checks and lint can complete.
+
+- **Generated navigation budgets and compact reads (#110).** A conservative
+  `prdkit:navigation:v1` footer keeps same-file tracking references clickable while excluding
+  validated definitions from prose budgets. `read-spec.sh` uses that same recognizer before
+  text reaches routine agent context, retaining IDs, authored references, original line numbers
+  and source/content identity; `--raw`, `--stats` and `--target` keep raw reads, accounting and
+  individual lookup available. Malformed/mixed/conflicting/unknown blocks stay visible and
+  counted with diagnostics. Instruction-file byte budgets, raw integrity and review inputs stay
+  raw. This supplies no tracker/export adapter and makes no tokenizer-performance claim.
+  Parser execution failures fail doctor explicitly rather than leaving budgets unverified in
+  an apparently successful report.
+
 - **Targeted review packages (#106).** Later packages distinguish native retained coverage,
   review actions and conditional prospective carry through an optional advisory scope map.
   The existing gate exports additive diagnostics without changing its verdicts or JSON fields.
