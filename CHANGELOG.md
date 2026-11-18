@@ -10,6 +10,14 @@ change by change.
 
 ### Changed
 
+- **Project-owned lifecycle orders (#109).** An optional `**Stages**: A > B > C` header in
+  `specs/product/lifecycle.md` (or the single-file spec's `## Lifecycle` section) replaces the
+  built-in order for doctor, status and bounds. Multiword names, summary stage columns and
+  split stage details share that order. Invalid declarations/Now/Next fail diagnostics;
+  custom-order unknown markers fail too. Status/bounds now refuse unknown markers instead of
+  silently classifying them as current, including with the default vocabulary. Existing valid
+  default-stage sources and project-owned templates remain compatible; no stage is advanced.
+
 - **Review verdicts bind content fingerprints, not commit ranges (breaking; closes #66 and #86).**
   A verdict used to name a hand-typed `<base sha>..<head sha>` range and coverage was proven from
   commit ancestry, so a base merge, an edit reverted before a base merge (#86), a narrow range

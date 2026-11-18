@@ -82,7 +82,11 @@ journey solves a pain (or supports one that does), and each part exists for jour
 
 ## The lifecycle decides what is needed now
 
-A product moves through stages, and each needs less than the next. Skip the ones it does not need.
+A product moves through owner-chosen stages. The default order is below; skip stages it does
+not need. To replace the vocabulary and order, put `**Stages**: Idea > Experimental > Stable`
+in the header of `specs/product/lifecycle.md` (or under `## Lifecycle` in `specs/SPEC.md`),
+before any stage subheadings. Keep that declaration with Now/Next when splitting stage details.
+Headings, diagrams and summary columns do not declare an order.
 
 | Stage | Means |
 |-------|-------|
@@ -98,6 +102,17 @@ A product moves through stages, and each needs less than the next. Skip the ones
 
 - `lifecycle.md` names the stage **Now** and **Next**, and for each stage its goal, audience,
   environment, promise and exit criteria. Only the owner moves Now.
+- Stage names start with an ASCII letter and end with a letter/digit; letters, digits, spaces
+  and hyphens are allowed. Separate them with `>`; comparison ignores case and repeated
+  whitespace. Declare each name once. No custom-name aliases are inferred; the default alone
+  accepts `General availability` for `GA`. Now and Next name whole stages; a `since <date>`,
+  parenthesized or semicolon-delimited note may follow. Next must be later than Now; omit it
+  when there is no next stage. Separate Now/Next lines and the inline `·` form both work.
+- Malformed or duplicate declarations and unknown Now/Next values fail diagnostics; no fallback
+  order is selected. With an explicit order, unknown `from:` values also fail doctor. Without
+  one they retain the legacy source-note advisory, but status/bounds refuse classification for
+  unknown markers in either form (nonzero exit, including JSON mode). With no lifecycle at all,
+  the existing all-needed-now default remains; doctor advises when known markers lack Now.
 - An item needed only from a later stage carries `from: <stage>` with its maturity:
   `**R-12 Choose a plan** (hypothesis, from: ga)`, `# J-07 Choose my plan (hypothesis, from:
   ga)`, or in a part's Maturity cell. Without one it is needed now. Remove a marker once its

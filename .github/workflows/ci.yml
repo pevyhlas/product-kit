@@ -59,6 +59,7 @@ jobs:
           fi
           bash tests/test_adoption_gate.sh
           bash tests/test_doctor.sh
+          bash tests/test_lifecycle.sh
       - name: Shellcheck scripts and tests
         # SC1091 (not following sourced files) is excluded repo-wide: scripts
         # source common.sh / lib.sh via runtime-resolved paths shellcheck

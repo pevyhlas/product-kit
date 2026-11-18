@@ -223,21 +223,23 @@ while IFS= read -r problem; do [ -z "$problem" ] || advisories+=("$problem"); do
 
 # --- Lifecycle: the current stage, from: markers, the product page's stage columns ----------
 stages="$(spec_stages "$root")"
-now_next="$(spec_stage_now "$root")"; now="${now_next%%"$SEP"*}"
-if [ -f "$root/specs/product/lifecycle.md" ]; then
-    known="$(awk "$SPEC_STAGE_AWK"' BEGIN { print stage_rank(ARGV[1]); exit }' "$now")"
-    [ "$known" != 0 ] || findings+=("Lifecycle: specs/product/lifecycle.md needs '**Now**: <stage>', one of: $SPEC_STAGE_LIST")
-fi
-# An advisory: `from:` may also start a source note, such as `from: owner interview`.
-while IFS= read -r problem; do [ -z "$problem" ] || advisories+=("$problem"); done < <(
-    printf '%s\n' "$stages" | awk -F "$SEP" -v list="$SPEC_STAGE_LIST" "$SPEC_STAGE_AWK"'
-        NF && !stage_rank($2) { print "Lifecycle: \"from: " $2 "\" in " $1 " at " $3 " names no stage; stages: " list }')
-if [ -n "$stages" ] && [ -z "$now" ]; then
-    advisories+=("Lifecycle: items carry from: markers, but specs/product/lifecycle.md names no current stage, so every item counts as needed now")
+spec_lifecycle_load "$root"
+now="$SPEC_STAGE_NOW"
+while IFS= read -r problem; do [ -z "$problem" ] || findings+=("$problem"); done <<< "$SPEC_STAGE_ERRORS"
+# Without an explicit vocabulary, retain the legacy source-note advisory. An explicit order
+# makes markers strict. Derived classification tools reject unknown markers in either form.
+while IFS= read -r problem; do
+    [ -n "$problem" ] || continue
+    if [ "$SPEC_STAGE_CUSTOM" = 1 ]; then findings+=("$problem"); else advisories+=("$problem"); fi
+done < <(printf '%s\n' "$stages" | spec_stage_problems)
+if [ -n "$SPEC_STAGE_ERRORS" ]; then now=""; fi
+if [ -n "$stages" ] && [ -z "$now" ] && [ -z "$SPEC_STAGE_ERRORS" ]; then
+    advisories+=("Lifecycle: items carry from: markers, but the canonical lifecycle names no current stage, so every item counts as needed now")
 fi
 if [ -n "$now" ]; then
     if [ -n "$stages" ]; then
-        reached="$(printf '%s\n' "$stages" | awk -F "$SEP" -v now="$now" "$SPEC_STAGE_AWK"'
+        reached="$(printf '%s\n' "$stages" | awk -F "$SEP" -v now="$now" \
+            -v stage_order="$SPEC_STAGE_ORDER" -v stage_custom="$SPEC_STAGE_CUSTOM" "$SPEC_STAGE_AWK"'
             NF && stage_rank($2) && stage_rank($2) <= stage_rank(now) { out = out (out ? ", " : "") $1 }
             END { print out }')"
         [ -z "$reached" ] || advisories+=("Lifecycle: the stage is $now, so remove the reached from: markers of $reached")
@@ -247,7 +249,7 @@ if [ -n "$now" ]; then
         while IFS= read -r problem; do [ -z "$problem" ] || advisories+=("$problem"); done < <(
             { printf '%s\n' "$stages" | awk -F "$SEP" 'NF && $1 ~ /^J-/ { print "S" FS $1 FS $2 }'
               awk "$SPEC_SKIP_AWK"'{ if (spec_skip($0)) next } { print "L" "\037" FNR "\037" $0 }' "$root/specs/product.md"; } |
-            awk -F "$SEP" -v now="$now" "$SPEC_STAGE_AWK"'
+            awk -F "$SEP" -v now="$now" -v stage_order="$SPEC_STAGE_ORDER" -v stage_custom="$SPEC_STAGE_CUSTOM" "$SPEC_STAGE_AWK"'
                 $1 == "S" { from[$2] = $3; next }
                 $3 !~ /^\|/ { cols = 0; next }
                 {
@@ -488,7 +490,7 @@ allocation="$({ printf '%s\n' "$items" | awk 'NF { print "T\037" $0 }'
         function flush(   f) { if (lines) { f = at[1]; sub(/:[0-9]+$/, "", f); cites(text, at[1] "\037" (why ? f : "")) } }
         function newfile() { why = 0; top = (FILENAME ~ /^specs\/parts\/[^\/]+\.md$/) }
         /^#/ { why = top && tolower($0) ~ /^##[[:space:]]+why/ }' "${alloc[@]}"); } |
-    awk -F "$SEP" -v now="$now" "$SPEC_STAGE_AWK"'
+    awk -F "$SEP" -v now="$now" -v stage_order="$SPEC_STAGE_ORDER" -v stage_custom="$SPEC_STAGE_CUSTOM" "$SPEC_STAGE_AWK"'
         $1 == "T" { at[$2] = $8; if ($6 == "yes") gone[$2] = 1
                     else if ($2 ~ /^[RQ]-/) need[++n] = $2
                     else if ($2 ~ /^P[0-9]+$/ && !($2 in listed)) { listed[$2] = 1; part[++m] = $2 }
