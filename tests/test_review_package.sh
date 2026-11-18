@@ -185,7 +185,8 @@ assert_not_contains "$(cat "$pkg/delta.patch")" 'more from the base' "the base's
 assert_contains "$(cat "$pkg/index.md")" "That merge conflicts on shared.txt" "index names the conflicted path"
 
 it "A commit in the base's history as --since gives the whole change"
-out="$(cd "$mr" && bash "$SCRIPT" 007-merged "$MERGED_BASE2" --since "$START")"
+# Independent structural variant: an identical completed round for 007-merged is now refused.
+out="$(cd "$mr" && bash "$SCRIPT" 008-full-since "$MERGED_BASE2" --since "$START")"
 pkg="$(pkg_of "$out")"
 assert_eq "$(cat "$pkg/diff.patch")" "$(cat "$pkg/delta.patch")" "delta equals the full diff"
 assert_contains "$(cat "$pkg/index.md")" "is in the base's history" "index says why"
@@ -329,7 +330,7 @@ b add -A; b commit -q -m 'config'; CONFIG="$(b rev-parse HEAD)"
 b update-ref refs/remotes/origin/release "$M"
 trust_at "$bm" "$BMAIN" "$CONFIG"
 b checkout -q 001-x
-out="$(cd "$bm" && bash "$SCRIPT" 001-x "$M" "$H" --since "$R")"
+out="$(cd "$bm" && bash "$SCRIPT" 011-configured "$M" "$H" --since "$R")"
 assert_contains "$(cat "$(pkg_of "$out")/delta.patch")" 'evil' "origin/release, named in origin/HEAD's committed config, is trusted"
 cd_run 001-x "$X" "$H" --since "$R"
 assert_eq 1 "$STATUS" "and a branch commit is still refused"
