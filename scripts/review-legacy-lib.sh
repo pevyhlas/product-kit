@@ -230,7 +230,7 @@ review_legacy_resolve() { # root checked base head rigor registry work scoped-re
     local root="$1" checked="$2" base="$3" head="$4" rigor="$5" registry="$6" work="$7" receipts="$8" pr="$9"
     local identity change reviewer reason cleared current row evidence current_fp="" empty_ok
     local type seq origin review time receipt_id rchange rreviewer from to rhead since rbase base_at verdict c h m l report carried
-    local LL_EVIDENCE OWNER_APPROVED_COMMIT="" owner_checked=false owner_valid=false
+    local LL_EVIDENCE owner_valid=false
     LL_BLOCKERS=(); LL_PROBLEMS=(); LL_EMPTY_VALID=(); LL_EMPTY_ALLOWED=()
     LL_NUL_UNAVAILABLE=false; LL_NUL_ERROR=""
     mkdir -p "$work" || { LL_PROBLEMS+=('legacy scan: cannot allocate history evidence'); return 1; }
@@ -267,11 +267,10 @@ review_legacy_resolve() { # root checked base head rigor registry work scoped-re
     while IFS=$'\037' read -r identity change reviewer reason; do
         cleared=false
         if [ "$reviewer" = owner ] || [ "$reviewer" = '(unnamed)' ]; then
-            if ! $owner_checked; then
-                owner_checked=true
-                if [ -n "$receipts" ] && owner_native_approval_valid "$root" "$checked" "$base" "$head" &&
-                    [ -n "$OWNER_APPROVED_COMMIT" ]; then owner_valid=true; fi
-            fi
+            # The caller evaluated native owner state once, before any exemption. Legacy
+            # clearance additionally proves historical inclusion; it is not barrier clearance.
+            if [ -n "$receipts" ] && ${OWNER_VALID:-false} &&
+                [ -n "${OWNER_APPROVED_COMMIT:-}" ]; then owner_valid=true; fi
             if $owner_valid && _legacy_evidence "$root" "$checked" "$base" "$OWNER_APPROVED_COMMIT" "$rigor" "$work" &&
                 awk -F '\037' -v id="$identity" '$1==id { found=1 } END { exit !found }' "$LL_EVIDENCE"; then cleared=true; fi
         elif [ -n "$receipts" ] && [ "$(review_eligibility "$registry" "$reviewer")" = reviewer ]; then

@@ -95,13 +95,25 @@ receipts bind content, order and counts, not reviewer independence.
 Removing an id from `review-publishers` drops that publisher's receipts, **FAILs included**,
 on both current and closed source PRs. Reconcile its standing verdicts before rotating the id.
 
-T3 needs the owner's latest decisive native review: APPROVED counts, CHANGES_REQUESTED or
-DISMISSED is a barrier, and COMMENTED is ignored. The approved commit's L0/L1 slice must match
-the checked head. A code fix or rebase can keep it; an L0/L1 edit needs approval again. The gate
+Native owner barriers are PR-wide, independent of coverage: CHANGES_REQUESTED blocks at every
+tier, including T0, record-only closure and a renamed/deleted/missing carrier. DISMISSED is a
+distinct revocation barrier, not a request for changes. Each configured personal numeric actor
+keeps its own barrier; another owner's approval cannot clear it. COMMENTED, PENDING, record
+text and tier edits do not clear either state. An event-free otherwise exempt PR needs no new
+positive owner approval. Future coverage exemptions must retain this pre-coverage check.
+
+Only a later valid APPROVED review by the issuer clears its barrier. Invalid or unwitnessed
+approval leaves the earlier negative standing. Positive approval is still required for
+substantive T3 and owner/unnamed legacy clearance, not for every tier. T3 uses the latest
+decisive native review, with no standing owner barrier. The approved commit's L0/L1 slice must
+match the checked head. A code fix or rebase can keep it; an L0/L1 edit needs approval again. The gate
 confirms the commit was the head strictly before submission using all activity types and the
 deciding window's continuity. Same-second ties or aged-out/missing activity fail closed: push
 a commit (record-only is enough), then approve again. Retention is not known. Owner text,
 receipts and record lines never approve; an owner-authored T3 PR needs a different PR author.
+Missing identities, duplicate review ids, unknown states and incomplete enumeration are
+unavailable authority, never an event-free exemption. Native barriers belong to the current
+repository/PR; they grant no cross-PR PASS authority or automatic legacy-history clearance.
 
 ### Repairing an edited or invalid receipt
 
