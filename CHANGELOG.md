@@ -10,6 +10,9 @@ change by change.
 
 ### Changed
 
+- **CI completion bounds (#114).** Linux/native-macOS job caps are 45/90 minutes so the
+  expanded verification suites, legacy-AWK checks and lint can complete.
+
 - **Generated navigation budgets and compact reads (#110).** A conservative
   `prdkit:navigation:v1` footer keeps same-file tracking references clickable while excluding
   validated definitions from prose budgets. `read-spec.sh` uses that same recognizer before
