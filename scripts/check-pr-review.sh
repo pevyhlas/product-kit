@@ -12,37 +12,89 @@ export PATH LC_ALL=C LANG=C
 umask 077
 set -m # each asynchronous child gets its own process group, including on Bash 3.2
 phase=bootstrap; error_code=interrupted; root=""; child=""; watcher=""; overall=""
+capture_out=""; capture_err=""; critical=false; finishing=false; pending_signal=""; signal_count=0
 native=null; native_exit=null; transport=refused; status=1
 deadline=$((SECONDS+600))
 
 # All output is buffered until owned processes are gone and private scratch is deleted.
+check_signal() {
+    if ! $critical && ! $finishing && [ -n "$pending_signal" ]; then refuse "$phase" "$pending_signal"; fi
+    return 0
+}
+request_signal() {
+    signal_count=$((signal_count+1))
+    [ -n "$pending_signal" ] || pending_signal="$1"
+    # Never exit from a signal trap, including the entry to an EXIT trap before finish has
+    # set its flags. Explicit safe checkpoints handle cancellation after ownership is known.
+    return 0
+}
+wait_owned() {
+    local pid="$1" before
+    while :; do
+        before="$signal_count"
+        if wait "$pid" 2>/dev/null; then waited_exit=0; else waited_exit=$?; fi
+        # A caught signal can interrupt wait without obtaining the child's result. Teardown
+        # keeps waiting; ordinary execution defers to its cancellation path.
+        [ "$before" != "$signal_count" ] || break
+        $finishing || break
+    done
+}
 cancel_group() {
-    local pid="$1" n=0
+    local pid="$1" stop_at
     group_exit=null
     [ -n "$pid" ] || return 0
     if kill -0 -- "-$pid" 2>/dev/null; then
         kill -TERM -- "-$pid" 2>/dev/null || true
-        while kill -0 -- "-$pid" 2>/dev/null && [ "$n" -lt 5 ]; do
-            sleep 1; n=$((n+1))
+        stop_at=$((SECONDS+5))
+        while kill -0 -- "-$pid" 2>/dev/null && [ "$SECONDS" -lt "$stop_at" ]; do
+            sleep 1
         done
         kill -KILL -- "-$pid" 2>/dev/null || true
     fi
-    if wait "$pid" 2>/dev/null; then group_exit=0; else group_exit=$?; fi
+    wait_owned "$pid"; group_exit="$waited_exit"
     return 0
 }
 stop_watcher() {
     [ -n "$watcher" ] || return 0
     # Only our trusted watchdog and its sleep live here; no grace period is needed.
     kill -KILL -- "-$watcher" 2>/dev/null || true
-    wait "$watcher" 2>/dev/null || true
+    wait_owned "$watcher"
     watcher=""
+}
+collect_captures() {
+    capture_failed=false
+    if [ -n "$capture_out" ] || [ -n "$capture_err" ]; then
+        # The registered operation watchdog bounds this drain too, after all workload writers
+        # have been terminated. A failed/killed reader cannot authorize a truncated result.
+        printf 'drain\n' > "$root/drain"
+        if [ -n "$capture_out" ]; then
+            wait_owned "$capture_out"
+            [ "$waited_exit" -eq 0 ] || capture_failed=true
+            capture_out=""
+        fi
+        if [ -n "$capture_err" ]; then
+            wait_owned "$capture_err"
+            [ "$waited_exit" -eq 0 ] || capture_failed=true
+            capture_err=""
+        fi
+    fi
 }
 finish() {
     local native_pending=false
-    trap - EXIT INT TERM HUP ERR USR1
+    finishing=true
+    trap - EXIT ERR
+    # Queue, rather than default or exit on, repeated catchable signals during teardown.
+    trap 'request_signal interrupted' INT TERM HUP
+    trap 'request_signal overall-timeout' USR1
+    if [ -n "$overall" ]; then
+        kill -KILL -- "-$overall" 2>/dev/null || true
+        wait_owned "$overall"; overall=""
+    fi
     if [ "$phase" = native ] && [ -n "$child" ] && [ "$native_exit" = null ]; then native_pending=true; fi
     cancel_group "$child"
     if $native_pending; then native_exit="$group_exit"; fi
+    child=""
+    collect_captures
     stop_watcher
     # A signal may interrupt wait after the native gate has already produced complete JSON.
     # It still refuses, but must not discard that diagnostic object or invent a watchdog exit.
@@ -52,9 +104,11 @@ finish() {
     if [ -n "$root" ] && { ! rm -rf -- "$root" || [ -e "$root" ]; }; then
         phase=cleanup; error_code=cleanup-failed; transport=refused; status=1
     fi
-    if [ -n "$overall" ]; then
-        kill -KILL -- "-$overall" 2>/dev/null || true
-        wait "$overall" 2>/dev/null || true
+    # Teardown is now complete. Close the catchable-signal window before the final decision
+    # and buffered emission; signals queued during teardown must still prevent success.
+    trap '' INT TERM HUP USR1
+    if [ -n "$pending_signal" ] && [ "$transport" = complete ]; then
+        phase=cleanup; error_code="$pending_signal"; transport=refused; status=1
     fi
     if [ "$transport" = complete ]; then
         printf '{"launcher":"complete","error":null,"native_exit":%s,"native":%s}\n' "$native_exit" "$native"
@@ -67,8 +121,8 @@ finish() {
 }
 refuse() { phase="$1"; error_code="$2"; status="${3:-1}"; exit "$status"; }
 trap finish EXIT
-trap 'refuse "$phase" interrupted' INT TERM HUP
-trap 'refuse "$phase" overall-timeout' USR1
+trap 'request_signal interrupted' INT TERM HUP
+trap 'request_signal overall-timeout' USR1
 trap 'refuse "$phase" command-failed' ERR
 
 repository=""; event=""
@@ -102,12 +156,16 @@ root="$(mktemp -d /tmp/prdkit-pr.XXXXXXXX)" || refuse bootstrap scratch
 # Independent whole-invocation deadline, not just an elapsed-time check between acquisitions.
 # USR1 interrupts the parent's wait builtin; its trap cancels/reaps the currently owned groups.
 parent=$$
+critical=true
 (
+    trap - EXIT ERR INT TERM HUP USR1
     set +m
     sleep "$((deadline-SECONDS))"
     kill -USR1 "$parent" 2>/dev/null || true
 ) >/dev/null 2>&1 &
 overall=$!
+critical=false
+check_signal
 HOME="$root/home"; GH_CONFIG_DIR="$root/gh"; XDG_CONFIG_HOME="$root/xdg"; TMPDIR="$root/tmp"
 export HOME GH_CONFIG_DIR XDG_CONFIG_HOME TMPDIR
 mkdir -p "$HOME" "$GH_CONFIG_DIR" "$XDG_CONFIG_HOME" "$TMPDIR" "$root/template" "$root/trusted"
@@ -120,41 +178,91 @@ for tool in git gh jq; do command -v "$tool" >/dev/null || refuse bootstrap tool
 # Parser diagnostics may quote input. Keep them private too; public stderr is phase/code only.
 jq() { command jq "$@" 2>>"$root/json.err"; }
 
-# Every external acquisition/evaluation (and the selection/extraction work) has an independent
-# group watchdog. File-size hard limits also bound native gate internal capture and fast writers;
-# stdout/stderr/history overflow is a refusal, never a truncated successful response.
+# Only capture readers write capped files. No inherited file-size limit constrains Git objects,
+# packfiles or the native gate's working files. FIFO readers stop at the exact byte ceiling;
+# overflow is distinct from malformed JSON, timeout and reader failure.
+capture_read() { # fifo destination stream
+    head -c 4194304 < "$1" > "$2" || return 1
+    if [ "$(wc -c < "$2")" -ge 4194304 ]; then printf '%s\n' "$3" > "$root/overflow"; fi
+    return 0
+}
+capture_file() { # destination command... (selector data, not Git object storage)
+    local destination="$1" rc; shift
+    if "$@" | head -c 4194304 > "$destination"; then rc=0; else rc=$?; fi
+    [ "$(wc -c < "$destination")" -lt 4194304 ] || return 1
+    return "$rc"
+}
 bounded() { # seconds output error command...
     local seconds="$1" out="$2" err="$3" remaining rc
     shift 3
+    check_signal
     bounded_exit=null; bounded_limit=""
     remaining=$((deadline-SECONDS))
     if [ "$remaining" -le 0 ]; then bounded_limit=timeout; return 124; fi
     [ "$seconds" -le "$remaining" ] || seconds="$remaining"
-    rm -f "$root/limit"
+    rm -f "$root/limit" "$root/overflow" "$root/drain" "$root/out.pipe" "$root/err.pipe"
+    mkfifo "$root/out.pipe" "$root/err.pipe"
+    # Traps queue cancellation throughout every asynchronous launch-to-PID registration.
+    # There is no point at which teardown can run with an unregistered owned job.
+    critical=true
     (
+        trap - EXIT ERR INT TERM HUP USR1
         set +m
-        ulimit -f 4096
+        capture_read "$root/out.pipe" "$out" stdout
+    ) >/dev/null 2>&1 &
+    capture_out=$!
+    (
+        trap - EXIT ERR INT TERM HUP USR1
+        set +m
+        capture_read "$root/err.pipe" "$err" stderr
+    ) >/dev/null 2>&1 &
+    capture_err=$!
+    (
+        trap - EXIT ERR INT TERM HUP USR1
+        set +m
         "$@"
-    ) >"$out" 2>"$err" &
+    ) >"$root/out.pipe" 2>"$root/err.pipe" &
     child=$!
     (
+        trap - EXIT ERR INT TERM HUP USR1
         set +m
-        sleep "$seconds"
-        printf 'timeout\n' > "$root/limit"
-        kill -TERM -- "-$child" 2>/dev/null || true
-        sleep 5
-        kill -KILL -- "-$child" 2>/dev/null || true
+        end=$((SECONDS+seconds))
+        while :; do
+            if [ -f "$root/drain" ]; then
+                sleep 5
+                kill -KILL -- "-$capture_out" "-$capture_err" 2>/dev/null || true
+                exit 0
+            fi
+            if [ -f "$root/overflow" ] || [ "$SECONDS" -ge "$end" ]; then
+                [ -f "$root/overflow" ] || printf 'timeout\n' > "$root/limit"
+                kill -TERM -- "-$child" 2>/dev/null || true
+                sleep 5
+                kill -KILL -- "-$child" 2>/dev/null || true
+                sleep 5
+                kill -KILL -- "-$capture_out" "-$capture_err" 2>/dev/null || true
+                exit 0
+            fi
+            sleep 1
+        done
     ) >/dev/null 2>&1 &
     watcher=$!
-    if wait "$child"; then rc=0; else rc=$?; fi
-    bounded_exit="$rc"
-    cancel_group "$child"; child=""
-    stop_watcher
-    if [ -f "$root/limit" ]; then bounded_limit=timeout; return 124; fi
-    # BSD ulimit's units can differ; use a conservative common byte ceiling too.
-    if [ "$(wc -c < "$out")" -ge 4194304 ] || [ "$(wc -c < "$err")" -ge 4194304 ]; then
-        bounded_limit=overflow; return 125
+    critical=false
+    check_signal
+    critical=true
+    wait_owned "$child"; rc="$waited_exit"
+    if [ -z "$pending_signal" ]; then
+        bounded_exit="$rc"
+        # Transfer at the point the wait result is obtained, BEFORE clearing ownership.
+        if [ "$phase" = native ]; then native_exit="$rc"; fi
     fi
+    critical=false
+    check_signal
+    cancel_group "$child"; child=""
+    collect_captures
+    stop_watcher
+    if [ -f "$root/overflow" ]; then bounded_limit=overflow; return 125; fi
+    if [ -f "$root/limit" ]; then bounded_limit=timeout; return 124; fi
+    if $capture_failed; then bounded_limit=capture; return 126; fi
     return "$rc"
 }
 one_object() {
@@ -317,12 +425,12 @@ select_carrier() {
     if is_change_id "$head_branch"; then printf '%s\n' "$head_branch"; return 0; fi
     # Capability failure is fatal. --full-history includes side branches; combined diffs include
     # merge-created additions, but not imports from a parent. NUL paths never enter line parsing.
-    git -C "$objects" diff --no-renames --no-ext-diff --no-textconv --diff-filter=A \
-        --name-only -z "$start" "$head" -- specs/changes/ > "$root/net" || return 1
-    git -C "$objects" log --full-history --diff-merges=combined --no-renames --no-ext-diff \
+    capture_file "$root/net" git -C "$objects" diff --no-renames --no-ext-diff --no-textconv --diff-filter=A \
+        --name-only -z "$start" "$head" -- specs/changes/ || return 1
+    capture_file "$root/history" git -C "$objects" log --full-history --diff-merges=combined --no-renames --no-ext-diff \
         --no-textconv --diff-filter=A --name-only -z --format= "$start..$head" \
-        -- specs/changes/ > "$root/history" || return 1
-    git -C "$objects" ls-tree -r -z --name-only "$start" -- specs/changes/ > "$root/baseline" || return 1
+        -- specs/changes/ || return 1
+    capture_file "$root/baseline" git -C "$objects" ls-tree -r -z --name-only "$start" -- specs/changes/ || return 1
     : > "$root/existing"; : > "$root/introduced"
     while IFS= read -r -d '' path; do
         case "$path" in specs/changes/*.md)
@@ -355,9 +463,15 @@ if bounded 180 "$root/native.json" "$root/native.err" /bin/bash --noprofile --no
     : # The actual child exit, distinct from watchdog/capture classification, is kept below.
 fi
 native_exit="$bounded_exit"
+check_signal
 if one_object "$root/native.json"; then native="$(cat "$root/native.json")"
 elif [ -z "$bounded_limit" ]; then refuse native invalid-json; fi
-[ -z "$bounded_limit" ] || refuse native execution-limit
+case "$bounded_limit" in
+    overflow) refuse native capture-limit ;;
+    capture) refuse native capture-failed ;;
+    timeout) refuse native execution-limit ;;
+esac
+check_signal
 jq -e '
     (.problems|type) == "array" and (.authority|type) == "string" and
     (.result == "pass" or .result == "fail" or .result == "preview")

@@ -303,9 +303,13 @@ or zero/multiple assignments refuse. The native gate owns record recovery, closu
 fingerprints, owner events, receipts, coverage and sibling-deletion checks.
 
 Bounds are 600 seconds overall, 120 per acquisition/selection/extraction and 180 for the native
-gate, with five seconds TERM-to-KILL grace for owned process groups. Capture files have a hard
-size limit and a conservative 4 MiB acceptance ceiling each; overflow refuses, never truncates to
-success. All owned processes are terminated/reaped before deleting only the invocation's scratch.
+gate, with five seconds TERM-to-KILL grace for owned process groups. Dedicated FIFO readers cap
+stdout/stderr at 4 MiB each; reaching the ceiling refuses with `capture-limit`, never truncated
+success. Selector history streams are separately capped. These capture limits do **not** impose
+a file-size limit on Git packs/objects or native working files. Cancellation is deferred through
+each launch-to-ownership registration. Teardown stops the overall watchdog first, queues repeated
+catchable signals and allows up to five seconds for capture readers to drain after writers stop.
+All owned processes are terminated/reaped before deleting only the invocation's scratch.
 Cleanup failure refuses. Uncatchable runner termination can leave no complete result and is not
 PASS. stdout is one buffered JSON object, newline-terminated:
 

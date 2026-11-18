@@ -1,0 +1,283 @@
+#!/usr/bin/env bash
+# Extra execution/output cases sourced by test_pr_review.sh, sharing only its disposable fixture.
+# Every instrumentation/mutation below is test-only. Synthetic native objects are negative
+# transport/oracle controls, never substitutes for the real integrated native gate controls.
+# shellcheck disable=SC2016,SC2034 # generated scripts and inputs shared with the fixture driver
+
+live_group() {
+    ps -axo pid=,pgid=,stat= | awk -v group="$1" '$2 == group && $3 !~ /^Z/ { print $1 }'
+}
+assert_group_gone() {
+    assert_eq '' "$(live_group "$1")" "$2"
+    if kill -0 "$1" 2>/dev/null; then _no "$2 (owned leader not reaped)"; else _ok "$2 (owned leader reaped)"; fi
+}
+restore_control() {
+    git branch -f main "$BASE"
+    git checkout -q --detach "$HEAD_SHA"
+    bindings "$HEAD_SHA"; instrument
+}
+record_cleanup() {
+    # Measure BEFORE the owned root is deleted, not merely after the launcher has exited.
+    awk -v dir="$FIX" '
+        /^    if \[ -n "\$root" \] && \{ ! rm -rf/ {
+            print "    if [ -f \"" dir "/group\" ]; then"
+            print "        ps -axo pid=,pgid=,stat= | awk -v g=\"$(cat \"" dir "/group\")\" '\''$2 == g && $3 !~ /^Z/ { print $1 }'\'' > \"" dir "/live-at-remove\""
+            print "    fi"
+            print "    if [ -f \"$root/native.json\" ]; then wc -c < \"$root/native.json\" > \"" dir "/stdout-size\"; fi"
+            print "    if [ -f \"$root/native.err\" ]; then wc -c < \"$root/native.err\" > \"" dir "/stderr-size\"; fi"
+        }
+        { print }
+    ' "$FIX/launcher" > "$FIX/injected"
+    mv "$FIX/injected" "$FIX/launcher"
+}
+bound_gate() { # jq mutation, output mode, actual exit; creates explicitly SYNTHETIC negative gate
+    local filter="$1" mode="${2:-normal}" rc="${3:-0}"
+    git checkout -q --detach "$BASE"
+    {
+        printf '#!/bin/bash\nrepo=""; while [ "$#" -gt 0 ]; do\n'
+        printf 'case "$1" in --repo) shift; repo="$1" ;; esac; shift; done\n'
+        if [ "$mode" = stubborn ]; then printf 'trap "" TERM\n'; fi
+        printf 'p="$(git -C "$repo" rev-parse origin/HEAD)"\nt="$(git -C "$repo" rev-parse refs/remotes/origin/main)"\n'
+        printf 'jq --arg p "$p" --arg t "$t" '\''.policy_at=$p|.diagnostics.policy_at=$p|.diagnostics.base_at=$t'\'' <<'\''JSON'\''\n%s\nJSON\n' \
+            "$(printf '%s' "$NATIVE" | jq -c "$filter")"
+        case "$mode" in
+            stdout) printf 'head -c 5242880 /dev/zero | tr "\\000" " "\n' ;;
+            stderr) printf 'head -c 5242880 /dev/zero | tr "\\000" " " >&2\n' ;;
+            stubborn)
+                printf '/bin/bash -c '\''trap "" TERM; echo "$$" > "$1"; while :; do sleep 60; done'\'' _ %q &\n' "$FIX/stubborn"
+                printf 'echo ready > %q\nwait\n' "$FIX/native-ready" ;;
+        esac
+        printf 'exit %s\n' "$rc"
+    } > .prdkit/scripts/bash/check-review.sh
+    git add -A; git commit -qm "synthetic negative transport $mode"
+    git branch -f main HEAD; bindings "$HEAD_SHA"; instrument
+}
+assert_other_bindings() {
+    run jq -e --arg h "$HEAD_SHA" --arg p "$(git rev-parse main)" '
+        .native.diagnostics.head == $h and .native.pr_head == $h and
+        .native.policy_at == $p and .native.diagnostics.policy_at == $p and
+        .native.diagnostics.base_at == $p and
+        .native.diagnostics.base_ref == "refs/remotes/origin/main" and
+        .native.pr == "https://github.com/owner/repo/pull/7" and .native.problems == []
+    ' "$FIX/stdout"
+    assert_eq 0 "$STATUS" 'negative has otherwise fresh H/T/P and PR bindings'
+}
+
+it 'complete history and native scratch exceed the capture ceiling with small diagnostics'
+git checkout -q --detach "$BASE"
+dd if=/dev/urandom of=historical.bin bs=1048576 count=8 2>"$FIX/dd.err"
+git add historical.bin; git commit -qm 'large historical object'
+git rm -q historical.bin; git commit -qm 'large object is historical, not at target tip'
+LARGE_BASE="$(git rev-parse HEAD)"
+git branch -f main "$LARGE_BASE"
+mkdir -p specs/changes
+printf '# Carrier\n**Tier**: T1\n## State\n' > specs/changes/001-carrier.md
+dd if=/dev/urandom of=source.bin bs=1048576 count=8 2>>"$FIX/dd.err"
+git add -A; git commit -qm 'large reviewed implementation'
+LARGE_HEAD="$(git rev-parse HEAD)"
+LARGE_FP="$(review_fingerprint "$PROJ" 001-carrier "$LARGE_BASE" "$LARGE_HEAD")"
+bindings "$LARGE_HEAD"
+PAYLOAD="$(jq -cn --arg head "$LARGE_HEAD" --arg base "$LARGE_BASE" --arg fp "$LARGE_FP" '
+    {schema:"prdkit.review.v3",id:"00000000000000000000000000000011",repo:"owner/repo",pr:7,
+     change:"001-carrier",reviewer:"code",from:"start",to:$fp,head:$head,since:"",
+     base:"refs/remotes/origin/main",base_at:$base,verdict:"PASS",
+     critical:0,high:0,medium:0,low:0,report:"https://example.invalid/report"}')"
+fx_review 7 "$(printf '<!-- prdkit-review\n%s\n-->\n' "$PAYLOAD")"
+instrument
+awk -v dir="$FIX" '
+    /^bounded 120 "\$root\/fsck.out"/ {
+        print "find \"$objects/.git/objects\" -type f -exec wc -c {} \\; > \"" dir "/object-sizes\""
+    }
+    { print }
+' "$FIX/launcher" > "$FIX/injected"
+mv "$FIX/injected" "$FIX/launcher"
+record_cleanup
+launch
+assert_eq 0 "$STATUS" 'real native gate accepts ordinary complete large histories and working streams'
+assert_eq pass "$(jq -r .native.result "$FIX/stdout")"
+run awk '$1 > 4194304 { n++ } END { exit !n }' "$FIX/object-sizes"
+assert_eq 0 "$STATUS" 'fetched Git object/pack actually exceeds the former inherited cap'
+run test "$(cat "$FIX/stdout-size")" -lt 16384
+assert_eq 0 "$STATUS" 'large objects are not large diagnostic capture'
+printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
+restore_control
+
+it 'cancellation at the very first teardown command cannot recursively exit cleanup'
+instrument
+rm -f "$FIX/group" "$FIX/live-at-remove"
+awk -v dir="$FIX" '
+    /^overall=\$!/ { print; print "printf '\''%s\\n'\'' \"$overall\" > \"" dir "/group\""; next }
+    /^    local native_pending=false/ { print "    kill -TERM \"$$\"" }
+    { print }
+' "$FIX/launcher" > "$FIX/injected"
+mv "$FIX/injected" "$FIX/launcher"
+record_cleanup
+launch
+assert_eq 1 "$STATUS"
+assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
+assert_eq interrupted "$(jq -r .error.code "$FIX/stdout")"
+assert_eq 0 "$(jq -r .native_exit "$FIX/stdout")" 'entry cancellation retains obtained real-native success'
+assert_eq pass "$(jq -r .native.result "$FIX/stdout")"
+assert_group_gone "$(cat "$FIX/group")" 'overall group reaped despite teardown-entry cancellation'
+assert_eq '' "$(cat "$FIX/live-at-remove")"
+restore_control
+
+it 'isolated head/type negatives reject for their own guard, not a stale target'
+for fault in head type; do
+    if [ "$fault" = head ]; then mutation='.head="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"'
+    else mutation='.head_is_pr_head="true"'; fi
+    bound_gate "$mutation"
+    launch
+    assert_eq 1 "$STATUS"
+    assert_eq inconsistent-result "$(jq -r .error.code "$FIX/stdout")"
+    assert_other_bindings
+    # Deliberately remove ONLY the intended guard in a disposable launcher. Acceptance of this
+    # synthetic negative by the mutant proves unrelated stale bindings cannot be its oracle.
+    if [ "$fault" = head ]; then
+        sed 's/\.pr == \$pr and \.head == \$h and /.pr == $pr and /' "$FIX/launcher" > "$FIX/mutant"
+    else
+        sed 's/ and \.head_is_pr_head == true//' "$FIX/launcher" > "$FIX/mutant"
+    fi
+    mv "$FIX/mutant" "$FIX/launcher"
+    launch
+    assert_eq 0 "$STATUS" "isolated $fault guard mutation is detected by the negative oracle"
+    assert_eq complete "$(jq -r .launcher "$FIX/stdout")"
+done
+restore_control
+
+it 'finite valid-data stdout/stderr overflow is causal, byte-bounded and prompt'
+for stream in stdout stderr; do
+    bound_gate . "$stream"
+    record_cleanup
+    START="$SECONDS"
+    launch
+    ELAPSED=$((SECONDS-START))
+    assert_eq 1 "$STATUS"
+    assert_eq capture-limit "$(jq -r .error.code "$FIX/stdout")"
+    assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
+    run test "$ELAPSED" -lt 20
+    assert_eq 0 "$STATUS" "$stream finite overflow is not a native timeout"
+    assert_eq 4194304 "$(tr -d '[:space:]' < "$FIX/$stream-size")" "$stream capture stops at the byte ceiling"
+    assert_other_bindings
+    # Increase only the disposable capture ceiling above the finite 5 MiB producer. It now
+    # completes with valid bound JSON, so malformed data/timeouts cannot make the oracle pass.
+    instrument
+    sed 's/4194304/8388608/g' "$FIX/launcher" > "$FIX/mutant"
+    mv "$FIX/mutant" "$FIX/launcher"
+    record_cleanup
+    launch
+    assert_eq 0 "$STATUS" "$stream bound mutation is caught by the overflow oracle"
+    assert_eq complete "$(jq -r .launcher "$FIX/stdout")"
+    run test "$(cat "$FIX/$stream-size")" -gt 4194304
+    assert_eq 0 "$STATUS" 'finite mutant producer really exceeds the intended capture ceiling'
+done
+restore_control
+
+it 'every asynchronous launch is registered before queued cancellation runs'
+for boundary in overall child watcher capture_out capture_err; do
+    instrument
+    rm -f "$FIX/group" "$FIX/descendant" "$FIX/live-at-remove"
+    if [ "$boundary" != overall ]; then touch "$FIX/hang"; fi
+    awk -v name="$boundary" -v dir="$FIX" '
+        $0 ~ /^[[:space:]]*[a-z_]+=\$!$/ && index($0, name "=$!") {
+            print "if [ \"" name "\" = overall ] || [ \"$phase\" = fetch ]; then"
+            print "printf '\''%s\\n'\'' \"$!\" > \"" dir "/group\""
+            if (name == "child") {
+                print "for n in 1 2 3 4 5; do [ ! -f \"" dir "/descendant\" ] || break; sleep 1; done"
+            }
+            print "kill -TERM \"$$\""
+            print "fi"
+        }
+        { print }
+    ' "$FIX/launcher" > "$FIX/injected"
+    mv "$FIX/injected" "$FIX/launcher"
+    record_cleanup
+    launch
+    rm -f "$FIX/hang"
+    assert_file "$FIX/group" "$boundary boundary was actually reached"
+    assert_eq 1 "$STATUS"
+    assert_eq interrupted "$(jq -r .error.code "$FIX/stdout")"
+    assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
+    assert_group_gone "$(cat "$FIX/group")" "$boundary group stopped before result"
+    assert_eq '' "$(cat "$FIX/live-at-remove")" "$boundary group stopped before scratch deletion"
+    if [ "$boundary" = child ]; then
+        assert_file "$FIX/descendant" 'workload is armed at its registration boundary'
+        assert_terminated "$(cat "$FIX/descendant")" 'registration-boundary descendant terminated'
+    fi
+done
+restore_control
+
+it 'obtained native status survives the bounded-to-caller transfer window'
+bound_gate . normal 17
+sed '/^native_exit="\$bounded_exit"/i\
+kill -TERM "$$"
+' "$FIX/launcher" > "$FIX/injected"
+mv "$FIX/injected" "$FIX/launcher"
+launch
+assert_eq 1 "$STATUS"
+assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
+assert_eq interrupted "$(jq -r .error.code "$FIX/stdout")"
+assert_eq 17 "$(jq -r .native_exit "$FIX/stdout")"
+assert_eq '[null,17,true]' "$(jq -c .native.extension.keep "$FIX/stdout")"
+assert_other_bindings
+restore_control
+
+it 'overlapping overall deadline and repeated signals cannot interrupt KILL escalation/teardown'
+bound_gate . stubborn
+rm -f "$FIX/native-ready" "$FIX/stubborn" "$FIX/group" "$FIX/teardown-ready" "$FIX/live-at-remove"
+awk -v dir="$FIX" '
+    /sleep "\$\(\(deadline-SECONDS\)\)"/ {
+        print "    for n in 1 2 3 4 5 6 7 8 9 10; do [ ! -f \"" dir "/native-ready\" ] || break; sleep 1; done"
+        print "    sleep 1"
+        next
+    }
+    /^    finishing=true/ { print; print "    printf ready > \"" dir "/teardown-ready\""; next }
+    /^    child=\$!/ { print; print "    if [ \"$phase\" = native ]; then printf '\''%s\\n'\'' \"$child\" > \"" dir "/group\"; fi"; next }
+    { print }
+' "$FIX/launcher" > "$FIX/injected"
+mv "$FIX/injected" "$FIX/launcher"
+record_cleanup
+set -m
+env -i PATH="$ORIGINAL_PATH" GH_TOKEN=synthetic GITHUB_EVENT_NAME=pull_request \
+    GITHUB_REPOSITORY=owner/repo GITHUB_REPOSITORY_ID=42 \
+    "$REAL_BASH" --noprofile --norc "$FIX/launcher" --repository owner/repo --event "$FIX/event" \
+    > "$FIX/stdout" 2>"$FIX/stderr" &
+LAUNCHER_PID=$!
+(
+    sleep 20
+    kill -KILL "$LAUNCHER_PID" 2>/dev/null || true
+    [ ! -f "$FIX/group" ] || kill -KILL -- "-$(cat "$FIX/group")" 2>/dev/null || true
+) >/dev/null 2>&1 &
+GUARD=$!
+for n in 1 2 3 4 5 6 7 8 9 10; do
+    [ ! -f "$FIX/native-ready" ] || [ ! -f "$FIX/stubborn" ] || break
+    sleep 1
+done
+assert_file "$FIX/native-ready"; assert_file "$FIX/stubborn"
+STUBBORN="$(cat "$FIX/stubborn")"
+kill -TERM "$STUBBORN"
+if kill -0 "$STUBBORN" 2>/dev/null; then _ok 'descendant is armed to resist TERM'; else _no 'stubborn fixture not armed'; fi
+START="$SECONDS"
+kill -TERM "$LAUNCHER_PID"
+for n in 1 2 3 4 5; do [ ! -f "$FIX/teardown-ready" ] || break; sleep 1; done
+assert_file "$FIX/teardown-ready"
+kill -TERM "$LAUNCHER_PID" 2>/dev/null || true
+kill -HUP "$LAUNCHER_PID" 2>/dev/null || true
+kill -USR1 "$LAUNCHER_PID" 2>/dev/null || true
+if wait "$LAUNCHER_PID"; then STATUS=0; else STATUS=$?; fi
+ELAPSED=$((SECONDS-START))
+kill -KILL -- "-$GUARD" 2>/dev/null || true
+wait "$GUARD" 2>/dev/null || true
+assert_eq 1 "$STATUS"
+assert_eq 1 "$(jq -s length "$FIX/stdout")" 'one complete refusal after repeated catchable signals'
+assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
+assert_eq interrupted "$(jq -r .error.code "$FIX/stdout")"
+assert_eq 137 "$(jq -r .native_exit "$FIX/stdout")" 'TERM-resistant native group required actual KILL escalation'
+assert_terminated "$STUBBORN" 'TERM-resistant descendant terminated'
+assert_group_gone "$(cat "$FIX/group")" 'native group terminated and owned leader reaped'
+assert_eq '' "$(cat "$FIX/live-at-remove")" 'native group is gone before scratch deletion'
+assert_eq '' "$(find "$FIX/scratch" -mindepth 1 -print)"
+run test "$ELAPSED" -lt 15
+assert_eq 0 "$STATUS" 'teardown remains bounded despite repeated signals'
+assert_other_bindings
+restore_control

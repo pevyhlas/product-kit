@@ -35,7 +35,12 @@ FIX="$(mktemp -d)"; track_tmp "$FIX"
 mkdir "$FIX/bin" "$FIX/scratch"
 REAL_GIT="$(command -v git)"
 REAL_RM="$(command -v rm)"
-REAL_BASH="$(command -v bash)"
+REAL_BASH=/bin/bash
+EXPECTED_BASH="$("$REAL_BASH" --noprofile --norc -c 'printf "%s" "$BASH_VERSION"')"
+printf 'launcher interpreter: %s %s (%s)\n' "$REAL_BASH" "$EXPECTED_BASH" "$(uname -s)"
+if [ "$(uname -s)" = Darwin ]; then
+    case "$EXPECTED_BASH" in 3.2.*) _ok 'native macOS supervisor is Bash 3.2' ;; *) _no 'native system Bash 3.2 required' "$EXPECTED_BASH" ;; esac
+fi
 ORIGINAL_PATH="$PATH"
 # The fake gh embeds its own fixture custody, rather than exposing a production environment knob.
 {
@@ -59,13 +64,19 @@ ORIGINAL_PATH="$PATH"
     printf 'exec %q "$@"\n' "$REAL_GIT"
 } > "$FIX/bin/git"
 {
-    printf '#!/bin/bash\n[ ! -f %q ] || exit 1\nexec %q "$@"\n' "$FIX/cleanup-fail" "$REAL_RM"
+    printf '#!/bin/bash\n'
+    printf 'if [ -f %q ] && [ "$#" = 3 ] && [ "$1" = -rf ] && [ "$2" = -- ]; then\n' "$FIX/cleanup-fail"
+    printf '  case "$3" in %q/prdkit-pr.*) exit 1 ;; esac\nfi\n' "$FIX/scratch"
+    printf 'exec %q "$@"\n' "$REAL_RM"
 } > "$FIX/bin/rm"
 chmod +x "$FIX/bin/"*
 instrument() {
     # Fixed source substitutions, never installed or committed as production options.
     sed -e "s|^PATH=.*|PATH=$FIX/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin|" \
         -e "s|mktemp -d /tmp/prdkit-pr.XXXXXXXX|mktemp -d $FIX/scratch/prdkit-pr.XXXXXXXX|" \
+        -e "/^set -euo pipefail/a\\
+printf '%s\\\\n' \"\\\$BASH_VERSION\" > \"$FIX/interpreter\"
+" \
         "$PK_ROOT/scripts/check-pr-review.sh" > "$FIX/launcher"
 }
 instrument
@@ -90,8 +101,14 @@ launch() {
         "$REAL_BASH" --noprofile --norc "$FIX/launcher" --repository owner/repo --event "$FIX/event" \
         > "$FIX/stdout" 2>"$FIX/stderr"; then STATUS=0; else STATUS=$?; fi
     OUTPUT="$(cat "$FIX/stdout")"
+    assert_eq "$EXPECTED_BASH" "$(cat "$FIX/interpreter")" 'actual nested supervisor interpreter'
     assert_eq 1 "$(printf '%s' "$OUTPUT" | jq -s length)" 'one structured stdout object'
     assert_eq '' "$(find "$FIX/scratch" -mindepth 1 -print)" 'owned scratch cleaned'
+}
+assert_terminated() {
+    local state
+    state="$(ps -o stat= -p "$1" 2>/dev/null || true)"
+    case "$state" in ''|Z*) _ok "$2" ;; *) _no "$2" "$state" ;; esac
 }
 bindings "$HEAD_SHA"
 
@@ -142,14 +159,30 @@ bindings "$HEAD_SHA"
 
 it 'pre-shell constructor removes shell injection; launcher drops inherited Git/config/proxy state'
 printf 'touch %q\n' "$FIX/sentinel" > "$FIX/startup"
-printf '[alias]\n status = !touch %s\n' "$FIX/sentinel" > "$FIX/gitconfig"
+env BASH_ENV="$FIX/startup" "$REAL_BASH" -c ':'
+assert_file "$FIX/sentinel" 'startup poison is armed without the clean constructor'
+rm "$FIX/sentinel"
+mkdir -p "$FIX/hooks" "$FIX/hook-control"
+printf '#!/bin/sh\nprintf "%%s\\n" "$1" >> %q\n' "$FIX/hook-sentinel" > "$FIX/hooks/reference-transaction"
+chmod +x "$FIX/hooks/reference-transaction"
+printf '[core]\n hooksPath = %s\n' "$FIX/hooks" > "$FIX/gitconfig"
+"$REAL_GIT" -C "$FIX/hook-control" init -q
+env GIT_CONFIG_GLOBAL="$FIX/gitconfig" "$REAL_GIT" -C "$FIX/hook-control" fetch -q --no-tags \
+    "$PROJ" '+refs/pull/7/head:refs/prdkit/control'
+assert_file "$FIX/hook-sentinel" 'global configuration arms a hook on the actual fetch/ref-update operation'
+rm "$FIX/hook-sentinel"
+env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$FIX/hooks" \
+    "$REAL_GIT" -C "$FIX/hook-control" update-ref refs/prdkit/second "$HEAD_SHA"
+assert_file "$FIX/hook-sentinel" 'injected configuration also arms the ref-update hook'
+rm "$FIX/hook-sentinel"
 export BASH_ENV="$FIX/startup"
 launch GIT_CONFIG_GLOBAL="$FIX/gitconfig" GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath \
-    GIT_CONFIG_VALUE_0="$FIX" GIT_OBJECT_DIRECTORY="$FIX/missing" GIT_ALTERNATE_OBJECT_DIRECTORIES="$PROJ/.git/objects" \
+    GIT_CONFIG_VALUE_0="$FIX/hooks" GIT_OBJECT_DIRECTORY="$FIX/missing" GIT_ALTERNATE_OBJECT_DIRECTORIES="$PROJ/.git/objects" \
     GIT_DIR="$PROJ/.git" GIT_WORK_TREE="$PROJ" GIT_REPLACE_REF_BASE=refs/spoof/ HTTPS_PROXY=http://127.0.0.1:1
 unset BASH_ENV
 assert_eq 0 "$STATUS" "$OUTPUT"
 assert_eq absent "$([ -e "$FIX/sentinel" ] && echo present || echo absent)"
+assert_eq absent "$([ -e "$FIX/hook-sentinel" ] && echo present || echo absent)"
 
 it 'target and policy are separate authenticated tips, with policy-configured literal trust'
 git checkout -q --detach "$BASE"
@@ -285,8 +318,8 @@ for fault in multiple malformed nul binding preview wrong-type exit-result overf
             {
                 printf '#!/bin/bash\nrepo=""; while [ "$#" -gt 0 ]; do\n'
                 printf '  case "$1" in --repo) shift; repo="$1" ;; esac; shift; done\n'
-                printf 'p="$(git -C "$repo" rev-parse origin/HEAD)"\n'
-                printf 'jq --arg p "$p" '\''.policy_at=$p|.diagnostics.policy_at=$p'\'' <<'\''JSON'\''\n%s\nJSON\nexit %s\n' \
+                printf 'p="$(git -C "$repo" rev-parse origin/HEAD)"\nt="$(git -C "$repo" rev-parse refs/remotes/origin/main)"\n'
+                printf 'jq --arg p "$p" --arg t "$t" '\''.policy_at=$p|.diagnostics.policy_at=$p|.diagnostics.base_at=$t'\'' <<'\''JSON'\''\n%s\nJSON\nexit %s\n' \
                     "$(printf '%s' "$NATIVE" | jq -c "$filter")" "$rc"
             } > "$FIX/gate" ;;
     esac
@@ -342,11 +375,15 @@ assert_file "$FIX/native-ready"
 kill -TERM "$LAUNCHER_PID"
 if wait "$LAUNCHER_PID"; then STATUS=0; else STATUS=$?; fi
 assert_eq 1 "$STATUS"
+assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
+assert_eq interrupted "$(jq -r .error.code "$FIX/stdout")"
 assert_eq pass "$(jq -r .native.result "$FIX/stdout")" 'native diagnostic object survives cancellation'
 case "$(jq -r .native_exit "$FIX/stdout")" in
     143|137) _ok 'actual native cancellation exit preserved' ;;
     *) _no 'actual native cancellation exit lost' "$(cat "$FIX/stdout")" ;;
 esac
+assert_file "$FIX/native-descendant"
+assert_terminated "$(cat "$FIX/native-descendant")" 'native cancellation terminates descendant'
 assert_eq '' "$(find "$FIX/scratch" -mindepth 1 -print)" 'native cancellation cleans scratch'
 git branch -f main "$BASE"
 bindings "$HEAD_SHA"
@@ -371,6 +408,8 @@ cp "$FIX/gh.original" "$FIX/bin/gh"
 # pretending fixture host registration is real and makes the graph matrix fast on native macOS.
 it 'complete selector histories use real Git, NUL paths and the production function'
 sed -n '/^select_carrier() {/,/^}/p' "$PK_ROOT/scripts/check-pr-review.sh" > "$FIX/selector"
+sed -n '/^capture_file() {/,/^}/p' "$PK_ROOT/scripts/check-pr-review.sh" > "$FIX/capture-helper"
+source "$FIX/capture-helper"
 source "$FIX/selector"
 objects="$PROJ"; root="$FIX"
 sha() { [[ "$1" =~ ^[0-9a-f]{40}$ ]]; }
@@ -471,7 +510,11 @@ else _no 'timeout reached owned descendant fixture'; fi
 
 it 'whole-invocation watchdog is independent of per-acquisition bounds'
 instrument
-sed 's/deadline=$((SECONDS+600))/deadline=$((SECONDS+2))/' "$FIX/launcher" > "$FIX/short"
+# Isolate the overall timer in this disposable copy. Otherwise the per-operation remaining-time
+# clamp arms the two watchdogs together and their scheduling race is not an overall-timer oracle.
+sed -e 's/deadline=$((SECONDS+600))/deadline=$((SECONDS+5))/' \
+    -e '/^    \[ "\$seconds" -le "\$remaining" \] || seconds="\$remaining"$/d' \
+    "$FIX/launcher" > "$FIX/short"
 mv "$FIX/short" "$FIX/launcher"
 touch "$FIX/hang"; launch; rm "$FIX/hang"
 assert_eq 1 "$STATUS"
@@ -491,11 +534,14 @@ for n in 1 2 3 4 5 6 7 8 9 10; do
     [ ! -f "$FIX/descendant" ] || break
     sleep 1
 done
+assert_file "$FIX/descendant" 'fetch descendant ready before cancellation'
 kill -TERM "$LAUNCHER_PID"
 if wait "$LAUNCHER_PID"; then STATUS=0; else STATUS=$?; fi
 rm "$FIX/hang"
 assert_eq 1 "$STATUS"
 assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
+assert_eq interrupted "$(jq -r .error.code "$FIX/stdout")"
+assert_terminated "$(cat "$FIX/descendant")" 'fetch cancellation terminates descendant'
 assert_eq '' "$(find "$FIX/scratch" -mindepth 1 -print)" 'cancellation cleans invocation scratch'
 
 it 'cleanup failure prevents a valid native success'
@@ -510,5 +556,18 @@ rm "$FIX/cleanup-fail"
 OUTPUT="$(cat "$FIX/stdout")"
 assert_eq 1 "$STATUS"
 assert_eq cleanup-failed "$(printf '%s' "$OUTPUT" | jq -r .error.code)"
+assert_eq 0 "$(printf '%s' "$OUTPUT" | jq -r .native_exit)"
+run jq -e --arg h "$HEAD_SHA" --arg p "$BASE" '
+    .native.result == "pass" and .native.authority == "host" and .native.problems == [] and
+    .native.change == "001-carrier" and .native.pr == "https://github.com/owner/repo/pull/7" and
+    .native.head == $h and .native.pr_head == $h and .native.head_is_pr_head == true and
+    .native.base == "refs/remotes/origin/main" and .native.base_trusted == true and
+    .native.policy_at == $p and .native.diagnostics.base_at == $p and
+    .native.diagnostics.base_ref == "refs/remotes/origin/main" and
+    .native.diagnostics.policy_at == $p and .native.diagnostics.head == $h and
+    .native.diagnostics.receipt_ready == true and .native.diagnostics.host_content_bound == true
+' "$FIX/stdout"
+assert_eq 0 "$STATUS" 'only final deletion fails after a fully bound real native success'
 "$REAL_RM" -rf "$FIX/scratch/"*
+source "$TESTS_DIR/pr-review-process-cases.sh"
 finish
