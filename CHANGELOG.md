@@ -10,6 +10,15 @@ change by change.
 
 ### Changed
 
+- **Generated navigation budgets and compact reads (#110).** A conservative
+  `prdkit:navigation:v1` footer keeps same-file tracking references clickable while excluding
+  validated definitions from prose budgets. `read-spec.sh` uses that same recognizer before
+  text reaches routine agent context, retaining IDs, authored references, original line numbers
+  and source/content identity; `--raw`, `--stats` and `--target` keep raw reads, accounting and
+  individual lookup available. Malformed/mixed/conflicting/unknown blocks stay visible and
+  counted with diagnostics. Instruction-file byte budgets, raw integrity and review inputs stay
+  raw. This supplies no tracker/export adapter and makes no tokenizer-performance claim.
+
 - **Review verdicts bind content fingerprints, not commit ranges (breaking; closes #66 and #86).**
   A verdict used to name a hand-typed `<base sha>..<head sha>` range and coverage was proven from
   commit ancestry, so a base merge, an edit reverted before a base merge (#86), a narrow range
