@@ -319,6 +319,38 @@ done
 git branch -f main "$BASE"
 bindings "$HEAD_SHA"
 
+it 'cancellation after complete native output retains object and actual child exit'
+git checkout -q --detach "$BASE"
+{
+    # Synthetic NEGATIVE transport: a valid diagnostic object then an intentional hang.
+    printf '#!/bin/bash\ncat <<'\''JSON'\''\n%s\nJSON\n' "$NATIVE"
+    printf 'echo ready > %q\nsleep 60 &\necho $! > %q\nwait\n' "$FIX/native-ready" "$FIX/native-descendant"
+} > .prdkit/scripts/bash/check-review.sh
+git add -A; git commit -qm 'negative interrupted native transport'
+git branch -f main HEAD
+bindings "$HEAD_SHA"
+env -i PATH="$ORIGINAL_PATH" GH_TOKEN=synthetic GITHUB_EVENT_NAME=pull_request \
+    GITHUB_REPOSITORY=owner/repo GITHUB_REPOSITORY_ID=42 \
+    "$REAL_BASH" "$FIX/launcher" --repository owner/repo --event "$FIX/event" \
+    > "$FIX/stdout" 2>"$FIX/stderr" &
+LAUNCHER_PID=$!
+for n in 1 2 3 4 5 6 7 8 9 10; do
+    [ ! -f "$FIX/native-ready" ] || break
+    sleep 1
+done
+assert_file "$FIX/native-ready"
+kill -TERM "$LAUNCHER_PID"
+if wait "$LAUNCHER_PID"; then STATUS=0; else STATUS=$?; fi
+assert_eq 1 "$STATUS"
+assert_eq pass "$(jq -r .native.result "$FIX/stdout")" 'native diagnostic object survives cancellation'
+case "$(jq -r .native_exit "$FIX/stdout")" in
+    143|137) _ok 'actual native cancellation exit preserved' ;;
+    *) _no 'actual native cancellation exit lost' "$(cat "$FIX/stdout")" ;;
+esac
+assert_eq '' "$(find "$FIX/scratch" -mindepth 1 -print)" 'native cancellation cleans scratch'
+git branch -f main "$BASE"
+bindings "$HEAD_SHA"
+
 it 'fresh final host bindings refuse a default movement after a useful native result'
 cp "$FIX/bin/gh" "$FIX/gh.original"
 {

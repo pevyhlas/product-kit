@@ -18,6 +18,7 @@ deadline=$((SECONDS+600))
 # All output is buffered until owned processes are gone and private scratch is deleted.
 cancel_group() {
     local pid="$1" n=0
+    group_exit=null
     [ -n "$pid" ] || return 0
     if kill -0 -- "-$pid" 2>/dev/null; then
         kill -TERM -- "-$pid" 2>/dev/null || true
@@ -26,7 +27,8 @@ cancel_group() {
         done
         kill -KILL -- "-$pid" 2>/dev/null || true
     fi
-    wait "$pid" 2>/dev/null || true
+    if wait "$pid" 2>/dev/null; then group_exit=0; else group_exit=$?; fi
+    return 0
 }
 stop_watcher() {
     [ -n "$watcher" ] || return 0
@@ -36,8 +38,17 @@ stop_watcher() {
     watcher=""
 }
 finish() {
+    local native_pending=false
     trap - EXIT INT TERM HUP ERR USR1
-    cancel_group "$child"; stop_watcher
+    if [ "$phase" = native ] && [ -n "$child" ] && [ "$native_exit" = null ]; then native_pending=true; fi
+    cancel_group "$child"
+    if $native_pending; then native_exit="$group_exit"; fi
+    stop_watcher
+    # A signal may interrupt wait after the native gate has already produced complete JSON.
+    # It still refuses, but must not discard that diagnostic object or invent a watchdog exit.
+    if [ "$native" = null ] && [ -n "$root" ] && [ -f "$root/native.json" ]; then
+        if one_object "$root/native.json"; then native="$(cat "$root/native.json")"; fi
+    fi
     if [ -n "$root" ] && { ! rm -rf -- "$root" || [ -e "$root" ]; }; then
         phase=cleanup; error_code=cleanup-failed; transport=refused; status=1
     fi
