@@ -353,11 +353,12 @@ git branch -f main "$BASE"
 bindings "$HEAD_SHA"
 
 it 'cancellation after complete native output retains object and actual child exit'
+rm -f "$FIX/native-ready" "$FIX/native-descendant"
 git checkout -q --detach "$BASE"
 {
     # Synthetic NEGATIVE transport: a valid diagnostic object then an intentional hang.
     printf '#!/bin/bash\ncat <<'\''JSON'\''\n%s\nJSON\n' "$NATIVE"
-    printf 'echo ready > %q\nsleep 60 &\necho $! > %q\nwait\n' "$FIX/native-ready" "$FIX/native-descendant"
+    printf 'sleep 60 &\necho $! > %q\necho ready > %q\nwait\n' "$FIX/native-descendant" "$FIX/native-ready"
 } > .prdkit/scripts/bash/check-review.sh
 git add -A; git commit -qm 'negative interrupted native transport'
 git branch -f main HEAD
@@ -368,7 +369,7 @@ env -i PATH="$ORIGINAL_PATH" GH_TOKEN=synthetic GITHUB_EVENT_NAME=pull_request \
     > "$FIX/stdout" 2>"$FIX/stderr" &
 LAUNCHER_PID=$!
 for n in 1 2 3 4 5 6 7 8 9 10; do
-    [ ! -f "$FIX/native-ready" ] || break
+    [ ! -f "$FIX/native-ready" ] || [ ! -f "$FIX/native-descendant" ] || break
     sleep 1
 done
 assert_file "$FIX/native-ready"

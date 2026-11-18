@@ -63,7 +63,7 @@ assert_other_bindings() {
     assert_eq 0 "$STATUS" 'negative has otherwise fresh H/T/P and PR bindings'
 }
 
-it 'complete history and native scratch exceed the capture ceiling with small diagnostics'
+it 'complete history exceeds the former object ceiling with real native evaluation and small diagnostics'
 git checkout -q --detach "$BASE"
 dd if=/dev/urandom of=historical.bin bs=1048576 count=8 2>"$FIX/dd.err"
 git add historical.bin; git commit -qm 'large historical object'
@@ -93,13 +93,133 @@ awk -v dir="$FIX" '
 mv "$FIX/injected" "$FIX/launcher"
 record_cleanup
 launch
-assert_eq 0 "$STATUS" 'real native gate accepts ordinary complete large histories and working streams'
+assert_eq 0 "$STATUS" 'real native gate evaluates the acquired complete large history'
 assert_eq pass "$(jq -r .native.result "$FIX/stdout")"
 run awk '$1 > 4194304 { n++ } END { exit !n }' "$FIX/object-sizes"
 assert_eq 0 "$STATUS" 'fetched Git object/pack actually exceeds the former inherited cap'
 run test "$(cat "$FIX/stdout-size")" -lt 16384
 assert_eq 0 "$STATUS" 'large objects are not large diagnostic capture'
 printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
+restore_control
+
+normal_capture_drain() { # stream; synchronized ordinary collection, not launch or finish
+    local stream="$1" case_dir="$FIX/drain-$1" target
+    case "$stream" in stdout) target=capture_out ;; stderr) target=capture_err ;; *) return 1 ;; esac
+    mkdir "$case_dir"
+    restore_control
+    # Hold only the selected native reader, AFTER it captures the real gate's output and EOF.
+    # Snapshot every asynchronous job, ordinary wait entry/interruption, and pre-removal state.
+    awk -v dir="$case_dir" -v stream="$stream" -v target="$target" '
+        /^capture_read\(\) / { in_reader=1 }
+        in_reader && /^    return 0/ {
+            print "    if [ \"$phase\" = native ] && [ \"$3\" = \"" stream "\" ]; then"
+            print "        trap \"\" TERM HUP"
+            print "        printf ready > \"" dir "/reader-ready\""
+            print "        while :; do sleep 60; done"
+            print "    fi"
+        }
+        /^}/ { in_reader=0 }
+        $0 ~ /^[[:space:]]*(overall|capture_out|capture_err|child|watcher)=\$!$/ {
+            print
+            name=$0; sub(/^[[:space:]]*/, "", name); sub(/=.*/, "", name)
+            print "printf '\''%s %s\\n'\'' \"" name "\" \"$" name "\" >> \"" dir "/groups\""
+            next
+        }
+        /^        if wait "\$pid"/ {
+            print "        if [ \"$phase\" = native ] && ! $finishing && [ \"$pid\" = \"$" target "\" ]; then"
+            print "            printf '\''%s\\n'\'' \"$pid\" > \"" dir "/normal-wait\""
+            print "            cp \"$root/native.json\" \"" dir "/native-produced.json\""
+            print "        fi"
+        }
+        /^        (\[ "\$before" != "\$signal_count" \]|if \[ "\$before" = "\$signal_count" \])/ {
+            print "        drain_trace_count=${drain_trace_count:-0}"
+            print "        if [ \"$phase\" = native ] && [ \"$drain_trace_count\" -lt 50 ]; then"
+            print "            alive=false; kill -0 \"$pid\" 2>/dev/null && alive=true"
+            print "            printf '\''{\"pid\":%s,\"wait_exit\":%s,\"finishing\":%s,\"critical\":%s,\"before\":%s,\"signals\":%s,\"alive\":%s}\\n'\'' \"$pid\" \"$waited_exit\" \"$finishing\" \"$critical\" \"$before\" \"$signal_count\" \"$alive\" >> \"" dir "/wait-results\""
+            print "            drain_trace_count=$((drain_trace_count+1))"
+            print "        fi"
+            print "        if [ \"$phase\" = native ] && ! $finishing && [ \"$pid\" = \"$" target "\" ] && [ \"$before\" != \"$signal_count\" ]; then"
+            print "            alive=false; kill -0 \"$pid\" 2>/dev/null && alive=true"
+            print "            printf '\''{\"reader\":%s,\"wait_exit\":%s,\"finishing\":%s,\"child\":\"%s\",\"watcher\":%s,\"alive\":%s}\\n'\'' \"$pid\" \"$waited_exit\" \"$finishing\" \"$child\" \"$watcher\" \"$alive\" > \"" dir "/interrupted-normal-wait\""
+            print "        fi"
+        }
+        /^    finishing=true/ {
+            print
+            print "    printf ready > \"" dir "/finish-ready\""
+            next
+        }
+        /^    if \[ -n "\$root" \] && \{ ! rm -rf/ {
+            print "    ps -axo pid=,pgid=,stat= > \"" dir "/ps-at-remove\""
+            print "    awk '\''NR==FNR { owned[$2]=1; next } ($2 in owned) && $3 !~ /^Z/ { print }'\'' \"" dir "/groups\" \"" dir "/ps-at-remove\" > \"" dir "/live-at-remove\""
+            print "    awk '\''NR==FNR { owned[$2]=1; next } $1 in owned { print }'\'' \"" dir "/groups\" \"" dir "/ps-at-remove\" > \"" dir "/leaders-at-remove\""
+        }
+        { print }
+    ' "$FIX/launcher" > "$FIX/injected"
+    mv "$FIX/injected" "$FIX/launcher"
+    env -i PATH="$ORIGINAL_PATH" GH_TOKEN=synthetic GITHUB_EVENT_NAME=pull_request \
+        GITHUB_REPOSITORY=owner/repo GITHUB_REPOSITORY_ID=42 \
+        "$REAL_BASH" --noprofile --norc "$FIX/launcher" --repository owner/repo --event "$FIX/event" \
+        > "$FIX/stdout" 2>"$FIX/stderr" &
+    LAUNCHER_PID=$!
+    # Bounded fixture handshakes, not polling a background suite or a host/runtime authority.
+    for n in {1..100}; do
+        [ ! -f "$case_dir/reader-ready" ] || [ ! -f "$case_dir/normal-wait" ] || break
+        sleep 0.1
+    done
+    assert_file "$case_dir/reader-ready" "$stream reader alive after capture and EOF"
+    assert_file "$case_dir/normal-wait" "$stream ordinary collection wait reached"
+    READER="$(cat "$case_dir/normal-wait")"
+    if kill -0 "$READER" 2>/dev/null; then _ok "$stream reader live at normal wait"; else _no "$stream reader missing before signal"; fi
+    # Let the parent enter wait. The post-wait trace below must show actual interruption
+    # (143), finishing=false, child retired, and a still-live reader; a launch signal cannot pass.
+    sleep 0.2
+    START="$SECONDS"
+    kill -TERM "$LAUNCHER_PID"
+    for n in {1..100}; do
+        [ ! -f "$case_dir/interrupted-normal-wait" ] || [ ! -f "$case_dir/finish-ready" ] || break
+        sleep 0.1
+    done
+    assert_file "$case_dir/interrupted-normal-wait" "$stream normal wait was actually interrupted"
+    run jq -e --argjson pid "$READER" '
+        .reader == $pid and .wait_exit == 143 and .finishing == false and
+        .child == "" and .watcher > 0 and .alive == true
+    ' "$case_dir/interrupted-normal-wait"
+    assert_eq 0 "$STATUS" "$stream failure window is ordinary drain with live ownership/watchdog"
+    if kill -HUP "$LAUNCHER_PID" 2>/dev/null && kill -USR1 "$LAUNCHER_PID" 2>/dev/null; then
+        _ok "$stream repeated catchable signals delivered"
+    else _no "$stream repeated signals could not reach teardown"; fi
+    if wait "$LAUNCHER_PID"; then STATUS=0; else STATUS=$?; fi
+    ELAPSED=$((SECONDS-START))
+    assert_eq 1 "$STATUS" "$stream interrupted drain refuses"
+    assert_eq 1 "$(jq -s length "$FIX/stdout")" "$stream complete structured refusal"
+    assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
+    assert_eq interrupted "$(jq -r .error.code "$FIX/stdout")"
+    assert_eq 0 "$(jq -r .native_exit "$FIX/stdout")" "$stream obtained actual native status retained"
+    run jq -e --arg h "$HEAD_SHA" --arg p "$BASE" '
+        .native.result == "pass" and .native.authority == "host" and .native.problems == [] and
+        .native.head == $h and .native.pr_head == $h and .native.policy_at == $p and
+        .native.diagnostics.base_at == $p and .native.diagnostics.policy_at == $p
+    ' "$FIX/stdout"
+    assert_eq 0 "$STATUS" "$stream real native diagnostic object retained"
+    assert_eq "$(jq -cS . "$case_dir/native-produced.json")" "$(jq -cS .native "$FIX/stdout")" \
+        "$stream entire captured native object preserved"
+    assert_eq '' "$(cat "$case_dir/live-at-remove")" "$stream all groups terminated BEFORE root deletion"
+    assert_eq '' "$(cat "$case_dir/leaders-at-remove")" "$stream all owned leaders reaped BEFORE root deletion"
+    assert_group_gone "$READER" "$stream reader terminated/reaped before result"
+    assert_eq '' "$(find "$FIX/scratch" -mindepth 1 -print)" "$stream root cleaned after group cleanup"
+    run test "$ELAPSED" -lt 15
+    assert_eq 0 "$STATUS" "$stream repeated-signal refusal remains bounded"
+    # Preserve trace evidence for the private failing-before driver; ordinary suites clean their
+    # fixture through lib.sh. Kill any observed orphan only AFTER the assertions above.
+    cp "$FIX/stdout" "$case_dir/result.json"; cp "$FIX/stderr" "$case_dir/stderr"
+    while read -r name pid; do kill -KILL -- "-$pid" 2>/dev/null || true; done < "$case_dir/groups"
+    "$REAL_RM" -rf "$FIX/scratch/"*
+}
+
+for stream in stdout stderr; do
+    it "signal-interrupted normal $stream collection retains ownership until reaped"
+    normal_capture_drain "$stream"
+done
 restore_control
 
 it 'cancellation at the very first teardown command cannot recursively exit cleanup'

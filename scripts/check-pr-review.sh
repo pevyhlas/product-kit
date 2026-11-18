@@ -33,10 +33,12 @@ wait_owned() {
     while :; do
         before="$signal_count"
         if wait "$pid" 2>/dev/null; then waited_exit=0; else waited_exit=$?; fi
-        # A caught signal can interrupt wait without obtaining the child's result. Teardown
-        # keeps waiting; ordinary execution defers to its cancellation path.
-        [ "$before" != "$signal_count" ] || break
-        $finishing || break
+        # A wait result alone is not a termination barrier. Keep ownership while the leader
+        # is alive, even if no new signal-count change has been observed.
+        if [ "$before" = "$signal_count" ] && ! kill -0 "$pid" 2>/dev/null; then break; fi
+        # Dispatch ordinary cancellation BEFORE any caller can retire this still-owned job.
+        check_signal
+        if ! $finishing && [ -n "$pending_signal" ]; then break; fi
     done
 }
 cancel_group() {
