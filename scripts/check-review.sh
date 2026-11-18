@@ -4,7 +4,7 @@
 # Online --pr enumerates this PR and closed-source blockers in every tier. --receipts revalidates
 # an untrusted snapshot without gh/jq. With no source, only structure and coverage needs are known.
 # Exit 0 host pass, 1 fail, 2 usage, 3 preview pass. The owner approves natively, never by text.
-# shellcheck disable=SC2034 # Coverage inputs and normalized row fields cross sourced interfaces.
+# shellcheck disable=SC2034,SC2153 # Coverage/legacy inputs and normalized rows cross sourced interfaces.
 set -euo pipefail
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
@@ -19,12 +19,13 @@ source "$SCRIPT_DIR/review-receipts-lib.sh"
 source "$SCRIPT_DIR/review-owner-lib.sh"
 # shellcheck source=scripts/review-legacy-lib.sh
 source "$SCRIPT_DIR/review-legacy-lib.sh"
-json=false; head_ref=HEAD; base_ref=""; repo=.; id=""
+json=false; diagnostics=false; head_ref=HEAD; base_ref=""; repo=.; id=""
 pr_url=""; receipts_file=""; save_receipts=""
-usage='Usage: check-review.sh [--json] [--head <rev>] [--base <rev>] [--repo <dir>] [--pr <url> [--save-receipts <file>] | --receipts <file>] [<change-id>]'
+usage='Usage: check-review.sh [--json [--diagnostics]] [--head <rev>] [--base <rev>] [--repo <dir>] [--pr <url> [--save-receipts <file>] | --receipts <file>] [<change-id>]'
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --json) json=true ;;
+        --diagnostics) diagnostics=true ;;
         --pr) shift; [ "$#" -gt 0 ] || { echo "$usage" >&2; exit 2; }; pr_url="$1" ;;
         --receipts) shift; [ "$#" -gt 0 ] || { echo "$usage" >&2; exit 2; }; receipts_file="$1" ;;
         --save-receipts) shift; [ "$#" -gt 0 ] || { echo "$usage" >&2; exit 2; }; save_receipts="$1" ;;
@@ -67,13 +68,23 @@ policy_at=""
 $base_trusted || import_base=""
 
 problems=(); rows=(); tier=""; rigor=""; record_at=""; record_only=false; start=""; notes=()
+d_classes=(); d_cursor=0
+diagnostic_capture() {
+    $diagnostics || return 0
+    while [ "$d_cursor" -lt "${#problems[@]}" ]; do
+        d_classes+=("$1"); d_cursor=$((d_cursor+1))
+    done
+}
 sep37="$(printf '\037')"; head_fp=""; fp_ready=false
 v_line=(); v_rev=(); v_round=(); v_from=(); v_to=(); v_verdict=(); v_c=(); v_h=(); v_m=(); v_l=(); v_link=()
 v_receipt=(); v_receipt_head=(); v_empty_clearance=()
 authority=none; pr_head=""; head_is_pr_head=false; publisher_isolation=""
+host_content_bound=false
 [ -z "$receipts_file" ] || authority=snapshot
 RC_PR=""; RC_PR_HEAD=""; RC_FETCHED=""; RC_IGNORED=0; RC_INVALID=0; RC_CARRIED=0; RC_RECEIPTS=0
 receipt_ready=false
+RC_SCOPE_BLOCKERS=(); RC_REFERENCES=(); RC_CURRENT_REVIEWERS=(); coverage_standing=(); coverage_clean=(); coverage_end=(); coverage_eligible=()
+e_from=(); e_to=(); latest=()
 # Fingerprints are computed against the trusted base: --base, or, only to word the problems of a
 # refused --base, the trusted default branch.
 fp_base=""
@@ -105,6 +116,7 @@ if [ -n "$policy_at" ]; then
         problems+=("The trusted base's constitution must name exactly one Rigor, light or full (- **Rigor**: light); fix .prdkit/memory/constitution.md on the integration branch")
 fi
 # Enumerate blockers even when structural checks fail, at T0, and for record-only changes.
+diagnostic_capture structure
 if [ -z "$pr_url" ] && [ -z "$receipts_file" ] && [ -n "$policy_at" ]; then
     if review_receipts_policy "$root" "$policy_at"; then publisher_isolation="$RC_ISOLATION"
     else problems+=("$RC_ERROR"); fi
@@ -126,6 +138,7 @@ if [ -n "$pr_url" ] || [ -n "$receipts_file" ]; then
             else problems+=("${RC_ERROR:-malformed receipt snapshot}"); fi
         fi
         if $receipt_ready; then
+            [ "$authority" != host ] || host_content_bound=true
             pr_head="$RC_PR_HEAD"
             if [ "$authority" = host ] && { ! spec_objects_local "$root" ||
                 ! GIT_NO_LAZY_FETCH=1 git -C "$root" merge-base --is-ancestor "$pr_head" "$head" 2>/dev/null; }; then
@@ -135,12 +148,15 @@ if [ -n "$pr_url" ] || [ -n "$receipts_file" ]; then
         fi
         if $receipt_ready; then
             [ "$pr_head" != "$head" ] || head_is_pr_head=true
-            [ "$RC_BASE" = "${base_canonical#refs/remotes/origin/}" ] ||
+            if [ "$RC_BASE" != "${base_canonical#refs/remotes/origin/}" ]; then
+                host_content_bound=false
                 problems+=("the PR merges into $RC_BASE, not --base ${base_canonical#refs/remotes/origin/}")
+            fi
             if ! $head_is_pr_head; then
                 if ! checked_fp="$(review_fingerprint "$root" "$id" "$fp_base" "$head")" ||
                     ! pr_fp="$(review_fingerprint "$root" "$id" "$fp_base" "$pr_head")" || [ "$checked_fp" != "$pr_fp" ]; then
                     problems+=("PR head does not match the content of --head; use --head <PR head>")
+                    host_content_bound=false
                 fi
             fi
             if review_receipts_scope "$id" "$rigor" "$registry" "$fp_cache/receipts-work" "$root"; then
@@ -155,6 +171,7 @@ if [ -n "$pr_url" ] || [ -n "$receipts_file" ]; then
         fi
     fi
 fi
+diagnostic_capture host
 if [ "$publisher_isolation" = shared ] && [ "$authority" != host ]; then
     notes+=("Publisher isolation is shared: authentication does not establish the reviewer's independence.")
 fi
@@ -169,6 +186,7 @@ if [ -n "$fp_base" ]; then
     [ "${LL_NUL_UNAVAILABLE:-false}" != true ] || authority=unavailable
     problems+=(${LL_PROBLEMS[@]+"${LL_PROBLEMS[@]}"})
 fi
+diagnostic_capture legacy
 # Every **Tier** field in a record on stdin, one per line: T0-T3, or ? when its whole value (up to
 # the next · or the end of the line, in optional backticks) is not exactly one tier: T1/T3, T1-T3,
 # T1x, "T1, T3" and "T1 T3" are not tiers.
@@ -396,11 +414,14 @@ else
     done
 
     coverage_record_only="$record_only"
+    diagnostic_capture structure
     [ "$tier" != T0 ] || record_only=true
     review_coverage_evaluate
+    diagnostic_capture coverage
     owner="$OWNER_VALID"
     record_only="$coverage_record_only"
     if [ "$tier" = T3 ] && ! $record_only && ! $owner; then problems+=("$OWNER_ERROR"); fi
+    diagnostic_capture owner
     # Keep actionable path diagnostics when the publisher's provenance commit is still local.
     # These are diagnostics only; authenticated tokens, never the commits, decide coverage.
     if $fp_ready; then
@@ -430,8 +451,11 @@ else
             fi
         fi
     fi
+    diagnostic_capture structure
     review_coverage_require_start
+    diagnostic_capture coverage
 fi
+diagnostic_capture structure
 
 result=pass; [ "${#problems[@]}" -eq 0 ] || result=fail
 # Advisory: a reviewed PR-scoped record still at this head would merge open (review.md, Closing).
@@ -451,9 +475,47 @@ if $json; then
             "$(json_escape "$critical")" "$(json_escape "$high")" "$(json_escape "$medium")" "$(json_escape "$low")" "$(json_escape "$receipt_url")"
         sep=,
     done
-    printf '],"registry_at":"%s","authority":"%s","pr":"%s","pr_head":"%s","head_is_pr_head":%s,"publisher_isolation":"%s","legacy_blockers":%s,"receipts":%s,"ignored_receipts":%s,"invalid_receipts":%s,"carried_blockers":%s,"owner":%s,"problems":%s}\n' \
+    printf '],"registry_at":"%s","authority":"%s","pr":"%s","pr_head":"%s","head_is_pr_head":%s,"publisher_isolation":"%s","legacy_blockers":%s,"receipts":%s,"ignored_receipts":%s,"invalid_receipts":%s,"carried_blockers":%s,"owner":%s,"problems":%s' \
         "$registry_at" "$authority" "$(json_escape "${pr_url:-${RC_PR:+https://github.com/$RC_REPO/pull/$RC_PR}}")" "$pr_head" "$head_is_pr_head" "$publisher_isolation" \
         "$(review_legacy_json)" "$RC_RECEIPTS" "$RC_IGNORED" "$RC_INVALID" "$RC_CARRIED" "$(review_owner_json)" "$(json_array ${problems[@]+"${problems[@]}"})"
+    if $diagnostics; then
+        printf ',"diagnostics":{"base_ref":"%s","base_at":"%s","policy_at":"%s","head":"%s","host_content_bound":%s,"fetched":"%s","receipt_ready":%s,"start_covered":' \
+            "$(json_escape "$base_canonical")" "$import_base" "$policy_at" "$head" "$host_content_bound" "$RC_FETCHED" "$receipt_ready"
+        if $fp_ready; then covered "$REVIEW_FP_EMPTY" && printf true || printf false; else printf null; fi
+        printf ',"registry":['; sep=""
+        while IFS="$sep37" read -r identity role line; do
+            [ -n "$identity" ] || continue
+            printf '%s{"reviewer":"%s","eligibility":"%s"}' "$sep" "$(json_escape "$identity")" "$(review_eligibility "$registry" "$identity")"; sep=,
+        done <<< "$registry"
+        printf '],"edges":['
+        sep=""
+        for k in ${e_from[@]+"${!e_from[@]}"}; do
+            printf '%s{"from":"%s","to":"%s"}' "$sep" "${e_from[k]}" "${e_to[k]}"; sep=,
+        done
+        printf '],"latest":['; sep=""
+        for i in ${latest[@]+"${latest[@]}"}; do
+            standing=false
+            for k in ${coverage_standing[@]+"${coverage_standing[@]}"}; do [ "${v_rev[k]}" != "${v_rev[i]}" ] || standing=true; done
+            printf '%s{"reviewer":"%s","eligibility":"%s","receipt":"%s","from":"%s","to":"%s","clean":%s,"end_covered":%s,"standing":%s}' \
+                "$sep" "$(json_escape "${v_rev[i]}")" "$(review_eligibility "$registry" "${v_rev[i]}")" "$(json_escape "${v_receipt[i]}")" \
+                "${v_from[i]}" "${v_to[i]}" "${coverage_clean[i]:-false}" "${coverage_end[i]:-false}" "$standing"
+            sep=,
+        done
+        printf '],"standing":['; sep=""
+        for i in ${coverage_standing[@]+"${coverage_standing[@]}"}; do
+            printf '%s{"reviewer":"%s","to":"%s","receipt":"%s"}' "$sep" "$(json_escape "${v_rev[i]}")" "${v_to[i]}" "$(json_escape "${v_receipt[i]}")"; sep=,
+        done
+        printf '],"scope_blockers":['; sep=""
+        for row in ${RC_SCOPE_BLOCKERS[@]+"${RC_SCOPE_BLOCKERS[@]}"}; do
+            IFS="$sep37" read -r kind seq origin review submitted receipt_id change reviewer from to rest <<< "$row"
+            printf '%s{"reviewer":"%s","change":"%s","origin_pr":"%s","to":"%s","receipt":"%s"}' "$sep" \
+                "$(json_escape "$reviewer")" "$change" "$origin" "$to" "https://github.com/$RC_REPO/pull/$origin#pullrequestreview-$review"; sep=,
+        done
+        printf '],"references":%s,"current_reviewers":%s,"current_pr":"%s","problem_classes":%s}' \
+            "$(json_array ${RC_REFERENCES[@]+"${RC_REFERENCES[@]}"})" \
+            "$(json_array ${RC_CURRENT_REVIEWERS[@]+"${RC_CURRENT_REVIEWERS[@]}"})" "$RC_PR" "$(json_array ${d_classes[@]+"${d_classes[@]}"})"
+    fi
+    printf '}\n'
 elif [ "$result" = pass ]; then
     if $record_only; then
         printf 'PASS %s at %s: since %s it carries only the record and the log; %s recorded verdict(s), none blocking; no covering receipt needed on this PR.\n' "$id" "$head" "$base_ref" "${#rows[@]}"

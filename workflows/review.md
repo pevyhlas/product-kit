@@ -62,6 +62,25 @@ current merge base with a trusted integration branch for a focused package; afte
 use the new merge base. Never dispatch a round with no source change. The range is the range
 actually inspected. Map findings to fixes and affected obligations, preserving unaffected review.
 
+The package's `context-manifest.tsv` binds the actual child, referenced blocks, all computed
+bounds and required parent checkpoint/row/obligations to immutable objects and line spans.
+Start there and at the full diff, not at the entire parent. Explicit `--context` still supplies
+a whole file. Missing or ambiguous context and unverified evidence remain named dispatch gaps.
+
+For optional advisory scheduling, use `build-review-package.sh --pr <url> --since <rev>
+--review-plan <repo-relative-json>` ([contract](https://github.com/pevyhlas/product-kit/blob/main/docs/review-packages.md)). It captures the
+native gate's unchanged result and separates retained host coverage, reviewers needing action
+and prospective carry. The lead's map never proves unaffectedness or closes a finding.
+Prospective carry needs an actual clean native fix receipt and fresh online gate evaluation;
+no hypothetical receipt is evaluated or published. Unavailable/partial host evidence, snapshots
+and unpublished changed code cannot establish current retention. Ordinary structural packages
+remain possible without host tools. Neither a plan nor a package authorizes merging.
+
+Equal reviewed content refuses before round allocation, including comparison with the latest
+completed object-bound package when `--since` is omitted. Reuse the existing package for receipt
+repairs, owner action or new verification evidence. Incomplete rounds keep their evidence and
+number; unknown comparison is never equality. Concurrent allocation is serialized.
+
 Trusted default-branch policy names `review-host: github`, numeric `review-publishers`, personal
 numeric `review-owner` ids, and `review-publisher-isolation: required|shared`. Register eligible
 reviewer identities there too; a branch cannot register itself. Bot and User account types plus

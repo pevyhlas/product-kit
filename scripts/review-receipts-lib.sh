@@ -313,11 +313,12 @@ review_receipts_scope() { # change rigor registry work root; local checks also r
     local type seq origin review time receipt_id change reviewer from to rhead since base base_at verdict c h m l report carried reason row
     local n k j candidate clear block scope start_fp scoped
     local rs=() origins=() changes=() reviewers=() froms=() tos=() blocks=() seqs=() links=()
-    RC_PROBLEMS=(); RC_COVERAGE="$work/coverage"; RC_INVALID=0; RC_CARRIED=0; RC_RECEIPTS=0
+    RC_PROBLEMS=(); RC_SCOPE_BLOCKERS=(); RC_REFERENCES=(); RC_CURRENT_REVIEWERS=(); RC_COVERAGE="$work/coverage"; RC_INVALID=0; RC_CARRIED=0; RC_RECEIPTS=0
     : > "$RC_COVERAGE" || { RC_ERROR='cannot write receipt coverage'; return 1; }
     scoped="$(mktemp "$work/scoped.XXXXXX")" || { RC_ERROR='cannot allocate scoped receipts'; return 1; }
     while IFS= read -r row; do
         IFS=$'\037' read -r type seq origin review time receipt_id change reviewer from to rhead since base base_at verdict c h m l report carried <<< "$row"
+        case "$type" in R|X) RC_REFERENCES+=("https://github.com/$RC_REPO/pull/$origin#pullrequestreview-$review") ;; esac
         case "$type" in
             O) printf '%s\n' "$row" >> "$scoped"; continue ;;
             X)
@@ -334,6 +335,8 @@ review_receipts_scope() { # change rigor registry work root; local checks also r
             printf 'X\037%s\037%s\037%s\037%s\n' "$seq" "$origin" "$review" "$RC_ERROR" >> "$scoped"
             [ "$origin" = "$RC_PR" ] || RC_CARRIED=$((RC_CARRIED+1)); continue
         fi
+        # Scope/identity fact only. Foreign-change rows on this PR still grant no coverage.
+        [ "$origin" != "$RC_PR" ] || RC_CURRENT_REVIEWERS+=("$reviewer")
         block=false; if _receipts_blocking "$verdict" "$c" "$h" "$m" "$scope_rigor"; then block=true; fi
         rs+=("$row"); origins+=("$origin"); changes+=("$change"); reviewers+=("$reviewer"); froms+=("$from"); tos+=("$to"); blocks+=("$block"); seqs+=("$seq")
         links+=("https://github.com/$RC_REPO/pull/$origin#pullrequestreview-$review")
@@ -373,6 +376,7 @@ review_receipts_scope() { # change rigor registry work root; local checks also r
                 fi
             done
             if ! $clear; then
+                RC_SCOPE_BLOCKERS+=("${rs[k]}")
                 RC_PROBLEMS+=("receipt ${links[k]}: ${reviewers[k]} ${changes[k]} blocking verdict stands: no later clean PASS in scope")
                 [ "${origins[k]}" = "$RC_PR" ] || RC_CARRIED=$((RC_CARRIED+1))
                 [ "${origins[k]}" = "$RC_PR" ] || printf '%s\n' "${rs[k]}" >> "$scoped"

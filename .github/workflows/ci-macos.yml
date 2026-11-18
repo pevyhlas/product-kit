@@ -61,5 +61,11 @@ jobs:
           /bin/bash tests/test_review_owner.sh
           /bin/bash tests/test_publish_review.sh
           /bin/bash tests/test_review_package.sh
+          /bin/bash tests/test_review_package_rounds.sh
+          /bin/bash tests/test_review_package_targeted.sh
+          /bin/bash tests/test_review_package_inputs.sh
+          /bin/bash tests/test_review_package_lock.sh
+          /bin/bash tests/test_review_package_lock_safety.sh
+          /bin/bash tests/test_review_package_completion.sh
           /bin/bash tests/test_delivery_checkpoint.sh
           /bin/bash tests/test_release.sh
