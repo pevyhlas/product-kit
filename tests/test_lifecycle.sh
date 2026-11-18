@@ -122,6 +122,12 @@ invalid 'from: stable extra'
 printf '# J-01 Try (hypothesis, from: )\n' > specs/product/journeys/j-01-try.md
 invalid 'from: (empty)'
 
+it "conditional library callers cannot turn lifecycle failure into successful bounds"
+run bash -c 'source "$1"; if bounds_for_root "$2" --all; then exit 0; else exit 1; fi' \
+    _ "$SCRIPTS/bounds.sh" "$PROJ"
+assert_eq 1 "$STATUS" "review-package conditional caller sees failure"
+assert_not_contains "$OUTPUT" 'Qualities:' "conditional caller emits no fabricated bounds"
+
 it "defaults and the General availability alias remain usable without a declaration"
 printf '**Now**: MVP since 2026-11-01 · **Next**: General availability\n' > specs/product/lifecycle.md
 printf '# J-01 Try (hypothesis, from: Paid preview)\n' > specs/product/journeys/j-01-try.md

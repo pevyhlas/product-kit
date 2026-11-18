@@ -12,18 +12,16 @@
 # after the current one (`from: ga`; lifecycle.md, Now) are listed apart: built only on the
 # owner's direction (spec.md, Lifecycle). Over-inclusion is the safe side: the agent marks each item in the
 # record's Bounds section and the reviewer checks the diff against this list.
-set -euo pipefail
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 source "$SCRIPT_DIR/spec-lib.sh"
+bounds_for_root() { # materialized immutable inputs; same computation as the installed command
+local root="$1"; shift
 usage='Usage: bounds.sh <change-id> | bounds.sh --all'
 case "${1:-}" in
     -h|--help) echo "$usage"; exit 0 ;;
     '') echo "$usage" >&2; exit 2 ;;
 esac
-root="$(get_repo_root)"
-require_consumer_root "$root" bounds.sh
-
 scope=""
 if [ "$1" != "--all" ]; then
     record="$root/specs/changes/$1.md"
@@ -33,7 +31,7 @@ if [ "$1" != "--all" ]; then
         s = $0; while (match(s, /\*\*(Parts|Journeys)\*\*:[^*]*/)) { print substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH) }
     }' "$record" | tr '\n' ' ')"
 fi
-spec_lifecycle_require "$root"
+spec_lifecycle_require "$root" || return
 now="$SPEC_STAGE_NOW"
 
 files=()
@@ -164,3 +162,11 @@ while IFS= read -r file; do files+=("$file"); done < <(spec_files "$root")
     }
 ' "${files[@]}")
 echo "Mark each in the record's Bounds: holds (how), or conflict (to the owner inbox; never resolved by the agent)."
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    set -euo pipefail
+    root="$(get_repo_root)"
+    require_consumer_root "$root" bounds.sh
+    bounds_for_root "$root" "$@"
+fi

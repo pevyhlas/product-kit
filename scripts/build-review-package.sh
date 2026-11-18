@@ -20,6 +20,8 @@
 #                     base as BASE to leave the base out
 #   --context PATH    Snapshot a repo-relative tracked file at HEAD (repeatable)
 #   --evidence PATH   Copy a completed repo-relative evidence file (repeatable)
+#   --pr URL          Capture a fresh native gate evaluation (no publication or fetch)
+#   --review-plan PATH  Optional contained JSON advisory scope map; requires --pr and --since
 #
 # ARGUMENTS:
 #   CHANGE_ID     Change id (e.g. 004-export-csv)
@@ -53,6 +55,12 @@ SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 source "$SCRIPT_DIR/spec-lib.sh"
 source "$SCRIPT_DIR/review-fingerprint-lib.sh"
+source "$SCRIPT_DIR/review-context-lib.sh"
+source "$SCRIPT_DIR/review-package-plan-lib.sh"
+export GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1
+spec_objects_local "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || {
+    echo "ERROR: objects cannot be read locally without fetching; no package allocated" >&2; exit 1;
+}
 
 case "${1:-}" in
     --help|-h)
@@ -71,15 +79,17 @@ BASE_SHA="$2"
 shift 2
 HEAD_SHA=HEAD
 if [ "$#" -gt 0 ] && [[ "$1" != --* ]]; then HEAD_SHA="$1"; shift; fi
-SINCE=""; CONTEXT=(); EVIDENCE=()
+SINCE=""; CONTEXT=(); EVIDENCE=(); PR_URL=""; REVIEW_PLAN=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --since|--context|--evidence)
+        --since|--context|--evidence|--pr|--review-plan)
             [ "$#" -ge 2 ] && [ -n "$2" ] || { echo "ERROR: $1 needs a value" >&2; exit 1; }
             case "$1" in
                 --since) SINCE="$2" ;;
                 --context) CONTEXT+=("$2") ;;
                 --evidence) EVIDENCE+=("$2") ;;
+                --pr) PR_URL="$2" ;;
+                --review-plan) REVIEW_PLAN="$2" ;;
             esac
             shift 2 ;;
         *) echo "ERROR: unknown argument: $1" >&2; exit 1 ;;
@@ -114,7 +124,7 @@ if [ -n "$SINCE" ]; then
     # Any earlier reviewed head, in HEAD's history or not: after a base merge the new BASE (the
     # merge base) is newer than it, and after a rebase or squash it is on no branch any more.
     if [ "$SINCE" = "$HEAD_SHA" ]; then
-        echo "ERROR: --since must be an earlier reviewed head, not HEAD" >&2; exit 1
+        echo "ERROR: --since must be an earlier reviewed head, not HEAD; no round needed" >&2; exit 1
     fi
 fi
 # BASE decides what the focused delta leaves out, so with --since it must be where the change
@@ -123,6 +133,9 @@ fi
 # gives the fingerprints; without --since a missing one only leaves them empty.
 trusted_refs="$(spec_trusted_refs "$REPO_ROOT")"
 base_is_merge_base=false; merge_bases=""; FP_REF=""
+POLICY_REF="$(printf '%s\n' "$trusted_refs" | sed -n 1p)"
+POLICY_AT=""
+[ -z "$POLICY_REF" ] || POLICY_AT="$(git -C "$REPO_ROOT" rev-parse --verify --quiet "$POLICY_REF^{commit}" || true)"
 while IFS= read -r trusted; do
     [ -n "$trusted" ] || continue
     git -C "$REPO_ROOT" rev-parse --verify --quiet "$trusted^{commit}" >/dev/null 2>&1 || continue
@@ -131,6 +144,8 @@ while IFS= read -r trusted; do
     [ -z "$mb" ] || merge_bases="$merge_bases ${trusted#refs/remotes/}=${mb}"
     if [ "$mb" = "$BASE_SHA" ]; then base_is_merge_base=true; FP_REF="$trusted"; break; fi
 done <<<"$trusted_refs"
+FP_BASE_AT=""
+[ -z "$FP_REF" ] || FP_BASE_AT="$(git -C "$REPO_ROOT" rev-parse "$FP_REF^{commit}")"
 if [ -n "$SINCE" ]; then
     if [ -z "$trusted_refs" ]; then
         echo "ERROR: --since needs a trusted integration branch to check BASE against: set origin/HEAD (git remote set-head origin --auto) and fetch it, or build the full package without --since" >&2
@@ -153,12 +168,90 @@ safe_path() { # relative path, with no traversal, control characters or symlink 
         rest="${rest#*/}"
     done
 }
+# Repeated explicit requests are one immutable snapshot, not conflicting inventory entries.
+unique_snapshot_paths() {
+    local candidate previous found
+    SNAPSHOT_PATHS=()
+    for candidate in "$@"; do
+        found=false
+        for previous in ${SNAPSHOT_PATHS[@]+"${SNAPSHOT_PATHS[@]}"}; do
+            [ "$candidate" != "$previous" ] || found=true
+        done
+        if ! $found; then SNAPSHOT_PATHS+=("$candidate"); fi
+    done
+}
+unique_snapshot_paths ${CONTEXT[@]+"${CONTEXT[@]}"}; CONTEXT=(${SNAPSHOT_PATHS[@]+"${SNAPSHOT_PATHS[@]}"})
+unique_snapshot_paths ${EVIDENCE[@]+"${EVIDENCE[@]}"}; EVIDENCE=(${SNAPSHOT_PATHS[@]+"${SNAPSHOT_PATHS[@]}"})
 for p in ${CONTEXT[@]+"${CONTEXT[@]}"}; do
     safe_path "$p" || { echo "ERROR: unsafe context path: $p" >&2; exit 1; }
     # Reject tree entries and symlinks even if the current checkout differs from HEAD.
     mode="$(git -C "$REPO_ROOT" ls-tree "$HEAD_SHA" -- ":(literal)$p")"
     case "$mode" in 100644\ *|100755\ *) ;; *) echo "ERROR: context must be a regular file at HEAD: $p" >&2; exit 1 ;; esac
 done
+if [ -n "$REVIEW_PLAN" ]; then
+    safe_path "$REVIEW_PLAN" && [ -f "$REPO_ROOT/$REVIEW_PLAN" ] && [ -r "$REPO_ROOT/$REVIEW_PLAN" ] ||
+        { echo "ERROR: unsafe/unreadable --review-plan" >&2; exit 1; }
+    if [ -z "$PR_URL" ] || [ -z "$SINCE" ] || ! command -v jq >/dev/null 2>&1; then
+        echo "ERROR: --review-plan needs --pr, --since and jq" >&2; exit 1
+    fi
+fi
+
+# Compute content before touching any round. Freeze integration tips for *all* comparisons.
+FINGERPRINT=""; SINCE_FINGERPRINT=""
+COMPARISON_TEXT="unknown: no trusted/comparable completed package"
+if [ -z "$FP_REF" ]; then
+    FP_TEXT="none: BASE is not the change's merge base with a trusted integration branch, so publish-review.sh computes them when the verdict is published"
+elif review_fingerprint "$REPO_ROOT" "$CHANGE_ID" "$FP_BASE_AT" "$HEAD_SHA" >/dev/null; then
+    FINGERPRINT="$REVIEW_FP"; FP_TEXT="$FINGERPRINT (HEAD, against ${FP_REF#refs/remotes/})"
+    if [ -n "$SINCE" ]; then
+        if review_fingerprint "$REPO_ROOT" "$CHANGE_ID" "$FP_BASE_AT" "$SINCE" >/dev/null; then
+            SINCE_FINGERPRINT="$REVIEW_FP"; FP_TEXT="$FP_TEXT; $SINCE_FINGERPRINT (SINCE)"
+        else FP_TEXT="$FP_TEXT; none for SINCE: $REVIEW_FP_ERROR"; fi
+    fi
+else FP_TEXT="none: $REVIEW_FP_ERROR"; fi
+if [ -n "$SINCE" ]; then
+    [ -n "$FINGERPRINT" ] && [ -n "$SINCE_FINGERPRINT" ] ||
+        { echo "ERROR: targeted comparison unknown: $FP_TEXT; no round allocated" >&2; exit 1; }
+    [ "$FINGERPRINT" != "$SINCE_FINGERPRINT" ] ||
+        { echo "ERROR: nothing changed since --since; no round needed" >&2; exit 1; }
+    COMPARISON_TEXT="changed since $SINCE (immutable trusted-tip comparison)"
+fi
+
+PACKAGE_SCRATCH="$(mktemp -d)"
+LOCK_CANDIDATE=""; LOCK_PRIVATE=""; LOCK_OWNED=false
+cleanup_review_package() {
+    # A pathname is not ownership. Refused/interrupted contenders leave the shared entry
+    # alone; even an armed owner must still identify its own regular claim by inode.
+    if $LOCK_OWNED && [ ! -L "$LOCK_CANDIDATE" ] && [ -d "$LOCK_CANDIDATE" ] &&
+        [ ! -L "$LOCK_CANDIDATE/claim" ] && [ -f "$LOCK_CANDIDATE/claim" ] &&
+        [ -n "$LOCK_PRIVATE" ] && [ ! -L "$LOCK_PRIVATE" ] &&
+        [ "$LOCK_CANDIDATE/claim" -ef "$LOCK_PRIVATE" ]; then
+        if rm "$LOCK_CANDIDATE/claim"; then
+            rmdir "$LOCK_CANDIDATE" 2>/dev/null ||
+                echo "WARNING: allocation directory retained; reconcile it before retrying" >&2
+        fi
+    fi
+    [ -z "$LOCK_PRIVATE" ] || rm -f "$LOCK_PRIVATE"
+    rm -rf "$PACKAGE_SCRATCH"
+}
+acquire_review_lock() {
+    LOCK_CANDIDATE="$REVIEW_DIR/.allocation-lock"
+    # Never redirect into an existing leaf: FIFO and nonregular/symlink entries are busy.
+    if [ -e "$LOCK_CANDIDATE" ] || [ -L "$LOCK_CANDIDATE" ]; then return 1; fi
+    LOCK_PRIVATE="$(mktemp "$REVIEW_DIR/.allocation-claim.XXXXXXXX")" || return 1
+    printf 'pid=%s\n' "$$" > "$LOCK_PRIVATE" || return 1
+    if ! mkdir "$LOCK_CANDIDATE" 2>/dev/null; then return 1; fi
+    if [ -L "$LOCK_CANDIDATE" ] || [ ! -d "$LOCK_CANDIDATE" ] ||
+        [ -e "$LOCK_CANDIDATE/claim" ] || [ -L "$LOCK_CANDIDATE/claim" ]; then return 1; fi
+    # Same-filesystem hard-link creation never opens a FIFO. Verify the private inode rather
+    # than trusting a utility's success status or a shared directory's mere existence.
+    if ! ln -n "$LOCK_PRIVATE" "$LOCK_CANDIDATE/claim" 2>/dev/null; then return 1; fi
+    if [ -L "$LOCK_CANDIDATE" ] || [ -L "$LOCK_CANDIDATE/claim" ] ||
+        [ ! -f "$LOCK_CANDIDATE/claim" ] || [ ! "$LOCK_CANDIDATE/claim" -ef "$LOCK_PRIVATE" ]; then return 1; fi
+    LOCK_OWNED=true
+}
+trap cleanup_review_package EXIT
+review_plan_prepare
 for p in ${EVIDENCE[@]+"${EVIDENCE[@]}"}; do
     safe_path "$p" && [ -f "$REPO_ROOT/$p" ] && [ -r "$REPO_ROOT/$p" ] || {
         echo "ERROR: evidence must be a readable, contained regular file: $p" >&2; exit 1;
@@ -168,9 +261,16 @@ done
 # --- Compute the next round from existing round-* directories ----------------
 REVIEW_DIR="$REPO_ROOT/.prdkit/cache/evidence/$CHANGE_ID/reviews"
 safe_path ".prdkit/cache/evidence/$CHANGE_ID/reviews" || { echo "ERROR: symlinked package directory" >&2; exit 1; }
-ROUND=1
+# Serialize completed-binding comparison AND assembly. Busy is retry-later, never permission
+# to allocate another identical round. Interrupted packages remain numbered and untouched.
+mkdir -p "$REVIEW_DIR"
+if ! acquire_review_lock; then
+    echo "ERROR: package allocation busy or claim unconfirmed; reconcile retained evidence before retrying" >&2; exit 1
+fi
+ROUND=1; COMPLETED=0; COMPLETED_HEAD=""
 for d in "$REVIEW_DIR"/round-*/; do
     [[ -d "$d" ]] || continue
+    [ ! -L "${d%/}" ] || { echo "ERROR: symlinked round directory" >&2; exit 1; }
     n="${d%/}"
     n="${n##*/round-}"
     case "$n" in
@@ -180,12 +280,35 @@ for d in "$REVIEW_DIR"/round-*/; do
     if [[ "$n" -ge "$ROUND" ]]; then
         ROUND=$((n + 1))
     fi
+    if [ "$n" -gt "$COMPLETED" ] && [ -f "$d/completed.tsv" ] && [ ! -L "$d/completed.tsv" ]; then
+        # Older interrupted writers can leave empty/unterminated files. A failed complete
+        # read or malformed record is incomplete evidence, never a fatal errexit or binding.
+        if review_file_without_nul "$d/completed.tsv" &&
+            awk -F '\t' 'NR!=1 || NF!=7 { bad=1 } END { exit (bad || NR!=1) }' "$d/completed.tsv" &&
+            IFS=$'\t' read -r version bound_id bound_head bound_base bound_tip bound_policy bound_comparison < "$d/completed.tsv" &&
+            [ "$version" = package1 ] && [ "$bound_id" = "$CHANGE_ID" ] && [ "$bound_comparison" = known ] &&
+            [[ "$bound_head" =~ ^[0-9a-f]{40}$ && "$bound_tip" =~ ^[0-9a-f]{40}$ && "$bound_policy" =~ ^[0-9a-f]{40}$ ]] &&
+            [[ "$bound_base" == refs/remotes/* ]]; then
+            COMPLETED="$n"; COMPLETED_HEAD="$bound_head"
+        fi
+    fi
 done
+if [ -n "$COMPLETED_HEAD" ] && [ -n "$FP_BASE_AT" ]; then
+    prior_fp=""
+    if review_fingerprint "$REPO_ROOT" "$CHANGE_ID" "$FP_BASE_AT" "$COMPLETED_HEAD" >/dev/null; then prior_fp="$REVIEW_FP"; fi
+    if [ -n "$FINGERPRINT" ] && [ "$prior_fp" = "$FINGERPRINT" ]; then
+        echo "ERROR: reviewed content equals completed round-$COMPLETED; no round needed (reuse its artifacts)" >&2; exit 1
+    fi
+    if [ -z "$prior_fp" ]; then COMPARISON_TEXT="unknown: completed round-$COMPLETED head is unreadable"
+    elif [ -n "$FINGERPRINT" ]; then COMPARISON_TEXT="changed from completed round-$COMPLETED (recomputed from objects)"; fi
+    if [ -n "$SINCE" ] && [ -z "$prior_fp" ]; then
+        echo "ERROR: completed package comparison unknown; no targeted round allocated" >&2; exit 1
+    fi
+fi
 
 # Claim the round directory atomically: `mkdir` without -p fails if the
 # directory already exists, so two concurrent invocations can never both
 # claim the same round and overwrite each other's package.
-mkdir -p "$REVIEW_DIR"
 PACKAGE_DIR="$REVIEW_DIR/round-$ROUND"
 until mkdir "$PACKAGE_DIR" 2>/dev/null; do
     ROUND=$((ROUND + 1))
@@ -275,22 +398,10 @@ for p in ${EVIDENCE[@]+"${EVIDENCE[@]}"}; do
     fi
     inventory "evidence/$p" "caller-supplied:$p (verify producer revision/result)"
 done
-# The content fingerprints the verdict binds, against the trusted ref BASE is the merge base with.
-FINGERPRINT=""; SINCE_FINGERPRINT=""
-if [ -z "$FP_REF" ]; then
-    FP_TEXT="none: BASE is not the change's merge base with a trusted integration branch, so publish-review.sh computes them when the verdict is published"
-elif review_fingerprint "$REPO_ROOT" "$CHANGE_ID" "$FP_REF" "$HEAD_SHA" >/dev/null; then
-    FINGERPRINT="$REVIEW_FP"; FP_TEXT="$FINGERPRINT (HEAD, against ${FP_REF#refs/remotes/})"
-    if [ -n "$SINCE" ]; then
-        if review_fingerprint "$REPO_ROOT" "$CHANGE_ID" "$FP_REF" "$SINCE" >/dev/null; then
-            SINCE_FINGERPRINT="$REVIEW_FP"; FP_TEXT="$FP_TEXT; $SINCE_FINGERPRINT (SINCE)"
-        else
-            FP_TEXT="$FP_TEXT; none for SINCE: $REVIEW_FP_ERROR"
-        fi
-    fi
-else
-    FP_TEXT="none: $REVIEW_FP_ERROR"
-fi
+review_context_build
+review_plan_write
+inventory context-gaps.txt "unresolved required context and verification"
+inventory context-manifest.tsv "immutable object/blob/span provenance; gaps are explicit"
 
 cat > "$PACKAGE_DIR/index.md" <<EOF
 # Review package: $CHANGE_ID
@@ -299,12 +410,16 @@ cat > "$PACKAGE_DIR/index.md" <<EOF
 - Focused delta (delta.patch): $DELTA
 - Content fingerprint: $FP_TEXT. Publish the verdict with publish-review.sh, which binds it to the
   reviewed content, not to these commits.
+- Fingerprint comparison: $COMPARISON_TEXT.
 - Inventory: manifest.tsv (bytes and Git blob object IDs of exact packaged content).
+- Context: context-manifest.tsv (immutable source revisions, blobs and complete spans; gaps named).
+- Coverage and advisory dispatch: dispatch.json; native gate output/status are kept when requested.
 - Tracked context is read from the named HEAD, never the working copy.
 - Evidence is a stable copy, not proof of completion or applicability to HEAD.
 
 ## Before dispatch
 
+Start at the index, context manifest and full diff, not the whole programme parent.
 Read the inventory. Supply the change/acceptance record, applicable canon and review policy,
 bounds output with its input revision, prior findings for re-review, and completed verification
 results (command, revision, environment, exit/result and limitations). Explicitly identify missing
@@ -315,5 +430,25 @@ this package inside that access boundary; local sibling paths are not portable e
 reviewer consumes captured bounds/results and returns its report as text when it cannot write.
 Full diff remains available; use the focused delta and affected obligations for a re-review.
 EOF
+inventory index.md "package navigation and limitations"
+# Validate final artifacts, not just hashes recorded before later assembly steps.
+inventory_seen=()
+while IFS=$'\t' read -r file bytes oid source; do
+    [ "$file" != file ] || continue
+    for prior in ${inventory_seen[@]+"${inventory_seen[@]}"}; do
+        [ "$prior" != "$file" ] || { echo "ERROR: duplicate artifact $file; incomplete round retained" >&2; exit 1; }
+    done
+    inventory_seen+=("$file")
+    if [ ! -f "$PACKAGE_DIR/$file" ] || [ -L "$PACKAGE_DIR/$file" ] ||
+        [ "$bytes" != "$(wc -c < "$PACKAGE_DIR/$file" | tr -d ' ')" ] ||
+        [ "$oid" != "$(git -C "$REPO_ROOT" hash-object --no-filters "$PACKAGE_DIR/$file")" ]; then
+        echo "ERROR: final artifact integrity failed for $file ($source); incomplete round retained" >&2; exit 1
+    fi
+done < "$PACKAGE_DIR/manifest.tsv"
+# Completion is written LAST, never to an interrupted round. It is a comparison binding, not
+# approval: later calls recompute the prior head's content from immutable objects.
+comparison=unknown; [ -z "$FINGERPRINT" ] || comparison=known
+printf 'package1\t%s\t%s\t%s\t%s\t%s\t%s\n' "$CHANGE_ID" "$HEAD_SHA" "$FP_REF" "$FP_BASE_AT" "$POLICY_AT" "$comparison" > "$PACKAGE_DIR/completed.pending"
+mv "$PACKAGE_DIR/completed.pending" "$PACKAGE_DIR/completed.tsv"
 
 printf '{"ROUND":%d,"BASE_SHA":"%s","HEAD_SHA":"%s","PACKAGE_DIR":"%s","REPORT_PATH":"%s","INDEX_PATH":"%s","SINCE_SHA":"%s","FINGERPRINT":"%s","SINCE_FINGERPRINT":"%s"}\n' "$ROUND" "$BASE_SHA" "$HEAD_SHA" "$(json_escape "$PACKAGE_DIR")" "$(json_escape "$PACKAGE_DIR/report.md")" "$(json_escape "$PACKAGE_DIR/index.md")" "$SINCE" "$FINGERPRINT" "$SINCE_FINGERPRINT"
