@@ -64,7 +64,7 @@ spec_navigation() { # file budget|stats|compact|diagnostics|target [reference ke
                 }
                 key = line; sub(/^\[/, "", key); sub(/\].*/, "", key); key = norm(key)
                 url = line; sub(/^[^]]+\]: /, "", url)
-                authority = url; sub(/^https?:\/\//, "", authority); sub(/[/#?].*/, "", authority)
+                authority = url; sub(/^https?:\/\//, "", authority); sub(/[\/#?].*/, "", authority)
                 path = url; sub(/^https?:\/\/[^\/]*\//, "", path)
                 if (authority !~ /^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?$/ || path == url || path == "")
                     bad("navigation targets need an absolute detail URL without user information")

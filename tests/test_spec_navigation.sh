@@ -139,4 +139,18 @@ assert_eq 0 "$STATUS" "upgrade succeeds: $OUTPUT"
 assert_eq "$before" "$(git hash-object "$FILE")" "upgrade never rewrites navigation"
 run bash "$READER" "$FILE"
 assert_contains "$OUTPUT" 'state=valid' "installed upgraded recognizer works"
+
+it "doctor fails truthfully if the navigation/budget parser cannot execute"
+mkdir -p failbin
+cat > failbin/awk <<'SH'
+#!/usr/bin/env bash
+case "$*" in *projection=prdkit-navigation-v1*) exit 2 ;; esac
+exec "$NAV_REAL_AWK" "$@"
+SH
+chmod +x failbin/awk
+run env NAV_REAL_AWK="$(command -v awk)" PATH="$PROJ/failbin:$PATH" \
+    bash "$PROJ/.prdkit/scripts/bash/doctor.sh" --json
+assert_eq 1 "$STATUS" "parser failure is a failing doctor result"
+assert_contains "$OUTPUT" 'Budget reader failed: specs/product/requirements.md' "the failed budget is named"
+assert_not_contains "$OUTPUT" 'integer expression expected' "empty parser output is not used as a count"
 finish

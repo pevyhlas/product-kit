@@ -87,10 +87,14 @@ mixed="$(spec_mixed_forms "$root")"
 # --- Reading budgets (never targets; never drop an item to fit) -------------------------------
 # A line counts once per 100 characters (spec_reading_lines), so a long row cannot dodge one.
 budget_fix() { # limit remedy path...
-    local limit="$1" fix="$2" path reading lines size problem; shift 2
+    local limit="$1" fix="$2" path reading lines size problem measured; shift 2
     for path in "$@"; do
         [ -f "$path" ] || continue
-        read -r reading lines <<< "$(spec_reading_lines "$path")"
+        if ! measured="$(spec_reading_lines "$path")"; then
+            findings+=("Budget reader failed: ${path#"$root"/}; reading budget is unverified")
+            continue
+        fi
+        read -r reading lines <<< "$measured"
         while IFS= read -r problem; do
             [ -z "$problem" ] || advisories+=("${path#"$root"/}: $problem")
         done < <(spec_navigation "$path" diagnostics)

@@ -18,6 +18,8 @@ change by change.
   individual lookup available. Malformed/mixed/conflicting/unknown blocks stay visible and
   counted with diagnostics. Instruction-file byte budgets, raw integrity and review inputs stay
   raw. This supplies no tracker/export adapter and makes no tokenizer-performance claim.
+  Parser execution failures fail doctor explicitly rather than leaving budgets unverified in
+  an apparently successful report.
 
 - **Targeted review packages (#106).** Later packages distinguish native retained coverage,
   review actions and conditional prospective carry through an optional advisory scope map.
