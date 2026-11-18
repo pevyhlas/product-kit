@@ -1,8 +1,11 @@
 # Independent review: {CHANGE_ID}
 
-You did not implement this change. Read the change record and the spec sections it touches,
-{SPEC_PATHS}, the constitution's review policy, then the package index and full change diff at
-{REVIEW_PACKAGE_PATH} for {BASE_SHA}..{HEAD_SHA}. Never judge from a summary. Capabilities:
+You did not implement this change. Start at the package index, context-manifest.tsv and full
+change diff at {REVIEW_PACKAGE_PATH} for {BASE_SHA}..{HEAD_SHA}. Read the actual child record,
+the bound spec sections {SPEC_PATHS}, the constitution's review policy and the selected parent
+checkpoint/obligations, not the whole parent by default. Immutable source/blob/line bindings
+distinguish current canon, trusted policy and a recovered historical closing record.
+Unresolved context and unverified evidence remain gaps, never PASS. Never judge from a summary. Capabilities:
 {ALLOWED_READ_PATHS}, shell {YES_OR_NO}, network {YES_OR_NO}, report {REPORT_PATH_OR_RETURN_TEXT}.
 Use only those capabilities; do not modify code, the index or HEAD. Missing/inaccessible required
 input means review pending with the exact gap, not PASS or an implementation defect. The coordinator
@@ -44,7 +47,11 @@ The receipt is metadata, not evidence of independence.
 
 On re-review, use {SINCE_SHA_OR_INITIAL} and the finding-to-fix/affected-obligation map. Mark earlier
 findings addressed or not, inspect the behavior the fix affects and cross-boundary consequences,
-and keep unchanged approvals. The full diff remains available for context; do not re-ingest every
+and keep unchanged approvals. dispatch.json separates authenticated retained coverage from
+prospective carry: a forecast requires an actual clean native narrow receipt and a fresh online
+gate evaluation. The optional map is lead judgment, not verdict authority or proof that a concern
+is unaffected. Never infer a finding closed from it. A missing map or unavailable host leaves
+dispatch pending, not an empty required panel. The full diff remains available for context; do not re-ingest every
 prior transcript. State which concern/range the verdict covers. For a design judgment between concepts you did not produce, report
 compliance per concept, real tradeoffs and a recommendation; difference alone is not a defect.
 

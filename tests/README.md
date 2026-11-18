@@ -76,6 +76,7 @@ reproduce the duplicate number; synchronization markers avoid a scheduler-depend
 | Immutable review packages and bounded round allocation | review_package |
 | Remote checkpoint observation | delivery_checkpoint |
 | Context-budget advisories and strict doctor | context_budget |
+| Generated navigation: shared budget/compact reader, retained authored citations, malformed footers, byte/line provenance and upgrade preservation | spec_navigation |
 | Evaluation runner comply/violate behavior | evals_runner |
 | Accepted-change economics, missing telemetry, independent acceptance and duplicate meters | accepted_change_benchmark |
 | Version and documentation links | version, doc_links |

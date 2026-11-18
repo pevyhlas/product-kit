@@ -10,6 +10,34 @@ change by change.
 
 ### Changed
 
+- **CI completion bounds (#114).** Linux/native-macOS job caps are 45/90 minutes so the
+  expanded verification suites, legacy-AWK checks and lint can complete.
+
+- **Generated navigation budgets and compact reads (#110).** A conservative
+  `prdkit:navigation:v1` footer keeps same-file tracking references clickable while excluding
+  validated definitions from prose budgets. `read-spec.sh` uses that same recognizer before
+  text reaches routine agent context, retaining IDs, authored references, original line numbers
+  and source/content identity; `--raw`, `--stats` and `--target` keep raw reads, accounting and
+  individual lookup available. Malformed/mixed/conflicting/unknown blocks stay visible and
+  counted with diagnostics. Instruction-file byte budgets, raw integrity and review inputs stay
+  raw. This supplies no tracker/export adapter and makes no tokenizer-performance claim.
+  Parser execution failures fail doctor explicitly rather than leaving budgets unverified in
+  an apparently successful report.
+
+- **Targeted review packages (#106).** Later packages distinguish native retained coverage,
+  review actions and conditional prospective carry through an optional advisory scope map.
+  The existing gate exports additive diagnostics without changing its verdicts or JSON fields.
+  Equal reviewed content refuses before round allocation, including omitted `--since` with a
+  completed binding; concurrent identical requests cannot create duplicate rounds. Object-bound
+  child context includes referenced blocks, complete bounds and required parent obligations,
+  not a whole-parent default. Structural previews remain usable without host tools; unknown
+  authority/context and every existing blocker remain explicit. See `docs/review-packages.md`.
+  Later corrective coverage also exercises complete identity accounting, single-object inputs,
+  literal spec paths, disjoint context artifacts, explicit parent anchors and pre-allocation
+  unknown-object refusal, with deterministic lock and artifact-preservation negative controls.
+  Guard acquisition/cleanup also exercises nonregular entries and interrupted contenders;
+  partial completion bindings remain incomplete evidence rather than blocking previews.
+
 - **Review verdicts bind content fingerprints, not commit ranges (breaking; closes #66 and #86).**
   A verdict used to name a hand-typed `<base sha>..<head sha>` range and coverage was proven from
   commit ancestry, so a base merge, an edit reverted before a base merge (#86), a narrow range

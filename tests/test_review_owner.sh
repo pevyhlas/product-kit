@@ -333,7 +333,7 @@ barrier_fixture() {
             fx_review 7 "$(printf '<!-- prdkit-review\n%s\n-->\n' "$BODY")" ;;
     esac
 }
-barrier_check() { run bash "$CHECK" --json --pr "$PR" "$@" "$CHANGE"; }
+barrier_check() { run bash "$CHECK" --json --diagnostics --pr "$PR" "$@" "$CHANGE"; }
 barrier_assert() {
     assert_eq 1 "$STATUS" "$OUTPUT"
     assert_eq host "$(printf '%s' "$OUTPUT" | jq -r .authority)"
@@ -342,6 +342,12 @@ barrier_assert() {
     assert_contains "$OUTPUT" "$2"
     assert_not_contains "$OUTPUT" 'needs a recorded independent review' 'clean coverage cannot mask the owner barrier'
     assert_eq 0 "$(printf '%s' "$OUTPUT" | jq .invalid_receipts)"
+    assert_eq true "$(printf '%s' "$OUTPUT" | jq '(.diagnostics.problem_classes|length)==(.problems|length)')" \
+        'integrated diagnostics retain one class per problem'
+    assert_eq '["owner"]' "$(printf '%s' "$OUTPUT" | jq -c '. as $g |
+        [range(0; $g.problems|length) as $i |
+         select($g.problems[$i]==$g.owner.barriers[0].reason) | $g.diagnostics.problem_classes[$i]]')" \
+        'early PR-wide barriers are owner diagnostics, not legacy or structure problems'
 }
 
 it 'owner negatives block every tier, record-only closure, renamed and missing carriers'

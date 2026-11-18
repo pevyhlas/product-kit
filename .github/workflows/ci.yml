@@ -17,7 +17,8 @@ jobs:
   test:
     name: test
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # Expanded suites can finish tests near 30m; reserve time for legacy awk and lint (#114).
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -59,6 +60,7 @@ jobs:
           fi
           bash tests/test_adoption_gate.sh
           bash tests/test_doctor.sh
+          bash tests/test_spec_navigation.sh
       - name: Shellcheck scripts and tests
         # SC1091 (not following sourced files) is excluded repo-wide: scripts
         # source common.sh / lib.sh via runtime-resolved paths shellcheck
