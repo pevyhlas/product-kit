@@ -201,8 +201,8 @@ native PASS on this PR includes them in its own reviewed history. Owner and unna
 need a valid native owner approval with the same historical proof. Lines never enter coverage.
 These blockers apply to T0 and record-only changes too. Branch renaming can escape closed-PR
 carry; rewriting pre-merge branch history can erase a newly introduced legacy line. Default-
-branch inherited blockers are protected. The candidate's CI scripts remain part of the trust
-boundary: trusted execution is not provided by this change. With shared credentials, review
+branch inherited blockers are protected. The ordinary gate does not authenticate its own execution
+source; use the trusted all-PR boundary below for enforcement. With shared credentials, review
 independence remains a deployment property, not something the host can prove.
 
 A closing commit that deletes the record is checked against the record's last committed
@@ -240,35 +240,95 @@ current branch. Online, the PR head must be a local ancestor of `--head`, otherw
 unavailable. A differing descendant must also be fingerprint-identical, so an unpushed closing
 commit can be checked. Merge using the actual PR head.
 
-It authenticates recorded verdicts; it does not review, and it never grants merge authority. Where the
-plan offers no branch protection, the merging agent's run is the gate. CI can run it as a
-visible status, with the branch history fetched. It applies to change branches only: a branch
-not named after a change has no record to check. Pin each action to a full commit SHA with its
-version as a comment, as the kit's own workflows do.
+### Trusted all-PR execution — `check-pr-review.sh`
 
-```yaml
-- uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-  with: { fetch-depth: 0, ref: "${{ github.event.pull_request.head.sha }}" }
-- name: Authenticated review covers the head
-  env:
-    HEAD_REF: ${{ github.head_ref }}
-    HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-    BASE_REF: ${{ github.base_ref }}
-    PR_URL: ${{ github.event.pull_request.html_url }}
-    GH_TOKEN: ${{ github.token }}
-  run: |
-    # actions/checkout may initialize origin without its remote-default symbolic ref.
-    git remote set-head origin --auto
-    case "$HEAD_REF" in
-      [0-9][0-9][0-9]-*) bash .prdkit/scripts/bash/check-review.sh --pr "$PR_URL" --head "$HEAD_SHA" --base "origin/$BASE_REF" "$HEAD_REF" ;;
-      *) echo "Not a change branch; no review record to check." ;;
-    esac
+The launcher authenticates inputs and transports **one** native evaluation; it does not review
+or grant permission to merge. An ordinary candidate-controlled workflow or same-name successful
+check is not enforcement. The consumer must register an authenticated required workflow with an
+immutable repository/path/source identity, protect it without bypass, and verify registration and
+source-spoof rejection on the actual host. An environment assertion, event file, arbitrary SHA or
+this documentation cannot establish that registration. Without it enforcement is **BLOCKED**.
+
+This is an integration contract, **not a runnable workflow** (there is intentionally no substitute
+bootstrap action or registration API):
+
+```text
+host-registered immutable required workflow W
+  pull_request: opened, reopened, synchronize, edited, ready_for_review, converted_to_draft
+  every applicable PR, forks and drafts included; no path/numbered-branch skips
+  fresh GitHub-hosted ubuntu-24.04 job; finite job timeout (at least 11 minutes)
+  permissions: {} by default; this job: contents: read, pull-requests: read
+  trusted pre-shell constructor -> absolute trusted /bin/bash --noprofile --norc
+    W's validated regular-blob launcher:
+    check-pr-review.sh --repository <fixed-owner/name> --event <private-host-event-path>
 ```
+
+**Before any shell starts**, W's trusted parent must construct an allowlisted environment with a
+fixed fresh-host tool PATH, C locale, private HOME/GH_CONFIG_DIR/XDG_CONFIG_HOME/TMPDIR and umask
+077. Preserve only authenticated host invocation values (including GITHUB_EVENT_NAME,
+GITHUB_REPOSITORY, GITHUB_REPOSITORY_ID), the read-scoped GH_TOKEN and necessary trusted platform
+values. Retain W's immutable source, workflow/run/event identity and event in trusted run evidence.
+Never infer W's authenticity from these environment variables. Validate launcher bytes as a
+contained regular Git blob (100644 or 100755) from W; no symlink/gitlink or candidate copy.
+
+Exclude BASH_ENV, ENV, SHELLOPTS, BASHOPTS, exported BASH_FUNC_* functions, loader/language injection,
+caller proxies, credential helpers and **all** inherited GIT_* variables. Unsetting them in an
+already-started poisoned shell is too late. The launcher's later defensive sanitization is not
+this constructor. gh/jq/Git/core tools must be installed in trusted host tool locations, not the
+workspace, caller bin directory, user configuration or gh extensions. Deliver the credential only
+ephemerally; never a publisher write token, persisted login or credential-bearing URL.
+
+No candidate checkout/build/artifact execution, self-hosted runner, mutable W source or
+`pull_request_target`. Any bootstrap action must be pinned to its reviewed full commit SHA with a
+version comment. Target edits require a new evaluation. The consumer retains stronger content
+policy, deployment evidence and no-bypass controls; this entrypoint does not authorize wrapper,
+test or ruleset removal.
+
+The launcher checks the event/live repository IDs, PR number, open state, fork/head repository,
+branch and exact commit H. It separately resolves current target T and default-policy P, fetches
+their complete histories into new fetch-only objects, checks exact tips, and rechecks live
+bindings before accepting a result. Event base SHA remains evidence, not current T. Candidate
+clone URLs, local Git state, hooks, config, replacements, alternates and credentials are never
+copied. Fetch is restricted to the bound github.com HTTPS repository; no tags, filters, submodules,
+shallow history or implicit object acquisition.
+
+The exact native gate/helper closure is extracted as regular blobs from P's installed
+`.prdkit/scripts/bash/`, not from H or the old merge base. Native `spec_trusted_refs` at P must
+approve the actual target's origin ref; a non-origin/unresolved mapping cannot alias another SHA
+into trust. Unique merge base S stays distinct from T and P. An exact numbered branch selects its
+ID, even when closed. Otherwise exactly one ID must be introduced by the union of net additions
+and **complete** S..H history (side branches and merge-created additions included), minus IDs
+present at S. Git 2.31+ combined-diff capability is required; incomplete history, no/multiple bases
+or zero/multiple assignments refuse. The native gate owns record recovery, closure, tier,
+fingerprints, owner events, receipts, coverage and sibling-deletion checks.
+
+Bounds are 600 seconds overall, 120 per acquisition/selection/extraction and 180 for the native
+gate, with five seconds TERM-to-KILL grace for owned process groups. Capture files have a hard
+size limit and a conservative 4 MiB acceptance ceiling each; overflow refuses, never truncates to
+success. All owned processes are terminated/reaped before deleting only the invocation's scratch.
+Cleanup failure refuses. Uncatchable runner termination can leave no complete result and is not
+PASS. stdout is one buffered JSON object, newline-terminated:
+
+```json
+{"launcher":"complete","error":null,"native_exit":0,"native":{}}
+```
+
+`native` is the **entire** native object, including unknown fields/diagnostics, not the empty
+illustration above. `complete` means transport completed, not approval: native failures and
+preview exit 3 remain nonzero. A transport refusal uses `launcher:"refused"`,
+`error:{"stage":"binding","code":"context-moved"}` (for example), actual `native_exit` or null, and
+any valid captured native object or null. Error classes/phases on stderr are sanitized; raw
+host/tool stderr stays private to the invocation, never printed as workflow commands.
+
+Only native exit 0, host pass, empty problems and matching change/PR/H/T/P/canonical target plus
+ready/content-bound diagnostics can exit 0. Usage exits 2; all other refusals/failures exit 1.
+Missing/partial host data never falls back to offline success. Final CI certifies actual remote H,
+not the ordinary gate's permitted local metadata-only closing descendant.
 
 It replaces the 0.x `check-signoff.sh`, but not one for one. The 0.x gate ran on every pull
 request touching `gated-paths` and required a `readiness.md` with fingerprinted evidence; 1.0
-drops that record, the fingerprint and `evidence-fingerprint.sh`, and checks change branches
-against their own record. `init.sh --upgrade` warns while `signoff-requirements.md` still lists
+drops that record, the fingerprint and `evidence-fingerprint.sh`; all-PR integration requires a
+unique review carrier rather than skipping unnumbered branches. `init.sh --upgrade` warns while `signoff-requirements.md` still lists
 `gated-paths:`; replace the CI step and fold the review policy into the constitution's `Review
 and checks` at the cutover.
 

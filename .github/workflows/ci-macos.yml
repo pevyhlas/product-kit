@@ -55,6 +55,7 @@ jobs:
           /bin/bash tests/test_review_fingerprint.sh
           /bin/bash tests/test_review_receipts.sh
           /bin/bash tests/test_review_gate.sh
+          /bin/bash tests/test_pr_review.sh
           /bin/bash tests/test_review_legacy_scan.sh
           /bin/bash tests/test_review_legacy_gate.sh
           /bin/bash tests/test_review_upgrade.sh

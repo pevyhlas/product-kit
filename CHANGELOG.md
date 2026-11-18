@@ -8,6 +8,11 @@ change by change.
 
 ## [Unreleased]
 
+### Added
+- Trusted all-PR review transport with authenticated host/ref bindings, fetch-only objects,
+  complete-history carrier selection, bounded execution and full native diagnostic forwarding.
+  Enforcement still requires an independently registered immutable workflow and clean pre-shell bootstrap.
+
 ### Changed
 
 - **Targeted review packages (#106).** Later packages distinguish native retained coverage,
