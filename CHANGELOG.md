@@ -10,6 +10,9 @@ change by change.
 
 ### Changed
 
+- **CI completion bounds (#114).** Linux/native-macOS job caps are 45/90 minutes so the
+  expanded verification suites, legacy-AWK checks and lint can complete.
+
 - **Project-owned lifecycle orders (#109).** An optional `**Stages**: A > B > C` header in
   `specs/product/lifecycle.md` (or the single-file spec's `## Lifecycle` section) replaces the
   built-in order for doctor, status and bounds. Multiword names, summary stage columns and
