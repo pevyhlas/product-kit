@@ -437,6 +437,14 @@ if [ -f "$FIX/descendant" ]; then
     case "$STATE" in ''|Z*) _ok 'descendant terminated' ;; *) _no 'descendant survived watchdog' "$STATE" ;; esac
 else _no 'timeout reached owned descendant fixture'; fi
 
+it 'whole-invocation watchdog is independent of per-acquisition bounds'
+instrument
+sed 's/deadline=$((SECONDS+600))/deadline=$((SECONDS+2))/' "$FIX/launcher" > "$FIX/short"
+mv "$FIX/short" "$FIX/launcher"
+touch "$FIX/hang"; launch; rm "$FIX/hang"
+assert_eq 1 "$STATUS"
+assert_eq overall-timeout "$(printf '%s' "$OUTPUT" | jq -r .error.code)"
+
 it 'cancellation cleans owned groups before emitting refusal'
 instrument
 rm -f "$FIX/descendant"

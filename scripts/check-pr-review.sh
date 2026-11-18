@@ -11,7 +11,7 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin
 export PATH LC_ALL=C LANG=C
 umask 077
 set -m # each asynchronous child gets its own process group, including on Bash 3.2
-phase=bootstrap; error_code=interrupted; root=""; child=""; watcher=""
+phase=bootstrap; error_code=interrupted; root=""; child=""; watcher=""; overall=""
 native=null; native_exit=null; transport=refused; status=1
 deadline=$((SECONDS+600))
 
@@ -36,10 +36,14 @@ stop_watcher() {
     watcher=""
 }
 finish() {
-    trap - EXIT INT TERM HUP ERR
+    trap - EXIT INT TERM HUP ERR USR1
     cancel_group "$child"; stop_watcher
     if [ -n "$root" ] && { ! rm -rf -- "$root" || [ -e "$root" ]; }; then
         phase=cleanup; error_code=cleanup-failed; transport=refused; status=1
+    fi
+    if [ -n "$overall" ]; then
+        kill -KILL -- "-$overall" 2>/dev/null || true
+        wait "$overall" 2>/dev/null || true
     fi
     if [ "$transport" = complete ]; then
         printf '{"launcher":"complete","error":null,"native_exit":%s,"native":%s}\n' "$native_exit" "$native"
@@ -53,6 +57,7 @@ finish() {
 refuse() { phase="$1"; error_code="$2"; status="${3:-1}"; exit "$status"; }
 trap finish EXIT
 trap 'refuse "$phase" interrupted' INT TERM HUP
+trap 'refuse "$phase" overall-timeout' USR1
 trap 'refuse "$phase" command-failed' ERR
 
 repository=""; event=""
@@ -83,6 +88,15 @@ for variable in $(compgen -v); do
     esac
 done
 root="$(mktemp -d /tmp/prdkit-pr.XXXXXXXX)" || refuse bootstrap scratch
+# Independent whole-invocation deadline, not just an elapsed-time check between acquisitions.
+# USR1 interrupts the parent's wait builtin; its trap cancels/reaps the currently owned groups.
+parent=$$
+(
+    set +m
+    sleep "$((deadline-SECONDS))"
+    kill -USR1 "$parent" 2>/dev/null || true
+) >/dev/null 2>&1 &
+overall=$!
 HOME="$root/home"; GH_CONFIG_DIR="$root/gh"; XDG_CONFIG_HOME="$root/xdg"; TMPDIR="$root/tmp"
 export HOME GH_CONFIG_DIR XDG_CONFIG_HOME TMPDIR
 mkdir -p "$HOME" "$GH_CONFIG_DIR" "$XDG_CONFIG_HOME" "$TMPDIR" "$root/template" "$root/trusted"
