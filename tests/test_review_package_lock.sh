@@ -17,15 +17,14 @@ for mutation in 0 1; do
     mkdir -p "$copy" "$sync"
     cp "$PK_ROOT"/scripts/*.sh "$copy/"
     awk -v mutate="$mutation" '
-        $0=="LOCK_PATH=\"$REVIEW_DIR/.allocation-lock\"" && mutate { print "LOCK_PATH=\"\""; lock++; next }
-        $0=="if ! (set -C; : > \"$LOCK_PATH\") 2>/dev/null; then" && mutate { print "if false; then"; acquire++; next }
+        $0=="if ! acquire_review_lock; then" && mutate { print "if false; then"; acquire++; next }
         /^# Claim the round directory atomically:/ {
             print "printf \"%s\\n\" \"$CALLER-compared\" >&8"
             print "IFS= read -r _release < \"$SYNC_DIR/$CALLER.release\""
             hook++
         }
         { print }
-        END { if (hook!=1 || (mutate && (lock!=1 || acquire!=1))) exit 1 }
+        END { if (hook!=1 || (mutate && acquire!=1)) exit 1 }
     ' "$PK_ROOT/scripts/build-review-package.sh" > "$copy/build-review-package.sh"
     mkfifo "$sync/events" "$sync/one.release" "$sync/two.release"
     exec 8<> "$sync/events"

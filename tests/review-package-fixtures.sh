@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Test evidence only: relative path -> type/mode/size/hash, including empty directories.
+# Test evidence only: relative path -> inode/type/mode/size/hash, including empty directories.
 # Unlike an unordered hash multiset, this detects swaps, in-place corruption and mode changes.
 package_snapshot() {
-    local root="$1" entry relative mode bytes oid target
-    if [ ! -e "$root" ]; then printf 'ABSENT\n'; return; fi
+    local root="$1" entry relative mode inode bytes oid target
+    if [ ! -e "$root" ] && [ ! -L "$root" ]; then printf 'ABSENT\n'; return; fi
     while IFS= read -r -d '' entry; do
         relative="${entry#"$root"}"; relative="${relative#/}"; relative="${relative:-.}"
-        mode="$(LC_ALL=C ls -ld "$entry")"; mode="${mode%% *}"
+        # Only numeric inode/mode prefixes are read; names come from find -print0, not ls.
+        # shellcheck disable=SC2012
+        IFS=$'\t' read -r inode mode <<< "$(LC_ALL=C ls -ldin "$entry" | awk '{ print $1 "\t" $2 }')"
         bytes=-; oid=-
         if [ -L "$entry" ]; then
             target="$(readlink "$entry")"
@@ -15,6 +17,6 @@ package_snapshot() {
         elif [ -f "$entry" ]; then
             bytes="$(wc -c < "$entry" | tr -d ' ')"; oid="$(git hash-object --no-filters "$entry")"
         fi
-        printf '%q\t%s\t%s\t%s\n' "$relative" "$mode" "$bytes" "$oid"
+        printf '%q\t%s\t%s\t%s\t%s\n' "$relative" "$inode" "$mode" "$bytes" "$oid"
     done < <(find "$root" -print0) | LC_ALL=C sort
 }

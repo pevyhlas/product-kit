@@ -35,10 +35,20 @@ Equal fingerprints refuse with **no round needed** before allocating a round or 
 artifacts. Omitting `--since` also compares the latest completed, comparable package's actual
 head, recomputing content from Git objects, not trusting its saved digest. Interrupted rounds
 retain evidence and numbering; their existence does not prove completion. A completion binding
-is written last. Allocation/comparison/assembly share an exclusive Bash noclobber lock file; a busy call
+is published last by same-directory rename. Empty, unterminated or malformed historical
+bindings remain incomplete evidence, preserving numbering and ordinary unknown-comparison
+previews. Allocation/comparison/assembly share an exclusive directory/verified private-inode
+claim; a busy call
 refuses rather than opening another round. An interrupted lock requires explicit reconciliation;
 never erase failure evidence. Unknown fingerprints do not mean equal or changed: targeted
 requests fail before allocation, while ordinary full structural previews remain available.
+
+All existing guard leaves (regular, directory, FIFO or symlink, including dangling/nonregular
+targets) refuse without opening or reclaiming them. Directory creation and a same-filesystem
+hard-linked private claim establish ownership; a leaf type precheck alone does not. Cleanup
+is unarmed until claim confirmation and verifies the owned inode before release. Interrupted
+or unsupported claims can remain stale for explicit reconciliation; no automatic lock repair,
+new runtime dependency or implicit host operation is attempted.
 
 ## Optional host facts and advisory map
 

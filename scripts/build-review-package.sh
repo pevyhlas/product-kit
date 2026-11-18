@@ -218,8 +218,39 @@ if [ -n "$SINCE" ]; then
 fi
 
 PACKAGE_SCRATCH="$(mktemp -d)"
-LOCK_PATH=""
-trap 'if [ -n "$LOCK_PATH" ]; then rm -f "$LOCK_PATH"; fi; rm -rf "$PACKAGE_SCRATCH"' EXIT
+LOCK_CANDIDATE=""; LOCK_PRIVATE=""; LOCK_OWNED=false
+cleanup_review_package() {
+    # A pathname is not ownership. Refused/interrupted contenders leave the shared entry
+    # alone; even an armed owner must still identify its own regular claim by inode.
+    if $LOCK_OWNED && [ ! -L "$LOCK_CANDIDATE" ] && [ -d "$LOCK_CANDIDATE" ] &&
+        [ ! -L "$LOCK_CANDIDATE/claim" ] && [ -f "$LOCK_CANDIDATE/claim" ] &&
+        [ -n "$LOCK_PRIVATE" ] && [ ! -L "$LOCK_PRIVATE" ] &&
+        [ "$LOCK_CANDIDATE/claim" -ef "$LOCK_PRIVATE" ]; then
+        if rm "$LOCK_CANDIDATE/claim"; then
+            rmdir "$LOCK_CANDIDATE" 2>/dev/null ||
+                echo "WARNING: allocation directory retained; reconcile it before retrying" >&2
+        fi
+    fi
+    [ -z "$LOCK_PRIVATE" ] || rm -f "$LOCK_PRIVATE"
+    rm -rf "$PACKAGE_SCRATCH"
+}
+acquire_review_lock() {
+    LOCK_CANDIDATE="$REVIEW_DIR/.allocation-lock"
+    # Never redirect into an existing leaf: FIFO and nonregular/symlink entries are busy.
+    if [ -e "$LOCK_CANDIDATE" ] || [ -L "$LOCK_CANDIDATE" ]; then return 1; fi
+    LOCK_PRIVATE="$(mktemp "$REVIEW_DIR/.allocation-claim.XXXXXXXX")" || return 1
+    printf 'pid=%s\n' "$$" > "$LOCK_PRIVATE" || return 1
+    if ! mkdir "$LOCK_CANDIDATE" 2>/dev/null; then return 1; fi
+    if [ -L "$LOCK_CANDIDATE" ] || [ ! -d "$LOCK_CANDIDATE" ] ||
+        [ -e "$LOCK_CANDIDATE/claim" ] || [ -L "$LOCK_CANDIDATE/claim" ]; then return 1; fi
+    # Same-filesystem hard-link creation never opens a FIFO. Verify the private inode rather
+    # than trusting a utility's success status or a shared directory's mere existence.
+    if ! ln -n "$LOCK_PRIVATE" "$LOCK_CANDIDATE/claim" 2>/dev/null; then return 1; fi
+    if [ -L "$LOCK_CANDIDATE" ] || [ -L "$LOCK_CANDIDATE/claim" ] ||
+        [ ! -f "$LOCK_CANDIDATE/claim" ] || [ ! "$LOCK_CANDIDATE/claim" -ef "$LOCK_PRIVATE" ]; then return 1; fi
+    LOCK_OWNED=true
+}
+trap cleanup_review_package EXIT
 review_plan_prepare
 for p in ${EVIDENCE[@]+"${EVIDENCE[@]}"}; do
     safe_path "$p" && [ -f "$REPO_ROOT/$p" ] && [ -r "$REPO_ROOT/$p" ] || {
@@ -233,12 +264,8 @@ safe_path ".prdkit/cache/evidence/$CHANGE_ID/reviews" || { echo "ERROR: symlinke
 # Serialize completed-binding comparison AND assembly. Busy is retry-later, never permission
 # to allocate another identical round. Interrupted packages remain numbered and untouched.
 mkdir -p "$REVIEW_DIR"
-LOCK_PATH="$REVIEW_DIR/.allocation-lock"
-# Bash's exclusive noclobber create is portable and does not depend on a mkdir utility's
-# concurrent existing-directory handling. Existing files, symlinks and old lock directories
-# all refuse; never reclaim another request's lock or discard interrupted evidence.
-if ! (set -C; : > "$LOCK_PATH") 2>/dev/null; then
-    LOCK_PATH=""; echo "ERROR: package allocation busy; reuse the in-progress package or retry after it finishes" >&2; exit 1
+if ! acquire_review_lock; then
+    echo "ERROR: package allocation busy or claim unconfirmed; reconcile retained evidence before retrying" >&2; exit 1
 fi
 ROUND=1; COMPLETED=0; COMPLETED_HEAD=""
 for d in "$REVIEW_DIR"/round-*/; do
@@ -254,8 +281,12 @@ for d in "$REVIEW_DIR"/round-*/; do
         ROUND=$((n + 1))
     fi
     if [ "$n" -gt "$COMPLETED" ] && [ -f "$d/completed.tsv" ] && [ ! -L "$d/completed.tsv" ]; then
-        IFS=$'\t' read -r version bound_id bound_head bound_base bound_tip bound_policy bound_comparison < "$d/completed.tsv"
-        if [ "$version" = package1 ] && [ "$bound_id" = "$CHANGE_ID" ] && [ "$bound_comparison" = known ] &&
+        # Older interrupted writers can leave empty/unterminated files. A failed complete
+        # read or malformed record is incomplete evidence, never a fatal errexit or binding.
+        if review_file_without_nul "$d/completed.tsv" &&
+            awk -F '\t' 'NR!=1 || NF!=7 { bad=1 } END { exit (bad || NR!=1) }' "$d/completed.tsv" &&
+            IFS=$'\t' read -r version bound_id bound_head bound_base bound_tip bound_policy bound_comparison < "$d/completed.tsv" &&
+            [ "$version" = package1 ] && [ "$bound_id" = "$CHANGE_ID" ] && [ "$bound_comparison" = known ] &&
             [[ "$bound_head" =~ ^[0-9a-f]{40}$ && "$bound_tip" =~ ^[0-9a-f]{40}$ && "$bound_policy" =~ ^[0-9a-f]{40}$ ]] &&
             [[ "$bound_base" == refs/remotes/* ]]; then
             COMPLETED="$n"; COMPLETED_HEAD="$bound_head"
@@ -417,6 +448,7 @@ done < "$PACKAGE_DIR/manifest.tsv"
 # Completion is written LAST, never to an interrupted round. It is a comparison binding, not
 # approval: later calls recompute the prior head's content from immutable objects.
 comparison=unknown; [ -z "$FINGERPRINT" ] || comparison=known
-printf 'package1\t%s\t%s\t%s\t%s\t%s\t%s\n' "$CHANGE_ID" "$HEAD_SHA" "$FP_REF" "$FP_BASE_AT" "$POLICY_AT" "$comparison" > "$PACKAGE_DIR/completed.tsv"
+printf 'package1\t%s\t%s\t%s\t%s\t%s\t%s\n' "$CHANGE_ID" "$HEAD_SHA" "$FP_REF" "$FP_BASE_AT" "$POLICY_AT" "$comparison" > "$PACKAGE_DIR/completed.pending"
+mv "$PACKAGE_DIR/completed.pending" "$PACKAGE_DIR/completed.tsv"
 
 printf '{"ROUND":%d,"BASE_SHA":"%s","HEAD_SHA":"%s","PACKAGE_DIR":"%s","REPORT_PATH":"%s","INDEX_PATH":"%s","SINCE_SHA":"%s","FINGERPRINT":"%s","SINCE_FINGERPRINT":"%s"}\n' "$ROUND" "$BASE_SHA" "$HEAD_SHA" "$(json_escape "$PACKAGE_DIR")" "$(json_escape "$PACKAGE_DIR/report.md")" "$(json_escape "$PACKAGE_DIR/index.md")" "$SINCE" "$FINGERPRINT" "$SINCE_FINGERPRINT"

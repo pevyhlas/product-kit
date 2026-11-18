@@ -21,6 +21,8 @@ change by change.
   Later corrective coverage also exercises complete identity accounting, single-object inputs,
   literal spec paths, disjoint context artifacts, explicit parent anchors and pre-allocation
   unknown-object refusal, with deterministic lock and artifact-preservation negative controls.
+  Guard acquisition/cleanup also exercises nonregular entries and interrupted contenders;
+  partial completion bindings remain incomplete evidence rather than blocking previews.
 
 - **Review verdicts bind content fingerprints, not commit ranges (breaking; closes #66 and #86).**
   A verdict used to name a hand-typed `<base sha>..<head sha>` range and coverage was proven from
