@@ -72,6 +72,7 @@ reproduce the duplicate number; synchronization markers avoid a scheduler-depend
 | Installed version versus spec layout, conservative migration states, unknown metadata and source-less diagnostics | adoption_state |
 | Current-source consumer installation, repeated upgrades, customization and source-less helpers | consumer_smoke |
 | Change bounds: constraints, non-goals and qualities in scope for a change's parts and journeys, ranges, later-stage items | bounds |
+| Explicit lifecycle orders, whole multiword names, transitions, invalid classifications, single-file canon and upgrade preservation | lifecycle |
 | Merge gate: recorded review verdicts cover the merged head, per tier and rigor | check_review |
 | Immutable review packages and bounded round allocation | review_package |
 | Remote checkpoint observation | delivery_checkpoint |

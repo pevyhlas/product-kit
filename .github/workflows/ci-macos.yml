@@ -47,6 +47,7 @@ jobs:
           /bin/bash tests/test_consumer_smoke.sh
           /bin/bash tests/test_script_safety.sh
           /bin/bash tests/test_bounds.sh
+          /bin/bash tests/test_lifecycle.sh
           /bin/bash tests/test_spec_navigation.sh
           /bin/bash tests/test_agent_tiers.sh
           /bin/bash tests/test_context_budget.sh

@@ -13,6 +13,14 @@ change by change.
 - **CI completion bounds (#114).** Linux/native-macOS job caps are 45/90 minutes so the
   expanded verification suites, legacy-AWK checks and lint can complete.
 
+- **Project-owned lifecycle orders (#109).** An optional `**Stages**: A > B > C` header in
+  `specs/product/lifecycle.md` (or the single-file spec's `## Lifecycle` section) replaces the
+  built-in order for doctor, status and bounds. Multiword names, summary stage columns and
+  split stage details share that order. Invalid declarations/Now/Next fail diagnostics;
+  custom-order unknown markers fail too. Status/bounds now refuse unknown markers instead of
+  silently classifying them as current, including with the default vocabulary. Existing valid
+  default-stage sources and project-owned templates remain compatible; no stage is advanced.
+
 - **Generated navigation budgets and compact reads (#110).** A conservative
   `prdkit:navigation:v1` footer keeps same-file tracking references clickable while excluding
   validated definitions from prose budgets. `read-spec.sh` uses that same recognizer before
