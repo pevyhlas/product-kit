@@ -39,7 +39,8 @@ spec_navigation() { # file budget|stats|compact|diagnostics|target [reference ke
             t = line; sub(/^ */, "", t)
             if (fence != "") {
                 if (substr(t, 1, 1) == fence) {
-                    closing = t; gsub(fence, "", closing)
+                    closing = t
+                    if (fence == "`") gsub(/`/, "", closing); else gsub(/~/, "", closing)
                     if (closing ~ /^[[:space:]]*$/ && length(t) - length(closing) >= fence_len) fence = ""
                 }
                 next
