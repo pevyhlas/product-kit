@@ -5,6 +5,7 @@
 # fields — and never writes. Bash 3.2 and POSIX awk only.
 # shellcheck disable=SC2034 # used by the scripts that source this library
 SPEC_SEP="$(printf '\037')"
+source "$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/spec-navigation-lib.sh"
 
 # Text carried in row fields must never introduce a field or record boundary.
 spec_field() { printf '%s' "$1" | tr '\037\t\r\n' '    '; }
@@ -263,11 +264,10 @@ spec_removed_features() { # root
 }
 
 # Reading length: a line counts once per 100 characters, rounded up, and at least once, so a
-# long table row or paragraph cannot dodge a line budget. Dropping UTF-8 continuation bytes
-# leaves one byte per character for every awk under LC_ALL=C.
+# long table row or paragraph cannot dodge a line budget. Only a validated generated-navigation
+# footer is exempt, through the same recognizer as read-spec.sh. Physical lines remain raw.
 spec_reading_lines() { # file -> "<reading lines> <lines>"
-    LC_ALL=C tr -d '\200-\277' < "$1" |
-        LC_ALL=C awk '{ l = length($0); n += l > 100 ? int((l + 99) / 100) : 1 } END { print n + 0, NR }'
+    spec_navigation "$1" budget
 }
 
 # Spec files that define IDs, relative to root.

@@ -46,6 +46,50 @@ the files directly in it; a retired file is exempt), and that `observed.md` link
 Links in `specs/archive.md` must resolve too; a git path is code (`git show <sha>:<path>`), not
 a link.
 
+## Generated tracking navigation
+
+Keep a short record ID near its source item, on a separate `Tracking:` line (below a heading,
+so its anchor does not change). Use same-file reference links. The optional v1 convention is:
+
+```markdown
+Tracking: [REC-123][nav-rec-123]
+
+<!-- prdkit:navigation:v1 begin -->
+[nav-rec-123]: https://tracker.example.test/items/REC-123
+<!-- prdkit:navigation:v1 end -->
+```
+
+The definitions are active Markdown, not commented out. This is navigation, never evidence,
+authored citations, copied tracking status or a source-of-truth change. External exporters return
+mappings; inserting links is an ordinary source edit/PR under project authority.
+
+The recognizer deliberately accepts a narrow subset:
+- One complete footer at end of file (only blank lines may follow), exact marker lines/version,
+  and one or more single-line definitions; no blank lines, titles, prose or nested blocks inside.
+- Keys are `nav-` followed by ASCII letters/digits/underscores/hyphens, unique across the whole
+  file after case/whitespace normalization. URLs are absolute HTTP(S) detail URLs with a host,
+  optional numeric port and nonempty path; no user information, whitespace or Markdown titles.
+  Keep credentials and private target metadata out of published URLs.
+- Every key is used only by a `Tracking: [ID][nav-key]` line, with zero to three leading spaces.
+  More links on that line are space-separated; IDs use ASCII letters/digits and `._/-`.
+  Repeated uses reuse one definition. These lines contain no prose or evidence assertions.
+- Authored references remain outside the footer. Possible conflicting definitions or other
+  uses, unsupported HTML context, malformed/mixed/unknown blocks stay visible and counted with
+  a diagnostic. Fenced examples do not qualify. This is not a general Markdown parser.
+
+Only validated footer definitions and their envelope are excluded from prose reading budgets.
+Visible IDs, mappings and all substantive text still count. Auto-loaded instruction byte budgets
+remain raw. An exemption alone saves no model input.
+
+For routine spec context use `bash .prdkit/scripts/bash/read-spec.sh specs/<file>.md` before
+loading text into the agent context. Its read-only projection keeps original line numbers and
+reports its version, source path, observed HEAD, actual content blob, raw size and omitted size.
+The working-tree snapshot may differ from HEAD; the content blob identifies the bytes read.
+Use `--stats` for accounting, `--target nav-key` for one validated target, and `--raw` for exact
+source bytes. Malformed navigation stays in the projection. Raw Git diffs/blobs remain the
+integrity and review artifacts; use them for link changes, source review and revision evidence.
+The compact view is neither a replacement specification nor a hash/review input.
+
 ## Levels
 
 | Level | Answers | Never contains |
