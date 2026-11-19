@@ -439,7 +439,11 @@ unit_parent_fault_case() (
                         command cat "$@"
                     } ;;
                 missing-capture)
-                    unit_stream_body() { unit_cmd rm "$FIX/unit-stream-err"; } ;;
+                    unit_stream_body() {
+                        # Only the capture is absent; a later receipt check must not mask it.
+                        unit_write "$FIX/unit-stream-status" printf '%s 1\n' "$STATUS"
+                        unit_cmd rm "$FIX/unit-stream-err"
+                    } ;;
             esac
             printf 'fault-armed:%s\n' "$fault"
             unit_stream_probe stdout-closed
