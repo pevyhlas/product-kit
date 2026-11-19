@@ -26,7 +26,12 @@ def observation:
     (try (.gate|fields) catch []) as $g |
     (try (.owned|fields) catch []) as $o |
     (try (.descendant|fields) catch []) as $d |
+    (try (.terminal|fields) catch []) as $t |
     (try [.events|split("\n")[]|select(length>0)|fromjson] catch []) as $events |
+    (($t|length)==2 and ($t[0]|numeric|number_in(0;32)) and
+       ($t[1]=="false" or $t[1]=="true")) as $terminal |
+    ($terminal and $t[1]=="false" and ($t[0]|numeric)==($events|length) and
+       all(range(0;$events|length); . as $i | $events[$i].seq==($i+1))) as $collected |
     (($g|length)==3 and ($g[0]|numeric|pid) and ($g[1]|numeric|pid) and
       ($o|length)==6 and all($o[]; numeric|pid) and
       ($d|length)==2 and ($d[0]|numeric|pid) and ($d[1]|numeric|number_in(0;255))) as $identities |
@@ -34,6 +39,8 @@ def observation:
     [$events[]|select(.kind=="transfer")] as $transfers |
     {schema:"native-case-v1",evidence:"incomplete",kernel_status_proven:false,
      overflow:(.overflow==true or ($events|length)>32 or ($waits|length)>16),
+     collection:{terminal_available:$terminal,complete:$collected,
+       error:(if $terminal then $t[1]=="true" else null end)},
      identity:{
         leader_is_gate:(if $identities then $g[0]==$o[1] else null end),
         gate_parent_is_leader:(if $identities then $g[1]==$o[1] else null end),
@@ -57,8 +64,9 @@ def observation:
        equal:(if .object.available==true and (.object.equal|boolean) then .object.equal else null end),
        extension_keep:(if .object.available==true and (.object.extension_keep|boolean) then .object.extension_keep else null end),
        digest:(if .object.available==true and (.object.digest|type)=="string" and
-         (.object.digest|test("^[a-f0-9]{40}$")) then .object.digest else null end)}} |
-    if $identities and (.overflow|not) and (.identity.gate_ignores_term|boolean) and
+         (.object.digest|length)==40 and (.object.digest|test("[^a-f0-9]")|not)
+         then .object.digest else null end)}} |
+    if $collected and $identities and (.overflow|not) and (.identity.gate_ignores_term|boolean) and
        .before_term.available and .before_kill.available and .before_delete.available and
        .before_term.owned_live!=null and .before_kill.owned_live!=null and .before_delete.owned_live!=null and
        (.signals.TERM!=null) and (.signals.KILL!=null) and

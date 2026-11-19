@@ -384,7 +384,8 @@ done
 assert_file "$FIX/native-ready"; assert_file "$FIX/stubborn"
 STUBBORN="$(cat "$FIX/stubborn")"
 kill -TERM "$STUBBORN"
-printf '%s %s\n' "$STUBBORN" "$?" > "$nd_dir/descendant"
+nd_descendant_rc=$?
+{ printf '%s %s\n' "$STUBBORN" "$nd_descendant_rc" > "$nd_dir/descendant"; } 2>/dev/null || :
 if kill -0 "$STUBBORN" 2>/dev/null; then _ok 'descendant is armed to resist TERM'; else _no 'stubborn fixture not armed'; fi
 START="$SECONDS"
 kill -TERM "$LAUNCHER_PID"
@@ -397,8 +398,7 @@ if wait "$LAUNCHER_PID"; then STATUS=0; else STATUS=$?; fi
 ELAPSED=$((SECONDS-START))
 kill -KILL -- "-$GUARD" 2>/dev/null || true
 wait "$GUARD" 2>/dev/null || true
-nd_summary "$nd_dir" "$FIX/stdout" > "$nd_dir/summary"
-printf 'native-diagnostic: %s\n' "$(cat "$nd_dir/summary")"
+nd_publish "$nd_dir" "$FIX/stdout" || :
 assert_eq 1 "$STATUS"
 assert_eq 1 "$(jq -s length "$FIX/stdout")" 'one complete refusal after repeated catchable signals'
 assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
@@ -411,7 +411,9 @@ assert_eq '' "$(find "$FIX/scratch" -mindepth 1 -print)"
 run test "$ELAPSED" -lt 15
 assert_eq 0 "$STATUS" 'teardown remains bounded despite repeated signals'
 assert_other_bindings
-assert_eq complete "$(jq -r .evidence "$nd_dir/summary")" 'bounded diagnostic witnesses are available'
-assert_eq true "$(jq -r .object.equal "$nd_dir/summary")" 'entire synthetic native object retained'
-assert_eq true "$(jq -r .object.extension_keep "$nd_dir/summary")" 'actual sequence retains unknown field'
+{ # Contain only these new diagnostic assertions, not inherited whole-suite output.
+    assert_eq complete "$(nd_public_value .evidence)" 'bounded diagnostic witnesses are available'
+    assert_eq true "$(nd_public_value .object.equal)" 'entire synthetic native object retained'
+    assert_eq true "$(nd_public_value .object.extension_keep)" 'actual sequence retains unknown field'
+} 2>/dev/null
 restore_control
