@@ -12,8 +12,32 @@ change by change.
 - Trusted all-PR review transport with authenticated host/ref bindings, fetch-only objects,
   complete-history carrier selection, bounded execution and full native diagnostic forwarding.
   Enforcement still requires an independently registered immutable workflow and clean pre-shell bootstrap.
+  Its policy-bound helper closure includes the shared navigation parser; integrated controls
+  preserve native per-owner barriers and clearing before coverage exemptions.
 
 ### Changed
+
+- **CI completion bounds (#114).** Linux/native-macOS job caps are 45/90 minutes so the
+  expanded verification suites, legacy-AWK checks and lint can complete.
+
+- **Project-owned lifecycle orders (#109).** An optional `**Stages**: A > B > C` header in
+  `specs/product/lifecycle.md` (or the single-file spec's `## Lifecycle` section) replaces the
+  built-in order for doctor, status and bounds. Multiword names, summary stage columns and
+  split stage details share that order. Invalid declarations/Now/Next fail diagnostics;
+  custom-order unknown markers fail too. Status/bounds now refuse unknown markers instead of
+  silently classifying them as current, including with the default vocabulary. Existing valid
+  default-stage sources and project-owned templates remain compatible; no stage is advanced.
+
+- **Generated navigation budgets and compact reads (#110).** A conservative
+  `prdkit:navigation:v1` footer keeps same-file tracking references clickable while excluding
+  validated definitions from prose budgets. `read-spec.sh` uses that same recognizer before
+  text reaches routine agent context, retaining IDs, authored references, original line numbers
+  and source/content identity; `--raw`, `--stats` and `--target` keep raw reads, accounting and
+  individual lookup available. Malformed/mixed/conflicting/unknown blocks stay visible and
+  counted with diagnostics. Instruction-file byte budgets, raw integrity and review inputs stay
+  raw. This supplies no tracker/export adapter and makes no tokenizer-performance claim.
+  Parser execution failures fail doctor explicitly rather than leaving budgets unverified in
+  an apparently successful report.
 
 - **Targeted review packages (#106).** Later packages distinguish native retained coverage,
   review actions and conditional prospective carry through an optional advisory scope map.
@@ -73,8 +97,17 @@ change by change.
   and structure-only paths remain gh/jq-free. Removed `--verify-reports`, `report_verification`
   and the old report matcher. JSON now reports authority, receipt/blocker counts, legacy blockers
   and native owner metadata.
-- **T3 uses the owner's native approval.** The latest decisive APPROVED review must bind the
-  checked head's L0/L1 slice; CHANGES_REQUESTED and DISMISSED are barriers. Code fixes and rebases
+- **Native owner barriers precede every coverage exemption.** CHANGES_REQUESTED blocks the
+  current PR at all tiers, record-only closure and renamed/deleted/missing carriers. DISMISSED
+  is a distinct revocation barrier. Each numeric owner actor must clear its own barrier with
+  a later valid native APPROVED review; another owner's approval, COMMENTED/PENDING, record
+  text and tier edits cannot clear it. Invalid later approval leaves the negative standing.
+  Otherwise exempt, event-free PRs need no positive owner approval. JSON preserves existing
+  fields and adds `owner.actor` and per-actor `owner.barriers` with review/state/reason.
+  Preview snapshots use `prdkit-receipts 2` with actor-bearing owner rows; old actorless
+  snapshots are refused and need fresh capture. Verdict receipt v3 and `fp1` are unchanged.
+- **T3 uses the owner's native approval.** The latest decisive APPROVED review, with no
+  standing owner barrier, must bind the checked head's L0/L1 slice. Code fixes and rebases
   can keep approval; L0/L1 edits lapse it. The GraphQL approved commit must match the head
   reconstructed strictly before submission from the activity log, including merge pushes and
   deciding-window continuity. Same-second ties or aged-out activity fail closed and need a new

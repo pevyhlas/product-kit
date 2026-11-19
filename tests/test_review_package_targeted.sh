@@ -269,6 +269,26 @@ assert_eq '[]' "$(jq -c .retained "$PKG/dispatch.json")" 'no cross-PR PASS trans
 parity
 rm "$GH_STUB_DIR/pulls/6.json" "$GH_STUB_DIR/reviews/6.json"
 
+it "PR-wide owner barriers survive advisory planning beside actually retained coverage"
+for native_state in CHANGES_REQUESTED DISMISSED; do
+    advance "native-owner-$native_state"
+    post code PASS HEAD
+    post security PASS HEAD
+    fx_owner_review 7 "$native_state" "$(git rev-parse HEAD)"
+    package
+    assert_eq "$native_state" "$(jq -r '.blockers.owner.barriers[0].state' "$PKG/dispatch.json")" \
+        'advisory output retains the actual owner barrier'
+    assert_eq '["owner"]' "$(jq -c .blockers.problem_classes "$PKG/dispatch.json")" \
+        'the only failure is classified as owner, not an unrelated coverage or legacy failure'
+    assert_eq 1 "$(jq '.problems|length' "$PKG/gate.json")" 'one native owner barrier, no duplicate T3 error'
+    assert_eq '["code","security"]' "$(jq -c '[.retained[].reviewer]|sort' "$PKG/dispatch.json")" \
+        'actual independent coverage stays distinct from overall eligibility'
+    assert_eq fail "$(jq -r .gate_result "$PKG/dispatch.json")" 'owner barrier still blocks the native gate'
+    assert_eq pending "$(jq -r .dispatch "$PKG/dispatch.json")" 'an advisory map cannot waive the owner barrier'
+    parity
+done
+cp "$GH_STUB_DIR/original.json" "$GH_STUB_DIR/reviews/7.json"
+
 it "Legacy blockers, owner requirements and tier floors are not waived by the map"
 printf '**Review**: round 1 · %s..%s · code · FAIL · 0 critical, 1 high, 0 medium, 0 low · https://example.invalid/legacy\n' \
     "$BASE" "$F1" >> "specs/changes/$ID.md"

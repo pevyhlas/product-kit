@@ -4,6 +4,11 @@ The spec narrows the space of acceptable implementations where a wrong choice is
 is not a program and never tries to be complete; code and tests are the exact implementation.
 Keep what explains the system; leave what explains the work to git, PRs and CI.
 
+For routine `specs/` context, read through
+`bash .prdkit/scripts/bash/read-spec.sh specs/<file>.md` (spec.md, Generated tracking navigation).
+It preserves source IDs and line numbers while omitting only validated generated navigation.
+Use raw source/Git diffs for review, integrity, link maintenance and exact-revision evidence.
+
 ## Authority
 
 Humans own product intent and consequential choices. Read project instructions and

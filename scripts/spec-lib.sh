@@ -5,6 +5,7 @@
 # fields — and never writes. Bash 3.2 and POSIX awk only.
 # shellcheck disable=SC2034 # used by the scripts that source this library
 SPEC_SEP="$(printf '\037')"
+source "$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/spec-navigation-lib.sh"
 
 # Text carried in row fields must never introduce a field or record boundary.
 spec_field() { printf '%s' "$1" | tr '\037\t\r\n' '    '; }
@@ -33,27 +34,30 @@ SPEC_SKIP_AWK='function spec_skip(line) {
     return 0
 }'
 
-# Lifecycle stages, in order. A project may skip stages; only the owner moves the current one
-# (lifecycle.md, Now). stage_rank below keeps the same order.
-# shellcheck disable=SC2034 # read by the scripts that source this library
-SPEC_STAGE_LIST='idea, demo, mvp, private preview, public preview, paid preview, ga, sunset, retired'
+# The default order; a canonical lifecycle header can replace it with **Stages**: A > B > C.
+# Load once per consumer invocation, then pass stage_order and stage_custom to ranking awk.
+SPEC_STAGE_DEFAULT='idea>demo>mvp>private preview>public preview>paid preview>ga>sunset>retired'
 # shellcheck disable=SC2016 # awk code: its $ is awk's, never the shell's
-SPEC_STAGE_AWK='function stage_rank(s) {
-    s = tolower(s); gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); gsub(/[[:space:]]+/, " ", s)
-    if (s == "idea") return 1; if (s == "demo") return 2; if (s == "mvp") return 3
-    if (s == "private preview") return 4; if (s == "public preview") return 5
-    if (s == "paid preview") return 6; if (s == "ga" || s == "general availability") return 7
-    if (s == "sunset") return 8; if (s == "retired") return 9
-    return 0
+SPEC_STAGE_AWK='function stage_trim(s) {
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); gsub(/[[:space:]]+/, " ", s); return s
+}
+function stage_rank(s,   i, n, a) {
+    if (!stage_loaded) {
+        stage_loaded = 1
+        n = split(stage_order, a, ">")
+        for (i = 1; i <= n; i++) stage_ranks[tolower(stage_trim(a[i]))] = i
+    }
+    s = tolower(stage_trim(s))
+    if (!stage_custom && s == "general availability") s = "ga"
+    return (s in stage_ranks) ? stage_ranks[s] : 0
 }
 # The stage named by a `from: <stage>` marker in text (the parenthetical of an item heading or
 # bullet, or a parts-table Maturity cell), lowercased; blank when there is none.
-function stage_from(text,   t, m) {
+function stage_from(text,   t) {
     t = tolower(text)
-    if (!match(t, /from:[[:space:]]*[a-z]+([[:space:]]+[a-z]+)?/)) return ""
-    m = substr(t, RSTART, RLENGTH); sub(/^from:[[:space:]]*/, "", m); gsub(/[[:space:]]+/, " ", m)
-    if (m !~ /^(private|public|paid) preview$/ && m !~ /^general availability$/) sub(/ .*/, "", m)
-    return m
+    if (!match(t, /(^|[[:space:],;(])from:[[:space:]]*/)) return ""
+    t = substr(t, RSTART + RLENGTH); sub(/[,;)|].*/, "", t); t = stage_trim(t)
+    return t == "" ? "(empty)" : t
 }'
 
 spec_today() { printf '%s\n' "${PRDKIT_TODAY:-$(date +%Y-%m-%d)}"; }
@@ -260,11 +264,10 @@ spec_removed_features() { # root
 }
 
 # Reading length: a line counts once per 100 characters, rounded up, and at least once, so a
-# long table row or paragraph cannot dodge a line budget. Dropping UTF-8 continuation bytes
-# leaves one byte per character for every awk under LC_ALL=C.
+# long table row or paragraph cannot dodge a line budget. Only a validated generated-navigation
+# footer is exempt, through the same recognizer as read-spec.sh. Physical lines remain raw.
 spec_reading_lines() { # file -> "<reading lines> <lines>"
-    LC_ALL=C tr -d '\200-\277' < "$1" |
-        LC_ALL=C awk '{ l = length($0); n += l > 100 ? int((l + 99) / 100) : 1 } END { print n + 0, NR }'
+    spec_navigation "$1" budget
 }
 
 # Spec files that define IDs, relative to root.
@@ -467,23 +470,126 @@ spec_code_paths() { # root
     }'
 }
 
-# The current lifecycle stage: `**Now**: <stage>` in specs/product/lifecycle.md (blank if none),
-# then the next stage from `**Next**:`.
-spec_stage_now() { # root
-    local file="$1/specs/product/lifecycle.md"
-    [ -f "$file" ] || return 0
-    awk '
-        # The stage name a field starts with (`MVP since 2026-10-01` is MVP), in its own case.
-        function field(name,   t, l) {
-            if (!match($0, "\\*\\*" name "\\*\\*:[^*·]*")) return ""
-            t = substr($0, RSTART, RLENGTH); sub(/^[^:]*:[[:space:]]*/, "", t); l = tolower(t)
-            if (l ~ /^(private|public|paid)[[:space:]]+preview/ || l ~ /^general[[:space:]]+availability/) match(t, /^[A-Za-z]+[[:space:]]+[A-Za-z]+/)
-            else match(t, /^[A-Za-z]+/)
-            return RSTART ? substr(t, 1, RLENGTH) : ""
+# Shared lifecycle configuration. Fields belong before the first stage heading, either in
+# lifecycle.md or under ## Lifecycle in the single-file form. Never infer order from prose.
+# Emits tagged rows, including errors; loader keeps errors available to doctor without
+# terminating its other diagnostics. Names are plain ASCII words, digits, spaces and hyphens.
+spec_lifecycle() { # root
+    local file="specs/product/lifecycle.md" single=0
+    if [ -f "$1/specs/SPEC.md" ]; then file="specs/SPEC.md"; single=1; fi
+    if [ ! -f "$1/$file" ]; then printf 'order\037%s\ncustom\0370\n' "$SPEC_STAGE_DEFAULT"; return 0; fi
+    LC_ALL=C awk -v source="$file" -v single="$single" -v default_order="$SPEC_STAGE_DEFAULT" "$SPEC_STAGE_AWK"'
+        function problem(s) { print "error\037Lifecycle: " source " " s }
+        function field(name,   t, mark) {
+            mark = "**" name "**:"
+            t = substr($0, index($0, mark) + length(mark))
+            if (index(t, mark)) problem("declares " name " more than once")
+            sub(/\*\*.*/, "", t); sub(/·.*/, "", t)
+            return stage_trim(t)
         }
-        !now && index($0, "**Now**:") { now = field("Now"); next_ = field("Next") }
-        END { print now "\037" next_ }
-    ' "$file"
+        function stage_name(t) {
+            if (stage_rank(t)) return t
+            # Notes have an explicit delimiter; never accept a known prefix of an unknown name.
+            if (match(tolower(t), /[[:space:]]+since[[:space:]]|[[:space:]]*\(|[[:space:]]*;/)) t = substr(t, 1, RSTART - 1)
+            return stage_trim(t)
+        }
+        BEGIN { active = !single; present = !single; stage_order = default_order }
+        {
+            line = $0; sub(/\r$/, "", line)
+            # Ignore HTML comments and fenced examples (both fence kinds, with closing length).
+            t = line; sub(/^ */, "", t)
+            if (fence != "") {
+                if (substr(t, 1, 1) == fence) {
+                    closing = t
+                    if (fence == "`") gsub(/`/, "", closing); else gsub(/~/, "", closing)
+                    if (closing ~ /^[[:space:]]*$/ && length(t) - length(closing) >= fence_len) fence = ""
+                }
+                next
+            }
+            if (comment) { if (index(line, "-->")) comment = 0; next }
+            if (line ~ /^[[:space:]]*<!--/) { if (!index(line, "-->")) comment = 1; next }
+            if (match(t, /^```+|^~~~+/)) { fence = substr(t, 1, 1); fence_len = RLENGTH; next }
+            if (line ~ /^    |^\t/) next
+            if (single && tolower(stage_trim(line)) == "## lifecycle") {
+                if (present++) problem("has more than one Lifecycle section")
+                active = 1; next
+            }
+            if (line ~ /^##+[[:space:]]/) active = 0
+            if (!active) next
+            if (line ~ /^[[:space:]]*\*\*Stages\*\*/) {
+                stage_custom = 1
+                if (orders++) problem("declares Stages more than once")
+                if (line !~ /^[[:space:]]*\*\*Stages\*\*:/) { problem("needs **Stages**: A > B > C"); stage_order = ""; next }
+                stage_order = line; sub(/^[^:]*:[[:space:]]*/, "", stage_order)
+                n = split(stage_order, a, ">"); order = ""
+                if (!n) problem("has an empty Stages declaration")
+                for (i = 1; i <= n; i++) {
+                    name = stage_trim(a[i]); key = tolower(name)
+                    if (name !~ /^[A-Za-z]([A-Za-z0-9 -]*[A-Za-z0-9])?$/) problem("has an invalid stage name: \"" name "\"")
+                    if (key in seen) problem("has a duplicate stage: \"" name "\"")
+                    seen[key] = 1; order = order (i > 1 ? ">" : "") name
+                }
+                stage_order = order
+                next
+            }
+            if (index(line, "**Now**:")) { if (nows++) problem("declares Now more than once"); now = field("Now") }
+            if (index(line, "**Next**:")) { if (nexts++) problem("declares Next more than once"); next_ = field("Next") }
+            if (index(line, "**Next**") && !index(line, "**Next**:")) problem("needs **Next**: <stage>")
+        }
+        END {
+            list = stage_order; gsub(/>/, ", ", list)
+            now = stage_name(now); next_ = stage_name(next_)
+            if (present && !stage_rank(now)) problem("needs '\''**Now**: <stage>'\'', one of: " list)
+            if (nexts && !stage_rank(next_)) problem("has an unknown Next stage: \"" next_ "\"; stages: " list)
+            if (stage_rank(now) && stage_rank(next_) && stage_rank(next_) <= stage_rank(now)) problem("needs Next to follow Now in the stage order")
+            print "order\037" stage_order
+            print "custom\037" (stage_custom ? 1 : 0)
+            print "now\037" now
+            print "next\037" next_
+        }
+    ' "$1/$file"
+}
+
+spec_lifecycle_load() { # root -> SPEC_STAGE_{ORDER,LIST,CUSTOM,NOW,NEXT,ERRORS}
+    local rows key value
+    rows="$(spec_lifecycle "$1")" || return
+    SPEC_STAGE_ORDER=""; SPEC_STAGE_CUSTOM=0; SPEC_STAGE_NOW=""; SPEC_STAGE_NEXT=""; SPEC_STAGE_ERRORS=""
+    while IFS="$SPEC_SEP" read -r key value; do
+        case "$key" in
+            order) SPEC_STAGE_ORDER="$value" ;;
+            custom) SPEC_STAGE_CUSTOM="$value" ;;
+            now) SPEC_STAGE_NOW="$value" ;;
+            next) SPEC_STAGE_NEXT="$value" ;;
+            error) SPEC_STAGE_ERRORS="${SPEC_STAGE_ERRORS}${SPEC_STAGE_ERRORS:+$'\n'}$value" ;;
+        esac
+    done <<< "$rows"
+    SPEC_STAGE_LIST="${SPEC_STAGE_ORDER//>/, }"
+}
+
+spec_stage_now() { # root -> current, next; invalid configuration fails without a classification
+    spec_lifecycle_load "$1" || return
+    if [ -n "$SPEC_STAGE_ERRORS" ]; then printf '%s\n' "$SPEC_STAGE_ERRORS" >&2; return 1; fi
+    printf '%s\037%s\n' "$SPEC_STAGE_NOW" "$SPEC_STAGE_NEXT"
+}
+
+# The caller has loaded configuration. Unknown from: markers may be source notes in old specs,
+# but cannot support a successful current/later classification.
+spec_stage_problems() { # stage rows on stdin
+    awk -F "$SPEC_SEP" -v stage_order="$SPEC_STAGE_ORDER" -v stage_custom="$SPEC_STAGE_CUSTOM" \
+        -v list="$SPEC_STAGE_LIST" "$SPEC_STAGE_AWK"'
+        NF && !stage_rank($2) { print "Lifecycle: \"from: " $2 "\" in " $1 " at " $3 " names no stage; stages: " list }'
+}
+
+spec_lifecycle_require() { # root -> load configuration and reject unclassifiable data
+    local problems
+    spec_lifecycle_load "$1" || return
+    problems="$(spec_stages "$1" | spec_stage_problems)" || return
+    if [ -n "$SPEC_STAGE_ERRORS$problems" ]; then
+        [ -z "$SPEC_STAGE_ERRORS" ] || printf '%s\n' "$SPEC_STAGE_ERRORS" >&2
+        [ -z "$problems" ] || printf '%s\n' "$problems" >&2
+        echo 'Lifecycle classification unavailable; correct the lifecycle fields/markers first.' >&2
+        return 1
+    fi
 }
 
 # Items marked for a later stage: id, stage (lowercased), file:line. The marker sits in a

@@ -31,13 +31,15 @@ if [ "$1" != "--all" ]; then
         s = $0; while (match(s, /\*\*(Parts|Journeys)\*\*:[^*]*/)) { print substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH) }
     }' "$record" | tr '\n' ' ')"
 fi
-now="$(spec_stage_now "$root")"; now="${now%%"$SPEC_SEP"*}"
+spec_lifecycle_require "$root" || return
+now="$SPEC_STAGE_NOW"
 
 files=()
 while IFS= read -r file; do files+=("$file"); done < <(spec_files "$root")
 [ "${#files[@]}" -gt 0 ] || { echo "No spec files under specs/" >&2; exit 2; }
 
-(cd "$root" && awk -v header="$scope" -v now="$now" -v what="${1/--all/every change}" "$SPEC_SKIP_AWK $SPEC_STAGE_AWK"'
+(cd "$root" && awk -v header="$scope" -v now="$now" -v what="${1/--all/every change}" \
+    -v stage_order="$SPEC_STAGE_ORDER" -v stage_custom="$SPEC_STAGE_CUSTOM" "$SPEC_SKIP_AWK $SPEC_STAGE_AWK"'
     # IDs in text, with word boundaries: a part counts only when the parts table defines it (so
     # P95 or HTTP2 never does), and a part behavior (P2.B-07) cites its part. A range
     # (`J-01 to J-05`, `P1–P3`) cites every ID in it.
