@@ -3,7 +3,7 @@
 2.0 reads verdicts from authenticated pull-request reviews, not `**Review**:` lines in a
 record. **No 1.x PASS is converted into a receipt.** Open PRs need fresh reviews; historical
 FAILs remain enforceable. The transition flag acknowledges this change, not a data conversion.
-Use a kit source whose `VERSION` is 2.0 or newer; unreleased 1.x sources reject the flag.
+Pin the kit to `v2.0.0` for this transition; kit sources older than 2.0 reject the flag.
 
 ## 1. Merge policy first, under 1.x
 
@@ -46,7 +46,7 @@ never a branch-local proposed fix. 1.x ignores the new receipt policy keys.
 ## 2. Make an upgrade PR without changing records
 
 Start a branch from the default branch. Fetch its complete history and establish
-`origin/HEAD` beforehand. Select the intended 2.0 kit source and commit its pin before running
+`origin/HEAD` beforehand. Select `v2.0.0` and commit its pin before running
 the installer: a dirty source pin is still a dirty checkout.
 
 ```bash
@@ -89,6 +89,12 @@ pointing to `--migrate-reviews`; it works without the flag when none exist. Malf
 warning on plain upgrade and `--check`, but a migration prerequisite. `--migrate-reviews` without
 `--upgrade`, or on a kit source older than 2.0, is usage error 2. `--json` requires `--dry-run`.
 
+Before merging, remove calls to the retired execution ledger and retrospective and update
+any log tooling to read both `specs/log/<id>.md` and `specs/log.md`. Select `--with agent-tiers`
+if you want the renderer and aren't already using agent tiers. Move the adoption pin and
+manifest hash together if your project records them. See the [release notes](../CHANGELOG.md)
+for the full breaking-change checklist and the work deferred to 2.1.
+
 ### Interrupted installation
 
 Keep the same source revision and `.prdkit/.install-state`, inspect `--check`, and rerun the
@@ -106,7 +112,9 @@ After the upgrade merges, each open PR merges the default branch and obtains fre
 receipts. Only `check-review.sh --pr <url>` can authorize merging, in every tier, T0 and
 record-only included. It needs `gh`, `jq` and complete host reads. Offline or snapshot checks
 are previews: a would-be pass exits 3, not 0. T3 needs the owner's latest valid native approval,
-not an owner State line, relay or receipt. See [CI gates](ci-gates.md).
+not an owner State line, relay or receipt. Native owner changes requests and dismissals block
+before coverage exemptions; only the issuing owner can clear their barrier with a valid later
+approval. Closing now needs `close-change.sh --pr <url>`. See [CI gates](ci-gates.md).
 
 ### What stops counting, and what remains enforced
 
@@ -130,8 +138,10 @@ owes the fresh full review. The transition report names each affected record and
 
 The transition is not an authentication shortcut. Standing receipts carry from closed, unmerged
 PRs of the same branch; renaming that branch can escape carry. Rewriting pre-merge history can
-erase a newly introduced legacy FAIL, but inherited default-branch lines stay protected. Candidate
-CI scripts remain the gate execution trust boundary. Host unavailability delays merging, edited
+erase a newly introduced legacy FAIL, but inherited default-branch lines stay protected. The
+ordinary gate does not authenticate its execution source. The trusted all-PR launcher carries
+the same native gate; immutable workflow registration, a clean pre-shell bootstrap and proof
+on the consumer host are still required for enforcement. Host unavailability delays merging, edited
 receipts block until the publisher restates them from its retained log, and aged-out owner push
 activity needs a new push and re-approval. These residuals are detailed in the
 [CHANGELOG](../CHANGELOG.md) and [review workflow](../workflows/review.md).

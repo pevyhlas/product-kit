@@ -8,17 +8,79 @@ change by change.
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-11-19 — authenticated PR reviews and safer upgrades
+
+Review verdicts now live on pull requests and bind to reviewed content. This release also
+changes how installations opt into agent tiers and how closed changes write their log entries.
+The public command surface is unchanged.
+
+### BREAKING: upgrading from 1.5
+
+1. **Land review policy under 1.5 first.** Set `review-host: github`, numeric `review-publishers`
+   and `review-owner` identities, and `review-publisher-isolation: required` in
+   `.prdkit/memory/config.md` on the default branch. Ensure that branch has exactly one valid
+   `Rigor` line and an eligible reviewer registry. Establish `origin/HEAD` after fetching full
+   history; explicitly allow any other review target in `review-integration-branches`. Allow
+   literal `review-t0-paths` there if T0 should cover docs beyond the record and log. Get the
+   trusted receipt publisher working before the upgrade PR needs receipts.
+2. **Upgrade in a clean PR with no change-record edits.** Pin and commit `v2.0.0`, then run
+   `bash .product-kit/scripts/init.sh --check`. Plain `--upgrade` refreshes kit-owned files
+   when neither the trusted tip nor the checkout has active 1.x Review lines; otherwise it
+   refuses and directs you to `--upgrade --migrate-reviews`. Use
+   `bash .product-kit/scripts/init.sh --upgrade --migrate-reviews --dry-run [--json]` to preview the
+   blocker and fresh-review inventory, then run without the preview flags to install. The report
+   needs `jq`; `gh` and locally available history enable the open-PR scan. It never fetches,
+   posts a review, or edits records. Reconcile local edits to managed files slated for replacement
+   or deletion; customized project-owned templates and memory are kept. Update configured
+   adoption pin and manifest hash together. See the
+   [migration guide](https://github.com/pevyhlas/product-kit/blob/v2.0.0/docs/migrating-to-2.0.md)
+   for preflight and retry details.
+3. **Re-review open PRs and update CI and closing calls.** Merge the upgraded default branch into
+   each open PR. A trusted publisher posts new v3 receipts with `publish-review.sh` from trusted
+   code; no 1.x PASS or prior PR's PASS grants coverage. A legacy FAIL, blocking count or
+   unreadable line needs a clean full native PASS by that reviewer with historical proof
+   (`--clears-legacy` for genuinely empty content); owner or unnamed blockers need native owner
+   approval with historical proof. Use `check-review.sh --pr <url>` with `gh`, `jq` and complete
+   host reads in every tier; pass the actual target as `--base origin/<target>` and pass `--pr <url>`
+   to `close-change.sh` too. Remove `--verify-reports` from invocations.
+   Offline previews never authorize a merge (a would-pass exits 3); recapture
+   old snapshots in v2 snapshot format. T3 needs fresh native owner approval for the reviewed
+   L0/L1 slice. A standing changes request or dismissal blocks even exempt PRs until the same
+   owner clears it with valid approval. The trusted all-PR launcher is available, but immutable
+   workflow registration, a clean pre-shell bootstrap and host enforcement verification are
+   consumer work. Keep existing wrappers and stronger controls until those gates are proven.
+4. **Choose optional agent tiers and remove retired calls.** Fresh installs and 1.5 installs
+   that hadn't used agent tiers need `--with agent-tiers` to install or retain the renderer and
+   neutral definition template; existing definitions or a vendored baseline keep the subsystem.
+   Remove CI and script calls to the execution ledger and retrospective helpers. Upgrade removes
+   the recorded helpers and unedited seeded ledger policy; fold or delete an edited policy
+   yourself. Old ledger and retrospective data stays ignored and is still preserved on worktree
+   cleanup. Remove obsolete `retrospective` and `agent-optimization` config keys if present.
+5. **Read both log locations.** New closes write `specs/log/<id>.md` with at most 300 characters
+   of log text. Existing `specs/log.md` entries need no migration; compaction folds entry files
+   into it. Update any consumer tools that only read or write the shared log.
+
+**Deferred to 2.1 (not shipped):** evidence-based addition or removal of reviewers (C4); the
+remaining review follow-ups (C5 and C7b) and stable ruleset integration; doctor reporting of
+aggregate reading-budget excess and overdue compaction (#105); pinned source-object verification
+(#104); and remaining receipt acceptance work: historical replay, reviewer-model provenance in
+receipts, and wrapper removal.
+
 ### Added
-- Trusted all-PR review transport with authenticated host/ref bindings, fetch-only objects,
-  complete-history carrier selection, bounded execution and full native diagnostic forwarding.
-  Enforcement still requires an independently registered immutable workflow and clean pre-shell bootstrap.
-  Its policy-bound helper closure includes the shared navigation parser; integrated controls
-  preserve native per-owner barriers and clearing before coverage exemptions.
+
+- **Trusted all-PR review transport (#115).** The installed `check-pr-review.sh` binds the live
+  repository, PR head, target and trusted policy, acquires fetch-only objects, and selects a
+  carrier from complete history. It runs one native gate with its helper closure (including the
+  navigation parser) from the trusted policy snapshot. The native gate runs as the registered
+  workload process; its result, diagnostics and per-owner barriers are preserved, with bounded
+  execution and cleanup. The launcher does not install or register a required workflow,
+  authenticate its own source, or establish enforcement by itself.
 
 ### Changed
 
 - **CI completion bounds (#114).** Linux/native-macOS job caps are 45/90 minutes so the
-  expanded verification suites, legacy-AWK checks and lint can complete.
+  expanded verification suites, legacy-AWK checks and lint can complete. Review-upgrade tests
+  reuse an initialized seed with independent case copies (#116); installed behavior is unchanged.
 
 - **Project-owned lifecycle orders (#109).** An optional `**Stages**: A > B > C` header in
   `specs/product/lifecycle.md` (or the single-file spec's `## Lifecycle` section) replaces the
@@ -79,7 +141,7 @@ change by change.
     in its JSON and index. The offline gate now also uses `mktemp`, `wc`, `sort` and a SHA-256
     tool (`sha256sum`, `shasum` or `openssl`).
 
-- **Verdicts are authenticated PR receipts (breaking; #69).** `publish-review.sh` replaces the
+- **Verdicts are authenticated PR receipts (breaking; #69, #100).** `publish-review.sh` replaces the
   unreleased `record-review.sh`. It posts a submitted COMMENT review through a listed publisher,
   then reads it back through GraphQL to verify its numeric author identity, review id, intact
   body and null edit markers. Record text and pasted blocks never grant approval. `--from-report`
@@ -97,7 +159,7 @@ change by change.
   and structure-only paths remain gh/jq-free. Removed `--verify-reports`, `report_verification`
   and the old report matcher. JSON now reports authority, receipt/blocker counts, legacy blockers
   and native owner metadata.
-- **Native owner barriers precede every coverage exemption.** CHANGES_REQUESTED blocks the
+- **Native owner barriers precede every coverage exemption (#108).** CHANGES_REQUESTED blocks the
   current PR at all tiers, record-only closure and renamed/deleted/missing carriers. DISMISSED
   is a distinct revocation barrier. Each numeric owner actor must clear its own barrier with
   a later valid native APPROVED review; another owner's approval, COMMENTED/PENDING, record
@@ -156,9 +218,9 @@ change by change.
     reviewer blocker, without an artificial delta or coverage edge. Adding content expires that
     clearance without invalidating the receipt; a later qualifying full PASS clears normally.
   - Rewriting pre-merge branch history can erase a newly introduced legacy line. Inherited
-    default-branch blockers remain protected. The candidate's own CI scripts remain the trust
-    boundary; trusted gate execution is not supplied here. PRs merged under 1.x retain 1.x rules.
-  - `init.sh --upgrade --migrate-reviews` checks trusted policy and a clean, record-untouched
+    default-branch blockers remain protected. The ordinary gate does not authenticate its own
+    execution; use the trusted all-PR boundary for enforcement. PRs merged under 1.x retain 1.x rules.
+  - `init.sh --upgrade --migrate-reviews` (#102) checks trusted policy and a clean, record-untouched
     upgrade branch, reports enforced blockers and fresh reviews owed, then installs 2.0 without
     publishing or changing a record. `--dry-run [--json]` reports without installing. Plain 2.0
     upgrade refuses while active 1.x lines exist at the trusted tip or checkout. First upgrades
@@ -200,12 +262,10 @@ change by change.
     `ignore = all` can no longer hide a gitlink change behind a record-only close.
   - These policy rules remain in force with content fingerprints and PR receipts; a branch cannot
     change its own trusted policy or lower the tier through record-only metadata.
-- **Breaking: a closed change's log entry is its own file.** `close-change.sh` writes
+- **Breaking: a closed change's log entry is its own file (#94).** `close-change.sh` writes
   `specs/log/<id>.md`, one line `- <date> <id>: <text>`, instead of inserting that line at the
-  top of `specs/log.md`. Two branches that each closed a change used to conflict in
-  `specs/log.md`, so every merge forced the other open branches into a hand-resolved merge (a
-  consumer project counted 19 such conflicts in 48 hours). Entry files never conflict, in a local
-  merge, a squash or a host's server-side merge. Compaction folds them into `specs/log.md` in the
+  top of `specs/log.md`. Branches closing different changes no longer conflict on the log
+  during a merge or squash. Compaction folds the entries into `specs/log.md` in the
   log's order and deletes them (`compact.md`). Every reader takes both: `check-review.sh`,
   `cleanup-change.sh --closed`, `doctor.sh`, `new-change.sh` numbering and `status.sh`, whose
   compaction count includes the entry files. Lines already in `specs/log.md` stay valid; nothing
@@ -216,10 +276,8 @@ change by change.
   readers take only regular files, and in a partial clone whose Git is older than 2.45 they read
   nothing rather than fetch: `check-review.sh` then fails closed and `cleanup-change.sh --closed`
   keeps the worktree.
-- `close-change.sh` refuses a log text over 300 characters (counted as characters, not bytes),
-  three reading lines by the spec's budget rule; the kit's own example entries are under 50. The
-  refusal says that carried findings and follow-ups go to the parent's row or the spec, and
-  evidence stays in the PR. A consumer project's entries had grown to 734 characters on average.
+- `close-change.sh` refuses log text over 300 characters (not bytes). Carried findings and
+  follow-ups go to the parent's row or the spec; evidence stays in the PR.
 
 ### Added
 
@@ -228,8 +286,8 @@ change by change.
 
 ### Removed (breaking)
 
-- **The execution ledger and the retrospective.** The ledger had one reader, the retrospective,
-  and neither was in use. Removed: `ledger-emit.sh`, `ledger-spool-adapter.sh`, `json-lib.sh`
+- **The execution ledger and the retrospective (#92).** Removed: `ledger-emit.sh`,
+  `ledger-spool-adapter.sh`, `json-lib.sh`
   (sourced only by those two), `retrospective.sh`, the `task-ledger-template.md` template and the
   `.prdkit/memory/task-ledger.md` it seeded, the `prdkit.ledger.v1` schemas,
   `docs/task-ledger-integration.md`, the change workflow's "emit the ledger events" step and the
@@ -251,7 +309,7 @@ change by change.
 
 ### Changed (breaking)
 
-- **Agent tiers are optional.** A fresh install no longer installs `render-agents.sh` or the
+- **Agent tiers are optional (#95).** A fresh install no longer installs `render-agents.sh` or the
   neutral `agent-definition-template.md`; pass `--with agent-tiers` to add them. The manifest
   records the choice (`options: agent-tiers`, or `options: none`) and later runs keep it. A
   project that uses agent tiers (`.prdkit/agents/*.md` or a vendored `.prdkit/agent-library/`)
@@ -264,8 +322,6 @@ change by change.
 
 ### Fixed
 
-- The trusted PR transport explicitly replaces the workload shell for the external native
-  gate, keeping its registered process identity portable without changing bounded shell callbacks.
 - `cleanup-change.sh` could delete a submodule commit that existed nowhere else (#85). A linked
   worktree keeps its own copy of each submodule repository, and removing the worktree deletes it.
   A commit made there and recorded in the superproject branch, but never pushed, left the
@@ -288,30 +344,6 @@ change by change.
   ref reaches), a worktree on an unrelated branch, or one outside `.worktrees/`. It now matches
   only the layout `new-change.sh` creates: `.worktrees/<id>` in the main checkout, on the branch
   `<id>`. Any other worktree is left for removal by id.
-
-### Adoption
-
-- Follow [Migrating to 2.0](docs/migrating-to-2.0.md): merge the receipt policy and a well-formed
-  Rigor line under 1.x first, make a clean `--upgrade --migrate-reviews` PR without record edits,
-  then merge the upgraded default branch into each open PR and obtain fresh native reviews.
-  The publisher must already work before the upgrade PR needs receipts. The report requires jq;
-  missing gh or an unavailable API only omits open PRs with a note. Missing local PR history is
-  explicitly unavailable, never fetched or treated as no blockers.
-- Budget the deliberate review cost: a 1.x FAIL that 1.x later cleared still requires that
-  reviewer's clean native full PASS on a PR changing or closing the record, until a qualifying
-  PR removes the line. A native owner approval clears owner or unnamed legacy blockers; deleting
-  record text alone clears nothing. No 1.x PASS is converted. The scan stays through 2.x.
-- In CI, establish `origin/HEAD` (`git remote set-head origin --auto`, as the documented step
-  does) and pass the pull request's target as `--base origin/<target>`. A stacked branch needs its
-  target listed in `review-integration-branches` on the default branch.
-- Before relying on T0 for documentation, add `- review-t0-paths: <paths>` to the `## Configuration`
-  section of `.prdkit/memory/config.md` and merge it to the integration branch.
-- An open record whose tier a branch commit lowered now fails: restore the higher tier, or review
-  at it. An open change that edits `specs/product.md` or `specs/product/` below T3 needs T3 and
-  the owner's native approval.
-- The default branch's constitution must hold exactly one well-formed Rigor line. Land a Rigor, registry or `review-t0-paths` change in its own pull request first.
-- If the integration branch holds `specs/log.md` as an executable file or a directory, every
-  change that starts there fails until it holds a regular file; fix that on the branch first.
 
 ## [1.5.0] — 2026-11-10 — worktree cleanup
 

@@ -93,7 +93,7 @@ Agent:  Change 012 adds requirement R-04 with the code. Acceptance A1 passes on 
 | **Large products**         | ⚠️ Designed for it (layered spec, agents read only what a change touches), but proven on only a handful of projects |
 | **Agents**                 | ⚠️ Installs for Claude Code, OpenCode, Codex and other `AGENTS.md` readers; [real-agent testing](docs/harnesses.md) is still limited |
 | **Many repos**             | ⚠️ One spec per repo; a shared interface belongs to the repo that provides it                         |
-| **Maturity**               | ⚠️ Experimental: 1.5.0, one maintainer                                                                |
+| **Maturity**               | ⚠️ Experimental: 2.0.0, one maintainer                                                                |
 | **Roadmap**                | ⚠️ Lifecycle stages (Idea → MVP → GA) and which journeys belong to each; no dates or timelines        |
 | **Ticketing**              | ❌ Not a ticket tracker; the work itself lives in git, pull requests and CI                           |
 | **One-off scripts**        | ❌ A spec costs more than it saves                                                                    |
@@ -118,7 +118,7 @@ Agent:  Change 012 adds requirement R-04 with the code. Acceptance A1 passes on 
 
 ```text
 Add Product-Kit (https://github.com/pevyhlas/product-kit) to this repository as a git
-submodule at .product-kit, pinned to tag v1.5.0, and run .product-kit/scripts/init.sh.
+submodule at .product-kit, pinned to tag v2.0.0, and run .product-kit/scripts/init.sh.
 Then adopt it by following .prdkit/workflows/init.md.
 ```
 
@@ -151,7 +151,7 @@ The agent installs the kit, reads your repository, fills in the project constitu
 
 ```bash
 git submodule add https://github.com/pevyhlas/product-kit .product-kit
-git -C .product-kit checkout v1.5.0
+git -C .product-kit checkout v2.0.0
 bash .product-kit/scripts/init.sh
 ```
 
@@ -212,6 +212,7 @@ bash .prdkit/scripts/bash/doctor.sh --strict   # spec integrity, reading budgets
 
 `check-review.sh --pr <url>` verifies publisher-authored review receipts and blockers for the exact
 head being merged. T3 also needs the owner's native approval, confirmed against the activity log.
+Native owner changes requests and dismissals block even PRs exempt from review coverage.
 It checks evidence; it does not review. The online check needs `gh` and `jq`; offline snapshots
 are previews (exit 3), never merge authority. See [CI gates](docs/ci-gates.md).
 
@@ -228,6 +229,10 @@ are previews (exit 3), never merge authority. See [CI gates](docs/ci-gates.md).
 <summary><b>Upgrade</b></summary>
 
 <br>
+
+**Upgrading from 1.5?** Start with [Migrating to 2.0](docs/migrating-to-2.0.md). Merge trusted
+review policy first. If active 1.x Review lines remain, plain `--upgrade` refuses and points to
+`--upgrade --migrate-reviews`; no old PASS becomes approval.
 
 ```bash
 git -C .product-kit fetch --tags && git -C .product-kit checkout vX.Y.Z
@@ -381,7 +386,7 @@ Upgrade, then run one cutover between changes with `/prdkit-init`. See [migratin
 
 ## Status
 
-⚠️ **Experimental.** One maintainer builds Product-Kit and uses it on a handful of projects. Interfaces can change between releases; each [CHANGELOG](CHANGELOG.md) entry says how to upgrade.
+⚠️ **Experimental.** One maintainer builds Product-Kit and uses it on a handful of projects. Interfaces can change between releases; see the [CHANGELOG](CHANGELOG.md) for upgrade notes and the work deferred to 2.1.
 
 ## Contributing
 
