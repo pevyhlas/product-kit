@@ -95,9 +95,10 @@ it 'public projection never reflects arbitrary fields, identifiers, strings or r
 base_input
 mutate '.secret="PATH_SENTINEL"|.object.secret="PATH_SENTINEL"'
 events 'map(.secret="PATH_SENTINEL")'
-assert_not_contains "$(cat "$FIX/summary")" PATH_SENTINEL
-assert_not_contains "$(cat "$FIX/summary")" 101
-assert_not_contains "$(cat "$FIX/summary")" 106
+for forbidden in PATH_SENTINEL 101 106; do
+    run grep -qF -- "$forbidden" "$FIX/summary"
+    assert_eq 1 "$STATUS" 'projection does not print forbidden input'
+done
 assert_eq '["before_delete","before_kill","before_term","evidence","identity","kernel_status_proven","object","overflow","schema","signals","transfer","waits"]' \
     "$(value 'keys')"
 assert_eq '["available","digest","equal","extension_keep"]' "$(value '.object|keys')"
@@ -107,12 +108,14 @@ it 'ephemeral collector bounds and failure reporting do not leak error paths'
 nd_count=0
 for n in {1..40}; do nd_append '{"kind":"wait"}'; done
 assert_eq 32 "$(wc -l < "$nd_dir/events" | tr -d ' ')"
-assert_file "$nd_dir/overflow"
+run test -f "$nd_dir/overflow"
+assert_eq 0 "$STATUS" 'collector records overflow'
 nd_summary "$nd_dir" "$FIX/missing" > "$FIX/summary" 2>"$FIX/public-errors"
 assert_eq incomplete "$(value .evidence)"
 assert_eq true "$(value .overflow)"
 assert_eq '' "$(cat "$FIX/public-errors")"
-assert_not_contains "$(cat "$FIX/summary")" "$FIX"
+run grep -qF -- "$FIX" "$FIX/summary"
+assert_eq 1 "$STATUS" 'collector never prints its fixture path'
 
 it 'ps failure and filtered-row overflow remain explicit, not empty-group success'
 nd_dir="$FIX/failed-ps"; mkdir "$nd_dir"
@@ -133,7 +136,8 @@ printf '106 0\n' > "$nd_dir/descendant"
 ps() { for n in {1..40}; do printf '%s 100 101 S\n' "$((200+n))"; done; }
 nd_count=0; nd_snapshot kill
 unset -f ps
-assert_file "$nd_dir/overflow"
+run test -f "$nd_dir/overflow"
+assert_eq 0 "$STATUS" 'filtered snapshot records overflow'
 assert_eq 33 "$(wc -l < "$nd_dir/ps-kill" | tr -d ' ')"
 assert_eq false "$(jq -r .available "$nd_dir/events")"
 
@@ -146,7 +150,10 @@ sed -n '/^    capture_err=\$!/,/^    child=\$!/p' "$PK_ROOT/scripts/check-pr-rev
 sed -n '/^    capture_err=\$!/,/^    child=\$!/p' "$FIX/launcher" > "$FIX/new-tail"
 run cmp "$FIX/old-tail" "$FIX/new-tail"
 assert_eq 0 "$STATUS" 'workload subshell through immediate PID registration byte-identical'
-assert_not_contains "$(cat "$FIX/launcher")" 'exec "$@"'
-assert_contains "$(cat "$FIX/launcher")" 'then nd_rc=0; else nd_rc=$?; fi'
-assert_contains "$(cat "$FIX/launcher")" 'nd_wait "$pid" "$waited_exit" "$before" "$signal_count"'
+run grep -qF 'exec "$@"' "$FIX/launcher"
+assert_eq 1 "$STATUS" 'observer does not add exec'
+run grep -qF 'then nd_rc=0; else nd_rc=$?; fi' "$FIX/launcher"
+assert_eq 0 "$STATUS" 'signal return code is captured before diagnostics'
+run grep -qF 'nd_wait "$pid" "$waited_exit" "$before" "$signal_count"' "$FIX/launcher"
+assert_eq 0 "$STATUS" 'wait observation receives original status and signal generation'
 finish
