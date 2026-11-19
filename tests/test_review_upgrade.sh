@@ -31,7 +31,7 @@ trusted_tip() {
     git -C "$PROJ" update-ref refs/remotes/origin/main HEAD
     git -C "$PROJ" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
 }
-transition_project() {
+make_transition_seed() {
     PROJ="$(make_inited_project --copy)"; track_tmp "$PROJ"
     PROJ="$(cd "$PROJ" && pwd -P)"
     git -C "$PROJ" remote add origin https://github.com/owner/repo.git
@@ -51,6 +51,19 @@ EOF
 EOF
     printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n| security | reviewer |\n' >> "$PROJ/.prdkit/memory/agents.md"
     commit_fixture policy; trusted_tip
+}
+# Build the common starting history once. Every case changes its own full copy,
+# including its own .git directory, ignored files, and installed kit.
+TRANSITION_SEED=
+transition_project() {
+    if [ -z "$TRANSITION_SEED" ]; then
+        make_transition_seed || exit 1
+        TRANSITION_SEED="$PROJ"
+    fi
+    PROJ="$(mktemp -d)" || exit 1
+    track_tmp "$PROJ"
+    PROJ="$(cd "$PROJ" && pwd -P)" || exit 1
+    cp -Rp "$TRANSITION_SEED/." "$PROJ/" || exit 1
 }
 upgrade() { run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade "$@"; }
 retry_marker() {
