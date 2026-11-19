@@ -2,15 +2,19 @@
 # Optional subsystems install only on request: agent tiers (render-agents.sh and the neutral
 # agent-definition template) need --with agent-tiers, the manifest records the choice, a project
 # that uses agent tiers keeps them, and --without removes them unless the project uses them.
+# shellcheck disable=SC2034 # TIERS_DIAG_* observations are read by the sourced test-local helper.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+source "$TESTS_DIR/optional-diagnostics.sh"
 
 hash_of() { (sha256sum "$1" 2>/dev/null || shasum -a 256 "$1") | cut -d' ' -f1; }
 TIER_FILES=".prdkit/scripts/bash/render-agents.sh .prdkit/templates/agent-definition-template.md"
 tiers_installed() { # project -> 0 when both agent-tier files are on disk and in the manifest
-    local rel
+    local rel failed
     for rel in $TIER_FILES; do
-        [ -f "$1/$rel" ] || return 1
-        grep -qF "  $rel" "$1/.prdkit/.manifest" || return 1
+        # shellcheck disable=SC2319 # The failed file-test condition status is the intended original observation.
+        [ -f "$1/$rel" ] || { failed=$?; tiers_diag_original_failure "$rel" file "$failed"; return 1; }
+        grep -qF "  $rel" "$1/.prdkit/.manifest" >/dev/null 2>&1 ||
+            { failed=$?; tiers_diag_original_failure "$rel" manifest "$failed"; return 1; }
     done
 }
 tiers_absent() {
@@ -44,9 +48,20 @@ assert_eq 0 "$STATUS" "adoption gate passes without agent tiers: $OUTPUT"
 
 it "--with agent-tiers installs them; later upgrades keep the recorded choice"
 run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --upgrade --with agent-tiers"
+TIERS_DIAG_FIRST_STATUS="$STATUS"
+TIERS_DIAG_FIRST_OUTPUT="$OUTPUT"
 assert_eq 0 "$STATUS" "upgrade with the option succeeds"
-if tiers_installed "$PROJ"; then _ok "agent-tier files installed and recorded"; else _no "agent-tier files installed and recorded"; fi
-assert_contains "$(cat "$PROJ/.prdkit/.manifest")" "options: agent-tiers" "choice recorded"
+TIERS_DIAG_CAPTURE=true
+TIERS_DIAG_ORIGINAL_ITEM=unavailable; TIERS_DIAG_ORIGINAL_CHECK=unavailable; TIERS_DIAG_ORIGINAL_STATUS=unavailable
+if tiers_installed "$PROJ"; then _ok "agent-tier files installed and recorded"; else
+    _no "agent-tier files installed and recorded"
+    tiers_diag_emit "$PROJ" 2>/dev/null || printf '%s\n' 'optional-diag status=unavailable'
+fi
+TIERS_DIAG_CAPTURE=false
+# Preserve the original substring assertion, without its raw-manifest failure payload.
+TIERS_DIAG_CHOICE="$(cat "$PROJ/.prdkit/.manifest" 2>/dev/null)"
+case "$TIERS_DIAG_CHOICE" in *"options: agent-tiers"*) TIERS_DIAG_CHOICE="options: agent-tiers" ;; *) TIERS_DIAG_CHOICE=unavailable ;; esac
+assert_contains "$TIERS_DIAG_CHOICE" "options: agent-tiers" "choice recorded"
 run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --upgrade"
 if tiers_installed "$PROJ"; then _ok "a plain upgrade keeps them"; else _no "a plain upgrade keeps them"; fi
 run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --check"
