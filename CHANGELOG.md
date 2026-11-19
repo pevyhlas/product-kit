@@ -8,6 +8,13 @@ change by change.
 
 ## [Unreleased]
 
+### Added
+- Trusted all-PR review transport with authenticated host/ref bindings, fetch-only objects,
+  complete-history carrier selection, bounded execution and full native diagnostic forwarding.
+  Enforcement still requires an independently registered immutable workflow and clean pre-shell bootstrap.
+  Its policy-bound helper closure includes the shared navigation parser; integrated controls
+  preserve native per-owner barriers and clearing before coverage exemptions.
+
 ### Changed
 
 - **CI completion bounds (#114).** Linux/native-macOS job caps are 45/90 minutes so the
@@ -257,6 +264,8 @@ change by change.
 
 ### Fixed
 
+- The trusted PR transport explicitly replaces the workload shell for the external native
+  gate, keeping its registered process identity portable without changing bounded shell callbacks.
 - `cleanup-change.sh` could delete a submodule commit that existed nowhere else (#85). A linked
   worktree keeps its own copy of each submodule repository, and removing the worktree deletes it.
   A commit made there and recorded in the superproject branch, but never pushed, left the

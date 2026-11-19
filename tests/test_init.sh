@@ -24,6 +24,8 @@ assert_file "$PROJ/.claude/commands/prdkit-inbox.md"
 assert_file "$PROJ/.prdkit/templates/implementation-plan-template.md"
 assert_file "$PROJ/.prdkit/templates/pr-summary-template.md"
 assert_file "$PROJ/.prdkit/scripts/bash/new-change.sh"
+assert_file "$PROJ/.prdkit/scripts/bash/check-pr-review.sh"
+assert_contains "$(cat "$PROJ/.prdkit/.manifest")" '.prdkit/scripts/bash/check-pr-review.sh' 'trusted launcher participates in installation integrity'
 if [ -e "$PROJ/.prdkit/memory/signoff-requirements.md" ]; then _no "retired sign-off policy seeded"; else _ok "no sign-off policy seeded"; fi
 if [ -e "$PROJ/specs" ]; then _no "installer created specs/"; else _ok "installer leaves specs/ to the project"; fi
 if [ -f "$PROJ/.claude/commands/prdkit.md" ] && [ ! -L "$PROJ/.claude/commands/prdkit.md" ]; then
