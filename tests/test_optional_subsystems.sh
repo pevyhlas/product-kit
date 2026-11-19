@@ -4,7 +4,55 @@
 # that uses agent tiers keeps them, and --without removes them unless the project uses them.
 # shellcheck disable=SC2034 # TIERS_DIAG_* observations are read by the sourced test-local helper.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
-source "$TESTS_DIR/optional-diagnostics.sh"
+# Contain the shell's source error too, not just utilities inside the helper.
+TIERS_DIAG_LOAD_STATUS=0
+if { source "$TESTS_DIR/optional-diagnostics.sh"; } >/dev/null 2>&1; then :; else
+    TIERS_DIAG_LOAD_STATUS=$?
+    printf '%s\n' 'optional-diag status=unavailable stage=load'
+    _no "diagnostic helper available"
+fi
+
+tiers_diag_record_failure() {
+    [ "${TIERS_DIAG_CAPTURE:-false}" = true ] || return 0
+    # Braces keep the observations in this shell while containing undefined/noisy callbacks.
+    if { tiers_diag_original_failure "$@"; } >/dev/null 2>&1; then return 0; fi
+    TIERS_DIAG_CALLBACK_FAILED=true
+    TIERS_DIAG_ORIGINAL_ITEM=unavailable; TIERS_DIAG_ORIGINAL_CHECK=unavailable; TIERS_DIAG_ORIGINAL_STATUS=unavailable
+}
+
+tiers_diag_report() {
+    if [ "$TIERS_DIAG_LOAD_STATUS" -ne 0 ]; then
+        { printf '%s\n' 'optional-diag status=unavailable stage=load'; } 2>/dev/null
+    elif [ "${TIERS_DIAG_CALLBACK_FAILED:-false}" = true ]; then
+        { printf '%s\n' 'optional-diag status=unavailable stage=callback'; } 2>/dev/null
+    elif { tiers_diag_emit "$1"; } 2>/dev/null; then return 0
+    else
+        { printf '%s\n' 'optional-diag status=unavailable stage=report'; } 2>/dev/null
+    fi
+    return 1 # Best effort only: delivery failure cannot clear the already-recorded assertion.
+}
+
+tiers_assert_first_install() { # actual first-result caller, also exercised by synthetic controls
+    TIERS_DIAG_FIRST_STATUS="$STATUS"
+    TIERS_DIAG_FIRST_OUTPUT="$OUTPUT"
+    assert_eq 0 "$STATUS" "upgrade with the option succeeds"
+    TIERS_DIAG_CAPTURE=true
+    TIERS_DIAG_CALLBACK_FAILED=false
+    TIERS_DIAG_ORIGINAL_ITEM=unavailable; TIERS_DIAG_ORIGINAL_CHECK=unavailable; TIERS_DIAG_ORIGINAL_STATUS=unavailable
+    if tiers_installed "$1"; then _ok "agent-tier files installed and recorded"; else
+        _no "agent-tier files installed and recorded"
+        tiers_diag_report "$1" || :
+    fi
+    TIERS_DIAG_CAPTURE=false
+    # Guard the ASSIGNMENT boundary as well as helper utilities: Bash can warn there.
+    # The helper never returns raw manifest bytes; only the fixed substring projection.
+    if { TIERS_DIAG_CHOICE="$(_tiers_diag_choice "$1/.prdkit/.manifest")"; } 2>/dev/null; then :; else
+        TIERS_DIAG_CHOICE=unavailable
+        printf '%s\n' 'optional-diag status=unavailable stage=choice'
+    fi
+    case "$TIERS_DIAG_CHOICE" in "options: agent-tiers") ;; *) TIERS_DIAG_CHOICE=unavailable ;; esac
+    assert_contains "$TIERS_DIAG_CHOICE" "options: agent-tiers" "choice recorded"
+}
 
 hash_of() { (sha256sum "$1" 2>/dev/null || shasum -a 256 "$1") | cut -d' ' -f1; }
 TIER_FILES=".prdkit/scripts/bash/render-agents.sh .prdkit/templates/agent-definition-template.md"
@@ -12,9 +60,9 @@ tiers_installed() { # project -> 0 when both agent-tier files are on disk and in
     local rel failed
     for rel in $TIER_FILES; do
         # shellcheck disable=SC2319 # The failed file-test condition status is the intended original observation.
-        [ -f "$1/$rel" ] || { failed=$?; tiers_diag_original_failure "$rel" file "$failed"; return 1; }
+        [ -f "$1/$rel" ] || { failed=$?; tiers_diag_record_failure "$rel" file "$failed"; return 1; }
         grep -qF "  $rel" "$1/.prdkit/.manifest" >/dev/null 2>&1 ||
-            { failed=$?; tiers_diag_original_failure "$rel" manifest "$failed"; return 1; }
+            { failed=$?; tiers_diag_record_failure "$rel" manifest "$failed"; return 1; }
     done
 }
 tiers_absent() {
@@ -48,20 +96,7 @@ assert_eq 0 "$STATUS" "adoption gate passes without agent tiers: $OUTPUT"
 
 it "--with agent-tiers installs them; later upgrades keep the recorded choice"
 run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --upgrade --with agent-tiers"
-TIERS_DIAG_FIRST_STATUS="$STATUS"
-TIERS_DIAG_FIRST_OUTPUT="$OUTPUT"
-assert_eq 0 "$STATUS" "upgrade with the option succeeds"
-TIERS_DIAG_CAPTURE=true
-TIERS_DIAG_ORIGINAL_ITEM=unavailable; TIERS_DIAG_ORIGINAL_CHECK=unavailable; TIERS_DIAG_ORIGINAL_STATUS=unavailable
-if tiers_installed "$PROJ"; then _ok "agent-tier files installed and recorded"; else
-    _no "agent-tier files installed and recorded"
-    tiers_diag_emit "$PROJ" 2>/dev/null || printf '%s\n' 'optional-diag status=unavailable'
-fi
-TIERS_DIAG_CAPTURE=false
-# Preserve the original substring assertion, without its raw-manifest failure payload.
-TIERS_DIAG_CHOICE="$(cat "$PROJ/.prdkit/.manifest" 2>/dev/null)"
-case "$TIERS_DIAG_CHOICE" in *"options: agent-tiers"*) TIERS_DIAG_CHOICE="options: agent-tiers" ;; *) TIERS_DIAG_CHOICE=unavailable ;; esac
-assert_contains "$TIERS_DIAG_CHOICE" "options: agent-tiers" "choice recorded"
+tiers_assert_first_install "$PROJ"
 run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --upgrade"
 if tiers_installed "$PROJ"; then _ok "a plain upgrade keeps them"; else _no "a plain upgrade keeps them"; fi
 run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --check"
@@ -154,5 +189,14 @@ assert_contains "$OUTPUT" "Agent tiers are in use" "doctor names the missing sub
 assert_contains "$OUTPUT" "--with agent-tiers" "doctor names the option"
 run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --upgrade"
 if tiers_installed "$PROJ"; then _ok "a plain upgrade installs what the project uses"; else _no "a plain upgrade installs what the project uses"; fi
+
+# Separate synthetic diagnostics: runs on healthy installers too, including native's
+# existing explicit test_optional_subsystems.sh invocation. Never installs a fault model.
+if { source "$TESTS_DIR/optional-diagnostics-cases.sh"; } 2>/dev/null &&
+    declare -F tiers_diag_cases >/dev/null; then
+    tiers_diag_cases
+else
+    _no "diagnostic controls available"
+fi
 
 finish

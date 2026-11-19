@@ -37,14 +37,33 @@ _tiers_diag_hash() {
     printf '%s' "$value"
 }
 
-_tiers_diag_manifest() (
+_tiers_diag_text_input() (
     # Refuse unreadable/NUL-bearing input before a text utility can change its bytes.
     set -o pipefail
     local bytes text
-    [ -f "$1" ] && [ ! -L "$1" ] || return 1
+    [ -f "$1" ] || return 1
     bytes="$(wc -c < "$1")" || return
     text="$(LC_ALL=C tr -d '\000' < "$1" | wc -c)" || return
     [ "${bytes//[[:space:]]/}" = "${text//[[:space:]]/}" ] || return 1
+)
+
+_tiers_diag_choice() (
+    # Preserve the original substring Boolean for readable text, not an exact options
+    # parser. Refuse malformed/NUL or failed reads before they can count as a choice.
+    _tiers_diag_text_input "$1" || return
+    local status
+    if LC_ALL=C grep -qF 'options: agent-tiers' "$1"; then
+        printf '%s' 'options: agent-tiers'
+    else
+        status=$?
+        [ "$status" -eq 1 ] || return "$status"
+        printf unavailable
+    fi
+)
+
+_tiers_diag_manifest() (
+    [ ! -L "$1" ] || return 1
+    _tiers_diag_text_input "$1" || return
     LC_ALL=C awk '
         substr($0,65,2) == "  " && substr($0,1,64) ~ /^[0-9a-f]+$/ {
             if(substr($0,67) == ".prdkit/scripts/bash/render-agents.sh") renderer++
@@ -71,7 +90,7 @@ tiers_diag_emit() ( # synthetic project; isolate all recheck state from the test
     [ "${TIERS_DIAG_FIRST_OUTPUT+x}" != x ] || retained=1
     printf 'optional-diag v=1 observed=original item=%s check=%s status=%s predicate_status=1 upgrade_status=%s output_retained=%s\n' \
         "$original_item" "$original_check" "$(_tiers_diag_code "${TIERS_DIAG_ORIGINAL_STATUS:-}")" \
-        "$(_tiers_diag_code "${TIERS_DIAG_FIRST_STATUS:-}")" "$retained"
+        "$(_tiers_diag_code "${TIERS_DIAG_FIRST_STATUS:-}")" "$retained" || return
     if data="$(_tiers_diag_manifest "$root/.prdkit/.manifest" 2>/dev/null)"; then
         measured=0
         IFS=' ' read -r rows_r rows_t options <<< "$data"
@@ -81,7 +100,7 @@ tiers_diag_emit() ( # synthetic project; isolate all recheck state from the test
     if manifest_hash="$(_tiers_diag_hash "$root/.prdkit/.manifest" 2>/dev/null)"; then manifest_status=0
     else manifest_status=$?; manifest_hash=unavailable; fi
     printf 'optional-diag observed=recheck item=manifest measure_status=%s options=%s sha256=%s hash_status=%s\n' \
-        "$measured" "$options" "$manifest_hash" "$manifest_status"
+        "$measured" "$options" "$manifest_hash" "$manifest_status" || return
     for item in renderer template; do
         case "$item" in
             renderer) rel=.prdkit/scripts/bash/render-agents.sh; src=scripts/render-agents.sh; rows="$rows_r" ;;
@@ -105,6 +124,6 @@ tiers_diag_emit() ( # synthetic project; isolate all recheck state from the test
         else installed_status=$?; installed_hash=unavailable; fi
         printf 'optional-diag observed=recheck item=%s exists=%s file=%s link=%s readable=%s executable=%s type=%s grep_status=%s exact_rows=%s source_sha256=%s source_hash_status=%s installed_sha256=%s installed_hash_status=%s\n' \
             "$item" "$exists" "$file" "$link" "$readable" "$executable" "$kind" "$grep_status" "$rows" \
-            "$source_hash" "$source_status" "$installed_hash" "$installed_status"
+            "$source_hash" "$source_status" "$installed_hash" "$installed_status" || return
     done
 )
