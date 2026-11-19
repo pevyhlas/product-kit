@@ -459,7 +459,8 @@ selected="$(cat "$root/selected")"
 is_change_id "$selected" || refuse select assignment
 
 phase=native
-if bounded 180 "$root/native.json" "$root/native.err" /bin/bash --noprofile --norc \
+# Replace only this external gate's workload shell; bounded function callbacks stay ordinary calls.
+if bounded 180 "$root/native.json" "$root/native.err" exec /bin/bash --noprofile --norc \
     "$root/trusted/check-review.sh" --json --diagnostics --repo "$objects" \
     --base "$canonical" --head "$head" --pr "https://github.com/$repository/pull/$pr" "$selected"; then
     : # The actual child exit, distinct from watchdog/capture classification, is kept below.

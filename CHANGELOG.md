@@ -264,6 +264,8 @@ change by change.
 
 ### Fixed
 
+- The trusted PR transport explicitly replaces the workload shell for the external native
+  gate, keeping its registered process identity portable without changing bounded shell callbacks.
 - `cleanup-change.sh` could delete a submodule commit that existed nowhere else (#85). A linked
   worktree keeps its own copy of each submodule repository, and removing the worktree deletes it.
   A commit made there and recorded in the superproject branch, but never pushed, left the

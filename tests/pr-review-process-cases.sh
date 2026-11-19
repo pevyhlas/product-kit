@@ -413,6 +413,13 @@ assert_eq 0 "$STATUS" 'teardown remains bounded despite repeated signals'
 assert_other_bindings
 { # Contain only these new diagnostic assertions, not inherited whole-suite output.
     assert_eq complete "$(nd_public_value .evidence)" 'bounded diagnostic witnesses are available'
+    assert_eq true "$(nd_public_value .identity.leader_is_gate)" 'registered native leader is the external gate'
+    assert_eq true "$(nd_public_value .identity.gate_ignores_term)" 'registered gate is armed to resist TERM'
+    assert_eq true "$(nd_public_value .before_kill.leader.live)" 'registered gate survives until group KILL'
+    assert_eq 0 "$(nd_public_value .signals.KILL)" 'native group KILL succeeds independently of its wait status'
+    assert_eq 137 "$(nd_public_value '.waits | map(select(.finishing and (.alive == false))) | last | .status')" \
+        'finishing wait independently records gate KILL status'
+    assert_eq false "$(nd_public_value .before_delete.leader.present)" 'native leader reaped before scratch deletion'
     assert_eq true "$(nd_public_value .object.equal)" 'entire synthetic native object retained'
     assert_eq true "$(nd_public_value .object.extension_keep)" 'actual sequence retains unknown field'
 } 2>/dev/null
