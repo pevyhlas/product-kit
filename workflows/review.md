@@ -62,6 +62,25 @@ current merge base with a trusted integration branch for a focused package; afte
 use the new merge base. Never dispatch a round with no source change. The range is the range
 actually inspected. Map findings to fixes and affected obligations, preserving unaffected review.
 
+The package's `context-manifest.tsv` binds the actual child, referenced blocks, all computed
+bounds and required parent checkpoint/row/obligations to immutable objects and line spans.
+Start there and at the full diff, not at the entire parent. Explicit `--context` still supplies
+a whole file. Missing or ambiguous context and unverified evidence remain named dispatch gaps.
+
+For optional advisory scheduling, use `build-review-package.sh --pr <url> --since <rev>
+--review-plan <repo-relative-json>` ([contract](https://github.com/pevyhlas/product-kit/blob/main/docs/review-packages.md)). It captures the
+native gate's unchanged result and separates retained host coverage, reviewers needing action
+and prospective carry. The lead's map never proves unaffectedness or closes a finding.
+Prospective carry needs an actual clean native fix receipt and fresh online gate evaluation;
+no hypothetical receipt is evaluated or published. Unavailable/partial host evidence, snapshots
+and unpublished changed code cannot establish current retention. Ordinary structural packages
+remain possible without host tools. Neither a plan nor a package authorizes merging.
+
+Equal reviewed content refuses before round allocation, including comparison with the latest
+completed object-bound package when `--since` is omitted. Reuse the existing package for receipt
+repairs, owner action or new verification evidence. Incomplete rounds keep their evidence and
+number; unknown comparison is never equality. Concurrent allocation is serialized.
+
 Trusted default-branch policy names `review-host: github`, numeric `review-publishers`, personal
 numeric `review-owner` ids, and `review-publisher-isolation: required|shared`. Register eligible
 reviewer identities there too; a branch cannot register itself. Bot and User account types plus
@@ -76,13 +95,25 @@ receipts bind content, order and counts, not reviewer independence.
 Removing an id from `review-publishers` drops that publisher's receipts, **FAILs included**,
 on both current and closed source PRs. Reconcile its standing verdicts before rotating the id.
 
-T3 needs the owner's latest decisive native review: APPROVED counts, CHANGES_REQUESTED or
-DISMISSED is a barrier, and COMMENTED is ignored. The approved commit's L0/L1 slice must match
-the checked head. A code fix or rebase can keep it; an L0/L1 edit needs approval again. The gate
+Native owner barriers are PR-wide, independent of coverage: CHANGES_REQUESTED blocks at every
+tier, including T0, record-only closure and a renamed/deleted/missing carrier. DISMISSED is a
+distinct revocation barrier, not a request for changes. Each configured personal numeric actor
+keeps its own barrier; another owner's approval cannot clear it. COMMENTED, PENDING, record
+text and tier edits do not clear either state. An event-free otherwise exempt PR needs no new
+positive owner approval. Future coverage exemptions must retain this pre-coverage check.
+
+Only a later valid APPROVED review by the issuer clears its barrier. Invalid or unwitnessed
+approval leaves the earlier negative standing. Positive approval is still required for
+substantive T3 and owner/unnamed legacy clearance, not for every tier. T3 uses the latest
+decisive native review, with no standing owner barrier. The approved commit's L0/L1 slice must
+match the checked head. A code fix or rebase can keep it; an L0/L1 edit needs approval again. The gate
 confirms the commit was the head strictly before submission using all activity types and the
 deciding window's continuity. Same-second ties or aged-out/missing activity fail closed: push
 a commit (record-only is enough), then approve again. Retention is not known. Owner text,
 receipts and record lines never approve; an owner-authored T3 PR needs a different PR author.
+Missing identities, duplicate review ids, unknown states and incomplete enumeration are
+unavailable authority, never an event-free exemption. Native barriers belong to the current
+repository/PR; they grant no cross-PR PASS authority or automatic legacy-history clearance.
 
 ### Repairing an edited or invalid receipt
 

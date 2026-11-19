@@ -17,7 +17,8 @@ jobs:
   portable-helpers-macos:
     name: portable helpers (macOS)
     runs-on: macos-15
-    timeout-minutes: 60
+    # Native upgrade/receipt and review-package coverage exceeded the former 60m cap (#114).
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -46,6 +47,8 @@ jobs:
           /bin/bash tests/test_consumer_smoke.sh
           /bin/bash tests/test_script_safety.sh
           /bin/bash tests/test_bounds.sh
+          /bin/bash tests/test_lifecycle.sh
+          /bin/bash tests/test_spec_navigation.sh
           /bin/bash tests/test_agent_tiers.sh
           /bin/bash tests/test_context_budget.sh
           /bin/bash tests/test_adoption_gate.sh
@@ -64,5 +67,11 @@ jobs:
           /bin/bash tests/test_review_owner.sh
           /bin/bash tests/test_publish_review.sh
           /bin/bash tests/test_review_package.sh
+          /bin/bash tests/test_review_package_rounds.sh
+          /bin/bash tests/test_review_package_targeted.sh
+          /bin/bash tests/test_review_package_inputs.sh
+          /bin/bash tests/test_review_package_lock.sh
+          /bin/bash tests/test_review_package_lock_safety.sh
+          /bin/bash tests/test_review_package_completion.sh
           /bin/bash tests/test_delivery_checkpoint.sh
           /bin/bash tests/test_release.sh

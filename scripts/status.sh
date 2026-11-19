@@ -34,12 +34,13 @@ ju() { if [[ "$1" =~ ^(0|[1-9][0-9]*)$ ]]; then printf '%s' "$1"; else printf nu
 ji() { if [[ "$1" =~ ^(0|-?[1-9][0-9]*)$ ]]; then printf '%s' "$1"; else printf null; fi; }
 
 items="$(spec_items "$root")"
-now_next="$(spec_stage_now "$root")"; stage_now="${now_next%%"$SEP"*}"; stage_next="${now_next#*"$SEP"}"
+spec_lifecycle_require "$root"
+stage_now="$SPEC_STAGE_NOW"; stage_next="$SPEC_STAGE_NEXT"
 # Live items marked for a stage after the current one: needed later, not now.
 later="$(if [ -n "$stage_now" ]; then
     { printf '%s\n' "$items" | awk -F "$SEP" 'NF && $5 == "yes" { print "R" FS $1 }'
       spec_stages "$root" | awk -F "$SEP" '{ print "S" FS $1 FS $2 }'; } |
-    awk -F "$SEP" -v now="$stage_now" "$SPEC_STAGE_AWK"'
+    awk -F "$SEP" -v now="$stage_now" -v stage_order="$SPEC_STAGE_ORDER" -v stage_custom="$SPEC_STAGE_CUSTOM" "$SPEC_STAGE_AWK"'
         $1 == "R" { gone[$2] = 1; next }
         !($2 in gone) && stage_rank($3) > stage_rank(now) { out = out (out ? ", " : "") $2 " (" $3 ")" }
         END { print out }'

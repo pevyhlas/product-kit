@@ -227,6 +227,15 @@ includes merges/deletions, rejects same-second submission ties, and checks conti
 the deciding window. Retention is unknown. An undetermined approval needs a new push (even a
 record-only commit) and re-approval. An absent approved commit names the required fetch. No
 owner text or relay can replace this; the owner cannot self-approve a T3 PR.
+CHANGES_REQUESTED blocks the entire current PR before every coverage exemption, even when
+the carrier is missing. DISMISSED is a distinct revocation barrier. Barriers are per configured
+numeric owner actor: only that issuer's later APPROVED review, after the same native provenance,
+non-self-approval, activity, object and L0/L1 freshness checks, can clear it. COMMENTED/PENDING,
+another owner's approval and record/tier edits cannot. An invalid later approval preserves the
+negative and its diagnosis. No decisive event adds no positive requirement to otherwise exempt
+PRs. Substantive T3 and owner/unnamed legacy-history clearance retain their separate requirements.
+Unknown/missing identity or state, duplicate review ids and incomplete streams are unavailable,
+not empty. This current-PR check grants no cross-PR coverage.
 
 Only `authority:"host"` can pass with exit **0**. For offline preview:
 
@@ -237,6 +246,10 @@ bash .prdkit/scripts/bash/check-review.sh --receipts receipts.txt <change-id>  #
 
 Snapshots are writable, unauthenticated, US-separated normalized rows, readable with awk and
 without gh/jq. They re-run local policy, fingerprints, coverage, owner slice and legacy history.
+The header is `prdkit-receipts 2`; owner rows append the authenticated `user:<database-id>`
+actor after the existing review/time/state/commit/submission-head fields. Version 1 snapshots
+are refused, not used to infer multi-owner clearance; capture a fresh snapshot with the current
+checker. This does not change verdict receipt v3 or `fp1`.
 JSON reports `authority:"snapshot"`; no source reports `authority:"none"`. Whenever authority is
 not `host` (including `unavailable`), JSON `result` is `preview`, even when problems exist.
 Consumers must inspect authority, problems and exit status: exit 1 is failure and 3 is a
@@ -244,6 +257,9 @@ would-pass preview; only a host-authority pass exits 0. Human output prints
 PREVIEW and fetch time. A would-be pass in either mode exits **3**, not merge authority. JSON
 also reports `pr`, `pr_head`, `head_is_pr_head`, `publisher_isolation`, receipt/ignored/invalid/
 carried counts, `legacy_blockers`, native `owner` metadata and `reviews[].receipt` URLs.
+The existing `owner` fields still describe the latest decisive event; `owner.actor` identifies
+its actor, while `owner.barriers[]` reports each standing actor/review/state and distinct reason
+(including an invalid later clearing attempt). `problems` includes these barriers at every tier.
 
 The legacy blocker-only scan reads active 1.x State review lines from raw Git blobs and complete
 history, including deleted/edited/transferred inherited records. No 1.x PASS converts or covers.

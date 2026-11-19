@@ -9,7 +9,7 @@ source_fixture() {
     FIXTURE="$(CDPATH='' cd "$FIXTURE" && pwd -P)"
     KIT="$FIXTURE/.product-kit"
     mkdir -p "$KIT/scripts" "$KIT/commands" "$KIT/workflows" "$KIT/templates"
-    for file in check-adoption.sh common.sh install-lib.sh install-source-lib.sh spec-lib.sh agent-tiers-lib.sh agents-section.md; do
+    for file in check-adoption.sh common.sh install-lib.sh install-source-lib.sh spec-lib.sh spec-navigation-lib.sh agent-tiers-lib.sh agents-section.md; do
         cp "$PK_ROOT/scripts/$file" "$KIT/scripts/$file" || exit 1
     done
     printf '1.5.0\n' > "$KIT/VERSION"

@@ -46,6 +46,50 @@ the files directly in it; a retired file is exempt), and that `observed.md` link
 Links in `specs/archive.md` must resolve too; a git path is code (`git show <sha>:<path>`), not
 a link.
 
+## Generated tracking navigation
+
+Keep a short record ID near its source item, on a separate `Tracking:` line (below a heading,
+so its anchor does not change). Use same-file reference links. The optional v1 convention is:
+
+```markdown
+Tracking: [REC-123][nav-rec-123]
+
+<!-- prdkit:navigation:v1 begin -->
+[nav-rec-123]: https://tracker.example.test/items/REC-123
+<!-- prdkit:navigation:v1 end -->
+```
+
+The definitions are active Markdown, not commented out. This is navigation, never evidence,
+authored citations, copied tracking status or a source-of-truth change. External exporters return
+mappings; inserting links is an ordinary source edit/PR under project authority.
+
+The recognizer deliberately accepts a narrow subset:
+- One complete footer at end of file (only blank lines may follow), exact marker lines/version,
+  and one or more single-line definitions; no blank lines, titles, prose or nested blocks inside.
+- Keys are `nav-` followed by ASCII letters/digits/underscores/hyphens, unique across the whole
+  file after case/whitespace normalization. URLs are absolute HTTP(S) detail URLs with a host,
+  optional numeric port and nonempty path; no user information, whitespace or Markdown titles.
+  Keep credentials and private target metadata out of published URLs.
+- Every key is used only by a `Tracking: [ID][nav-key]` line, with zero to three leading spaces.
+  More links on that line are space-separated; IDs use ASCII letters/digits and `._/-`.
+  Repeated uses reuse one definition. These lines contain no prose or evidence assertions.
+- Authored references remain outside the footer. Possible conflicting definitions or other
+  uses, unsupported HTML context, malformed/mixed/unknown blocks stay visible and counted with
+  a diagnostic. Fenced examples do not qualify. This is not a general Markdown parser.
+
+Only validated footer definitions and their envelope are excluded from prose reading budgets.
+Visible IDs, mappings and all substantive text still count. Auto-loaded instruction byte budgets
+remain raw. An exemption alone saves no model input.
+
+For routine spec context use `bash .prdkit/scripts/bash/read-spec.sh specs/<file>.md` before
+loading text into the agent context. Its read-only projection keeps original line numbers and
+reports its version, source path, observed HEAD, actual content blob, raw size and omitted size.
+The working-tree snapshot may differ from HEAD; the content blob identifies the bytes read.
+Use `--stats` for accounting, `--target nav-key` for one validated target, and `--raw` for exact
+source bytes. Malformed navigation stays in the projection. Raw Git diffs/blobs remain the
+integrity and review artifacts; use them for link changes, source review and revision evidence.
+The compact view is neither a replacement specification nor a hash/review input.
+
 ## Levels
 
 | Level | Answers | Never contains |
@@ -82,7 +126,11 @@ journey solves a pain (or supports one that does), and each part exists for jour
 
 ## The lifecycle decides what is needed now
 
-A product moves through stages, and each needs less than the next. Skip the ones it does not need.
+A product moves through owner-chosen stages. The default order is below; skip stages it does
+not need. To replace the vocabulary and order, put `**Stages**: Idea > Experimental > Stable`
+in the header of `specs/product/lifecycle.md` (or under `## Lifecycle` in `specs/SPEC.md`),
+before any stage subheadings. Keep that declaration with Now/Next when splitting stage details.
+Headings, diagrams and summary columns do not declare an order.
 
 | Stage | Means |
 |-------|-------|
@@ -98,6 +146,17 @@ A product moves through stages, and each needs less than the next. Skip the ones
 
 - `lifecycle.md` names the stage **Now** and **Next**, and for each stage its goal, audience,
   environment, promise and exit criteria. Only the owner moves Now.
+- Stage names start with an ASCII letter and end with a letter/digit; letters, digits, spaces
+  and hyphens are allowed. Separate them with `>`; comparison ignores case and repeated
+  whitespace. Declare each name once. No custom-name aliases are inferred; the default alone
+  accepts `General availability` for `GA`. Now and Next name whole stages; a `since <date>`,
+  parenthesized or semicolon-delimited note may follow. Next must be later than Now; omit it
+  when there is no next stage. Separate Now/Next lines and the inline `·` form both work.
+- Malformed or duplicate declarations and unknown Now/Next values fail diagnostics; no fallback
+  order is selected. With an explicit order, unknown `from:` values also fail doctor. Without
+  one they retain the legacy source-note advisory, but status/bounds refuse classification for
+  unknown markers in either form (nonzero exit, including JSON mode). With no lifecycle at all,
+  the existing all-needed-now default remains; doctor advises when known markers lack Now.
 - An item needed only from a later stage carries `from: <stage>` with its maturity:
   `**R-12 Choose a plan** (hypothesis, from: ga)`, `# J-07 Choose my plan (hypothesis, from:
   ga)`, or in a part's Maturity cell. Without one it is needed now. Remove a marker once its
