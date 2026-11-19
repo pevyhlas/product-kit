@@ -3,6 +3,7 @@
 # Every instrumentation/mutation below is test-only. Synthetic native objects are negative
 # transport/oracle controls, never substitutes for the real integrated native gate controls.
 # shellcheck disable=SC2016,SC2034 # generated scripts and inputs shared with the fixture driver
+source "$TESTS_DIR/pr-review-native-diagnostic.sh"
 
 live_group() {
     ps -axo pid=,pgid=,stat= | awk -v group="$1" '$2 == group && $3 !~ /^Z/ { print $1 }'
@@ -36,7 +37,10 @@ bound_gate() { # jq mutation, output mode, actual exit; creates explicitly SYNTH
     {
         printf '#!/bin/bash\nrepo=""; while [ "$#" -gt 0 ]; do\n'
         printf 'case "$1" in --repo) shift; repo="$1" ;; esac; shift; done\n'
-        if [ "$mode" = stubborn ]; then printf 'trap "" TERM\n'; fi
+        if [ "$mode" = stubborn ]; then
+            printf 'trap "" TERM\n'
+            nd_gate_source "$nd_dir"
+        fi
         printf 'p="$(git -C "$repo" rev-parse origin/HEAD)"\nt="$(git -C "$repo" rev-parse refs/remotes/origin/main)"\n'
         printf 'jq --arg p "$p" --arg t "$t" '\''.policy_at=$p|.diagnostics.policy_at=$p|.diagnostics.base_at=$t'\'' <<'\''JSON'\''\n%s\nJSON\n' \
             "$(printf '%s' "$NATIVE" | jq -c "$filter")"
@@ -45,6 +49,7 @@ bound_gate() { # jq mutation, output mode, actual exit; creates explicitly SYNTH
             stderr) printf 'head -c 5242880 /dev/zero | tr "\\000" " " >&2\n' ;;
             stubborn)
                 printf '/bin/bash -c '\''trap "" TERM; echo "$$" > "$1"; while :; do sleep 60; done'\'' _ %q &\n' "$FIX/stubborn"
+                printf 'nd_gate "$$" "$PPID" || :\n'
                 printf 'echo ready > %q\nwait\n' "$FIX/native-ready" ;;
         esac
         printf 'exit %s\n' "$rc"
@@ -343,6 +348,8 @@ assert_other_bindings
 restore_control
 
 it 'overlapping overall deadline and repeated signals cannot interrupt KILL escalation/teardown'
+nd_dir="$FIX/native-diagnostic"
+mkdir "$nd_dir"
 bound_gate . stubborn
 rm -f "$FIX/native-ready" "$FIX/stubborn" "$FIX/group" "$FIX/teardown-ready" "$FIX/live-at-remove"
 awk -v dir="$FIX" '
@@ -357,6 +364,7 @@ awk -v dir="$FIX" '
 ' "$FIX/launcher" > "$FIX/injected"
 mv "$FIX/injected" "$FIX/launcher"
 record_cleanup
+nd_instrument
 set -m
 env -i PATH="$ORIGINAL_PATH" GH_TOKEN=synthetic GITHUB_EVENT_NAME=pull_request \
     GITHUB_REPOSITORY=owner/repo GITHUB_REPOSITORY_ID=42 \
@@ -376,6 +384,7 @@ done
 assert_file "$FIX/native-ready"; assert_file "$FIX/stubborn"
 STUBBORN="$(cat "$FIX/stubborn")"
 kill -TERM "$STUBBORN"
+printf '%s %s\n' "$STUBBORN" "$?" > "$nd_dir/descendant"
 if kill -0 "$STUBBORN" 2>/dev/null; then _ok 'descendant is armed to resist TERM'; else _no 'stubborn fixture not armed'; fi
 START="$SECONDS"
 kill -TERM "$LAUNCHER_PID"
@@ -388,6 +397,8 @@ if wait "$LAUNCHER_PID"; then STATUS=0; else STATUS=$?; fi
 ELAPSED=$((SECONDS-START))
 kill -KILL -- "-$GUARD" 2>/dev/null || true
 wait "$GUARD" 2>/dev/null || true
+nd_summary "$nd_dir" "$FIX/stdout" > "$nd_dir/summary"
+printf 'native-diagnostic: %s\n' "$(cat "$nd_dir/summary")"
 assert_eq 1 "$STATUS"
 assert_eq 1 "$(jq -s length "$FIX/stdout")" 'one complete refusal after repeated catchable signals'
 assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
@@ -400,4 +411,7 @@ assert_eq '' "$(find "$FIX/scratch" -mindepth 1 -print)"
 run test "$ELAPSED" -lt 15
 assert_eq 0 "$STATUS" 'teardown remains bounded despite repeated signals'
 assert_other_bindings
+assert_eq complete "$(jq -r .evidence "$nd_dir/summary")" 'bounded diagnostic witnesses are available'
+assert_eq true "$(jq -r .object.equal "$nd_dir/summary")" 'entire synthetic native object retained'
+assert_eq true "$(jq -r .object.extension_keep "$nd_dir/summary")" 'actual sequence retains unknown field'
 restore_control
