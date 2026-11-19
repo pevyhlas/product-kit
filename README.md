@@ -88,7 +88,7 @@ Agent:  Change 012 adds requirement R-04 with the code. Acceptance A1 passes on 
 | **Existing code**          | ✅ Starts from what's true today                                                                      |
 | **Parallel work**          | ✅ Each change in its own worktree                                                                    |
 | **Control**                | ✅ Written policy for merge, release, deploy and spend; review can be checked in CI                   |
-| **Data**                   | ✅ Stays in your repo; no service, no account                                                         |
+| **Data**                   | ✅ Local spec work needs no service or account; the native PR gate uses GitHub                        |
 | **Lock-in**                | ✅ Low: plain Markdown                                                                                |
 | **Large products**         | ⚠️ Designed for it (layered spec, agents read only what a change touches), but proven on only a handful of projects |
 | **Agents**                 | ⚠️ Installs for Claude Code, OpenCode, Codex and other `AGENTS.md` readers; [real-agent testing](docs/harnesses.md) is still limited |
@@ -213,8 +213,9 @@ bash .prdkit/scripts/bash/doctor.sh --strict   # spec integrity, reading budgets
 `check-review.sh --pr <url>` verifies publisher-authored review receipts and blockers for the exact
 head being merged. T3 also needs the owner's native approval, confirmed against the activity log.
 Native owner changes requests and dismissals block even PRs exempt from review coverage.
-It checks evidence; it does not review. The online check needs `gh` and `jq`; offline snapshots
-are previews (exit 3), never merge authority. See [CI gates](docs/ci-gates.md).
+It checks evidence; it does not review. The online check needs `gh`, `jq`, configured GitHub
+publisher and owner identities, and complete host reads even for T0. Offline snapshots are
+previews (a would-pass exits 3), never merge authority. See [CI gates](docs/ci-gates.md).
 
 | Tier | When                                           | Independent reviewers        |
 | ---- | ---------------------------------------------- | ---------------------------- |
@@ -234,15 +235,21 @@ are previews (exit 3), never merge authority. See [CI gates](docs/ci-gates.md).
 review policy first. If active 1.x Review lines remain, plain `--upgrade` refuses and points to
 `--upgrade --migrate-reviews`; no old PASS becomes approval.
 
+On a clean upgrade branch in the consumer repo:
+
 ```bash
 git -C .product-kit fetch --tags && git -C .product-kit checkout vX.Y.Z
-bash .product-kit/scripts/init.sh --check     # read-only drift report
-bash .product-kit/scripts/init.sh --upgrade
+git add -- .product-kit
+git commit -m "Pin Product-Kit vX.Y.Z"
+bash .product-kit/scripts/init.sh --check     # read-only; expected drift can exit 1
 ```
 
-Upgrade from a clean, committed checkout with the trusted default branch fetched. Kit-owned
-commands and scripts are refreshed if unmodified; customized managed files that would be
-overwritten block the upgrade. Project-owned edits are kept and `specs/` is never touched.
+Replace `vX.Y.Z` with the selected tag. Inspect the drift, then run
+`bash .product-kit/scripts/init.sh --upgrade`, or add `--migrate-reviews` as described in the
+2.0 guide. Upgrade from a clean, committed checkout with the trusted default branch fetched.
+Kit-owned commands and scripts are refreshed if unmodified; customized managed files that would be
+overwritten block the upgrade. Project-owned edits are kept and the installer never touches
+`specs/`. For a gated 2.0 upgrade PR, add its numbered review record **after** installation.
 Each [CHANGELOG](CHANGELOG.md) entry says what else to do.
 
 </details>

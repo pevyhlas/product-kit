@@ -8,6 +8,8 @@ run bash .product-kit/scripts/init.sh
 it "fresh install provides the public interface and neutral agent operations"
 assert_eq 0 "$STATUS" "install succeeds"
 assert_contains "$OUTPUT" 'Product-Kit initialized' "success banner"
+assert_contains "$OUTPUT" 'commit the .product-kit pin' "fresh install explains the upgrade pin"
+assert_not_contains "$OUTPUT" 'submodule update --remote' "upgrades select a release instead of following a branch"
 for file in constitution.md agents.md config.md; do assert_file "$PROJ/.prdkit/memory/$file" "$file seeded"; done
 memfiles=("$PROJ"/.prdkit/memory/*.md)
 assert_eq 3 "${#memfiles[@]}" "only the three memory files are seeded"
@@ -153,6 +155,12 @@ echo 'LOCAL COMMAND EDIT' >> "$PROJ2/.opencode/commands/prdkit.md"
 run bash .product-kit/scripts/init.sh --check
 assert_eq 1 "$STATUS" "drift reported"
 for bucket in MODIFIED OUTDATED NEW KIT-OWNED; do assert_contains "$OUTPUT" "$bucket" "$bucket reported"; done
+assert_contains "$OUTPUT" '--upgrade refuses to overwrite these customizations' "2.0 check tells consumers to reconcile before upgrading"
+assert_not_contains "$OUTPUT" 'will OVERWRITE' "2.0 check does not promise to overwrite"
+printf '1.5.0\n' > .product-kit/VERSION
+run bash .product-kit/scripts/init.sh --check
+assert_contains "$OUTPUT" 'older installer may overwrite' "older-version behavior is distinguished"
+cp "$PK_ROOT/VERSION" .product-kit/VERSION
 assert_not_contains "$(cat "$PROJ2/.prdkit/templates/product-template.md")" 'NEW KIT PRODUCT' "check does not update"
 it "upgrade refreshes kit-owned and untouched files, preserves project edits"
 snapshot_upgrade_fixture "$PROJ2" || exit 1

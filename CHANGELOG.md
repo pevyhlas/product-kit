@@ -23,7 +23,7 @@ The public command surface is unchanged.
    history; explicitly allow any other review target in `review-integration-branches`. Allow
    literal `review-t0-paths` there if T0 should cover docs beyond the record and log. Get the
    trusted receipt publisher working before the upgrade PR needs receipts.
-2. **Upgrade in a clean PR with no change-record edits.** Pin and commit `v2.0.0`, then run
+2. **Install on a clean upgrade branch before editing records.** Pin and commit `v2.0.0`, then run
    `bash .product-kit/scripts/init.sh --check`. Plain `--upgrade` refreshes kit-owned files
    when neither the trusted tip nor the checkout has active 1.x Review lines; otherwise it
    refuses and directs you to `--upgrade --migrate-reviews`. Use
@@ -34,8 +34,10 @@ The public command surface is unchanged.
    or deletion; customized project-owned templates and memory are kept. Update configured
    adoption pin and manifest hash together. See the
    [migration guide](https://github.com/pevyhlas/product-kit/blob/v2.0.0/docs/migrating-to-2.0.md)
-   for preflight and retry details. A 0.x install must upgrade and complete its cutover under
-   1.x first.
+   for preflight and retry details. After installation, if using the native gate, create the
+   upgrade PR's numbered record with `new-change.sh --no-branch`, then commit it and review
+   and close the upgrade with that record as the carrier. A 0.x install must upgrade and
+   complete its cutover under 1.x first.
 3. **Re-review open PRs and update CI and closing calls.** Merge the upgraded default branch into
    each open PR. A trusted publisher posts new v3 receipts with `publish-review.sh` from trusted
    code; no 1.x PASS or prior PR's PASS grants coverage. A legacy FAIL, blocking count or
@@ -44,8 +46,8 @@ The public command surface is unchanged.
    approval with historical proof. Use `check-review.sh --pr <url>` with `gh`, `jq` and complete
    host reads in every tier; pass the actual target as `--base origin/<target>` and pass `--pr <url>`
    to `close-change.sh` too. Remove `--verify-reports` from invocations.
-   Offline previews never authorize a merge (a would-pass exits 3); recapture
-   old snapshots in v2 snapshot format. T3 needs fresh native owner approval for the reviewed
+   Offline previews never authorize a merge (a would-pass exits 3).
+   T3 needs fresh native owner approval for the reviewed
    L0/L1 slice. A standing changes request or dismissal blocks even exempt PRs until the same
    owner clears it with valid approval. The trusted all-PR launcher is available, but immutable
    workflow registration, a clean pre-shell bootstrap and host enforcement verification are
@@ -149,7 +151,8 @@ receipts, and wrapper removal.
   compares the report's final verdict/count lines; `--dry-run` encodes JSON with jq but makes no
   host call. Publish logs retain the original payload outside working trees, under the absolute
   Git common directory's `prdkit/receipts/`. They must never be maker-writable; symlinked log
-  components are refused. Old `.prdkit/cache/receipts/` logs are no longer read and are not migrated.
+  components are refused. Unreleased builds used `.prdkit/cache/receipts/` logs; those logs are
+  no longer read or migrated. Tagged 1.5.0 had no publisher log to migrate.
 - **The merge gate requires the host in every tier.** `check-review.sh --pr <url>` needs `gh`,
   `jq` and complete API reads even for T0 and record-only changes: only the host can show that no
   FAIL stands. Host unavailability means merging waits. `--receipts <snapshot>` and checks with
@@ -167,8 +170,9 @@ receipts, and wrapper removal.
   text and tier edits cannot clear it. Invalid later approval leaves the negative standing.
   Otherwise exempt, event-free PRs need no positive owner approval. JSON preserves existing
   fields and adds `owner.actor` and per-actor `owner.barriers` with review/state/reason.
-  Preview snapshots use `prdkit-receipts 2` with actor-bearing owner rows; old actorless
-  snapshots are refused and need fresh capture. Verdict receipt v3 and `fp1` are unchanged.
+  Preview snapshots use `prdkit-receipts 2` with actor-bearing owner rows. Only users of
+  unreleased builds with actorless snapshots need to recapture them; tagged 1.5.0 did not
+  use receipt snapshots. Verdict receipt v3 and `fp1` are unchanged from those builds.
 - **T3 uses the owner's native approval.** The latest decisive APPROVED review, with no
   standing owner barrier, must bind the checked head's L0/L1 slice. Code fixes and rebases
   can keep approval; L0/L1 edits lapse it. The GraphQL approved commit must match the head

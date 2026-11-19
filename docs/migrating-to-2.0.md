@@ -43,11 +43,22 @@ lines, `light/full`, `full:`, `full,` and `fullx` are invalid. Change `full: med
 uses the gate's unchanged Rigor parser and reads policy at the trusted default branch's tip,
 never a branch-local proposed fix. 1.x ignores the new receipt policy keys.
 
-## 2. Make an upgrade PR without changing records
+## 2. Install on the upgrade branch before editing records
 
 Start a branch from the default branch. Fetch its complete history and establish
 `origin/HEAD` beforehand. Select `v2.0.0` and commit its pin before running
 the installer: a dirty source pin is still a dirty checkout.
+
+```bash
+git -C .product-kit fetch --tags && git -C .product-kit checkout v2.0.0
+git add -- .product-kit
+git commit -m "Pin Product-Kit v2.0.0"
+bash .product-kit/scripts/init.sh --check  # read-only; expected drift can exit 1
+```
+
+Inspect and reconcile the drift before installing. If neither the trusted default tip nor
+the checkout has active 1.x Review lines, use `bash .product-kit/scripts/init.sh --upgrade`.
+Otherwise preview and install with `--migrate-reviews`:
 
 ```bash
 # Read-only preview; jq is required. gh adds the open-PR portion.
@@ -63,7 +74,8 @@ Preflight refuses before any target mutation unless:
 - The target has a 1.x or 2.0 manifest and a clean Git status, including staged, unstaged and
   untracked files.
 - Rigor and all four receipt policy keys are well formed at the trusted default tip.
-- Every `specs/changes/` path at HEAD equals that tip; the upgrade branch carries no record edits.
+- At installation time, every `specs/changes/` path at HEAD equals that tip. Create the upgrade
+  PR's own record only after installation succeeds.
 - The full planned overwrite/delete set is safe. Ignored or committed customizations to commands,
   scripts, workflows or managed text are not permission to replace them. Reconcile them first.
   Project-owned customized templates and memory stay preserved; `--force` does not bypass this
@@ -81,15 +93,14 @@ Missing `gh` or an unavailable API leaves an explicit note; the upgrade proceeds
 their history must already be local: the report never fetches. A missing head/history is marked
 `scan_available: false`, not presented as proof of no blockers. The report is informational:
 blockers do not prevent installing. **Neither preview nor installation posts a review or edits
-or creates a change record.** The upgrade diff contains kit installation files and the manifest,
-not record changes. Review and gate the upgrade PR normally, under the scripts CI actually runs.
+or creates a change record.** That constraint is on the installer, not on the final PR.
 
 Plain `--upgrade` to 2.0 refuses while any trusted-tip or checkout record has active 1.x lines,
 pointing to `--migrate-reviews`; it works without the flag when none exist. Plain upgrade also
 requires a committed install, a clean checkout, a local trusted default ref and a safe set of
 overwrite/delete destinations. Malformed Rigor is a warning on plain upgrade and `--check`, but a
-migration prerequisite. `--migrate-reviews` without
-`--upgrade`, or on a kit source older than 2.0, is usage error 2. `--json` requires `--dry-run`.
+migration prerequisite. With the 2.0 installer, `--migrate-reviews` without `--upgrade` is
+usage error 2. Earlier releases do not support the flag. `--json` requires `--dry-run`.
 
 Before merging, remove calls to the retired execution ledger and retrospective and update
 any log tooling to read both `specs/log/<id>.md` and `specs/log.md`. Select `--with agent-tiers`
@@ -108,7 +119,39 @@ commands still refuse, and records must always be clean. The exception works wit
 too. A write lock left after an untrappable kill requires explicit inspection before removal;
 there is no guessed-stale-lock cleanup or global rollback.
 
-## 3. Merge the default branch into each open PR, then review afresh
+## 3. Review and close the upgrade PR
+
+If your project uses the native review gate, the upgrade PR itself needs a numbered change
+record (the **review carrier**). Once installation and any same-source retries are complete,
+run this from the consumer root on the upgrade branch:
+
+```bash
+bash .prdkit/scripts/bash/new-change.sh --no-branch --short-name kit-upgrade "Upgrade Product-Kit to 2.0"
+```
+
+Use the printed `CHANGE_ID`. Complete `specs/changes/<id>.md` with the upgrade intent, checks,
+and the tier required by the actual diff and project policy. Commit the record and installed
+files before publishing the PR head. If the branch name differs from the ID, pass the ID
+explicitly to the publisher and gate. A valid receipt cannot replace the record.
+
+The consumer default branch still has 1.5 installed, so the all-PR launcher cannot yet
+load the 2.0 gate from there. Have the owner arrange for `check-review.sh` and
+`publish-review.sh` to run from an independently pinned, trusted 2.0 source against the
+consumer PR's fetched objects (`--repo`). Do not run the publisher with candidate code or
+bypass existing required checks. Once the required receipts (and owner approval if required)
+are in place, run the following locally with the actual PR URL, carrier ID and target ref:
+
+```bash
+bash .prdkit/scripts/bash/check-review.sh --pr "$pr_url" --base "$target_ref" "$change_id"
+bash .prdkit/scripts/bash/close-change.sh --pr "$pr_url" --base "$target_ref" "$change_id" "Upgrade Product-Kit to 2.0 — $pr_url"
+```
+
+`target_ref` is the fetched trusted target, e.g. `origin/main`. Push the closing commit and
+let CI check the final head. Closing retains the record in branch history and adds its log
+entry, so the review gate can still find the carrier. Do not rerun the migration installer
+after committing the carrier: its preflight still requires record equality.
+
+## 4. Merge the default branch into each open PR, then review afresh
 
 After the upgrade merges, each open PR merges the default branch and obtains fresh native
 receipts. Only `check-review.sh --pr <url>` can authorize merging, in every tier, T0 and
