@@ -8,8 +8,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 TIERS_DIAG_LOAD_STATUS=0
 if { source "$TESTS_DIR/optional-diagnostics.sh"; } >/dev/null 2>&1; then :; else
     TIERS_DIAG_LOAD_STATUS=$?
-    printf '%s\n' 'optional-diag status=unavailable stage=load'
-    _no "diagnostic helper available"
+    { printf '%s\n' 'optional-diag status=unavailable stage=load'; } 2>/dev/null
+    { _no "diagnostic helper available"; } 2>/dev/null
 fi
 
 tiers_diag_record_failure() {
@@ -48,10 +48,10 @@ tiers_assert_first_install() { # actual first-result caller, also exercised by s
     # The helper never returns raw manifest bytes; only the fixed substring projection.
     if { TIERS_DIAG_CHOICE="$(_tiers_diag_choice "$1/.prdkit/.manifest")"; } 2>/dev/null; then :; else
         TIERS_DIAG_CHOICE=unavailable
-        printf '%s\n' 'optional-diag status=unavailable stage=choice'
+        { printf '%s\n' 'optional-diag status=unavailable stage=choice'; } 2>/dev/null
     fi
     case "$TIERS_DIAG_CHOICE" in "options: agent-tiers") ;; *) TIERS_DIAG_CHOICE=unavailable ;; esac
-    assert_contains "$TIERS_DIAG_CHOICE" "options: agent-tiers" "choice recorded"
+    assert_contains "$TIERS_DIAG_CHOICE" "options: agent-tiers" "choice recorded" 2>/dev/null
 }
 
 hash_of() { (sha256sum "$1" 2>/dev/null || shasum -a 256 "$1") | cut -d' ' -f1; }
