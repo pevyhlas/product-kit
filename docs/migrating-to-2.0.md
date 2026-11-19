@@ -85,8 +85,10 @@ or creates a change record.** The upgrade diff contains kit installation files a
 not record changes. Review and gate the upgrade PR normally, under the scripts CI actually runs.
 
 Plain `--upgrade` to 2.0 refuses while any trusted-tip or checkout record has active 1.x lines,
-pointing to `--migrate-reviews`; it works without the flag when none exist. Malformed Rigor is a
-warning on plain upgrade and `--check`, but a migration prerequisite. `--migrate-reviews` without
+pointing to `--migrate-reviews`; it works without the flag when none exist. Plain upgrade also
+requires a committed install, a clean checkout, a local trusted default ref and a safe set of
+overwrite/delete destinations. Malformed Rigor is a warning on plain upgrade and `--check`, but a
+migration prerequisite. `--migrate-reviews` without
 `--upgrade`, or on a kit source older than 2.0, is usage error 2. `--json` requires `--dry-run`.
 
 Before merging, remove calls to the retired execution ledger and retrospective and update

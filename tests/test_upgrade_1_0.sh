@@ -9,6 +9,8 @@ hash_of() { (sha256sum "$1" 2>/dev/null || shasum -a 256 "$1") | cut -d' ' -f1; 
 tree_digest() { (cd "$1" && find specs -type f -print | LC_ALL=C sort | while IFS= read -r f; do printf '%s %s\n' "$(hash_of "$f")" "$f"; done); }
 
 PROJ="$(make_project)"; track_tmp "$PROJ"
+# This is the first leg of a 0.x migration, not a direct upgrade to 2.0.
+printf '1.5.0\n' > "$PROJ/.product-kit/VERSION"
 ( cd "$PROJ" && bash .product-kit/scripts/init.sh --copy ) >/dev/null 2>&1
 # Simulate what a 0.17 install left behind and recorded: retired workflows, scripts and
 # templates (one template edited since install), the sign-off policy seed, and 0.x canon.
@@ -83,6 +85,13 @@ for name in $helpers; do
 done
 
 it "upgrade removes retired kit files and keeps an edited retired template"
+if [ "$(cat "$PK_ROOT/VERSION")" = 2.0.0 ]; then
+    cp "$PK_ROOT/VERSION" "$PROJ/.product-kit/VERSION"
+    run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --upgrade"
+    assert_eq 1 "$STATUS" "a 0.x manifest cannot upgrade directly to 2.0"
+    assert_contains "$OUTPUT" "target must hold a 1.x or 2.0 manifest" "1.x staging required"
+    printf '1.5.0\n' > "$PROJ/.product-kit/VERSION"
+fi
 run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --upgrade"
 assert_contains "$OUTPUT" "reference kit files this kit no longer ships" "upgrade warns about CI"
 assert_contains "$OUTPUT" "scripts/validate.sh: artifact-lib.sh" "upgrade names the project script"
@@ -95,7 +104,7 @@ assert_contains "$OUTPUT" "Removed 4 retired kit file(s)" "removal reported"
 assert_file "$PROJ/.prdkit/templates/readiness-template.md" "edited retired template kept"
 assert_contains "$OUTPUT" "readiness-template.md" "kept template named for folding by hand"
 assert_file "$PROJ/.prdkit/memory/signoff-requirements.md" "project-owned memory never deleted"
-assert_contains "$(cat "$PROJ/.prdkit/.manifest")" "version: $(cat "$PK_ROOT/VERSION")" "manifest records the new version"
+assert_contains "$(cat "$PROJ/.prdkit/.manifest")" "version: 1.5.0" "manifest records the 1.x staging version"
 
 it "upgrade never touches specs/ and says a cutover is needed"
 assert_eq "$SPECS_BEFORE" "$(tree_digest "$PROJ")" "specs/ byte-identical after the upgrade"

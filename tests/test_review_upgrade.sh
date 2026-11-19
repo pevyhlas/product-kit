@@ -35,7 +35,9 @@ make_transition_seed() {
     PROJ="$(make_inited_project --copy)"; track_tmp "$PROJ"
     PROJ="$(cd "$PROJ" && pwd -P)"
     git -C "$PROJ" remote add origin https://github.com/owner/repo.git
-    # Release ownership stays with the maintainer; a fixture explicitly models the 2.0 source.
+    # Keep the installed fixture at 1.5 even when the source already identifies as 2.0.
+    sed 's/^version: .*/version: 1.5.0/' "$PROJ/.prdkit/.manifest" > "$PROJ/manifest.next" &&
+        mv "$PROJ/manifest.next" "$PROJ/.prdkit/.manifest" || exit 1
     printf '2.0.0\n' > "$PROJ/.product-kit/VERSION"
     cat > "$PROJ/.prdkit/memory/constitution.md" <<'EOF'
 # Constitution

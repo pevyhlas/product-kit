@@ -85,6 +85,17 @@ make_inited_project() {
     echo "$d"
 }
 
+# A 2.0 upgrade reads a committed install and local trusted default history.
+# Only for disposable fixtures: stage the prepared state and point origin/HEAD at it.
+snapshot_upgrade_fixture() {
+    local project="${1:-}"
+    [ -n "$project" ] && [ -d "$project/.git" ] || return 1
+    git -C "$project" add -A &&
+        git -C "$project" commit -q --allow-empty -m 'prepare upgrade fixture' &&
+        git -C "$project" update-ref refs/remotes/origin/main HEAD &&
+        git -C "$project" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+}
+
 # Commit stdin as <path> on top of a trusted remote-tracking ref and move the ref there, as a
 # policy change landing on the integration branch would, without touching the checkout or branch.
 trusted_edit() { # ref path < content

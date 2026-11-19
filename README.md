@@ -240,7 +240,10 @@ bash .product-kit/scripts/init.sh --check     # read-only drift report
 bash .product-kit/scripts/init.sh --upgrade
 ```
 
-Kit-owned commands and scripts are refreshed, templates and memory you edited are kept, and `specs/` is never touched. Each [CHANGELOG](CHANGELOG.md) entry says what else to do.
+Upgrade from a clean, committed checkout with the trusted default branch fetched. Kit-owned
+commands and scripts are refreshed if unmodified; customized managed files that would be
+overwritten block the upgrade. Project-owned edits are kept and `specs/` is never touched.
+Each [CHANGELOG](CHANGELOG.md) entry says what else to do.
 
 </details>
 
@@ -376,7 +379,8 @@ Pick one owner per change: the kit creates the worktree, or open changes with `-
 
 <br>
 
-Upgrade, then run one cutover between changes with `/prdkit-init`. See [migrating to 1.0](docs/migrating-to-1.0.md).
+Upgrade and run one cutover under 1.x with `/prdkit-init` before moving to 2.0.
+See [migrating to 1.0](docs/migrating-to-1.0.md).
 
 </details>
 

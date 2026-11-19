@@ -34,7 +34,8 @@ The public command surface is unchanged.
    or deletion; customized project-owned templates and memory are kept. Update configured
    adoption pin and manifest hash together. See the
    [migration guide](https://github.com/pevyhlas/product-kit/blob/v2.0.0/docs/migrating-to-2.0.md)
-   for preflight and retry details.
+   for preflight and retry details. A 0.x install must upgrade and complete its cutover under
+   1.x first.
 3. **Re-review open PRs and update CI and closing calls.** Merge the upgraded default branch into
    each open PR. A trusted publisher posts new v3 receipts with `publish-review.sh` from trusted
    code; no 1.x PASS or prior PR's PASS grants coverage. A legacy FAIL, blocking count or

@@ -134,6 +134,8 @@ assert_eq '4 3' "$OUTPUT" "101 Unicode characters count as two reading lines"
 
 it "upgrade installs the reader and preserves authored source"
 small; before="$(git hash-object "$FILE")"
+rm "$READER"
+snapshot_upgrade_fixture "$PROJ" || exit 1
 run bash "$PK_ROOT/scripts/init.sh" --upgrade --target "$PROJ"
 assert_eq 0 "$STATUS" "upgrade succeeds: $OUTPUT"
 assert_eq "$before" "$(git hash-object "$FILE")" "upgrade never rewrites navigation"
