@@ -8,6 +8,8 @@ run bash .product-kit/scripts/init.sh
 it "fresh install provides the public interface and neutral agent operations"
 assert_eq 0 "$STATUS" "install succeeds"
 assert_contains "$OUTPUT" 'Product-Kit initialized' "success banner"
+assert_contains "$OUTPUT" 'commit the .product-kit pin' "fresh install explains the upgrade pin"
+assert_not_contains "$OUTPUT" 'submodule update --remote' "upgrades select a release instead of following a branch"
 for file in constitution.md agents.md config.md; do assert_file "$PROJ/.prdkit/memory/$file" "$file seeded"; done
 memfiles=("$PROJ"/.prdkit/memory/*.md)
 assert_eq 3 "${#memfiles[@]}" "only the three memory files are seeded"
@@ -59,16 +61,20 @@ mkdir -p "$PROJ/.prdkit/cache/implementation"
 printf 'unfinished task details\n' > "$PROJ/.prdkit/cache/implementation/001-demo.md"
 run git -C "$PROJ" check-ignore -q .prdkit/cache/implementation/001-demo.md
 assert_eq 0 "$STATUS" "execution scratch cannot enter a routine add"
+snapshot_upgrade_fixture "$PROJ" || exit 1
 run bash .product-kit/scripts/init.sh --upgrade
 assert_eq 0 "$STATUS" "upgrade with execution scratch succeeds"
 assert_eq 'unfinished task details' "$(cat "$PROJ/.prdkit/cache/implementation/001-demo.md")" "upgrade leaves consumer scratch untouched"
 it "an upgrade adds the enrichment ignore entry once to a project seeded before it"
 grep -vxF '.prdkit/retrospective/' "$PROJ/.gitignore" > "$PROJ/.gitignore.old" || true
 mv "$PROJ/.gitignore.old" "$PROJ/.gitignore"
+snapshot_upgrade_fixture "$PROJ" || exit 1
 run bash .product-kit/scripts/init.sh --upgrade
 assert_eq 0 "$STATUS" "upgrade succeeds"
 assert_contains "$OUTPUT" "Added '.prdkit/retrospective/' to .gitignore" "entry added on upgrade"
+snapshot_upgrade_fixture "$PROJ" || exit 1
 run bash .product-kit/scripts/init.sh --upgrade
+assert_eq 0 "$STATUS" "repeat upgrade succeeds"
 assert_not_contains "$OUTPUT" "Added '.prdkit/retrospective/'" "not added twice"
 assert_eq 1 "$(grep -cxF '.prdkit/retrospective/' "$PROJ/.gitignore")" "entry present exactly once"
 it "manifest covers every installed file and includes workflow hashes"
@@ -117,7 +123,9 @@ run bash .product-kit/scripts/init.sh --check
 assert_eq 1 "$STATUS" "an outdated section is drift"
 assert_contains "$OUTPUT" "OUTDATED" "reported as outdated"
 assert_not_contains "$OUTPUT" "KIT-OWNED EDITS" "not reported as an edit"
+snapshot_upgrade_fixture "$PROJ" || exit 1
 run bash .product-kit/scripts/init.sh --upgrade
+assert_eq 0 "$STATUS" "upgrade refreshes the old managed section"
 assert_eq "$first" "$(cat "$PROJ/AGENTS.md")" "upgrade refreshes only managed entry"
 printf '\nConsumer outside managed section\n' >> "$PROJ/AGENTS.md"
 run bash .product-kit/scripts/init.sh --check
@@ -133,7 +141,9 @@ assert_file "$PROJ2/.opencode/commands/prdkit-inbox.md"
 if [ -L "$PROJ2/.opencode/commands/prdkit.md" ]; then _no 'copy mode linked'; else _ok 'real command copy'; fi
 if [ -d "$PROJ2/.claude/commands" ]; then _no 'unselected harness installed'; else _ok 'harness selection respected'; fi
 mkdir -p "$PROJ2/.codex" "$PROJ2/.claude"
+snapshot_upgrade_fixture "$PROJ2" || exit 1
 run bash .product-kit/scripts/init.sh --upgrade --copy
+assert_eq 0 "$STATUS" "upgrade succeeds with the recorded harness"
 assert_contains "$(cat "$PROJ2/.prdkit/.manifest")" 'harnesses: opencode' "upgrade keeps selected set"
 it "check distinguishes project customization, kit changes, and kit-owned edits"
 echo 'USER TEMPLATE' >> "$PROJ2/.prdkit/templates/spec-template.md"
@@ -145,17 +155,34 @@ echo 'LOCAL COMMAND EDIT' >> "$PROJ2/.opencode/commands/prdkit.md"
 run bash .product-kit/scripts/init.sh --check
 assert_eq 1 "$STATUS" "drift reported"
 for bucket in MODIFIED OUTDATED NEW KIT-OWNED; do assert_contains "$OUTPUT" "$bucket" "$bucket reported"; done
+assert_contains "$OUTPUT" '--upgrade refuses to overwrite these customizations' "2.0 check tells consumers to reconcile before upgrading"
+assert_not_contains "$OUTPUT" 'will OVERWRITE' "2.0 check does not promise to overwrite"
+printf '1.5.0\n' > .product-kit/VERSION
+run bash .product-kit/scripts/init.sh --check
+assert_contains "$OUTPUT" 'older installer may overwrite' "older-version behavior is distinguished"
+cp "$PK_ROOT/VERSION" .product-kit/VERSION
 assert_not_contains "$(cat "$PROJ2/.prdkit/templates/product-template.md")" 'NEW KIT PRODUCT' "check does not update"
 it "upgrade refreshes kit-owned and untouched files, preserves project edits"
+snapshot_upgrade_fixture "$PROJ2" || exit 1
+run bash .product-kit/scripts/init.sh --upgrade --copy
+assert_eq 1 "$STATUS" "2.0 refuses committed customizations to kit-owned files"
+assert_contains "$OUTPUT" "Customized overwrite/delete destination: .prdkit/workflows/change.md" "workflow edit named"
+assert_contains "$OUTPUT" "Customized overwrite/delete destination: .opencode/commands/prdkit.md" "command edit named"
+assert_contains "$(cat "$PROJ2/.prdkit/workflows/change.md")" 'LOCAL WORKFLOW EDIT' "refusal keeps the workflow"
+assert_contains "$(cat "$PROJ2/.opencode/commands/prdkit.md")" 'LOCAL COMMAND EDIT' "refusal keeps the command"
+cp .product-kit/workflows/change.md .prdkit/workflows/change.md
+cp .product-kit/commands/prdkit.md .opencode/commands/prdkit.md
+printf '\nNEW KIT WORKFLOW\n' >> .product-kit/workflows/change.md
+printf '\nNEW KIT COMMAND\n' >> .product-kit/commands/prdkit.md
+snapshot_upgrade_fixture "$PROJ2" || exit 1
 run bash .product-kit/scripts/init.sh --upgrade --copy
 assert_eq 0 "$STATUS" "upgrade succeeds"
-assert_contains "$OUTPUT" 'Overwrote' "kit edit overwrite reported"
 assert_contains "$(cat "$PROJ2/.prdkit/templates/spec-template.md")" 'USER TEMPLATE' "template preserved"
 assert_contains "$(cat "$PROJ2/.prdkit/memory/constitution.md")" 'USER POLICY' "policy preserved"
 assert_contains "$(cat "$PROJ2/.prdkit/templates/product-template.md")" 'NEW KIT PRODUCT' "untouched template refreshed"
 assert_file "$PROJ2/.prdkit/templates/new-template.md"
-assert_not_contains "$(cat "$PROJ2/.prdkit/workflows/change.md")" 'LOCAL WORKFLOW EDIT' "workflow refreshed"
-assert_not_contains "$(cat "$PROJ2/.opencode/commands/prdkit.md")" 'LOCAL COMMAND EDIT' "command refreshed"
+assert_contains "$(cat "$PROJ2/.prdkit/workflows/change.md")" 'NEW KIT WORKFLOW' "workflow refreshed"
+assert_contains "$(cat "$PROJ2/.opencode/commands/prdkit.md")" 'NEW KIT COMMAND' "command refreshed"
 it "force explicitly resets project-owned templates"
 run bash .product-kit/scripts/init.sh --force
 assert_not_contains "$(cat "$PROJ2/.prdkit/templates/spec-template.md")" 'USER TEMPLATE' "force restores template"
@@ -175,18 +202,22 @@ assert_contains "$(cat AGENTS.md)" 'Consumer notes.' "notes retained"
 assert_contains "$(cat AGENTS.md)" '.prdkit/workflows/protocol.md' "neutral path"
 assert_contains "$(cat AGENTS.md)" '.prdkit/workflows/inbox.md' "inbox review reachable without native slash commands"
 printf '\nTrailing notes.\n' >> AGENTS.md
+snapshot_upgrade_fixture "$PROJ3" || exit 1
 run bash .product-kit/scripts/init.sh --upgrade
+assert_eq 0 "$STATUS" "upgrade preserves surrounding notes"
 assert_contains "$(cat AGENTS.md)" 'Trailing notes.' "trailing notes retained"
 assert_eq 1 "$(grep -c 'BEGIN PRODUCT-KIT MANAGED SECTION' AGENTS.md)" "one managed block"
 it "malformed managed markers do not swallow user content"
 grep -v 'END PRODUCT-KIT MANAGED SECTION' AGENTS.md > AGENTS.tmp
 mv AGENTS.tmp AGENTS.md
 before="$(cat AGENTS.md)"
+snapshot_upgrade_fixture "$PROJ3" || exit 1
 run bash .product-kit/scripts/init.sh --upgrade
+assert_eq 1 "$STATUS" "upgrade refuses malformed managed markers"
 assert_eq "$before" "$(cat AGENTS.md)" "malformed block preserved"
-assert_contains "$OUTPUT" 'end marker missing' "repair explained"
 run bash .product-kit/scripts/init.sh --check
 assert_eq 1 "$STATUS" "malformed managed block is diagnosed"
+assert_contains "$OUTPUT" 'managed section (missing or malformed)' "check explains the repair"
 
 PROJ4="$(make_project)"; track_tmp "$PROJ4"
 cd "$PROJ4" || exit 1
@@ -220,15 +251,18 @@ assert_eq 2 "$STATUS" "a plain re-install is held to the same rule"
 assert_eq "$manifest_before" "$(cat "$PROJ4/.prdkit/.manifest")" "manifest still records every harness"
 assert_file "$PROJ4/.opencode/commands/prdkit.md" "opencode commands untouched"
 it "space- and comma-separated lists name the same harnesses"
+snapshot_upgrade_fixture "$PROJ4" || exit 1
 run bash .product-kit/scripts/init.sh --upgrade --harness "claude opencode agents"
 assert_eq 0 "$STATUS" "space-separated list (as the manifest records it) works"
 assert_contains "$(cat "$PROJ4/.prdkit/.manifest")" "harnesses: claude opencode agents" "space list keeps the set"
+snapshot_upgrade_fixture "$PROJ4" || exit 1
 run bash .product-kit/scripts/init.sh --upgrade --harness "claude, opencode" --harness agents
 assert_eq 0 "$STATUS" "comma+space and repeated flags work"
 assert_contains "$(cat "$PROJ4/.prdkit/.manifest")" "harnesses: claude opencode agents" "mixed list keeps the set"
 run bash .product-kit/scripts/init.sh --upgrade --harness all
 assert_eq 0 "$STATUS" "all is a superset"
 assert_contains "$(cat "$PROJ4/.prdkit/.manifest")" "harnesses: claude opencode codex agents" "all widens explicitly"
+snapshot_upgrade_fixture "$PROJ4" || exit 1
 run bash .product-kit/scripts/init.sh --upgrade
 assert_eq 0 "$STATUS" "upgrade without --harness"
 assert_contains "$(cat "$PROJ4/.prdkit/.manifest")" "harnesses: claude opencode codex agents" "omitted --harness keeps the recorded set"
@@ -239,26 +273,33 @@ it "install mode is recorded and preserved across upgrades"
 PROJ5="$(make_project)"; track_tmp "$PROJ5"
 ( cd "$PROJ5" && bash .product-kit/scripts/init.sh --copy ) >/dev/null 2>&1
 assert_contains "$(cat "$PROJ5/.prdkit/.manifest")" 'mode: copy' "copy mode recorded"
-( cd "$PROJ5" && bash .product-kit/scripts/init.sh --upgrade ) >/dev/null 2>&1
+snapshot_upgrade_fixture "$PROJ5" || exit 1
+run bash -c 'cd "$1" && bash .product-kit/scripts/init.sh --upgrade' _ "$PROJ5"
+assert_eq 0 "$STATUS" "plain upgrade succeeds in copy mode"
 if [ -L "$PROJ5/.claude/commands/prdkit.md" ]; then _no "plain upgrade preserves copy mode" "re-linked as symlink"; else _ok "plain upgrade preserves copy mode"; fi
 run bash -c 'cd "$1" && bash .product-kit/scripts/init.sh --upgrade --symlink' _ "$PROJ5"
 assert_contains "$(cat "$PROJ5/.prdkit/.manifest")" 'mode: symlink' "explicit --symlink wins and is recorded"
 assert_symlink "$PROJ5/.claude/commands/prdkit.md" "explicit --symlink re-links"
 assert_eq "../../.product-kit/commands/prdkit.md" "$(readlink "$PROJ5/.claude/commands/prdkit.md")" "symlinks are relative"
 assert_contains "$OUTPUT" "git submodule update --init .product-kit" "symlink install names what a new checkout needs"
+snapshot_upgrade_fixture "$PROJ5" || exit 1
 run bash -c 'cd "$1" && bash .product-kit/scripts/init.sh --upgrade' _ "$PROJ5"
+assert_eq 0 "$STATUS" "plain upgrade succeeds in symlink mode"
 assert_symlink "$PROJ5/.claude/commands/prdkit.md" "plain upgrade preserves symlink mode"
 assert_contains "$(cat "$PROJ5/.prdkit/.manifest")" 'mode: symlink' "symlink mode stays recorded"
 it "pre-0.10 installs are inferred from their command files"
 ( cd "$PROJ5" && bash .product-kit/scripts/init.sh --upgrade --copy ) >/dev/null 2>&1
 grep -v '^mode: ' "$PROJ5/.prdkit/.manifest" > "$PROJ5/.prdkit/.manifest.tmp"
 mv "$PROJ5/.prdkit/.manifest.tmp" "$PROJ5/.prdkit/.manifest"
+snapshot_upgrade_fixture "$PROJ5" || exit 1
 ( cd "$PROJ5" && bash .product-kit/scripts/init.sh --upgrade ) >/dev/null 2>&1
 if [ -L "$PROJ5/.claude/commands/prdkit.md" ]; then _no "mode inferred from installed copies" "flipped to symlink"; else _ok "mode inferred from installed copies"; fi
 assert_contains "$(cat "$PROJ5/.prdkit/.manifest")" 'mode: copy' "inferred mode re-recorded"
+snapshot_upgrade_fixture "$PROJ5" || exit 1
 ( cd "$PROJ5" && bash .product-kit/scripts/init.sh --upgrade --symlink ) >/dev/null 2>&1
 grep -v '^mode: ' "$PROJ5/.prdkit/.manifest" > "$PROJ5/.prdkit/.manifest.tmp"
 mv "$PROJ5/.prdkit/.manifest.tmp" "$PROJ5/.prdkit/.manifest"
+snapshot_upgrade_fixture "$PROJ5" || exit 1
 ( cd "$PROJ5" && bash .product-kit/scripts/init.sh --upgrade ) >/dev/null 2>&1
 assert_symlink "$PROJ5/.claude/commands/prdkit.md" "mode inferred from installed symlinks"
 assert_contains "$(cat "$PROJ5/.prdkit/.manifest")" 'mode: symlink' "inferred symlink mode re-recorded"
@@ -280,6 +321,7 @@ assert_contains "$OUTPUT" "RETIRED" "check reports retired commands"
 assert_contains "$OUTPUT" ".claude/commands/prdkit-merge.md" "recorded retired command listed"
 assert_contains "$OUTPUT" "prdkit-local.md (not recorded as kit-installed; kept" "unrecorded file flagged, not claimed"
 assert_file "$PROJ6/.claude/commands/prdkit-merge.md" "check is read-only"
+snapshot_upgrade_fixture "$PROJ6" || exit 1
 run bash -c "cd '$PROJ6' && bash .product-kit/scripts/init.sh --upgrade"
 assert_eq 0 "$STATUS" "upgrade with retired commands succeeds"
 assert_contains "$OUTPUT" "Removed 3 retired kit command(s)" "removal reported"
@@ -306,6 +348,7 @@ run bash -c "cd '$PROJ7' && bash .product-kit/scripts/init.sh --check"
 assert_contains "$OUTPUT" ".prdkit/scripts/bash/record-analysis.sh" "check lists the retired helper"
 assert_contains "$OUTPUT" "old-template.md (edited since install; kept" "edited retired template flagged"
 assert_file "$PROJ7/.prdkit/scripts/bash/record-analysis.sh" "check is read-only"
+snapshot_upgrade_fixture "$PROJ7" || exit 1
 run bash -c "cd '$PROJ7' && bash .product-kit/scripts/init.sh --upgrade"
 assert_eq 0 "$STATUS" "upgrade with retired kit files succeeds"
 assert_contains "$OUTPUT" "Removed 2 retired kit file(s)" "removal reported"
@@ -336,26 +379,32 @@ printf '%s  .prdkit/scripts/bash/../../../../victim.sh\n' "$ZERO_HASH" >> "$PROJ
 run bash -c "cd '$PROJ8' && bash .product-kit/scripts/init.sh --check"
 assert_not_contains "$OUTPUT" "RETIRED — installed kit files" "check does not list it as retired"
 assert_contains "$OUTPUT" "ignoring a .prdkit/.manifest entry outside the installed layout" "check warns"
+snapshot_upgrade_fixture "$PROJ8" || exit 1
 run bash -c "cd '$PROJ8' && bash .product-kit/scripts/init.sh --upgrade"
 assert_eq 0 "$STATUS" "upgrade succeeds"
 assert_file "${PROJ8%/proj}/victim.sh" "a file outside the project survives the upgrade"
 assert_contains "$OUTPUT" "ignoring a .prdkit/.manifest entry outside the installed layout" "upgrade warns"
 assert_not_contains "$(cat "$PROJ8/.prdkit/.manifest")" "victim.sh" "the rewritten manifest drops the entry"
 
-it "a kit-owned file replaced by a symlink is replaced, never written through"
+it "upgrade refuses a kit-owned symlink instead of writing through it"
 PROJ9="$(contained_project)"; track_tmp "${PROJ9%/proj}"
 ( cd "$PROJ9" && bash .product-kit/scripts/init.sh --copy ) >/dev/null 2>&1
 printf 'outside\n' > "${PROJ9%/proj}/sentinel"
 rm "$PROJ9/.prdkit/scripts/bash/status.sh" "$PROJ9/.prdkit/workflows/change.md"
 ln -s "${PROJ9%/proj}/sentinel" "$PROJ9/.prdkit/scripts/bash/status.sh"
 ln -s "${PROJ9%/proj}/sentinel" "$PROJ9/.prdkit/workflows/change.md"
+snapshot_upgrade_fixture "$PROJ9" || exit 1
 run bash -c "cd '$PROJ9' && bash .product-kit/scripts/init.sh --upgrade"
-assert_eq 0 "$STATUS" "upgrade succeeds"
+assert_eq 1 "$STATUS" "2.0 does not overwrite either customization"
+assert_contains "$OUTPUT" "Customized overwrite/delete destination: .prdkit/scripts/bash/status.sh" "replaced helper named"
+assert_contains "$OUTPUT" "Customized overwrite/delete destination: .prdkit/workflows/change.md" "replaced workflow named"
 assert_eq "outside" "$(cat "${PROJ9%/proj}/sentinel")" "the link target outside the project is unchanged"
 if [ -x "${PROJ9%/proj}/sentinel" ]; then _no "the link target gains no execute bit"; else _ok "the link target gains no execute bit"; fi
-for rel in .prdkit/scripts/bash/status.sh .prdkit/workflows/change.md; do
-    if [ -L "$PROJ9/$rel" ]; then _no "$rel is a regular file again"; else _ok "$rel is a regular file again"; fi
-done
+rm "$PROJ9/.prdkit/scripts/bash/status.sh" "$PROJ9/.prdkit/workflows/change.md"
+snapshot_upgrade_fixture "$PROJ9" || exit 1
+run bash -c "cd '$PROJ9' && bash .product-kit/scripts/init.sh --upgrade"
+assert_eq 0 "$STATUS" "upgrade works after removing the links"
+assert_file "$PROJ9/.prdkit/workflows/change.md" "workflow installed again"
 assert_eq "$(hash_of "$PK_ROOT/scripts/status.sh")" "$(hash_of "$PROJ9/.prdkit/scripts/bash/status.sh")" "the kit's status.sh is installed"
 
 it "a symlinked or escaping managed directory is refused before anything is written"
@@ -396,6 +445,7 @@ printf 'SHARED POLICY\n' > "${PROJ13%/proj}/constitution.md"
 rm "$PROJ13/.prdkit/memory/constitution.md" "$PROJ13/.prdkit/templates/spec-template.md"
 ln -s "${PROJ13%/proj}/constitution.md" "$PROJ13/.prdkit/memory/constitution.md"
 ln -s "${PROJ13%/proj}/missing.md" "$PROJ13/.prdkit/templates/spec-template.md"
+snapshot_upgrade_fixture "$PROJ13" || exit 1
 run bash -c "cd '$PROJ13' && bash .product-kit/scripts/init.sh --upgrade --force"
 assert_eq 0 "$STATUS" "forced upgrade succeeds"
 assert_eq "SHARED POLICY" "$(cat "${PROJ13%/proj}/constitution.md")" "the shared policy behind the link is unchanged"
@@ -411,11 +461,14 @@ ln -s CLAUDE.md "$PROJ14/AGENTS.md"
 run bash -c "cd '$PROJ14' && bash .product-kit/scripts/init.sh --harness claude,agents"
 assert_eq 0 "$STATUS" "install through an in-project link succeeds"
 assert_contains "$(cat "$PROJ14/CLAUDE.md")" 'BEGIN PRODUCT-KIT MANAGED SECTION' "the section lands in the link target"
-sed 's/protocol\.md/protocol-old.md/' "$PROJ14/CLAUDE.md" > "${PROJ14%/proj}/edited" && cat "${PROJ14%/proj}/edited" > "$PROJ14/CLAUDE.md"
+sed 's/## Product-Kit workflow/## Product-Kit workflow updated/' "$PROJ14/.product-kit/scripts/install-lib.sh" > "${PROJ14%/proj}/edited" &&
+    cat "${PROJ14%/proj}/edited" > "$PROJ14/.product-kit/scripts/install-lib.sh"
+snapshot_upgrade_fixture "$PROJ14" || exit 1
 run bash -c "cd '$PROJ14' && bash .product-kit/scripts/init.sh --upgrade"
+assert_eq 0 "$STATUS" "upgrade through an in-project link succeeds"
 assert_contains "$OUTPUT" "AGENTS.md managed section: updated" "an outdated section is rewritten"
 assert_symlink "$PROJ14/AGENTS.md" "the update keeps AGENTS.md a link"
-assert_not_contains "$(cat "$PROJ14/CLAUDE.md")" 'protocol-old.md' "the target holds the current section"
+assert_contains "$(cat "$PROJ14/CLAUDE.md")" '## Product-Kit workflow updated' "the target holds the current section"
 assert_contains "$(cat "$PROJ14/CLAUDE.md")" '# Notes' "the target keeps its own content"
 PROJ15="$(contained_project)"; track_tmp "${PROJ15%/proj}"
 printf 'outside agents\n' > "${PROJ15%/proj}/AGENTS.md"
