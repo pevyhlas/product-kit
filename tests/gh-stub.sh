@@ -126,6 +126,11 @@ case "$route" in
             # COMMENT reviews are accepted on closed PRs too (probe §9.6).
             [ -f "$GH_STUB_DIR/pulls/$number.json" ] || exit 1
             next_id="$(jq -s '[.[][] | .fullDatabaseId | tonumber] | (max // 1000) + 1' "$GH_STUB_DIR"/reviews/*.json)"
+            # Fixtures can rewind a review list, but a new POST never reuses an assigned host id.
+            if [ -f "$GH_STUB_DIR/last-post-id" ] && [ "$next_id" -le "$(cat "$GH_STUB_DIR/last-post-id")" ]; then
+                next_id=$(( $(cat "$GH_STUB_DIR/last-post-id") + 1 ))
+            fi
+            printf '%s\n' "$next_id" > "$GH_STUB_DIR/last-post-id"
             post_overrides="${GH_STUB_POST_OVERRIDES:-}"; [ -n "$post_overrides" ] || post_overrides='{}'
             jq -n --slurpfile reviews "$GH_STUB_DIR/reviews/$number.json" \
                 --slurpfile pr "$GH_STUB_DIR/pulls/$number.json" --slurpfile author "$GH_STUB_DIR/publisher.json" \

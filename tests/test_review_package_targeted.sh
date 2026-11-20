@@ -27,7 +27,7 @@ git checkout -qb "$ID"
 cat > "specs/changes/$ID.md" <<'EOF'
 # Change: targeted
 
-**Tier**: T2 · **Parts**: P1 · **Parent**: 900-programme
+**Tier**: T2 · **Parts**: P1 · **Parent**: 900-programme · **Opened**: 2026-01-01
 
 ## Spec edits
 
@@ -314,8 +314,11 @@ assert_eq fail "$(jq -r .gate_result "$PKG/dispatch.json")" 'floor/owner/legacy 
 parity
 
 it "Ambiguous selectors, symlink context and deleted child provenance stay explicit"
+sed 's/Parent\*\*: 900-programme/Parent**: —/' "specs/changes/$ID.md" > .git/record
+cp .git/record "specs/changes/$ID.md"; git add "specs/changes/$ID.md"; git commit -qm 'standalone change'
 advance context-gaps
 package '.context=[{path:"specs/parts/p1.md",selector:"Missing heading",reason:"required"}]'
+assert_not_contains "$(cat "$PKG/context-gaps.txt")" 'parent' 'standalone change does not request a parent for the Opened date'
 assert_contains "$(cat "$PKG/context-gaps.txt")" 'ambiguous/missing/unsupported section' 'unresolved selector gap'
 ln -s app.txt src/link.txt; git add src/link.txt
 git commit -qm 'synthetic link'; host_head

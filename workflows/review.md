@@ -121,6 +121,10 @@ Keep the publisher log outside every working tree, under the absolute Git common
 `$(git -C <fetch-clone> rev-parse --git-common-dir)/prdkit/receipts/<pr>/<receipt-id>.json`.
 It must **never be maker-writable**; protect it with the publisher credential. Symlinked log
 components are refused. Old `.prdkit/cache/receipts/` logs are never read or migrated.
+Online publishing uses Perl's core `IO::Handle` to sync the payload and directory entries
+before posting and the returned review mapping afterwards. Repair reads the original
+`<pr>/reviews/<review-id>.json`; `--receipt-id` must match that saved payload. If the mapping
+is missing, restore the publisher's backup rather than choosing another receipt.
 Only the original review author's typename and numeric id may restate it. Restate the **full
 original verdict**, never reconstruct it from a corrupted, maker-editable host body:
 

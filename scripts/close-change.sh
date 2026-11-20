@@ -42,6 +42,13 @@ max=300; length="$(printf '%s' "$text" | LC_ALL=C tr -d '\200-\277' | wc -c | tr
 
 root="$(git rev-parse --show-toplevel 2>/dev/null)" || refuse "not inside a Git checkout"
 path="specs/changes/$id.md"; log="specs/log.md"; entry="specs/log/$id.md"
+check_paths() {
+    local component
+    for component in specs specs/changes "$path" specs/log "$entry" "$log"; do
+        [ ! -L "$root/$component" ] || refuse "symlinked close path: $component"
+    done
+}
+check_paths
 git -C "$root" cat-file -e "HEAD:$path" 2>/dev/null || refuse "no record $path at HEAD"
 git -C "$root" diff --quiet HEAD -- "$path" ||
     refuse "$path has uncommitted edits: commit the record edits first; the check reads committed state"
@@ -61,8 +68,9 @@ if ! out="$(check)"; then
     refuse "check-review.sh does not pass at HEAD; publish the remaining verdicts first"
 fi
 
-if ! { mkdir -p "$root/specs/log" && printf -- '- %s %s: %s\n' "$day" "$id" "$text" > "$root/$entry"; } 2>/dev/null; then
-    rm -f "$root/$entry" 2>/dev/null || true
+check_paths
+if ! (cd -P "$root" && mkdir -p specs/log && cd -P specs/log &&
+    [ "$PWD" = "$root/specs/log" ] && set -C && printf -- '- %s %s: %s\n' "$day" "$id" "$text" > "$id.md"); then
     refuse "could not write $entry; nothing was deleted or committed"
 fi
 git -C "$root" rm -q -- "$path"

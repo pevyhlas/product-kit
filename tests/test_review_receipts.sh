@@ -209,7 +209,7 @@ assert_eq 1 "$(awk -F '\037' '$1=="R" { print $2 }' "$RC_FILE")" 'repair inherit
 receipt 7; fetch
 assert_eq '' "$(problems)" 'later full PASS clears the restated FAIL'
 reset_host; receipt 7 . '{"editor":{"login":"admin"}}'; receipt 7 '.restates="1001"'; fetch
-assert_eq 2 "$RC_INVALID" 'a visible original id must match'
+assert_eq 0 "$RC_INVALID" 'a receipt id in an edited body cannot veto the original publisher repair'
 reset_host; receipt 7; receipt 7 '.restates="1001"'; fetch
 assert_eq 1 "$RC_INVALID" 'restatement cannot remove a valid receipt'
 
@@ -227,7 +227,7 @@ for author in '{"__typename":"Bot","databaseId":1004,"login":"other[bot]"}' '{"_
     receipt 7 '.id="00000000000000000000000000000001"|.restates="1001"' "$(jq -cn --argjson author "$author" '{author:$author}')"
     fetch
     assert_eq 2 "$RC_INVALID" 'original invalid receipt and unauthorized restatement both block'
-    assert_contains "$(problems)" 'same id and publisher'
+    assert_contains "$(problems)" 'same publisher'
     assert_contains "$(problems)" 'edited receipt'
 done
 

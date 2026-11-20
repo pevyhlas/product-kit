@@ -196,7 +196,8 @@ review_receipts_fetch() { # URL root work; policy already read; caller supplies 
           ($publishers|split("\n")|index($actor)!=null) as $trusted |
           select(($s.pr.number==$current or ($s.pr.merged|not)) or $b.parsed.restates? != null) |
           {origin:$s.pr.number,review:($r.fullDatabaseId|tostring),time:$r.submittedAt,url:$r.url,
-           merged:$s.pr.merged,raw_id:(if ($b.parsed|type)=="object" then $b.parsed.id else null end),payload:$b.parsed,trusted:$trusted,
+           merged:$s.pr.merged,payload:$b.parsed,trusted:$trusted,
+           original_id:(if $r.lastEditedAt==null and $r.editor==null then $b.parsed.id? // null else null end),
             actor:$actor,ignored:($trusted|not),shaped:($b.starts>0),
            note:(if $trusted and $isolation=="shared" and $r.author.databaseId==$s.pr.author.databaseId then
                "receipts are authenticated to \($r.author.login), which also authored this PR: they bind content, order and counts, not the reviewer\u0027s independence" else "" end),
@@ -227,10 +228,10 @@ review_receipts_fetch() { # URL root work; policy already read; caller supplies 
            ($r.payload.restates_pr // $r.origin) as $origin |
            ([range(0;length) as $i | select(.[$i].origin==$origin and .[$i].review==$r.payload.restates) | $i][0]) as $i |
            if $i!=null and (.[$i].error!="" or (.[$i].repaired==true and .[$i].payload==($r.payload|del(.restates,.restates_pr)|.pr=$origin))) and .[$i].seq<$r.seq and
-               .[$i].actor==$r.actor and (.[$i].raw_id==null or .[$i].raw_id==$r.payload.id) then
-               .[$i] = (.[$i] + {error:"",repaired:true,payload:($r.payload|del(.restates,.restates_pr)|.pr=$origin),raw_id:$r.payload.id}) |
+                .[$i].actor==$r.actor and (.[$i].original_id==null or .[$i].original_id==$r.payload.id) then
+                .[$i] = (.[$i] + {error:"",repaired:true,payload:($r.payload|del(.restates,.restates_pr)|.pr=$origin)}) |
                map(if .seq==$r.seq then .consumed=true else . end)
-            else map(if .seq==$r.seq then .error="restatement does not replace an earlier invalid receipt with the same id and publisher" else . end) end) |
+             else map(if .seq==$r.seq then .error="restatement does not replace an earlier invalid review by the same publisher" else . end) end) |
         map(select(.consumed!=true)) |
         # Replays fix their first position. A conflicting id invalidates every occurrence.
         . as $resolved |

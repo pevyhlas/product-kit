@@ -22,7 +22,7 @@ record() { # id tier parent, then State lines
     mkdir -p specs/changes
     {
         printf '# Change: %s\n\n**Opened**: 2026-11-01 · **Parts**: P1 · **Tier**: %s · **Parent**: %s\n\n' "$id" "$tier" "$parent"
-        printf '## State\n\n**Step**: review\n**Next**: merge\n'
+        printf '## State\n\n**Step**: review\n**Waiting on**: nothing\n**Next**: merge\n'
         for line in "$@"; do printf '%s\n' "$line"; done
     } > "specs/changes/$id.md"
 }
@@ -59,6 +59,14 @@ echo stray > src/stray.txt; git add src/stray.txt
 run bash "$B/close-change.sh" 001-greet "warmer greeting — R-01 — #1"
 assert_eq 1 "$STATUS" "refuses with other staged changes"
 git rm -q --cached src/stray.txt; rm -f src/stray.txt
+outside="$(mktemp -d)"; track_tmp "$outside"
+ln -s "$outside" specs/log
+run bash "$B/close-change.sh" 001-greet "reviewed"
+assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'symlinked close path: specs/log'
+assert_eq '' "$(ls -A "$outside")" 'log destination untouched'
+assert_eq "$VERDICT" "$(git rev-parse HEAD)"
+assert_file specs/changes/001-greet.md
+rm specs/log
 run bash "$B/close-change.sh" 001-greet "warmer greeting — R-01 — #1"
 assert_eq 0 "$STATUS" "closes: $OUTPUT"
 assert_contains "$OUTPUT" "PASS 001-greet" "reports the gate at the closed head"

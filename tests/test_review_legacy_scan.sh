@@ -86,7 +86,11 @@ for operation in untouched edit delete move symlink submodule executable; do
     if [ "$operation" = submodule ]; then git commit -qm submodule || exit 1
     else commit "$operation"; fi
     scan
-    if [ "$operation" = untouched ]; then assert_eq 0 "$COUNT"; else assert_eq 1 "$COUNT" "$operation preserves origin blocker"; fi
+    case "$operation" in
+        untouched) assert_eq 0 "$COUNT" ;;
+        move) assert_eq 2 "$COUNT" 'both original and new change identities' ;;
+        *) assert_eq 1 "$COUNT" "$operation preserves origin blocker" ;;
+    esac
 done
 
 it 'branch lines survive deletion, transfer and a closed predecessor on the same history'
@@ -97,6 +101,11 @@ assert_contains "$FOUND" $'\037001-original\037code\037'
 record "$B" "$FAIL"; commit transfer
 scan
 assert_eq 2 "$COUNT" 'the same text in another change has another identity'
+
+it 'an identical FAIL in an unchanged fork-point sibling cannot mask the checked record'
+fresh; record "$A" "$FAIL"; commit inherited; BASE="$(git rev-parse HEAD)"
+record "$B" "$FAIL"; commit carrier; scan
+assert_eq 1 "$COUNT"; assert_contains "$FOUND" $'\037002-carrier\037code\037'
 
 it 'only active parsed State lines matter, including when fenced text later becomes active'
 fresh
@@ -122,11 +131,11 @@ scan "$MERGE"; assert_eq 1 "$COUNT"
 
 it 'a merge taking a line from any parent does not introduce it under another origin'
 fresh; record "$A" "$FAIL"; commit inherited; FORK="$(git rev-parse HEAD)"
-# Default removes the record; branch moves it. Fork-point text excludes the branch move.
+# Default removes the record; branch introduces the same text under a new change id.
 rm "$A"; commit closed; BASE="$(git rev-parse HEAD)"
 git checkout -q --detach "$FORK"; mv "$A" "$B"; commit moved; SIDE="$(git rev-parse HEAD)"
 MERGE="$(git commit-tree "$(git rev-parse "$SIDE^{tree}")" -p "$BASE" -p "$SIDE" -m 'take second parent')"
-scan "$MERGE"; assert_eq 0 "$COUNT"
+scan "$MERGE"; assert_eq 1 "$COUNT"; assert_contains "$FOUND" $'\037002-carrier\037code\037'
 
 it 'base merges advance start and never revive default-branch lines, including restores and moves'
 for operation in keep restore move; do
@@ -140,7 +149,9 @@ for operation in keep restore move; do
     esac
     SIDE="$(git rev-parse HEAD)"
     MERGE="$(git commit-tree "$(git rev-parse "$BASE^{tree}")" -p "$SIDE" -p "$BASE" -m 'merge default closing')"
-    scan "$MERGE"; assert_eq 0 "$COUNT" "$operation does not revive inherited FAIL"
+    scan "$MERGE"
+    if [ "$operation" = move ]; then assert_eq 1 "$COUNT" 'the intermediate change introduced its own FAIL'
+    else assert_eq 0 "$COUNT" "$operation does not revive inherited FAIL"; fi
 done
 
 it 'every merge base of C and start excludes inherited text in a criss-cross subhistory'
@@ -149,12 +160,13 @@ record "$A" "$FAIL"; commit inherited; X="$(git rev-parse HEAD)"
 git checkout -q --detach "$FORK"; printf other > other.txt; commit other; Y="$(git rev-parse HEAD)"
 BASE="$(git commit-tree "$(git rev-parse "$Y^{tree}")" -p "$X" -p "$Y" -m 'default removes FAIL')"
 C="$(git commit-tree "$(git rev-parse "$X^{tree}")" -p "$Y" -p "$X" -m 'parallel merge')"
-# Delete then restore at another path, so parent comparison alone cannot exclude it.
-git checkout -q --detach "$C"; rm "$A"; commit removed; record "$B" "$FAIL"; commit restored
+# Restore the same change id under a different directory; parent/path comparison is insufficient.
+git checkout -q --detach "$C"; rm "$A"; commit removed
+mkdir -p specs/changes/nested; record "specs/changes/nested/${A##*/}" "$FAIL"; commit restored
 SIDE="$(git rev-parse HEAD)"
 assert_eq 2 "$(git merge-base --all "$SIDE" "$BASE" | wc -l | tr -d ' ')" 'fixture has two fork points'
 MERGE="$(git commit-tree "$(git rev-parse "$BASE^{tree}")" -p "$SIDE" -p "$BASE" -m integration)"
-scan "$MERGE"; assert_eq 0 "$COUNT" 'all fork-point trees, at any path, govern inherited text'
+scan "$MERGE"; assert_eq 0 "$COUNT" 'all fork-point trees govern inherited text for the same change'
 
 it 'an unrelated merged root has no fork-point records and still introduces its active lines'
 fresh; record "$A" "$FAIL"; git add "$A"

@@ -412,6 +412,12 @@ while IFS="$SEP" read -r path _ loc; do
         open_ids="$open_ids$id "
     done
 done < <(spec_checkouts "$root")
+while IFS="$SEP" read -r id _ _ _ _ _ _ _ _ _ _ _ ws ns loc; do
+    file="specs/changes/$id.md"
+    [ "$loc" = . ] || file="$loc/$file"
+    [ "$ws" = present ] || advisories+=("$file (## State): Waiting on is $ws")
+    [ "$ns" = present ] || advisories+=("$file (## State): Next is $ns")
+done < <(spec_open_changes "$root")
 planned_closed=""; planned_unknown=""
 while IFS="$SEP" read -r id where; do
     [ -n "$id" ] || continue

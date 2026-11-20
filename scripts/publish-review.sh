@@ -81,13 +81,14 @@ if [ -n "$restates" ]; then
     origin="${restates_pr:-$number}"
     [[ "$origin" =~ ^[1-9][0-9]*$ ]] || refuse 'invalid --restates-pr'
     [ -z "$restates_pr" ] || [ "$origin" != "$number" ] || refuse '--restates-pr is present only when origin and posting PR differ'
-    log="$log_root/$origin/$receipt_id.json"
     check_log_path "$origin/$receipt_id.json"
+    check_log_path "$origin/reviews/$restates.json"
+    log="$log_root/$origin/reviews/$restates.json"
     [ -f "$log" ] && [ ! -L "$log" ] || refuse "no original publisher log: $log"
     if ! jq -se --arg repo "$host_repo" --argjson origin "$origin" --arg id "$receipt_id" '
         length==1 and (.[0] | .schema=="prdkit.review.v3" and .id==$id and (.repo|ascii_downcase)==($repo|ascii_downcase) and .pr==$origin and
         ([.change,.reviewer,.from,.to,.head,.since,.base,.base_at,.verdict,.report]|all(.[];type=="string" and (test("[\\x00-\\x1f\\x7f]")|not))) and
-        ([.critical,.high,.medium,.low]|all(.[];type=="number" and .>=0 and floor==.)))' "$log" >/dev/null 2>&1; then refuse 'the original publish log is malformed or belongs to another PR/receipt'; fi
+        ([.critical,.high,.medium,.low]|all(.[];type=="number" and .>=0 and floor==.)))' "$log" >/dev/null 2>&1; then refuse 'the review-id log is malformed or belongs to another PR/receipt'; fi
     original_change="$(jq -r .change "$log")"
     [ -z "$id" ] || [ "$id" = "$original_change" ] || refuse 'a restatement keeps the original change id'
     id="$original_change"
@@ -176,18 +177,45 @@ viewer="$(jq -er '.data.viewer.databaseId|numbers|tostring' "$work/viewer.json")
 printf '%s\n' "$RC_PUBLISHERS" | awk -F : -v id="$viewer" '$2==id { found=1 } END { exit !found }' || refuse 'the publishing credential is not a listed publisher'
 if [ "$RC_ISOLATION" = required ] && [ "$(jq -r .user.id "$work/pr.json")" = "$viewer" ]; then refuse 'publisher also authored this PR (isolation required)'; fi
 # Write ahead: even a POST timeout or an edited/unreadable read-back must not lose the repair log.
+durable_copy() { # install complete bytes without replacing another mapping, then sync the directory chain
+    perl -MIO::Handle -MFile::Temp=tempfile -MFile::Basename=dirname -e '
+        use strict; use warnings;
+        my ($src,$dst,$root)=@ARGV;
+        my $dir=dirname($dst);
+        my ($out,$tmp)=tempfile(".publish-XXXXXXXX", DIR=>$dir, UNLINK=>1);
+        open(my $in,"<",$src) or die "open payload: $!";
+        local $/; my $bytes=<$in>; defined($bytes) && length($bytes) or die "empty payload";
+        print {$out} $bytes or die "write payload: $!";
+        $out->flush && $out->sync && close($out) or die "sync payload: $!";
+        link($tmp,$dst) or die "install log: $!";
+        unlink($tmp) or die "remove temporary: $!";
+        while (1) {
+            open(my $d,"<",$dir) or die "open directory: $!";
+            $d->sync && close($d) or die "sync directory: $!";
+            last if $dir eq $root;
+            $dir=dirname($dir);
+        }
+    ' "$work/payload.json" "$1" "$git_dir"
+}
 mkdir -p "$log_root/$number" || refuse 'cannot create the publisher log'
 check_log_path "$number/$receipt_id.json"
 log="$log_root/$number/$receipt_id.json"
-if [ ! -e "$log" ]; then cp "$work/payload.json" "$log" || refuse 'cannot retain the publish payload'
-elif [ -z "$restates" ]; then refuse 'receipt id already exists in the publish log'; fi
+if [ -n "$restates" ]; then
+    # Each repair has its own transport fields; retain the exact POST payload too.
+    attempt="$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')"
+    [[ "$attempt" =~ ^[0-9a-f]{32}$ ]] || refuse 'could not generate a repair attempt id'
+    log="$log_root/$number/repair-$restates-$receipt_id-$attempt.json"
+    check_log_path "$number/${log##*/}"
+fi
+[ ! -e "$log" ] || refuse 'receipt id already exists in the publish log'
+durable_copy "$log" || refuse 'cannot durably retain the publish payload'
 jq -n --arg body "$body" '{event:"COMMENT",body:$body}' > "$work/post.json"
 if ! gh api --hostname github.com --method POST "repos/$host_repo/pulls/$number/reviews" --input "$work/post.json" > "$work/posted.json" 2>/dev/null; then
     refuse "POST failed or its result is unknown; the payload is retained at $log; inspect the PR before retrying"
 fi
 review="$(jq -er '.id|tostring|select(test("^[1-9][0-9]*$"))' "$work/posted.json")" || refuse "POST returned no review id; payload retained at $log"
 check_log_path "$number/reviews/$review.json"
-if ! mkdir -p "$log_root/$number/reviews" || ! cp "$work/payload.json" "$log_root/$number/reviews/$review.json"; then refuse 'review posted but could not retain its review-id log'; fi
+if ! mkdir -p "$log_root/$number/reviews" || ! durable_copy "$log_root/$number/reviews/$review.json"; then refuse "review $review posted but could not durably retain its review-id log; payload at $log"; fi
 url="https://github.com/$host_repo/pull/$number#pullrequestreview-$review"
 _receipts_reviews "$host_repo" "$number" "$work" || refuse "review $url was posted but GraphQL read-back failed: $RC_ERROR; payload retained at $log"
 if ! jq -e --arg id "$review" --arg body "$body" --arg viewer "$viewer" --arg publishers "$RC_PUBLISHERS" '

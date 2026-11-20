@@ -318,7 +318,7 @@ if nowhere_else "$c80"; then _ok "fixture: the commit exists only in the worktre
 run bash "$CLEAN2" 080-sub-unpushed
 assert_eq 1 "$STATUS" "refused"
 assert_contains "$OUTPUT" "submodule vendor/sub holds commit $c80" "names the submodule and the commit"
-assert_contains "$OUTPUT" "Push it" "says how to keep it"
+assert_contains "$OUTPUT" "Fetch it" "says how to keep it"
 run bash "$CLEAN2" --json 080-sub-unpushed
 assert_contains "$OUTPUT" '"result":"refused"' "JSON refuses"
 run bash "$CLEAN2" --force 080-sub-unpushed
@@ -330,14 +330,18 @@ assert_eq 0 "$STATUS" "the commit is kept"
 run test ! -e "$(mutex_of 080-sub-unpushed)"
 assert_eq 0 "$STATUS" "a refusal leaves no lock behind"
 
-it "once pushed, the same worktree is removed and the commit lives on"
+it "a stale tracking ref in the doomed copy cannot authorize removal"
 git -C "$PROJ2/.worktrees/080-sub-unpushed/vendor/sub" -c protocol.file.allow=always push -q origin HEAD:refs/heads/kept-080 >/dev/null 2>&1
+git -C "$SUBSRC" update-ref -d refs/heads/kept-080
+assert_eq "$c80" "$(git -C "$PROJ2/.worktrees/080-sub-unpushed/vendor/sub" rev-parse refs/remotes/origin/kept-080)"
+run bash "$CLEAN2" --force 080-sub-unpushed
+assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" "$c80"
+git -C "$PROJ2/vendor/sub" fetch -q "$PROJ2/.worktrees/080-sub-unpushed/vendor/sub" HEAD:refs/heads/kept-080
 run bash "$CLEAN2" 080-sub-unpushed
 assert_eq 0 "$STATUS" "removed"
 run test ! -d "$PROJ2/.worktrees/080-sub-unpushed"
 assert_eq 0 "$STATUS" "worktree gone"
-run git -C "$SUBSRC" cat-file -e "$c80^{commit}"
-assert_eq 0 "$STATUS" "the commit is on the submodule's remote"
+assert_eq "$c80" "$(git -C "$PROJ2/vendor/sub" rev-parse kept-080)" "commit survives cleanup"
 
 it "a commit fetched into the main checkout's copy of the submodule is held there"
 sub_worktree 081-sub-fetched

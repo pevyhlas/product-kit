@@ -29,6 +29,8 @@ PR=https://github.com/owner/repo/pull/7
 LOG_ROOT="$PROJ/.git/prdkit/receipts"
 fresh() {
     git reset -q --hard "$A"; git update-ref refs/remotes/origin/main "$BASE"
+    # Each synthetic host starts allocating its own database ids again.
+    rm -rf "$LOG_ROOT"
     use_gh_stub; fx_pr 7 "$A"
 }
 post() { run bash "$PUB" 001-reviewed --pr "$PR" --reviewer code --verdict PASS --counts 0,0,0,0 --report https://example.invalid/report --head HEAD "$@"; }
@@ -98,6 +100,33 @@ saved_log="$(printf '%s\n' "$OUTPUT" | sed 's/.*payload is retained at //;s/; in
 assert_file "$saved_log"
 assert_eq FAIL "$(jq -r .verdict "$saved_log")"
 assert_not_contains "$OUTPUT" 'Published '
+
+it 'file and directory sync failures stop publication at the correct boundary'
+sync_lib="$(mktemp -d)"; track_tmp "$sync_lib"
+cat > "$sync_lib/SyncFault.pm" <<'EOF'
+package SyncFault;
+use IO::Handle;
+my $real = \&IO::Handle::sync;
+no warnings 'redefine';
+*IO::Handle::sync = sub {
+    my ($fh)=@_;
+    my $boundary=(-d $fh ? "dir" : "file");
+    $boundary="posted-$boundary" if -f "$ENV{GH_STUB_DIR}/post-request.json";
+    return undef if $boundary eq $ENV{SYNC_FAULT};
+    return $real->($fh);
+};
+1;
+EOF
+for boundary in file dir posted-file posted-dir; do
+    fresh
+    PERL5LIB="$sync_lib" PERL5OPT=-MSyncFault SYNC_FAULT="$boundary" post
+    assert_eq 1 "$STATUS" "$boundary fails"
+    case "$boundary" in
+        posted-*) assert_contains "$OUTPUT" 'posted but could not durably retain its review-id log' ;;
+        *) assert_not_contains "$(cat "$GH_STUB_DIR/requests")" '--method POST'
+           assert_contains "$OUTPUT" 'cannot durably retain the publish payload' ;;
+    esac
+done
 
 it 'all b refusals occur without posting'
 fresh; git branch -f wip HEAD
@@ -249,10 +278,22 @@ for kind in planted tracked; do
     rm -f ".prdkit/cache/receipts/7/$missing.json"
 done
 
+it 'a repair requires the payload mapped to the exact host review'
+fresh; post --verdict FAIL
+first="$(payload | jq -r .id)"
+post
+second="$(payload | jq -r .id)"
+: > "$GH_STUB_DIR/requests"
+run bash "$PUB" --pr "$PR" --restates 1001 --receipt-id "$second"
+assert_eq 1 "$STATUS"; assert_not_contains "$(cat "$GH_STUB_DIR/requests")" '--method POST'
+rm "$LOG_ROOT/7/reviews/1001.json"
+run bash "$PUB" --pr "$PR" --restates 1001 --receipt-id "$first"
+assert_eq 1 "$STATUS"; assert_not_contains "$(cat "$GH_STUB_DIR/requests")" '--method POST'
+
 it 'editing FAIL and planting a tracked PASS log cannot produce host-authority PASS'
 fresh; post --verdict FAIL --counts 0,1,0,0
 assert_eq 0 "$STATUS" "$OUTPUT"; saved="$(payload | jq -r .id)"
-jq '.[0].body=(.[0].body|split("\n")|.[1]|fromjson|.verdict="PASS"|.high=0|"<!-- prdkit-review\n"+tojson+"\n-->") |
+jq '.[0].body=(.[0].body|split("\n")|.[1]|fromjson|.id="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"|.verdict="PASS"|.high=0|"<!-- prdkit-review\n"+tojson+"\n-->") |
     .[0].lastEditedAt="2026-01-03T00:00:00Z"' "$GH_STUB_DIR/reviews/7.json" > .git/edited
 mv .git/edited "$GH_STUB_DIR/reviews/7.json"
 gate; assert_eq 1 "$STATUS" 'an edited FAIL remains invalid'
@@ -299,6 +340,7 @@ git update-ref refs/remotes/origin/main "$INHERITED"
 git rm -q specs/changes/001-reviewed.md; mkdir -p specs/log
 printf -- '- 2026-01-01 001-reviewed: closed\n' > specs/log/001-reviewed.md
 git add specs/log; git commit -qm close
+rm -rf "$LOG_ROOT"
 use_gh_stub; fx_pr 7 "$(git rev-parse HEAD)"
 gate; assert_eq 1 "$STATUS" 'closing waits for the reviewer full PASS'
 post
