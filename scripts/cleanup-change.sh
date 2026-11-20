@@ -302,12 +302,19 @@ refuse_git() { # git's reason
 # that is not, and returns 2 when git cannot say: an inspection that fails never passes.
 UNSAFE_MODULE=""; UNSAFE_COMMIT=""
 independent_store() { # conservative: only accept a self-contained main repository
-    local module="$1" links
+    local module="$1" links rc
     [ -z "${GIT_OBJECT_DIRECTORY:-}${GIT_ALTERNATE_OBJECT_DIRECTORIES:-}${GIT_COMMON_DIR:-}" ] &&
         [ "$(CDPATH='' cd -P "$module" && pwd -P)" = "$module" ] &&
         [ -d "$module/objects" ] && [ ! -e "$module/commondir" ] &&
         [ ! -s "$module/objects/info/alternates" ] &&
-        links="$(find "$module" -type l -print)" && [ -z "$links" ]
+        [ ! -e "$module/shallow" ] && [ ! -e "$module/info/grafts" ] &&
+        [ -z "${GIT_SHALLOW_FILE:-}${GIT_GRAFT_FILE:-}" ] &&
+        links="$(find "$module" \( -type l -o -name '*.promisor' \) -print)" && [ -z "$links" ] || return 1
+    # The config can precede the first promisor pack. Read failures are not absence.
+    rc=0
+    git --git-dir="$module" config --get-regexp '^(extensions\.partialclone|remote\..*\.(promisor|partialclonefilter))$' >/dev/null || rc=$?
+    [ "$rc" = 1 ] && [ "$(git --git-dir="$module" rev-parse --is-shallow-repository)" = false ] &&
+        git --git-dir="$module" fsck --connectivity-only --no-reflogs >/dev/null 2>&1
 }
 held_outside() { # main checkout's module git dir, commit
     local refs
@@ -422,6 +429,8 @@ modules_readable() { # modules dir
 }
 submodule_commits_held() {
     local admin list state=0
+    local GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
+    export GIT_NO_REPLACE_OBJECTS GIT_NO_LAZY_FETCH
     UNSAFE_MODULE=""; UNSAFE_COMMIT=""; UNREADABLE=""
     admin="$(git -C "$WT" rev-parse --absolute-git-dir 2>/dev/null)" || return 2
     # A modules entry this run cannot see, or one that is not a directory, is not an absent one.

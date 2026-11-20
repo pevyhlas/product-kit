@@ -38,14 +38,22 @@ Notes before a comment <!--
 ```
 **Next**: example
 ```
+Literal markers: `<!--` and `` ` <!-- `` and \<!--.
+Multiline `<!--
+**Next**: example`
 MD
     case "$ws" in present) echo '**Waiting on**: nothing' >> "$probe" ;; blank) echo '**Waiting on**: <!-- hidden -->' >> "$probe" ;; esac
     case "$ns" in present) echo '**Next**: review' >> "$probe" ;; duplicate) printf '**Next**: one\n**Next**: two\n' >> "$probe" ;; esac
     printf '## Notes\n**Waiting on**: note\n**Next**: note\n' >> "$probe"
+    printf '## Acceptance\n| ok | description | note | 1 | PASS |\n' >> "$probe"
     run bash "$STATUS_SH" --json
     assert_eq "$ws $ns" "$(jq -r '.changes[0].state_fields | .waiting_on+" "+.next' <<< "$OUTPUT")"
     [ "$ns" = present ] || assert_eq '' "$(jq -r '.changes[0].next' <<< "$OUTPUT")"
     [ "$ws" = present ] || assert_eq '' "$(jq -r '.changes[0].waiting_on' <<< "$OUTPUT")"
+    assert_eq 1 "$(jq '.changes[0].acceptance.passed' <<< "$OUTPUT")"
+    if [ "$ws $ns" = 'present present' ]; then
+        assert_eq 'nothing/review' "$(jq -r '.changes[0]|.waiting_on+"/"+.next' <<< "$OUTPUT")"
+    fi
     run bash "$STATUS_SH"
     [ "$ws" = present ] || assert_contains "$OUTPUT" "State: Waiting on is $ws"
     [ "$ns" = present ] || assert_contains "$OUTPUT" "State: Next is $ns"
@@ -53,7 +61,7 @@ MD
     assert_eq 0 "$STATUS" 'ordinary doctor remains advisory'
     advises="$(jq -r '.advisories[]' <<< "$OUTPUT")"
     for item in "Waiting on is $ws" "Next is $ns"; do
-        if [[ "$item" == *' is present' ]]; then assert_not_contains "$advises" "$probe (## State): $item"
+        if [[ "$item" == *' is present' ]]; then assert_not_contains "$advises" "$probe (## State): ${item% present} "
         else assert_contains "$advises" "$probe (## State): $item"; fi
     done
 done

@@ -71,20 +71,18 @@ mkdir -p "$outside/specs/log"
 # Observe the real successful write: each operation must use its open parent,
 # including mkdir. A string-prefix containment check after mkdir is too late.
 mkdir "$outside/bin"
-export CLOSE_PYTHON; CLOSE_PYTHON="$(command -v python3)"
 cat > "$outside/bin/python3" <<'SH'
 #!/usr/bin/env bash
-exec "$CLOSE_PYTHON" -I -c '
-import os, sys
-sys.argv = sys.argv[1:]
-def observe(event, args):
-    if event=="os.mkdir" and args[0]=="log" and args[2]>=0:
-        print("anchored mkdir", file=sys.stderr)
-sys.addaudithook(observe)
-exec(compile(sys.stdin.buffer.read(), "<close>", "exec"))
-' "${@:2}"
+exit 127
 SH
-chmod +x "$outside/bin/python3"
+export REAL_MKDIR; REAL_MKDIR="$(command -v mkdir)"
+cat > "$outside/bin/mkdir" <<'SH'
+#!/usr/bin/env bash
+if [ "$*" = ./log ] && [ "$(pwd -P)" = "$CLOSE_SPECS" ]; then echo 'anchored mkdir' >&2; fi
+exec "$REAL_MKDIR" "$@"
+SH
+export CLOSE_SPECS="$PROJ/specs"
+chmod +x "$outside/bin/python3" "$outside/bin/mkdir"
 CDPATH="$outside" PATH="$outside/bin:$PATH" run bash "$B/close-change.sh" 001-greet "warmer greeting — R-01 — #1"
 assert_contains "$OUTPUT" 'anchored mkdir'
 assert_eq 0 "$STATUS" "closes: $OUTPUT"

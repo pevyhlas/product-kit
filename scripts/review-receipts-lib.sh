@@ -191,7 +191,7 @@ review_receipts_fetch() { # URL root work; policy already read; caller supplies 
             elif has("restates_pr") and ((.restates_pr|nat|not) or .restates_pr==0 or .restates_pr==$n) then "invalid restates_pr"
             elif has("restates_chain") and (has("restates")|not) then "repair chain requires restates"
             elif has("restates_chain") and ((.restates_chain|type)!="array" or
-                (all(.restates_chain[]; (.pr|nat) and .pr>0 and (.review|type)=="string" and (.review|test("^[1-9][0-9]*$")))|not)) then "invalid repair chain"
+                (all(.restates_chain[]; type=="object" and (.pr|nat) and .pr>0 and (.review|type)=="string" and (.review|test("^[1-9][0-9]*$")))|not)) then "invalid repair chain"
             else "" end;
         [ .[] as $s | $s.reviews[] | select(.state!="PENDING") | . as $r |
           (.body // "" | if type=="string" then . else "" end | payload) as $b |
@@ -204,7 +204,8 @@ review_receipts_fetch() { # URL root work; policy already read; caller supplies 
             isolated:($isolation!="required" or $r.author.databaseId!=$s.pr.author.databaseId),
            note:(if $trusted and $isolation=="shared" and $r.author.databaseId==$s.pr.author.databaseId then
                "receipts are authenticated to \($r.author.login), which also authored this PR: they bind content, order and counts, not the reviewer\u0027s independence" else "" end),
-            error:(if $isolation=="required" and $r.author.databaseId==$s.pr.author.databaseId then "publisher also authored this PR (isolation required)"
+            error:(if ($trusted|not) then ""
+                   elif $isolation=="required" and $r.author.databaseId==$s.pr.author.databaseId then "publisher also authored this PR (isolation required)"
                    elif $r.lastEditedAt!=null or $r.editor!=null then "edited receipt"
                   elif $b.starts!=1 or $b.ends!=1 or $b.inside then "expected exactly one receipt block"
                   else ($b.parsed|schema_error($s.pr.number)) end)} ] |

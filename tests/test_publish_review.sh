@@ -163,6 +163,24 @@ run bash "$PUB" --pr "$PR" --resume "$saved.json"
 assert_eq 0 "$STATUS" "$OUTPUT"
 assert_eq 1 "$(jq length "$GH_STUB_DIR/reviews/7.json")" 'resume submits the existing review'
 
+it 'successive faithful repairs resume their own host attempts'
+fresh; post
+saved="$(payload | jq -r .id)"
+repair=(bash "$PUB" --pr "$PR" --restates 1001 --receipt-id "$saved")
+run "${repair[@]}"; assert_eq 0 "$STATUS" "$OUTPUT"
+GH_STUB_LOSE_RESPONSE=true run "${repair[@]}"
+assert_eq 1 "$STATUS" 'lost response on identical second repair'
+attempt="$(printf '%s\n' "$OUTPUT" | sed 's/.*payload is retained at //;s/; inspect the PR before retrying$//')"
+run bash "$PUB" --pr "$PR" --resume "${attempt##*/}"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq 'COMMENTED' "$(jq -r '.[2].state' "$GH_STUB_DIR/reviews/7.json")"
+assert_eq false "$(jq '.[1].body==.[2].body' "$GH_STUB_DIR/reviews/7.json")" 'transport marker distinguishes equal verdicts'
+jq '. += [(.[2]|.fullDatabaseId="9001")]' "$GH_STUB_DIR/reviews/7.json" > .git/copied-body
+mv .git/copied-body "$GH_STUB_DIR/reviews/7.json"
+run bash "$PUB" --pr "$PR" --resume "${attempt##*/}"
+assert_eq 0 "$STATUS" 'already mapped attempt verifies just the saved host ID'
+assert_contains "$OUTPUT" '#pullrequestreview-1003'
+
 it 'all b refusals occur without posting'
 fresh; git branch -f wip HEAD
 for flags in base since owner identity maker unknown fingerprint since-fingerprint counts report-field; do

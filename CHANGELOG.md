@@ -28,7 +28,7 @@ From 2.0.0, pin the patch on a clean upgrade branch and run
 `bash .product-kit/scripts/init.sh --upgrade`. No record or receipt migration is required.
 Refresh the trusted publisher installation as well. Online publishing needs Perl with its
 core modules and a publisher log on a filesystem supporting file and directory sync.
-Closing uses Python 3.6+ on macOS or Linux for directory-relative, exclusive file creation.
+Closing uses the existing shell tools for directory-relative, exclusive entry creation.
 
 ## [2.0.0] — 2026-11-19 — authenticated PR reviews and safer upgrades
 

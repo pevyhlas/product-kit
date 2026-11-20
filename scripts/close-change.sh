@@ -69,29 +69,27 @@ if ! out="$(check)"; then
 fi
 
 check_paths
-# Bind each lookup to an already-open parent. Neither mkdir nor the exclusive
-# entry creation resolves a checked pathname again. Supported on macOS and Linux.
-if ! python3 -I - "$root" "$id" "$day" "$text" <<'PY'
-import os
-import sys
-
-root, change, day, text = sys.argv[1:]
-directory = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-checkout = os.open(root, directory)
-specs = os.open("specs", directory, dir_fd=checkout)
-try:
-    os.mkdir("log", dir_fd=specs)
-except FileExistsError:
-    pass
-log = os.open("log", directory, dir_fd=specs)
-entry = os.open(change + ".md", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                0o666, dir_fd=log)
-with os.fdopen(entry, "wb") as stream:
-    stream.write(os.fsencode(f"- {day} {change}: {text}\n"))
-PY
-then
+# The process cwd pins a directory just like a directory descriptor. Verify
+# its physical identity *after* entering it, before any relative write.
+if ! (
+    cd -P "$root/specs" && [ "$(pwd -P)" = "$root/specs" ] || exit 1
+    if [ ! -d ./log ]; then mkdir ./log || exit 1; fi
+    [ ! -L ./log ] && cd -P ./log && [ "$(pwd -P)" = "$root/specs/log" ] || exit 1
+    stage="$(mktemp -d .close-XXXXXXXX)" || exit 1
+    # Prepare in a private same-filesystem directory. Link into "." using the
+    # source basename: existing entries (even directories) cannot be replaced.
+    rc=0
+    (
+        cd -P "./$stage" && [ "$(pwd -P)" = "$root/specs/log/$stage" ] || exit 1
+        set -C
+        printf -- '- %s %s: %s\n' "$day" "$id" "$text" > "$id.md"
+    ) && ln "./$stage/$id.md" . || rc=1
+    (cd -P "./$stage" && [ "$(pwd -P)" = "$root/specs/log/$stage" ] && rm -f "./$id.md") &&
+        rmdir "./$stage" && exit "$rc"
+); then
     refuse "could not write $entry; nothing was deleted or committed"
 fi
+check_paths
 git -C "$root" rm -q -- "$path"
 git -C "$root" add -- "$entry"
 git -C "$root" commit -q -m "${message:-$id: close (log entry, record deleted)}" ||

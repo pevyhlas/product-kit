@@ -296,6 +296,14 @@ assert_contains "${RC_NOTES[*]}" "not the reviewer's independence"
 
 it 'required isolation is immutable on the source PR, including edited reviews'
 reset_host
+malformed='.restates="123"|.restates_chain=["invalid"]'
+receipt 7 "$malformed" '{"author":{"databaseId":1005}}'
+receipt 7 "$malformed"
+fetch
+assert_eq 1 "$RC_IGNORED" 'unlisted authors do not enter schema validation'
+assert_eq 1 "$RC_INVALID" 'malformed trusted chain is one invalid receipt'
+assert_contains "$(problems)" 'invalid repair chain'
+reset_host
 fx_closed_pr 6 "$HEAD_SHA" '{"author":{"databaseId":1001}}'
 receipt 6 . '{"editor":{"login":"admin"}}'
 receipt 7 '.id="00000000000000000000000000000001"|.restates="1001"|.restates_pr=6'

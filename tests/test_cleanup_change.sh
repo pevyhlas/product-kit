@@ -345,6 +345,21 @@ printf '%s\n' "$PROJ2/alternate" > "$survivor/objects/info/alternates"
 run bash "$CLEAN2" --force 080-sub-unpushed
 assert_eq 1 "$STATUS" 'refuse indirect object storage even when a local branch names the commit'
 rm "$survivor/objects/info/alternates"
+for store in shallow filtered promisor-pack; do
+    case "$store" in
+        shallow) printf '%s\n' "$c80" > "$survivor/shallow" ;;
+        filtered) git --git-dir="$survivor" config remote.origin.partialclonefilter blob:none ;;
+        promisor-pack) touch "$survivor/objects/pack/test.promisor" ;;
+    esac
+    run bash "$CLEAN2" --force 080-sub-unpushed
+    assert_eq 1 "$STATUS" "$store is not proof of complete local retention"
+    assert_contains "$OUTPUT" 'independent object store'
+    case "$store" in
+        shallow) rm "$survivor/shallow" ;;
+        filtered) git --git-dir="$survivor" config --unset remote.origin.partialclonefilter ;;
+        promisor-pack) rm "$survivor/objects/pack/test.promisor" ;;
+    esac
+done
 run bash "$CLEAN2" 080-sub-unpushed
 assert_eq 0 "$STATUS" "removed"
 run test ! -d "$PROJ2/.worktrees/080-sub-unpushed"

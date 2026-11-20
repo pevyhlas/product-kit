@@ -76,7 +76,7 @@ check_log_path() { # path below prdkit/receipts; every component must be publish
     done
 }
 if [ -n "$resume" ]; then
-    [[ "$resume" =~ ^(repair-[1-9][0-9]*-[0-9a-f]{32}-)?[0-9a-f]{32}\.json$ ]] || refuse 'invalid attempt filename'
+    [[ "$resume" =~ ^(repair2?-[1-9][0-9]*-[0-9a-f]{32}-)?[0-9a-f]{32}\.json$ ]] || refuse 'invalid attempt filename'
     if [ -n "$id$restates$restates_pr$receipt_id$reviewer$verdict$counts$report$head_ref$since_ref$from_report" ] || $clears_legacy || $dry_run; then
         refuse '--resume uses only the saved attempt'
     fi
@@ -213,7 +213,7 @@ durable_copy() { # install complete bytes without replacing another mapping, the
             last if $dir eq $root;
             $dir=dirname($dir);
         }
-    ' "$work/payload.json" "$1" "$git_dir"
+    ' "${2:-$work/payload.json}" "$1" "$git_dir"
 }
 mkdir -p "$log_root/$number" || refuse 'cannot create the publisher log'
 check_log_path "$number/$receipt_id.json"
@@ -223,9 +223,16 @@ if [ -z "$resume" ]; then
         # Each repair has its own transport fields; retain the exact POST payload too.
         attempt="$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')"
         [[ "$attempt" =~ ^[0-9a-f]{32}$ ]] || refuse 'could not generate a repair attempt id'
-        log="$log_root/$number/repair-$restates-$receipt_id-$attempt.json"
+        log="$log_root/$number/repair2-$restates-$receipt_id-$attempt.json"
         check_log_path "$number/${log##*/}"
     fi
+fi
+# Old attempts have no transport marker. Only new repairs need one: ordinary
+# publications already have a unique receipt ID. Keep it outside the v3 verdict.
+case "${log##*/}" in repair2-*) body+=$'\n\n'"<!-- prdkit-attempt: ${log##*/} -->" ;; esac
+binding="$log.review-id"
+check_log_path "$number/${binding##*/}"
+if [ -z "$resume" ]; then
     [ ! -e "$log" ] || refuse 'receipt id already exists in the publish log'
     durable_copy "$log" || refuse 'cannot durably retain the publish payload'
     jq -n --arg body "$body" '{body:$body}' > "$work/post.json"
@@ -238,8 +245,13 @@ else
     # Recover only a unique, unedited host copy of these exact local bytes. A
     # missing response or mapping never makes an edited review authoritative.
     _receipts_reviews "$host_repo" "$number" "$work" || refuse "$RC_ERROR"
-    match="$(jq -er --arg body "$body" --arg viewer "$viewer" --arg publishers "$RC_PUBLISHERS" '
-        [.reviews[] | select(.body==$body and .lastEditedAt==null and .editor==null and
+    known=""
+    if [ -e "$binding" ]; then
+        known="$(cat "$binding")"
+        [[ "$known" =~ ^[1-9][0-9]*$ ]] || refuse 'invalid saved review ID'
+    fi
+    match="$(jq -er --arg known "$known" --arg body "$body" --arg viewer "$viewer" --arg publishers "$RC_PUBLISHERS" '
+        [.reviews[] | select(($known=="" or (.fullDatabaseId|tostring)==$known) and .body==$body and .lastEditedAt==null and .editor==null and
             (.state=="PENDING" or .state=="COMMENTED") and (.author.databaseId|tostring)==$viewer and
             ((.author | (if .__typename=="Bot" then "bot:" elif .__typename=="User" then "user:" else "?:" end)+(.databaseId|tostring)) as $a |
              ($publishers|split("\n")|index($a))!=null))] |
@@ -249,6 +261,8 @@ else
 fi
 check_log_path "$number/reviews/$review.json"
 if ! mkdir -p "$log_root/$number/reviews" || ! durable_copy "$log_root/$number/reviews/$review.json"; then refuse "could not durably retain review $review mapping; use --resume ${log##*/}"; fi
+printf '%s\n' "$review" > "$work/review-id"
+durable_copy "$binding" "$work/review-id" || refuse "could not durably bind this attempt to review $review; use --resume ${log##*/}"
 if [ "$state" = PENDING ]; then
     jq -n --arg body "$body" '{body:$body,event:"COMMENT"}' > "$work/submit.json"
     gh api --hostname github.com --method POST "repos/$host_repo/pulls/$number/reviews/$review/events" --input "$work/submit.json" > /dev/null ||
