@@ -858,7 +858,11 @@ spec_changes() { # root
                         k=index(s,"-->"); if (!k) break
                         s=substr(s,k+3); comment=0
                     } else if (substr(s,1,1)=="\\") {
-                        out=out substr(s,1,2); s=substr(s,3)
+                        # Only consume the following character when it is one of
+                        # our ASCII delimiters; never cut a UTF-8 character in two.
+                        if (match(s,/^\\[\\`<]/)) {
+                            out=out substr(s,1,RLENGTH); s=substr(s,RLENGTH+1)
+                        } else { out=out "\\"; s=substr(s,2) }
                     } else if (substr(s,1,1)=="`") {
                         match(s,/^`+/); n=RLENGTH
                         m=closing_ticks(s,n,n+1)

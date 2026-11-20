@@ -38,7 +38,7 @@ Notes before a comment <!--
 ```
 **Next**: example
 ```
-Literal markers: `<!--` and `` ` <!-- `` and \<!--.
+Literal markers: `<!--` and `` ` <!-- `` and \<!--. Unicode after slash: \é.
 Multiline `<!--
 **Next**: example`
 MD
