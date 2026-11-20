@@ -208,10 +208,10 @@ sha_tool=sha256sum; command -v sha256sum >/dev/null 2>&1 || sha_tool=shasum
 for cmd in bash dirname git sed awk tr head tail grep cat mktemp rm mv mkdir wc sort jq od "$sha_tool"; do
     ln -s "$(command -v "$cmd")" "$TOOLS/$cmd"
 done
-logs_before="$(find "$LOG_ROOT" -type f | sort)"
+[ ! -e "$LOG_ROOT" ] || _no 'expected a fresh fixture with no publisher log'
 run env PATH="$TOOLS" bash "$PUB" 001-reviewed --pr "$PR" --reviewer code --verdict PASS --counts 0,0,0,0 --report https://example.invalid/report --head HEAD --dry-run
 assert_eq 0 "$STATUS" "$OUTPUT"
-assert_eq "$logs_before" "$(find "$LOG_ROOT" -type f | sort)"
+assert_eq absent "$([ -e "$LOG_ROOT" ] && echo created || echo absent)" 'dry-run creates no publisher log'
 assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
 
 it 'read-back rejects wrong typename/id, edits and changed body, retaining the log'
