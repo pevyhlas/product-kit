@@ -67,7 +67,26 @@ assert_eq '' "$(ls -A "$outside")" 'log destination untouched'
 assert_eq "$VERDICT" "$(git rev-parse HEAD)"
 assert_file specs/changes/001-greet.md
 rm specs/log
-run bash "$B/close-change.sh" 001-greet "warmer greeting — R-01 — #1"
+mkdir -p "$outside/specs/log"
+# Observe the real successful write: each operation must use its open parent,
+# including mkdir. A string-prefix containment check after mkdir is too late.
+mkdir "$outside/bin"
+export CLOSE_PYTHON; CLOSE_PYTHON="$(command -v python3)"
+cat > "$outside/bin/python3" <<'SH'
+#!/usr/bin/env bash
+exec "$CLOSE_PYTHON" -I -c '
+import os, sys
+sys.argv = sys.argv[1:]
+def observe(event, args):
+    if event=="os.mkdir" and args[0]=="log" and args[2]>=0:
+        print("anchored mkdir", file=sys.stderr)
+sys.addaudithook(observe)
+exec(compile(sys.stdin.buffer.read(), "<close>", "exec"))
+' "${@:2}"
+SH
+chmod +x "$outside/bin/python3"
+CDPATH="$outside" PATH="$outside/bin:$PATH" run bash "$B/close-change.sh" 001-greet "warmer greeting — R-01 — #1"
+assert_contains "$OUTPUT" 'anchored mkdir'
 assert_eq 0 "$STATUS" "closes: $OUTPUT"
 assert_contains "$OUTPUT" "PASS 001-greet" "reports the gate at the closed head"
 assert_not_contains "$OUTPUT" "Note:" "no open-record note once closed"

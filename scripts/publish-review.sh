@@ -14,15 +14,17 @@ source "$SCRIPT_DIR/review-receipts-lib.sh"
 source "$SCRIPT_DIR/review-legacy-lib.sh"
 usage='Usage: publish-review.sh <change-id> --pr <url> --reviewer <identity> --verdict PASS|FAIL --counts <c>,<h>,<m>,<l> --report <url> --head <rev> [--since <rev>] [--from-report <file>] [--clears-legacy] [--base <ref>] [--repo <dir>] [--dry-run]; or --pr <url> --restates <review-id> --receipt-id <32 hex> [--restates-pr <origin pr>] [--base <ref>] [--repo <dir>] [--dry-run]'
 id=""; pr_url=""; reviewer=""; verdict=""; counts=""; report=""; head_ref=""; since_ref=""; from_report=""; base_ref=origin/HEAD; repo=.
-dry_run=false; clears_legacy=false; restates=""; restates_pr=""; receipt_id=""
+usage="$usage; or --pr <url> --resume <attempt filename> [--base <ref>] [--repo <dir>]"
+dry_run=false; clears_legacy=false; restates=""; restates_pr=""; receipt_id=""; resume=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --pr|--reviewer|--verdict|--counts|--report|--head|--since|--from-report|--base|--repo|--restates|--restates-pr|--receipt-id)
+        --pr|--reviewer|--verdict|--counts|--report|--head|--since|--from-report|--base|--repo|--restates|--restates-pr|--receipt-id|--resume)
             [ "$#" -ge 2 ] || { echo "$usage" >&2; exit 2; }
             case "$1" in
                 --pr) pr_url="$2" ;; --reviewer) reviewer="$2" ;; --verdict) verdict="$2" ;; --counts) counts="$2" ;;
                 --report) report="$2" ;; --head) head_ref="$2" ;; --since) since_ref="$2" ;; --from-report) from_report="$2" ;;
                 --base) base_ref="$2" ;; --repo) repo="$2" ;; --restates) restates="$2" ;; --restates-pr) restates_pr="$2" ;; --receipt-id) receipt_id="$2" ;;
+                --resume) resume="$2" ;;
             esac
             shift ;;
         --dry-run) dry_run=true ;; --clears-legacy) clears_legacy=true ;;
@@ -73,7 +75,17 @@ check_log_path() { # path below prdkit/receipts; every component must be publish
         [ ! -L "$path" ] || refuse "symlinked publisher log component: $path"
     done
 }
-if [ -n "$restates" ]; then
+if [ -n "$resume" ]; then
+    [[ "$resume" =~ ^(repair-[1-9][0-9]*-[0-9a-f]{32}-)?[0-9a-f]{32}\.json$ ]] || refuse 'invalid attempt filename'
+    if [ -n "$id$restates$restates_pr$receipt_id$reviewer$verdict$counts$report$head_ref$since_ref$from_report" ] || $clears_legacy || $dry_run; then
+        refuse '--resume uses only the saved attempt'
+    fi
+    check_log_path "$number/$resume"
+    log="$log_root/$number/$resume"
+    jq -e --arg repo "$host_repo" --argjson pr "$number" '(.repo|ascii_downcase)==($repo|ascii_downcase) and .pr==$pr' "$log" >/dev/null ||
+        refuse 'wrong PR or missing attempt'
+    cp "$log" "$work/payload.json"
+elif [ -n "$restates" ]; then
     [[ "$restates" =~ ^[1-9][0-9]*$ && "$receipt_id" =~ ^[0-9a-f]{32}$ ]] || refuse 'restatement needs a numeric --restates review id and --receipt-id (32 hex)'
     if [ -n "$reviewer$verdict$counts$report$head_ref$since_ref$from_report" ] || $clears_legacy; then
         refuse 'a restatement reads the full original verdict from the publish log; do not override its fields'
@@ -93,6 +105,7 @@ if [ -n "$restates" ]; then
     [ -z "$id" ] || [ "$id" = "$original_change" ] || refuse 'a restatement keeps the original change id'
     id="$original_change"
     jq --arg repo "$host_repo" --argjson pr "$number" --arg review "$restates" --argjson origin "$origin" '
+        if has("restates") then .restates_chain=([{review:.restates,pr:(.restates_pr // .pr)}]+(.restates_chain // [])) else . end |
         del(.restates,.restates_pr) | .repo=$repo | .pr=$pr | .restates=$review |
         if $origin!=$pr then .restates_pr=$origin else . end' "$log" > "$work/payload.json"
 else
@@ -187,7 +200,12 @@ durable_copy() { # install complete bytes without replacing another mapping, the
         local $/; my $bytes=<$in>; defined($bytes) && length($bytes) or die "empty payload";
         print {$out} $bytes or die "write payload: $!";
         $out->flush && $out->sync && close($out) or die "sync payload: $!";
-        link($tmp,$dst) or die "install log: $!";
+        if (!link($tmp,$dst)) {
+            $!{EEXIST} or die "install log: $!";
+            open(my $existing,"<",$dst) or die "open existing log: $!";
+            <$existing> eq $bytes or die "conflicting existing log";
+            $existing->sync && close($existing) or die "sync existing log: $!";
+        }
         unlink($tmp) or die "remove temporary: $!";
         while (1) {
             open(my $d,"<",$dir) or die "open directory: $!";
@@ -199,23 +217,43 @@ durable_copy() { # install complete bytes without replacing another mapping, the
 }
 mkdir -p "$log_root/$number" || refuse 'cannot create the publisher log'
 check_log_path "$number/$receipt_id.json"
-log="$log_root/$number/$receipt_id.json"
-if [ -n "$restates" ]; then
-    # Each repair has its own transport fields; retain the exact POST payload too.
-    attempt="$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')"
-    [[ "$attempt" =~ ^[0-9a-f]{32}$ ]] || refuse 'could not generate a repair attempt id'
-    log="$log_root/$number/repair-$restates-$receipt_id-$attempt.json"
-    check_log_path "$number/${log##*/}"
+if [ -z "$resume" ]; then
+    log="$log_root/$number/$receipt_id.json"
+    if [ -n "$restates" ]; then
+        # Each repair has its own transport fields; retain the exact POST payload too.
+        attempt="$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')"
+        [[ "$attempt" =~ ^[0-9a-f]{32}$ ]] || refuse 'could not generate a repair attempt id'
+        log="$log_root/$number/repair-$restates-$receipt_id-$attempt.json"
+        check_log_path "$number/${log##*/}"
+    fi
+    [ ! -e "$log" ] || refuse 'receipt id already exists in the publish log'
+    durable_copy "$log" || refuse 'cannot durably retain the publish payload'
+    jq -n --arg body "$body" '{body:$body}' > "$work/post.json"
+    if ! gh api --hostname github.com --method POST "repos/$host_repo/pulls/$number/reviews" --input "$work/post.json" > "$work/posted.json" 2>/dev/null; then
+        refuse "POST failed or its result is unknown; the payload is retained at $log; inspect the PR before retrying"
+    fi
+    review="$(jq -er '.id|tostring|select(test("^[1-9][0-9]*$"))' "$work/posted.json")" || refuse "POST returned no review id; payload retained at $log"
+    state=PENDING
+else
+    # Recover only a unique, unedited host copy of these exact local bytes. A
+    # missing response or mapping never makes an edited review authoritative.
+    _receipts_reviews "$host_repo" "$number" "$work" || refuse "$RC_ERROR"
+    match="$(jq -er --arg body "$body" --arg viewer "$viewer" --arg publishers "$RC_PUBLISHERS" '
+        [.reviews[] | select(.body==$body and .lastEditedAt==null and .editor==null and
+            (.state=="PENDING" or .state=="COMMENTED") and (.author.databaseId|tostring)==$viewer and
+            ((.author | (if .__typename=="Bot" then "bot:" elif .__typename=="User" then "user:" else "?:" end)+(.databaseId|tostring)) as $a |
+             ($publishers|split("\n")|index($a))!=null))] |
+        if length==1 then .[0]|[.fullDatabaseId,.state]|@tsv else empty end' "$work/source-$number.json")" ||
+        refuse 'no unique unedited host match; cannot reconcile without independent evidence'
+    IFS=$'\t' read -r review state <<< "$match"
 fi
-[ ! -e "$log" ] || refuse 'receipt id already exists in the publish log'
-durable_copy "$log" || refuse 'cannot durably retain the publish payload'
-jq -n --arg body "$body" '{event:"COMMENT",body:$body}' > "$work/post.json"
-if ! gh api --hostname github.com --method POST "repos/$host_repo/pulls/$number/reviews" --input "$work/post.json" > "$work/posted.json" 2>/dev/null; then
-    refuse "POST failed or its result is unknown; the payload is retained at $log; inspect the PR before retrying"
-fi
-review="$(jq -er '.id|tostring|select(test("^[1-9][0-9]*$"))' "$work/posted.json")" || refuse "POST returned no review id; payload retained at $log"
 check_log_path "$number/reviews/$review.json"
-if ! mkdir -p "$log_root/$number/reviews" || ! durable_copy "$log_root/$number/reviews/$review.json"; then refuse "review $review posted but could not durably retain its review-id log; payload at $log"; fi
+if ! mkdir -p "$log_root/$number/reviews" || ! durable_copy "$log_root/$number/reviews/$review.json"; then refuse "could not durably retain review $review mapping; use --resume ${log##*/}"; fi
+if [ "$state" = PENDING ]; then
+    jq -n --arg body "$body" '{body:$body,event:"COMMENT"}' > "$work/submit.json"
+    gh api --hostname github.com --method POST "repos/$host_repo/pulls/$number/reviews/$review/events" --input "$work/submit.json" > /dev/null ||
+        refuse "submission failed or its result is unknown; use --resume ${log##*/}"
+fi
 url="https://github.com/$host_repo/pull/$number#pullrequestreview-$review"
 _receipts_reviews "$host_repo" "$number" "$work" || refuse "review $url was posted but GraphQL read-back failed: $RC_ERROR; payload retained at $log"
 if ! jq -e --arg id "$review" --arg body "$body" --arg viewer "$viewer" --arg publishers "$RC_PUBLISHERS" '

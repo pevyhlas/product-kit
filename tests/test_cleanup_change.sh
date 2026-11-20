@@ -336,7 +336,15 @@ git -C "$SUBSRC" update-ref -d refs/heads/kept-080
 assert_eq "$c80" "$(git -C "$PROJ2/.worktrees/080-sub-unpushed/vendor/sub" rev-parse refs/remotes/origin/kept-080)"
 run bash "$CLEAN2" --force 080-sub-unpushed
 assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" "$c80"
-git -C "$PROJ2/vendor/sub" fetch -q "$PROJ2/.worktrees/080-sub-unpushed/vendor/sub" HEAD:refs/heads/kept-080
+git -C "$PROJ2/vendor/sub" config protocol.file.allow never
+run git -C "$PROJ2/vendor/sub" -c protocol.file.allow=always fetch -q "$PROJ2/.worktrees/080-sub-unpushed/vendor/sub" HEAD:refs/heads/kept-080
+assert_eq 0 "$STATUS" 'fixture fetch overrides the local transport restriction'
+survivor="$(git -C "$PROJ2/vendor/sub" rev-parse --absolute-git-dir)"
+mkdir -p "$survivor/objects/info" "$PROJ2/alternate/pack"
+printf '%s\n' "$PROJ2/alternate" > "$survivor/objects/info/alternates"
+run bash "$CLEAN2" --force 080-sub-unpushed
+assert_eq 1 "$STATUS" 'refuse indirect object storage even when a local branch names the commit'
+rm "$survivor/objects/info/alternates"
 run bash "$CLEAN2" 080-sub-unpushed
 assert_eq 0 "$STATUS" "removed"
 run test ! -d "$PROJ2/.worktrees/080-sub-unpushed"
@@ -353,6 +361,18 @@ run git -C "$PROJ2/vendor/sub" cat-file -e "$c81^{commit}"
 assert_eq 0 "$STATUS" "the main checkout's submodule still has the commit"
 
 it "a local branch in the worktree's submodule that nothing records refuses --force"
+sub_worktree 089-tracking
+tracking="$PROJ2/.worktrees/089-tracking/vendor/sub"
+for tip in older current; do
+    oid="$(git -C "$tracking" "${GITID[@]}" commit-tree HEAD: -p HEAD -m "$tip")"
+    git -C "$tracking" update-ref --create-reflog refs/remotes/example/topic "$oid"
+done
+run bash "$CLEAN2" --force 089-tracking
+assert_eq 1 "$STATUS" 'tracking-only commits need independent local retention'
+git -C "$PROJ2/vendor/sub" -c protocol.file.allow=always fetch -q "$tracking" refs/remotes/example/topic:refs/heads/retain-tip
+run bash "$CLEAN2" --force 089-tracking
+assert_eq 1 "$STATUS" 'retaining the tip alone does not retain its previous reflog entry'
+
 sub_worktree 082-sub-branch
 git -C "$PROJ2/.worktrees/082-sub-branch/vendor/sub" checkout -qb scratch >/dev/null 2>&1
 git -C "$PROJ2/.worktrees/082-sub-branch/vendor/sub" "${GITID[@]}" commit -q --allow-empty -m scratch >/dev/null 2>&1

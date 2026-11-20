@@ -517,7 +517,7 @@ upgrade_transition_report() (
     note=''
     if ! command -v gh >/dev/null 2>&1; then note='Could not list open PRs: gh is missing; default-branch report is complete.'
     elif ! repo="$(upgrade_host_repo)"; then note='Could not list open PRs: origin is not a GitHub repository URL.'
-    elif ! gh api --method GET "repos/$repo/pulls?state=open&per_page=100" --paginate > "$work/open-pages" 2>/dev/null; then
+    elif ! gh api --hostname github.com --method GET "repos/$repo/pulls?state=open&per_page=100" --paginate > "$work/open-pages" 2>/dev/null; then
         note='Could not list open PRs: the host API is unavailable; the upgrade can proceed.'
     elif ! jq -se 'length>0 and all(.[]; type=="array" and all(.[];
         (.number|type)=="number" and (.head.sha|type)=="string" and (.head.sha|test("^[0-9a-f]{40}$")) and

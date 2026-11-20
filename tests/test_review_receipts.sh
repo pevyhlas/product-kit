@@ -294,6 +294,15 @@ RC_ISOLATION=shared; fetch
 assert_eq 0 "$RC_INVALID"
 assert_contains "${RC_NOTES[*]}" "not the reviewer's independence"
 
+it 'required isolation is immutable on the source PR, including edited reviews'
+reset_host
+fx_closed_pr 6 "$HEAD_SHA" '{"author":{"databaseId":1001}}'
+receipt 6 . '{"editor":{"login":"admin"}}'
+receipt 7 '.id="00000000000000000000000000000001"|.restates="1001"|.restates_pr=6'
+fetch
+assert_contains "$(problems)" 'isolation required'
+assert_eq 2 "$RC_INVALID" 'source policy failure and unusable repair remain'
+
 it 'closed-unmerged standing FAILs carry, but closed PASSes never cover'
 reset_host; fx_closed_pr 6 "$HEAD_SHA"
 receipt 6 '.verdict="FAIL"'; fetch

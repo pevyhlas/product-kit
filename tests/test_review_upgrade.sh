@@ -315,10 +315,11 @@ BEFORE="$(git -C "$PROJ" status --porcelain --untracked-files=all)"
 RECORDS_BEFORE="$(tree_snapshot "$PROJ/specs/changes")"
 git -C "$PROJ" remote set-url origin https://github.com/old/location.git
 git -C "$PROJ" config url.https://github.com/owner/repo.git.insteadOf https://github.com/old/location.git
-upgrade --migrate-reviews --dry-run --json
+GH_HOST=other.invalid upgrade --migrate-reviews --dry-run --json
 assert_eq 0 "$STATUS" "$OUTPUT"
 REPORT="$OUTPUT"
 assert_contains "$(cat "$GH_STUB_DIR/requests")" 'repos/owner/repo/pulls?state=open'
+assert_contains "$(cat "$GH_STUB_DIR/requests")" '--hostname github.com --method GET repos/owner/repo/pulls?state=open'
 assert_not_contains "$(cat "$GH_STUB_DIR/requests")" 'repos/old/location/pulls'
 assert_eq prdkit.review-transition.v1 "$(printf '%s' "$REPORT" | jq -r .schema)" 'JSON report schema'
 assert_eq 1 "$(printf '%s' "$REPORT" | jq .totals.records_with_blockers)" '1.x-cleared FAIL still reported'

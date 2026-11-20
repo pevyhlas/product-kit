@@ -51,10 +51,11 @@ assert_eq 32 "$(payload | jq '.id|length')"
 it 'posting sends COMMENT without commit_id and verifies GraphQL before reporting success'
 post
 assert_eq 0 "$STATUS" "$OUTPUT"
-assert_eq COMMENT "$(jq -r .event "$GH_STUB_DIR/post-request.json")"
+assert_eq false "$(jq 'has("event")' "$GH_STUB_DIR/post-request.json")" 'create is pending'
+assert_eq COMMENT "$(jq -r .event "$GH_STUB_DIR/submit-request.json")"
 assert_eq false "$(jq 'has("commit_id")' "$GH_STUB_DIR/post-request.json")"
 assert_contains "$(cat "$GH_STUB_DIR/requests")" 'query PrdkitReviews'
-assert_not_contains "$(cat "$GH_STUB_DIR/requests")" 'pulls/7/reviews/1001' 'REST is never used to validate a review'
+assert_contains "$(cat "$GH_STUB_DIR/requests")" 'pulls/7/reviews/1001/events'
 RECEIPT_ID="$(payload | jq -r .id)"
 assert_file "$LOG_ROOT/7/$RECEIPT_ID.json"
 assert_eq "$RECEIPT_ID" "$(jq -r .id "$LOG_ROOT/7/$RECEIPT_ID.json")"
@@ -111,22 +112,56 @@ no warnings 'redefine';
 *IO::Handle::sync = sub {
     my ($fh)=@_;
     my $boundary=(-d $fh ? "dir" : "file");
+    if ($boundary eq "file") {
+        # File::Temp opens read/write. sysread on the descriptor bypasses
+        # PerlIO buffers and must see all source bytes *before* sync.
+        open my $source, "<", $ARGV[0] or die $!;
+        local $/; my $expected=<$source>;
+        defined(sysseek($fh,0,0)) or die $!;
+        my $actual;
+        sysread($fh,$actual,length($expected)+1)==length($expected)
+            && $actual eq $expected or die "unflushed payload";
+    }
     $boundary="posted-$boundary" if -f "$ENV{GH_STUB_DIR}/post-request.json";
     return undef if $boundary eq $ENV{SYNC_FAULT};
     return $real->($fh);
 };
 1;
 EOF
+fresh
+PERL5LIB="$sync_lib" PERL5OPT=-MSyncFault SYNC_FAULT=none post
+assert_eq 0 "$STATUS" 'both file syncs see the complete payload'
 for boundary in file dir posted-file posted-dir; do
     fresh
     PERL5LIB="$sync_lib" PERL5OPT=-MSyncFault SYNC_FAULT="$boundary" post
     assert_eq 1 "$STATUS" "$boundary fails"
     case "$boundary" in
-        posted-*) assert_contains "$OUTPUT" 'posted but could not durably retain its review-id log' ;;
+        posted-*) assert_contains "$OUTPUT" 'could not durably retain review'
+            assert_eq PENDING "$(jq -r '.[0].state' "$GH_STUB_DIR/reviews/7.json")"
+            saved="$(jq -r '.body|split("\n")[1]|fromjson|.id' "$GH_STUB_DIR/post-request.json")"
+            run bash "$PUB" --pr "$PR" --resume "$saved.json"
+            assert_eq 0 "$STATUS" "$OUTPUT"
+            assert_eq COMMENTED "$(jq -r '.[0].state' "$GH_STUB_DIR/reviews/7.json")" ;;
         *) assert_not_contains "$(cat "$GH_STUB_DIR/requests")" '--method POST'
            assert_contains "$OUTPUT" 'cannot durably retain the publish payload' ;;
     esac
 done
+
+it 'an unknown create response is recoverable only from a unique unedited host match'
+fresh
+GH_STUB_LOSE_RESPONSE=true post
+assert_eq 1 "$STATUS" 'lost create response'
+saved="$(jq -r '.body|split("\n")[1]|fromjson|.id' "$GH_STUB_DIR/post-request.json")"
+cp "$GH_STUB_DIR/reviews/7.json" .git/pending
+for invalid in '.[0].editor={"login":"editor"}' '. += [ (.[0]|.fullDatabaseId="9999") ]' '.[0].author.databaseId=1005'; do
+    jq "$invalid" .git/pending > "$GH_STUB_DIR/reviews/7.json"
+    run bash "$PUB" --pr "$PR" --resume "$saved.json"
+    assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'no unique unedited host match'
+done
+cp .git/pending "$GH_STUB_DIR/reviews/7.json"
+run bash "$PUB" --pr "$PR" --resume "$saved.json"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq 1 "$(jq length "$GH_STUB_DIR/reviews/7.json")" 'resume submits the existing review'
 
 it 'all b refusals occur without posting'
 fresh; git branch -f wip HEAD
@@ -264,6 +299,15 @@ assert_eq "$original" "$(payload | jq -c 'del(.restates,.restates_pr)|.pr=7')"
 run bash "$CHECK" --json --pr https://github.com/owner/repo/pull/8 001-reviewed
 assert_eq 1 "$STATUS" 'identical restatement retries keep the original FAIL'
 assert_contains "$OUTPUT" '"invalid_receipts":0' 'a repeated faithful repair is a no-op, not a new invalid receipt'
+
+jq '.[0].lastEditedAt="2026-01-04T00:00:00Z"|.[0].body="edited repair"' "$GH_STUB_DIR/reviews/8.json" > .git/edited
+mv .git/edited "$GH_STUB_DIR/reviews/8.json"
+run bash "$PUB" --pr https://github.com/owner/repo/pull/8 --restates 1003 --receipt-id "$saved"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq '[{"review":"1001","pr":7}]' "$(payload | jq -c .restates_chain)"
+run bash "$CHECK" --json --pr https://github.com/owner/repo/pull/8 001-reviewed
+assert_eq 0 "$(jq .invalid_receipts <<< "$OUTPUT")" 'repair of the edited repair resolves to the same source'
+assert_eq 1 "$(jq .carried_blockers <<< "$OUTPUT")"
 
 it 'tracked and planted old in-tree logs are never used for restatement'
 for kind in planted tracked; do

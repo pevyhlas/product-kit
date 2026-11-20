@@ -28,7 +28,8 @@ for fields in 'missing present' 'present missing' 'missing missing' 'present pre
 **Next**: header
 ## State
 > **Waiting on**: quote
-<!--
+Notes before a comment <!--
+**Waiting on**: comment
 **Next**: comment
 -->
 ~~~~
@@ -38,12 +39,13 @@ for fields in 'missing present' 'present missing' 'missing missing' 'present pre
 **Next**: example
 ```
 MD
-    case "$ws" in present) echo '**Waiting on**: nothing' >> "$probe" ;; blank) echo '**Waiting on**:' >> "$probe" ;; esac
+    case "$ws" in present) echo '**Waiting on**: nothing' >> "$probe" ;; blank) echo '**Waiting on**: <!-- hidden -->' >> "$probe" ;; esac
     case "$ns" in present) echo '**Next**: review' >> "$probe" ;; duplicate) printf '**Next**: one\n**Next**: two\n' >> "$probe" ;; esac
     printf '## Notes\n**Waiting on**: note\n**Next**: note\n' >> "$probe"
     run bash "$STATUS_SH" --json
     assert_eq "$ws $ns" "$(jq -r '.changes[0].state_fields | .waiting_on+" "+.next' <<< "$OUTPUT")"
     [ "$ns" = present ] || assert_eq '' "$(jq -r '.changes[0].next' <<< "$OUTPUT")"
+    [ "$ws" = present ] || assert_eq '' "$(jq -r '.changes[0].waiting_on' <<< "$OUTPUT")"
     run bash "$STATUS_SH"
     [ "$ws" = present ] || assert_contains "$OUTPUT" "State: Waiting on is $ws"
     [ "$ns" = present ] || assert_contains "$OUTPUT" "State: Next is $ns"

@@ -840,6 +840,18 @@ spec_changes() { # root
                 v = line; sub("^.*\\*\\*" name "\\*\\*:[[:space:]]*", "", v); sub(/[[:space:]]+·.*/, "", v); return trim(v)
             }
             function presence(n,v) { return !n ? "missing" : n>1 ? "duplicate" : v=="" ? "blank" : "present" }
+            function visible(s,   out,k) {
+                while (length(s)) {
+                    if (comment) {
+                        k=index(s,"-->"); if (!k) break
+                        s=substr(s,k+3); comment=0
+                    } else {
+                        k=index(s,"<!--"); if (!k) return out s
+                        out=out substr(s,1,k-1); s=substr(s,k+4); comment=1
+                    }
+                }
+                return out
+            }
             {
                 gsub(/\037/, " "); sub(/\r$/, "")
                 # Ignore complete fenced examples, including inner shorter fences.
@@ -849,9 +861,8 @@ spec_changes() { # root
                     if (length(ending)>=length(code) && (ending ~ /^`+$/ || ending ~ /^~+$/) && substr(ending,1,1)==substr(code,1,1)) code=""
                     next
                 }
-                if (comment) { if (index($0,"-->")) comment=0; next }
-                if (marker ~ /^<!--/) { comment=!index(marker,"-->"); next }
-                if (match(marker,/^```+|^~~~+/)) { code=substr(marker,1,RLENGTH); next }
+                if (!comment && match(marker,/^```+|^~~~+/)) { code=substr(marker,1,RLENGTH); next }
+                $0=visible($0)
             }
             NR == 1 && /^# / { title = $0; sub(/^#[[:space:]]+(Change:[[:space:]]*)?/, "", title) }
             /\*\*Opened\*\*:/ { opened = field($0, "Opened") }

@@ -69,8 +69,27 @@ if ! out="$(check)"; then
 fi
 
 check_paths
-if ! (cd -P "$root" && mkdir -p specs/log && cd -P specs/log &&
-    [ "$PWD" = "$root/specs/log" ] && set -C && printf -- '- %s %s: %s\n' "$day" "$id" "$text" > "$id.md"); then
+# Bind each lookup to an already-open parent. Neither mkdir nor the exclusive
+# entry creation resolves a checked pathname again. Supported on macOS and Linux.
+if ! python3 -I - "$root" "$id" "$day" "$text" <<'PY'
+import os
+import sys
+
+root, change, day, text = sys.argv[1:]
+directory = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+checkout = os.open(root, directory)
+specs = os.open("specs", directory, dir_fd=checkout)
+try:
+    os.mkdir("log", dir_fd=specs)
+except FileExistsError:
+    pass
+log = os.open("log", directory, dir_fd=specs)
+entry = os.open(change + ".md", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o666, dir_fd=log)
+with os.fdopen(entry, "wb") as stream:
+    stream.write(os.fsencode(f"- {day} {change}: {text}\n"))
+PY
+then
     refuse "could not write $entry; nothing was deleted or committed"
 fi
 git -C "$root" rm -q -- "$path"
