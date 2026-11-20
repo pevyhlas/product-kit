@@ -190,31 +190,30 @@ viewer="$(jq -er '.data.viewer.databaseId|numbers|tostring' "$work/viewer.json")
 printf '%s\n' "$RC_PUBLISHERS" | awk -F : -v id="$viewer" '$2==id { found=1 } END { exit !found }' || refuse 'the publishing credential is not a listed publisher'
 if [ "$RC_ISOLATION" = required ] && [ "$(jq -r .user.id "$work/pr.json")" = "$viewer" ]; then refuse 'publisher also authored this PR (isolation required)'; fi
 # Write ahead: even a POST timeout or an edited/unreadable read-back must not lose the repair log.
-durable_copy() { # install complete bytes without replacing another mapping, then sync the directory chain
-    perl -MIO::Handle -MFile::Temp=tempfile -MFile::Basename=dirname -e '
-        use strict; use warnings;
-        my ($src,$dst,$root)=@ARGV;
-        my $dir=dirname($dst);
-        my ($out,$tmp)=tempfile(".publish-XXXXXXXX", DIR=>$dir, UNLINK=>1);
-        open(my $in,"<",$src) or die "open payload: $!";
-        local $/; my $bytes=<$in>; defined($bytes) && length($bytes) or die "empty payload";
-        print {$out} $bytes or die "write payload: $!";
-        $out->flush && $out->sync && close($out) or die "sync payload: $!";
-        if (!link($tmp,$dst)) {
-            $!{EEXIST} or die "install log: $!";
-            open(my $existing,"<",$dst) or die "open existing log: $!";
-            <$existing> eq $bytes or die "conflicting existing log";
-            $existing->sync && close($existing) or die "sync existing log: $!";
-        }
-        unlink($tmp) or die "remove temporary: $!";
-        while (1) {
-            open(my $d,"<",$dir) or die "open directory: $!";
-            $d->sync && close($d) or die "sync directory: $!";
-            last if $dir eq $root;
-            $dir=dirname($dir);
-        }
-    ' "${2:-$work/payload.json}" "$1" "$git_dir"
+sync_log_path() {
+    # BSD and GNU dd fsync their output descriptor after EOF. Duplicate a
+    # read-only descriptor: no payload bytes are changed, even for directories.
+    dd if=/dev/null conv=notrunc,fsync 3<"$1" >&3 2>/dev/null
 }
+durable_copy() (
+    local dst="$1" src="${2:-$work/payload.json}" dir tmp
+    dir="${dst%/*}"
+    [ -s "$src" ] || return 1
+    tmp="$(mktemp "$dir/.publish-XXXXXXXX")" || return 1
+    trap 'rm -f "$tmp"' EXIT
+    cat "$src" > "$tmp" && sync_log_path "$tmp" || return 1
+    [ ! -d "$dst" ] || return 1
+    if ! ln "$tmp" "$dst" 2>/dev/null; then
+        [ -f "$dst" ] && [ ! -L "$dst" ] && cmp -s "$src" "$dst" && sync_log_path "$dst" || return 1
+    fi
+    rm "$tmp" || return 1
+    trap - EXIT
+    while :; do
+        sync_log_path "$dir" || return 1
+        [ "$dir" != "$git_dir" ] || break
+        dir="${dir%/*}"
+    done
+)
 mkdir -p "$log_root/$number" || refuse 'cannot create the publisher log'
 check_log_path "$number/$receipt_id.json"
 if [ -z "$resume" ]; then

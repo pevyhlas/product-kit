@@ -121,7 +121,7 @@ Keep the publisher log outside every working tree, under the absolute Git common
 `$(git -C <fetch-clone> rev-parse --git-common-dir)/prdkit/receipts/<pr>/<receipt-id>.json`.
 It must **never be maker-writable**; protect it with the publisher credential. Symlinked log
 components are refused. Old `.prdkit/cache/receipts/` logs are never read or migrated.
-Online publishing uses Perl's core `IO::Handle` to sync the payload before creating a pending
+Online publishing syncs the payload and its directory entries before creating a pending
 review, then syncs its ID mapping before submitting it as a COMMENT. Pending reviews do not
 count. If the response or mapping write fails, use `publish-review.sh --pr <url> --resume
 <attempt-filename>` from the same trusted publisher. It requires exactly one unedited host

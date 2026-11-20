@@ -104,36 +104,37 @@ assert_not_contains "$OUTPUT" 'Published '
 
 it 'file and directory sync failures stop publication at the correct boundary'
 sync_lib="$(mktemp -d)"; track_tmp "$sync_lib"
-cat > "$sync_lib/SyncFault.pm" <<'EOF'
-package SyncFault;
-use IO::Handle;
-my $real = \&IO::Handle::sync;
-no warnings 'redefine';
-*IO::Handle::sync = sub {
-    my ($fh)=@_;
-    my $boundary=(-d $fh ? "dir" : "file");
-    if ($boundary eq "file") {
-        # File::Temp opens read/write. sysread on the descriptor bypasses
-        # PerlIO buffers and must see all source bytes *before* sync.
-        open my $source, "<", $ARGV[0] or die $!;
-        local $/; my $expected=<$source>;
-        defined(sysseek($fh,0,0)) or die $!;
-        my $actual;
-        sysread($fh,$actual,length($expected)+1)==length($expected)
-            && $actual eq $expected or die "unflushed payload";
-    }
-    $boundary="posted-$boundary" if -f "$ENV{GH_STUB_DIR}/post-request.json";
-    return undef if $boundary eq $ENV{SYNC_FAULT};
-    return $real->($fh);
-};
-1;
+REAL_DD="$(command -v dd)"; export REAL_DD
+cat > "$sync_lib/dd" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+[ "$*" = 'if=/dev/null conv=notrunc,fsync' ]
+if [ -d /dev/fd/1 ]; then boundary=dir
+else
+    boundary=file
+    # Save what reached the actual sync descriptor, before calling real dd.
+    cat <&1 > "$GH_STUB_DIR/synced-${SYNC_SEQ:-payload}"
+    if [ -f "$GH_STUB_DIR/post-request.json" ]; then
+        cp "$GH_STUB_DIR/synced-payload" "$GH_STUB_DIR/synced-posted-$(wc -c < "$GH_STUB_DIR/synced-payload" | tr -d ' ')"
+    else cp "$GH_STUB_DIR/synced-payload" "$GH_STUB_DIR/synced-before"; fi
+fi
+[ ! -f "$GH_STUB_DIR/post-request.json" ] || boundary="posted-$boundary"
+[ "$boundary" != "$SYNC_FAULT" ] || exit 1
+exec "$REAL_DD" "$@"
 EOF
+chmod +x "$sync_lib/dd"
 fresh
-PERL5LIB="$sync_lib" PERL5OPT=-MSyncFault SYNC_FAULT=none post
+PATH="$sync_lib:$PATH" SYNC_FAULT=none post
 assert_eq 0 "$STATUS" 'both file syncs see the complete payload'
+saved="$(payload | jq -r .id)"
+bytes="$(wc -c < "$LOG_ROOT/7/$saved.json" | tr -d ' ')"
+for copy in synced-before "synced-posted-$bytes"; do
+    run cmp "$LOG_ROOT/7/$saved.json" "$GH_STUB_DIR/$copy"
+    assert_eq 0 "$STATUS" 'file sync sees exactly the submitted payload bytes'
+done
 for boundary in file dir posted-file posted-dir; do
     fresh
-    PERL5LIB="$sync_lib" PERL5OPT=-MSyncFault SYNC_FAULT="$boundary" post
+    PATH="$sync_lib:$PATH" SYNC_FAULT="$boundary" post
     assert_eq 1 "$STATUS" "$boundary fails"
     case "$boundary" in
         posted-*) assert_contains "$OUTPUT" 'could not durably retain review'

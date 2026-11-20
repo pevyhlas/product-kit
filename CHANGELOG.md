@@ -26,9 +26,9 @@ change by change.
 
 From 2.0.0, pin the patch on a clean upgrade branch and run
 `bash .product-kit/scripts/init.sh --upgrade`. No record or receipt migration is required.
-Refresh the trusted publisher installation as well. Online publishing needs Perl with its
-core modules and a publisher log on a filesystem supporting file and directory sync.
-Closing uses the existing shell tools for directory-relative, exclusive entry creation.
+Refresh the trusted publisher installation as well. **Runtime requirements are unchanged
+from 2.0.0.** Online publication uses the system `dd` on Linux and macOS to sync files and
+directories; closing uses the existing shell tools. Neither operation needs Python or Perl.
 
 ## [2.0.0] — 2026-11-19 — authenticated PR reviews and safer upgrades
 
