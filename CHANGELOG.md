@@ -26,15 +26,13 @@ change by change.
   after the write error clears; the change record and index remain intact. Publishing
   requires hard links in `specs/log/`. If the filesystem does not support them,
   move the checkout to one that does and retry.
-- Removing a worktree leaves unrelated stale registrations alone. Explicit pruning refuses
-  stale registrations with submodule data. Cleanup also refuses embedded submodule stores
-  and submodules that administer linked worktrees, including with `--force`.
-- Pruning checks that a surviving branch or tag retains the stale checkout's HEAD and
-  reflog commits. Plain paths still work with older Git; relative registration pointers
-  are resolved from their administrative directory.
-- Before removing a worktree with submodule stores, cleanup moves the stores into the
-  common Git directory under `prdkit-retired/` and reports their location. Inspect them
-  for late writes and retain any needed refs before manually purging that archive.
+- Cleanup moves the entire worktree registration and any live checkout into a reported
+  `prdkit-retired/` slot. Its index, reflogs, submodule stores and a local backup of shared
+  objects remain available until manual purge. Explicit pruning quarantines only stale
+  registrations; removing one change leaves unrelated registrations alone.
+- Cleanup refuses unsupported layouts, including embedded submodule stores, dependent
+  linked checkouts and cross-filesystem moves. Plain paths still work on older Git;
+  relative registration pointers resolve from their administrative directory.
 - Cleanup no longer merges legacy ledger spools. If one remains, cleanup stops so you can
   archive and remove it without losing events.
 - Review packages show changed submodule pins even when configured as ignored. Full and
