@@ -214,9 +214,19 @@ runtime unknown if relevant> — <PR>"`, which writes the log entry `specs/log/<
 the record once `check-review.sh` passes. The text is at most 300 characters: carried findings and
 follow-ups go to the parent's row or the spec, evidence stays on the PR. One file per closed
 change means two branches that each close a change never conflict in the log; compaction folds
-the entries into `specs/log.md` ([compact.md](compact.md)). Push both commits together, so
-required checks run on the closed head; the helper accepts an unpushed closing commit only when
-it descends from the PR head and its fingerprint equals it, and refuses an offline preview.
+the entries into `specs/log.md` ([compact.md](compact.md)).
+
+The closing commit uses the checkout's ambient Git identity. To use an agent identity, set
+`GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` for the
+helper invocation:
+
+```bash
+GIT_AUTHOR_NAME='Agent' GIT_AUTHOR_EMAIL=agent@example.com GIT_COMMITTER_NAME='Agent' GIT_COMMITTER_EMAIL=agent@example.com bash .prdkit/scripts/bash/close-change.sh --pr https://github.com/owner/repo/pull/1 001-example 'Update behavior — R-01 — complete — #1'
+```
+
+Push both commits together, so required checks run on the closed head. The helper accepts an
+unpushed closing commit only when it descends from the PR head and its fingerprint equals it,
+and refuses an offline preview.
 JSON `result` is `preview` whenever authority is not `host`, including unavailable or blocked
 previews; inspect authority, problems and the exit code (1 failure, 3 would-pass preview).
 The PR, not the record,
