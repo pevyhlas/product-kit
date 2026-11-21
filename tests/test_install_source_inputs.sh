@@ -126,9 +126,14 @@ fixture_reject; assert_contains "$OUTPUT" 'Kit pin drift'
 fixture_reject --head HEAD; assert_contains "$OUTPUT" 'Kit pin drift'
 rm "$CONFIG"; mv "$FIXTURE/policy/config.md" "$CONFIG"
 printf '## Configuration\n' > "$CONFIG"
-rm "$FIXTURE/current"; ln -s .. "$FIXTURE/current"
+outside="$(mktemp -d "${FIXTURE%/*}/proof-outside.XXXXXXXX")" || exit 1
+track_tmp "$outside"
+cp "$KIT/scripts/agents-section.md" "$outside/main.md"
+rm "$FIXTURE/current"; ln -s "../${outside##*/}" "$FIXTURE/current"
+cmp -s "$KIT/scripts/agents-section.md" "$FIXTURE/AGENTS.md" || exit 1
 fixture_commit
-fixture_reject; fixture_reject --head HEAD
+fixture_reject; assert_contains "$OUTPUT" 'Cannot resolve AGENTS.md inside repository'
+fixture_reject --head HEAD; assert_contains "$OUTPUT" 'Cannot resolve AGENTS.md inside repository'
 rm "$FIXTURE/current" "$FIXTURE/AGENTS.md"; mv "$FIXTURE/policy/main.md" "$FIXTURE/AGENTS.md"
 
 it 'deselected agents harness accepts private prose but no kit markers or metadata'
