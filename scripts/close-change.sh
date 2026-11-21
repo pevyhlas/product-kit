@@ -75,12 +75,18 @@ if ! (
     cd -P "$root/specs" && [ "$(pwd -P)" = "$root/specs" ] || exit 1
     if [ ! -d ./log ]; then mkdir ./log || exit 1; fi
     [ ! -L ./log ] && cd -P ./log && [ "$(pwd -P)" = "$root/specs/log" ] || exit 1
-    # Create the entry directly from the pinned log directory. Bash noclobber
-    # uses O_EXCL for an absent file. Write only through the opened regular fd.
-    [ ! -e "./$id.md" ] && [ ! -L "./$id.md" ] || exit 1
-    set -C
-    exec 3>"./$id.md" || exit 1
-    [ -f /dev/fd/3 ] && printf -- '- %s %s: %s\n' "$day" "$id" "$text" >&3
+    stage="$(mktemp -d .close-XXXXXXXX)" || exit 1
+    trap 'rmdir "./$stage"' EXIT
+    (
+        cd -P "./$stage" && [ "$(pwd -P)" = "$root/specs/log/$stage" ] || exit 1
+        trap 'rm -f "./$id.md"' EXIT
+        set -C
+        cat <<< "- $day $id: $text" > "./$id.md" || exit 1
+        # Link the complete file from its private cwd. The directory operand
+        # makes link creation exclusive even if another entry is a directory.
+        # On failure there is never a public name for us to roll back.
+        [[ .. -ef "$root/specs/log" ]] && ln "./$id.md" ..
+    )
 ); then
     refuse "could not write $entry; nothing was deleted or committed"
 fi
