@@ -22,8 +22,9 @@ install_candidate_mode() { # root revision-or-empty path
         printf '%s\n' "${entry%% *}"
     elif [ -L "$1/$3" ]; then echo 120000
     elif [ -f "$1/$3" ]; then
-        perms="$(LC_ALL=C ls -ld "$1/$3")" || return 1
-        case "${perms:3:1}" in x|s) echo 100755 ;; *) echo 100644 ;; esac
+        # Git records the owner execute bit, not effective access, so do not use test -x.
+        perms="$(find "$1/$3" -prune -perm -0100)" || return 1
+        if [ -n "$perms" ]; then echo 100755; else echo 100644; fi
     elif [ -d "$1/$3" ]; then echo 040000
     elif [ -e "$1/$3" ]; then echo special
     fi

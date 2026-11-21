@@ -110,6 +110,11 @@ it 'Git executable modes and copy types are enforced'
 chmod -x .prdkit/scripts/bash/status.sh
 reject_source
 assert_contains "$OUTPUT" 'Installed Git mode mismatch' 'missing executable bit fails'
+# Git records only the owner execute bit; group/other execute does not count.
+chmod go+x .prdkit/scripts/bash/status.sh
+reject_source
+assert_contains "$OUTPUT" 'Installed Git mode mismatch' 'group/other execute without owner execute fails'
+chmod go-x .prdkit/scripts/bash/status.sh
 chmod +x .prdkit/scripts/bash/status.sh
 chmod +x .prdkit/workflows/review.md
 reject_source
