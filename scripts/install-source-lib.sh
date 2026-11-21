@@ -232,7 +232,7 @@ install_source_verify() { # consumer-root consumer-revision-or-empty scratch
     done < "$work/mapping"
     # All manifest data must be well-formed. Extra conffiles can be legitimate retirements;
     # extra kit-owned entries cannot authenticate themselves with a copied hash.
-    while IFS= read -r line; do
+    while IFS= read -r line || [ -n "$line" ]; do
         case "$line" in version:*|harnesses:*|mode:*|options:*|agents-section:*|'') continue ;; esac
         hash="${line%%  *}"; path="${line#*  }"
         if ! [[ "$hash" =~ ^[0-9a-f]{64}$ ]] ||

@@ -43,7 +43,7 @@ while [ "$#" -gt 0 ]; do
         --require-source) require_source=true ;;
         --head)
             shift
-            [ "$#" -gt 0 ] || { echo '--head requires a committed revision' >&2; exit 2; }
+            [ -n "${1:-}" ] || { echo '--head requires a committed revision' >&2; exit 2; }
             head="$1"; require_source=true ;;
         --help|-h) echo 'Usage: check-adoption.sh [--json] [--require-source] [--head <commit>]'; exit 0 ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;

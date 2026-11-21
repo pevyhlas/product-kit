@@ -12,6 +12,22 @@ assert_eq 0 "$STATUS" "$OUTPUT"
 fixture_check --head HEAD
 assert_eq 0 "$STATUS" "$OUTPUT"
 
+it 'an explicit empty head does not select worktree proof'
+fixture_check --head ''
+assert_eq 2 "$STATUS" 'explicit empty revision is a usage error'
+assert_not_contains "$OUTPUT" '"source_verification":"verified"'
+
+it 'an unexpected final manifest record is checked with and without a newline'
+for ending in lf eof; do
+    cp "$_SCRATCH_CWD/manifest" "$MANIFEST"
+    printf 'not a manifest record' >> "$MANIFEST"
+    [ "$ending" != lf ] || printf '\n' >> "$MANIFEST"
+    fixture_commit
+    fixture_reject
+    fixture_reject --head HEAD
+done
+cp "$_SCRATCH_CWD/manifest" "$MANIFEST"
+
 it 'accepted configuration headings retain each explicit restriction in both lanes'
 for heading in '##Configuration' '## Configuration' $'##\tConfiguration' '##Configuration — local' $'##Configuration\r'; do
     for restriction in matching pin hash; do
