@@ -76,23 +76,31 @@ if ! (
     if [ ! -d ./log ]; then mkdir ./log || exit 1; fi
     [ ! -L ./log ] && cd -P ./log && [ "$(pwd -P)" = "$root/specs/log" ] || exit 1
     stage="$(mktemp -d .close-XXXXXXXX)" || exit 1
-    trap 'rmdir "./$stage"' EXIT
     (
         cd -P "./$stage" && [ "$(pwd -P)" = "$root/specs/log/$stage" ] || exit 1
-        trap 'rm -f "./$id.md"' EXIT
+        # Keep cleanup in the private cwd even if that directory gets moved.
+        # shellcheck disable=SC2329 # called by the EXIT trap
+        cleanup_stage() {
+            rm -f "./$id.md"
+            if [[ . -ef "$root/specs/log/$stage" ]]; then rmdir "$root/specs/log/$stage"; fi
+        }
+        trap cleanup_stage EXIT
         set -C
         cat <<< "- $day $id: $text" > "./$id.md" || exit 1
-        # Link the complete file from its private cwd. The directory operand
-        # makes link creation exclusive even if another entry is a directory.
-        # On failure there is never a public name for us to roll back.
-        [[ .. -ef "$root/specs/log" ]] && ln "./$id.md" ..
+        # Pin the publishing cwd separately. A moved stage can make its source
+        # disappear, but can never redirect the destination to its new parent.
+        (
+            cd -P "$root/specs/log" && [ "$(pwd -P)" = "$root/specs/log" ] || exit 1
+            ln "./$stage/$id.md" .
+        ) || exit 1
+        [[ ! -L "$root/$entry" && "./$id.md" -ef "$root/$entry" ]]
     )
 ); then
     refuse "could not write $entry; nothing was deleted or committed"
 fi
 check_paths
-git -C "$root" rm -q -- "$path"
 git -C "$root" add -- "$entry"
+git -C "$root" rm -q -- "$path"
 git -C "$root" commit -q -m "${message:-$id: close (log entry, record deleted)}" ||
     refuse "the commit failed; the record deletion and the log entry are staged"
 

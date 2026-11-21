@@ -85,8 +85,8 @@ export CLOSE_SPECS="$PROJ/specs"
 REAL_LN="$(command -v ln)"; export REAL_LN
 cat > "$outside/bin/ln" <<'SH'
 #!/usr/bin/env bash
-# Closing must succeed without resolving a staged source from the log directory.
-if [ "$(pwd -P)" = "$CLOSE_SPECS/log" ]; then exit 1; fi
+# Publication must use the pinned log as its destination.
+if [ "$(pwd -P)" != "$CLOSE_SPECS/log" ] || [ "${2:-}" != . ]; then exit 1; fi
 exec "$REAL_LN" "$@"
 SH
 chmod +x "$outside/bin/python3" "$outside/bin/mkdir" "$outside/bin/ln"
@@ -215,18 +215,31 @@ else
     assert_eq '' "$(git status --porcelain)" "record and log untouched"
 fi
 
-it "publication preserves another writer's entry, including a FIFO"
+it "moving the staging directory during publication cannot redirect the entry"
 mkdir -p specs/log
 mkdir "$outside/collision"
 cat > "$outside/collision/ln" <<'SH'
 #!/usr/bin/env bash
 case "$COLLISION" in
+    move)
+        for stage in "$CLOSE_SPECS"/log/.close-*; do mv "$stage" "$MOVE_TO/stage" || exit 1; done ;;
     file) echo 'another writer' > "$CLOSE_SPECS/log/013-guard.md" ;;
     fifo) mkfifo "$CLOSE_SPECS/log/013-guard.md" ;;
 esac
 exec "$REAL_LN" "$@"
 SH
 chmod +x "$outside/collision/ln"
+mkdir "$outside/moved"
+run env PATH="$outside/collision:$PATH" COLLISION=move MOVE_TO="$outside/moved" bash "$B/close-change.sh" 013-guard "guarded — R-01 — #6"
+assert_eq 1 "$STATUS" 'publication refuses a moved stage'
+assert_eq 'stage' "$(ls -A "$outside/moved")" 'no entry published in the new parent'
+assert_eq '' "$(ls -A "$outside/moved/stage")" 'staged bytes cleaned from the original private directory'
+assert_eq '' "$(ls -A specs/log)" 'nothing published in the log'
+assert_eq "$GUARDED" "$(git rev-parse HEAD)" 'HEAD unchanged'
+run git diff --cached --quiet; assert_eq 0 "$STATUS" 'index unchanged'
+run git diff --quiet HEAD -- specs/changes/013-guard.md; assert_eq 0 "$STATUS" 'open record unchanged'
+
+it "publication preserves another writer's entry, including a FIFO"
 for kind in file fifo; do
     run env PATH="$outside/collision:$PATH" COLLISION="$kind" bash "$B/close-change.sh" 013-guard "guarded — R-01 — #6"
     assert_eq 1 "$STATUS" "refuses a concurrent $kind"
