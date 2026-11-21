@@ -194,12 +194,14 @@ install_source_verify() { # consumer-root consumer-revision-or-empty scratch
     if [ "$options" = none ]; then
         if [ -n "$head" ]; then
             if path="$(install_resolve_path "$root" "$head" .prdkit/agent-library "$work")"; then
-                if [ "$(install_candidate_mode "$root" "$head" "$path")" = 040000 ]; then
-                    echo 'Agent tiers are in use but the manifest deselects agent-tiers'
-                fi
+                case "$(install_candidate_mode "$root" "$head" "$path")" in
+                    040000|160000) echo 'Agent tiers are in use but the manifest deselects agent-tiers' ;;
+                esac
             elif [ "$?" -ne 2 ]; then echo 'Cannot resolve agent library'; fi
             if parent="$(install_resolve_path "$root" "$head" .prdkit/agents "$work")"; then
-                if [ "$(install_candidate_mode "$root" "$head" "$parent")" = 040000 ]; then
+                case "$(install_candidate_mode "$root" "$head" "$parent")" in
+                160000) echo 'Agent definitions unavailable: directory is a committed gitlink'; return ;;
+                040000)
                     install_object_git -C "$root" ls-tree -z --name-only "$head:$parent" > "$work/definitions" ||
                         { echo 'Cannot inventory agent definitions'; return; }
                     while IFS= read -r -d '' path; do
@@ -210,7 +212,8 @@ install_source_verify() { # consumer-root consumer-revision-or-empty scratch
                             esac
                         else echo 'Cannot resolve agent definition'; fi
                     done < "$work/definitions"
-                fi
+                    ;;
+                esac
             elif [ "$?" -ne 2 ]; then echo 'Cannot resolve agent definitions directory'; fi
         else
             : > "$work/tier-paths"

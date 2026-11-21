@@ -143,6 +143,27 @@ fixture_reject; assert_contains "$OUTPUT" 'Agent tiers are in use'
 fixture_reject --head HEAD; assert_contains "$OUTPUT" 'Agent tiers are in use'
 rm "$FIXTURE/.prdkit/agents/reviewer.md"
 
+it 'committed gitlink tier paths cannot prove a core-only install'
+mv "$FIXTURE/.prdkit/agents" "$_SCRATCH_CWD/definitions"
+for tier_path in agent-library agents; do
+    # An initialized local submodule with a direct definition; no remote or fetch.
+    rel=".prdkit/$tier_path"
+    git -C "$FIXTURE" -c protocol.file.allow=always submodule add -q "$KIT" "$rel" || exit 1
+    git -C "$FIXTURE/$rel" config user.name test
+    git -C "$FIXTURE/$rel" config user.email t@example.com
+    printf 'Active definition\n' > "$FIXTURE/$rel/reviewer.md"
+    git -C "$FIXTURE/$rel" add reviewer.md && git -C "$FIXTURE/$rel" commit -qm definition || exit 1
+    fixture_commit
+    fixture_reject; assert_contains "$OUTPUT" 'Agent tiers are in use'
+    fixture_reject --head HEAD
+    case "$tier_path" in
+        agents) assert_contains "$OUTPUT" 'Agent definitions unavailable' ;;
+        agent-library) assert_contains "$OUTPUT" 'Agent tiers are in use' ;;
+    esac
+    git -C "$FIXTURE" rm -qf "$rel" || exit 1
+done
+mv "$_SCRATCH_CWD/definitions" "$FIXTURE/.prdkit/agents"
+
 it 'installed path membership treats every character literally'
 extra="$FIXTURE/.prdkit/workflows/"'wor\153.md'
 printf 'extra\n' > "$extra"
