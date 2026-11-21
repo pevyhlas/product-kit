@@ -319,14 +319,18 @@ RETIRED_MEMORY="task-ledger.md"
 # This single list drives installation, the manifest, and --check, so the three
 # can never disagree about what "installed" means.
 list_kit_files() {
-    local src rel
+    local src
     for src in "$PK_ROOT"/commands/prdkit*.md "$PK_ROOT"/workflows/*.md \
         "$PK_ROOT"/scripts/*.sh "$PK_ROOT"/scripts/agents-section.md "$PK_ROOT"/templates/*.md; do
         [ -e "$src" ] || continue
-        while IFS= read -r rel; do
-            printf '%s\t%s\n' "$src" "$rel"
-        done < <(install_file_targets "${src#"$PK_ROOT"/}" "$HARNESSES" "$OPTIONS")
+        install_file_targets "${src#"$PK_ROOT"/}" "$HARNESSES" "$OPTIONS" "$src"$'\t' || return 1
     done
+}
+# A process-substitution reader sees only EOF if its producer fails mid-list.
+# Finish the mapping once, before any target writes, and use that same list for every pass.
+KIT_FILES="$(list_kit_files)" && [ -n "$KIT_FILES" ] || {
+    echo 'Cannot enumerate kit files; nothing was written.' >&2
+    exit 1
 }
 
 # Pristine hash recorded in the manifest for a relative path (empty if none).
@@ -589,7 +593,7 @@ if $CHECK; then
                 *)                MODIFIED+=("$rel|$src") ;;
             esac
         fi
-    done < <(list_kit_files)
+    done <<< "$KIT_FILES"
 
     RETIRED=()
     while IFS=$'\t' read -r rel action; do
@@ -714,7 +718,7 @@ containment_problems() {
     for rel in $dirs; do managed_dir_problem "$rel" || true; done
     while IFS=$'\t' read -r src rel; do
         if [ -d "$TARGET/$rel" ] && [ ! -L "$TARGET/$rel" ]; then printf '%s is a directory where the kit installs a file\n' "$rel"; fi
-    done < <(list_kit_files; printf 'manifest\t.prdkit/.manifest\nmanifest\t.prdkit/.manifest.tmp\nstate\t.prdkit/.install-state\nlock\t.prdkit/.install-lock\n')
+    done <<< "$KIT_FILES"$'\nmanifest\t.prdkit/.manifest\nmanifest\t.prdkit/.manifest.tmp\nstate\t.prdkit/.install-state\nlock\t.prdkit/.install-lock'
     [ ! -L "$PRDKIT_DIR/.install-state" ] || printf '.prdkit/.install-state is a symlink\n'
     for rel in AGENTS.md .gitignore; do
         [ "$rel" != AGENTS.md ] || has_harness agents || continue
@@ -911,7 +915,7 @@ while IFS=$'\t' read -r src rel; do
             esac
             ;;
     esac
-done < <(list_kit_files)
+done <<< "$KIT_FILES"
 
 # Remove kit-installed commands the kit no longer ships, so retired entry points stop
 # loading into every session. Unrecorded regular files are reported, never deleted.
@@ -1121,7 +1125,7 @@ rm -f "$manifest_tmp"
             rec="$(recorded_hash "$rel")"
             echo "${rec:-$kit}  $rel"
         fi
-    done < <(list_kit_files)
+    done <<< "$KIT_FILES"
 } > "$manifest_tmp"
 # A symlinked manifest is replaced, never written through or moved into.
 [ ! -L "$MANIFEST" ] || rm -f "$MANIFEST"

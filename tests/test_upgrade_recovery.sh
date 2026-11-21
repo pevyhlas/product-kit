@@ -41,6 +41,19 @@ EOF
 chmod +x "$SHIMS/fault"
 for tool in cp mv rm mktemp; do ln -s fault "$SHIMS/$tool"; done
 
+it 'a partial mapping cannot become a successful partial install'
+PROJ="$(make_project)"; track_tmp "$PROJ"
+cat >> "$PROJ/.product-kit/scripts/install-lib.sh" <<'EOF'
+install_file_targets() {
+    printf '%s.claude/commands/prdkit.md\n' "${4:-}"
+    return 1
+}
+EOF
+run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --copy
+assert_eq 1 "$STATUS" 'enumeration failure reaches the installer'
+assert_contains "$OUTPUT" 'Cannot enumerate kit files' 'failure names the incomplete plan'
+if [ ! -e "$PROJ/.prdkit" ] && [ ! -e "$PROJ/.claude" ]; then _ok 'no partial install'; else _no 'partial install created'; fi
+
 for fault in copy interrupt kill retire agents manifest storage; do
     it "$fault failure remains explicit and the same-source retry preserves consumer bytes"
     PROJ="$(make_project)"; track_tmp "$PROJ"

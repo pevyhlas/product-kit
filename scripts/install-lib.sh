@@ -14,20 +14,22 @@ install_file_selected() { # source-path options
     return 0
 }
 
-install_file_targets() { # source-path harnesses options
-    local src="$1" harnesses=" $2 " base="${1##*/}" pair
+install_file_targets() { # source-path harnesses options [literal output prefix]
+    local src="$1" harnesses=" $2 " base="${1##*/}" prefix="${4:-}" pair
     install_file_selected "$src" "$3" || return 0
     case "$src" in
         commands/prdkit*.md)
-            case "$harnesses" in *' claude '*) printf '.claude/commands/%s\n' "$base" ;; esac
-            case "$harnesses" in *' opencode '*) printf '.opencode/commands/%s\n' "$base" ;; esac ;;
-        workflows/*.md) printf '.prdkit/workflows/%s\n' "$base" ;;
+            case "$harnesses" in *' claude '*) printf '%s.claude/commands/%s\n' "$prefix" "$base" || return 1 ;; esac
+            case "$harnesses" in *' opencode '*) printf '%s.opencode/commands/%s\n' "$prefix" "$base" || return 1 ;; esac ;;
+        workflows/*.md) printf '%s.prdkit/workflows/%s\n' "$prefix" "$base" ;;
         scripts/init.sh) ;;
-        scripts/*.sh|scripts/agents-section.md) printf '.prdkit/scripts/bash/%s\n' "$base" ;;
+        scripts/*.sh|scripts/agents-section.md) printf '%s.prdkit/scripts/bash/%s\n' "$prefix" "$base" ;;
         templates/*.md)
-            printf '.prdkit/templates/%s\n' "$base"
+            printf '%s.prdkit/templates/%s\n' "$prefix" "$base" || return 1
             for pair in $MEMORY_SEEDS; do
-                [ "$base" != "${pair%%:*}" ] || printf '.prdkit/memory/%s\n' "${pair#*:}"
+                if [ "$base" = "${pair%%:*}" ]; then
+                    printf '%s.prdkit/memory/%s\n' "$prefix" "${pair#*:}" || return 1
+                fi
             done ;;
     esac
 }
