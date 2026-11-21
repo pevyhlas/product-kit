@@ -26,6 +26,11 @@ change by change.
 - Review packages show changed submodule pins even when configured as ignored. Full and
   focused patch paths are checked against the Git trees before the round can complete.
 
+### Documentation
+
+- Document the Git identity used by `close-change.sh` and how to set an agent's author and
+  committer identity for the closing commit.
+
 ### Adoption
 
 From 2.0.1, pin `v2.0.2` and run `bash .product-kit/scripts/init.sh --upgrade`.

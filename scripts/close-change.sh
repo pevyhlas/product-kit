@@ -4,6 +4,8 @@
 # Run it once the required receipts are published and before the final push, so required checks
 # run once on the closed head. It commits in the current checkout only; it never pushes, merges
 # or removes a worktree (cleanup-change.sh does that after merge, or --closed for every closed change).
+# The closing commit uses the checkout's ambient Git identity. To use an agent identity, set
+# GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL for this invocation.
 #
 # Usage: close-change.sh --pr <url> [--base <rev>] [--date YYYY-MM-DD] [-m <message>] <change-id> "<log text>"
 #   <log text> follows "- <date> <id>: " on the entry: "<intent> — <IDs> — <disposition> — <PR>",
@@ -23,7 +25,12 @@ while [ "$#" -gt 0 ]; do
                 [ "$#" -gt 1 ] || { echo "$usage" >&2; exit 2; }
                 case "$1" in --pr) pr="$2" ;; --base) base_args=(--base "$2") ;; --date) day="$2" ;; *) message="$2" ;; esac
                 shift 2; continue ;;
-            --help|-h) echo "$usage"; exit 0 ;;
+            --help|-h)
+                printf '%s\n' "$usage" \
+                    "The closing commit uses the checkout's ambient Git identity." \
+                    "For an agent identity, set GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL for this invocation." \
+                    "Example: GIT_AUTHOR_NAME='Agent' GIT_AUTHOR_EMAIL=agent@example.com GIT_COMMITTER_NAME='Agent' GIT_COMMITTER_EMAIL=agent@example.com bash .prdkit/scripts/bash/close-change.sh --pr https://github.com/owner/repo/pull/1 001-example 'Update behavior — R-01 — complete — #1'"
+                exit 0 ;;
             --) options=false; shift; continue ;;
             -*) echo "Unknown option: $1" >&2; exit 2 ;;
         esac
