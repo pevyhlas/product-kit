@@ -354,9 +354,19 @@ bound_gate . stubborn
 rm -f "$FIX/native-ready" "$FIX/stubborn" "$FIX/group" "$FIX/teardown-ready" "$FIX/live-at-remove"
 awk -v dir="$FIX" '
     /sleep "\$\(\(deadline-SECONDS\)\)"/ {
-        print "    for n in 1 2 3 4 5 6 7 8 9 10; do [ ! -f \"" dir "/native-ready\" ] || break; sleep 1; done"
-        print "    sleep 1"
+        # Do not race the driver to native-ready. Production keeps the FIRST
+        # cancellation reason; this case specifically requires TERM then USR1.
+        print "    for n in {1..200}; do [ ! -f \"" dir "/teardown-ready\" ] || break; sleep 0.1; done"
+        print "    [ -f \"" dir "/teardown-ready\" ] || exit 1"
         next
+    }
+    /^    kill -USR1 "\$parent"/ {
+        print "    kill -USR1 \"$parent\" && printf sent > \"" dir "/deadline-sent\""
+        next
+    }
+    /^        kill -KILL -- "-\$overall"/ {
+        # Keep the real watchdog alive until its deadline signal was sent.
+        print "        for n in {1..30}; do [ ! -f \"" dir "/deadline-sent\" ] || break; sleep 0.1; done"
     }
     /^    finishing=true/ { print; print "    printf ready > \"" dir "/teardown-ready\""; next }
     /^    child=\$!/ { print; print "    if [ \"$phase\" = native ]; then printf '\''%s\\n'\'' \"$child\" > \"" dir "/group\"; fi"; next }
@@ -393,13 +403,14 @@ for n in 1 2 3 4 5; do [ ! -f "$FIX/teardown-ready" ] || break; sleep 1; done
 assert_file "$FIX/teardown-ready"
 kill -TERM "$LAUNCHER_PID" 2>/dev/null || true
 kill -HUP "$LAUNCHER_PID" 2>/dev/null || true
-kill -USR1 "$LAUNCHER_PID" 2>/dev/null || true
+# The independent watchdog delivers USR1; the driver must not substitute for it.
 if wait "$LAUNCHER_PID"; then STATUS=0; else STATUS=$?; fi
 ELAPSED=$((SECONDS-START))
 kill -KILL -- "-$GUARD" 2>/dev/null || true
 wait "$GUARD" 2>/dev/null || true
 nd_publish "$nd_dir" "$FIX/stdout" || :
 assert_eq 1 "$STATUS"
+assert_file "$FIX/deadline-sent" 'independent deadline signal delivered during teardown'
 assert_eq 1 "$(jq -s length "$FIX/stdout")" 'one complete refusal after repeated catchable signals'
 assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
 assert_eq interrupted "$(jq -r .error.code "$FIX/stdout")"
