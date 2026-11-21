@@ -52,11 +52,11 @@ publish() { # reviewer [change] [head] [jq edit] [origin PR]
 online() { host; run bash "$CHECK" --json --pr "$PR" "$@" "$ID"; }
 standing() {
     assert_eq 1 "$STATUS" "$OUTPUT"
-    assert_eq 1 "$(printf '%s' "$OUTPUT" | jq '[.legacy_blockers[]|select(.cleared==false)]|length')" 'one legacy blocker stands'
+    assert_eq "${1:-1}" "$(printf '%s' "$OUTPUT" | jq '[.legacy_blockers[]|select(.cleared==false)]|length')" 'expected legacy blockers stand'
 }
 cleared() {
     assert_eq 0 "$STATUS" "$OUTPUT"
-    assert_eq 1 "$(printf '%s' "$OUTPUT" | jq '[.legacy_blockers[]|select(.cleared==true)]|length')" 'clearance reported separately from coverage'
+    assert_eq "${1:-1}" "$(printf '%s' "$OUTPUT" | jq '[.legacy_blockers[]|select(.cleared==true)]|length')" 'clearance reported separately from coverage'
 }
 
 it 'native coverage cannot clear another reviewer, narrow, dirty, invalid or wrong-scope legacy clearance'
@@ -104,6 +104,10 @@ for operation in untouched delete move edit; do
     commit carrier; host; publish security; online
     if [ "$operation" = untouched ]; then
         assert_eq 0 "$STATUS" "$OUTPUT"; assert_contains "$OUTPUT" '"legacy_blockers":[]'
+    elif [ "$operation" = move ]; then
+        standing 2
+        assert_eq '["001-original","003-moved"]' "$(jq -c '[.legacy_blockers[].change]|sort' <<< "$OUTPUT")"
+        publish code; online; cleared 2
     else
         standing; publish code; online; cleared
     fi

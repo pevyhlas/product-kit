@@ -210,6 +210,19 @@ for source in trusted checkout; do
     unchanged
 done
 
+it 'an installed 2.0 project needs no second review migration to take a patch'
+transition_project
+sed 's/^version: 1.5.0$/version: 2.0.0/' "$PROJ/.prdkit/.manifest" > "$PROJ/manifest.next"
+mv "$PROJ/manifest.next" "$PROJ/.prdkit/.manifest"
+mkdir -p "$PROJ/specs/changes"
+printf '# Record\n## State\n**Review**: legacy FAIL\n' > "$PROJ/specs/changes/001-work.md"
+commit_fixture installed; trusted_tip
+printf '2.0.1\n' > "$PROJ/.product-kit/VERSION"; commit_fixture pin
+upgrade
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_contains "$(cat "$PROJ/.prdkit/.manifest")" 'version: 2.0.1'
+assert_contains "$(cat "$PROJ/specs/changes/001-work.md")" '**Review**: legacy FAIL'
+
 it 'a same-source retry accepts rendered command bytes but no unrelated work'
 for kind in pristine unrelated edited staged outside wrong-source mode; do
     transition_project
@@ -300,9 +313,14 @@ printf 'Untracked ignored bytes\000remain\n' > "$PROJ/specs/changes/local-only/d
 ln -s data "$PROJ/specs/changes/local-only/link"
 BEFORE="$(git -C "$PROJ" status --porcelain --untracked-files=all)"
 RECORDS_BEFORE="$(tree_snapshot "$PROJ/specs/changes")"
-upgrade --migrate-reviews --dry-run --json
+git -C "$PROJ" remote set-url origin https://github.com/old/location.git
+git -C "$PROJ" config url.https://github.com/owner/repo.git.insteadOf https://github.com/old/location.git
+GH_HOST=other.invalid upgrade --migrate-reviews --dry-run --json
 assert_eq 0 "$STATUS" "$OUTPUT"
 REPORT="$OUTPUT"
+assert_contains "$(cat "$GH_STUB_DIR/requests")" 'repos/owner/repo/pulls?state=open'
+assert_contains "$(cat "$GH_STUB_DIR/requests")" '--hostname github.com --method GET repos/owner/repo/pulls?state=open'
+assert_not_contains "$(cat "$GH_STUB_DIR/requests")" 'repos/old/location/pulls'
 assert_eq prdkit.review-transition.v1 "$(printf '%s' "$REPORT" | jq -r .schema)" 'JSON report schema'
 assert_eq 1 "$(printf '%s' "$REPORT" | jq .totals.records_with_blockers)" '1.x-cleared FAIL still reported'
 assert_eq 1 "$(printf '%s' "$REPORT" | jq .totals.blockers_per_reviewer.code)" 'totals by reviewer'
@@ -329,6 +347,7 @@ it 'API failure is reported, not an upgrade blocker'
 run env GH_STUB_OFFLINE=true bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --migrate-reviews --dry-run --json
 assert_eq 0 "$STATUS" "$OUTPUT"
 assert_contains "$OUTPUT" 'host API is unavailable' 'API omission explicit'
+assert_eq '[null,null,null]' "$(printf '%s' "$OUTPUT" | jq -c '[.open_prs,.totals.open_prs,.totals.reviews_owed]')" 'unknown inventory is not zero'
 assert_not_contains "$(cat "$GH_STUB_DIR/requests")" POST 'unavailable report never posts'
 
 it 'a missing local PR head is an unavailable scan, not a claim of zero blockers'

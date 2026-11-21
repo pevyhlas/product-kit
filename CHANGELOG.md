@@ -8,6 +8,30 @@ change by change.
 
 ## [Unreleased]
 
+## [2.0.1] — 2026-11-20 — review recovery and change lifecycle fixes
+
+- Receipt repair restores the publisher's saved verdict for the original host review.
+  Publication syncs the payload and the pending-review ID before submitting a COMMENT;
+  `--resume` can reconcile an interrupted attempt with a unique unedited host review.
+- A legacy review line introduced under a different change ID retains its own blocker.
+- Worktree cleanup requires submodule commits to be reachable in the main checkout's
+  submodule. Fetch into a ref there if cleanup cannot verify a surviving copy.
+- Closing a change refuses linked record and log paths before writing an entry.
+- The upgrade inventory follows the effective origin fetch URL and distinguishes an unknown
+  open-PR inventory from a successful empty list.
+- Review packages read Parent independently of Opened. Doctor advises on missing, blank or
+  duplicate Waiting on and Next fields in State; status reports each field's condition.
+  State ignores fenced examples and HTML comment blocks whose `<!--` starts a line
+  (after optional whitespace). A comment marker after prose or a field value is literal text.
+
+### Adoption
+
+From 2.0.0, pin the patch on a clean upgrade branch and run
+`bash .product-kit/scripts/init.sh --upgrade`. No record or receipt migration is required.
+Refresh the trusted publisher installation as well. **Runtime requirements are unchanged
+from 2.0.0.** Online publication uses the system `dd` on Linux and macOS to sync files and
+directories; closing uses the existing shell tools. Neither operation needs Python or Perl.
+
 ## [2.0.0] — 2026-11-19 — authenticated PR reviews and safer upgrades
 
 Review verdicts now live on pull requests and bind to reviewed content. This release also

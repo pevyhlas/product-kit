@@ -42,6 +42,13 @@ max=300; length="$(printf '%s' "$text" | LC_ALL=C tr -d '\200-\277' | wc -c | tr
 
 root="$(git rev-parse --show-toplevel 2>/dev/null)" || refuse "not inside a Git checkout"
 path="specs/changes/$id.md"; log="specs/log.md"; entry="specs/log/$id.md"
+check_paths() {
+    local component
+    for component in specs specs/changes "$path" specs/log "$entry" "$log"; do
+        [ ! -L "$root/$component" ] || refuse "symlinked close path: $component"
+    done
+}
+check_paths
 git -C "$root" cat-file -e "HEAD:$path" 2>/dev/null || refuse "no record $path at HEAD"
 git -C "$root" diff --quiet HEAD -- "$path" ||
     refuse "$path has uncommitted edits: commit the record edits first; the check reads committed state"
@@ -61,10 +68,23 @@ if ! out="$(check)"; then
     refuse "check-review.sh does not pass at HEAD; publish the remaining verdicts first"
 fi
 
-if ! { mkdir -p "$root/specs/log" && printf -- '- %s %s: %s\n' "$day" "$id" "$text" > "$root/$entry"; } 2>/dev/null; then
-    rm -f "$root/$entry" 2>/dev/null || true
+check_paths
+# The process cwd pins a directory just like a directory descriptor. Verify
+# its physical identity *after* entering it, before any relative write.
+if ! (
+    cd -P "$root/specs" && [ "$(pwd -P)" = "$root/specs" ] || exit 1
+    if [ ! -d ./log ]; then mkdir ./log || exit 1; fi
+    [ ! -L ./log ] && cd -P ./log && [ "$(pwd -P)" = "$root/specs/log" ] || exit 1
+    # Create the entry directly from the pinned log directory. Bash noclobber
+    # uses O_EXCL for an absent file. Write only through the opened regular fd.
+    [ ! -e "./$id.md" ] && [ ! -L "./$id.md" ] || exit 1
+    set -C
+    exec 3>"./$id.md" || exit 1
+    [ -f /dev/fd/3 ] && printf -- '- %s %s: %s\n' "$day" "$id" "$text" >&3
+); then
     refuse "could not write $entry; nothing was deleted or committed"
 fi
+check_paths
 git -C "$root" rm -q -- "$path"
 git -C "$root" add -- "$entry"
 git -C "$root" commit -q -m "${message:-$id: close (log entry, record deleted)}" ||

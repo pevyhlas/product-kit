@@ -121,7 +121,7 @@ context_id() { # actual ID -> unique definition, never select an arbitrary sibli
 }
 
 review_context_build() {
-    local path blob rev record record_rev last parent header checkpoint row count a b id location reason target anchor line entry
+    local path blob rev record record_rev last parent parent_field header checkpoint row count a b id location reason target anchor line entry
     CTX_TMP="$PACKAGE_SCRATCH/context"; mkdir -p "$CTX_TMP/material/.prdkit"
     CTX_N=1
     printf 'artifact\tsource_rev\tsource_path\tsource_blob\tfirst_line\tlast_line\tobligation\treason\n' > "$PACKAGE_DIR/context-manifest.tsv"
@@ -195,7 +195,8 @@ review_context_build() {
     if [ -n "$record_rev" ]; then
         header="$(awk "$SPEC_SKIP_AWK"'{ if (spec_skip($0)) next } /^## / { exit } { print }' "$CTX_TMP/material/$record")"
         count="$(printf '%s\n' "$header" | awk '{ n+=gsub(/\*\*Parent\*\*:/,"&") } END { print n+0 }')"
-        parent="$(printf '%s\n' "$header" | awk '/\*\*Parent\*\*:/ { print }' | grep -Eo '[0-9]{3,}-[a-z0-9]+(-[a-z0-9]+)*' | LC_ALL=C sort -u || true)"
+        parent_field="$(printf '%s\n' "$header" | awk '/\*\*Parent\*\*:/ { sub(/^.*\*\*Parent\*\*:[[:space:]]*/, ""); sub(/·.*/, ""); sub(/[[:space:]]+$/, ""); print }')"
+        parent="$(printf '%s\n' "$parent_field" | grep -Eo '[0-9]{3,}-[a-z0-9]+(-[a-z0-9]+)*' | LC_ALL=C sort -u || true)"
         if [ "$count" -gt 1 ] || [[ "$parent" == *$'\n'* ]]; then context_gap parent "ambiguous Parent field"
         elif [ -n "$parent" ]; then
             path="specs/changes/$parent.md"
@@ -220,8 +221,8 @@ review_context_build() {
                     { if (spec_skip($0)) next }
                     /^#+ / && tolower($0) ~ /depend|hold|limit|architect|critical path|original goal|lane/ { print NR }' "$CTX_TMP/parent")
             else context_gap parent "missing/unsafe parent $path"; fi
-        elif printf '%s\n' "$header" | grep -q '\*\*Parent\*\*:'; then
-            printf '%s\n' "$header" | grep '\*\*Parent\*\*:' | grep -Eiq '(none|—|n/a)' ||
+        elif [ -n "$parent_field" ]; then
+            printf '%s\n' "$parent_field" | grep -Eiq '^(none|—|n/a)$' ||
                 context_gap parent "unsupported Parent field; supply explicit context"
         fi
         # Resolve all actual child citations, not just its declared Bounds.

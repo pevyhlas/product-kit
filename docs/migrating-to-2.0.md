@@ -89,7 +89,9 @@ default-branch records with blockers, default-branch blockers per reviewer, open
 reviewers owed per PR. JSON uses schema `prdkit.review-transition.v1` with `policy_at`, `records`,
 `open_prs`, `notes` and `totals`.
 
-Missing `gh` or an unavailable API leaves an explicit note; the upgrade proceeds. PR heads and
+The inventory follows the effective origin fetch URL. Missing `gh` or an unavailable API
+leaves an explicit note and reports the PR list and its totals as `null` (unknown); the
+upgrade proceeds. PR heads and
 their history must already be local: the report never fetches. A missing head/history is marked
 `scan_available: false`, not presented as proof of no blockers. The report is informational:
 blockers do not prevent installing. **Neither preview nor installation posts a review or edits

@@ -828,25 +828,38 @@ spec_records() { # root
 
 # Open changes: id, title, opened, step, waiting on, next, parent, acceptance total, passed,
 # failed or blocked, highest attempts, stalled items (not passed, and attempts >= 3 or BLOCKED;
-# comma-separated).
+# comma-separated), Waiting on and Next field status.
 spec_changes() { # root
     local root="$1" path
     for path in "$root"/specs/changes/*.md; do
         [ -f "$path" ] || continue
-        awk -v id="$(spec_field "$(basename "$path" .md)")" "$SPEC_SKIP_AWK"'
+        awk -v id="$(spec_field "$(basename "$path" .md)")" '
             BEGIN { gsub(/[\037\r\n]/, " ", id) }
             function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
             function field(line, name,   v) {
                 v = line; sub("^.*\\*\\*" name "\\*\\*:[[:space:]]*", "", v); sub(/[[:space:]]+·.*/, "", v); return trim(v)
             }
-            { gsub(/\037/, " "); if (spec_skip($0)) next }
-            NR == 1 && /^# / { title = $0; sub(/^#[[:space:]]+(Change:[[:space:]]*)?/, "", title) }
+            function presence(n,v) { return !n ? "missing" : n>1 ? "duplicate" : v=="" ? "blank" : "present" }
+            {
+                gsub(/\037/, " "); sub(/\r$/, "")
+                # Ignore complete fenced examples, including inner shorter fences.
+                marker=$0; sub(/^ ? ? ?/,"",marker)
+                if (code) {
+                    ending=marker; sub(/[[:space:]]+$/, "", ending)
+                    if (length(ending)>=length(code) && (ending ~ /^`+$/ || ending ~ /^~+$/) && substr(ending,1,1)==substr(code,1,1)) code=""
+                    next
+                }
+                if (comment || /^[[:space:]]*<!--/) { comment=!index($0,"-->"); next }
+                if (match(marker,/^```+|^~~~+/)) { code=substr(marker,1,RLENGTH); next }
+            }
+            FNR == 1 && /^# / { title = $0; sub(/^#[[:space:]]+(Change:[[:space:]]*)?/, "", title) }
             /\*\*Opened\*\*:/ { opened = field($0, "Opened") }
             /\*\*Parent\*\*:/ { parent = field($0, "Parent") }
             /^\*\*Step\*\*:/ { step = field($0, "Step") }
-            /^\*\*Waiting on\*\*:/ { waiting = field($0, "Waiting on") }
-            /^\*\*Next\*\*:/ { nxt = field($0, "Next") }
-            /^## / { sec = $0; sub(/^##[[:space:]]+/, "", sec); next }
+            sec == "State" && /^\*\*Waiting on\*\*:/ { nw++; waiting = field($0, "Waiting on") }
+            sec == "State" && /^\*\*Next\*\*:/ { nn++; nxt = field($0, "Next") }
+            /^# / { sec = ""; next }
+            /^## / { sec = $0; sub(/^##[[:space:]]+/, "", sec); sec = trim(sec); next }
             sec == "Acceptance" && /^\|/ {
                 n = split($0, c, "|"); item = trim(c[2])
                 if (item == "" || item == "Item" || item ~ /^-+$/) next
@@ -859,7 +872,7 @@ spec_changes() { # root
             }
             END {
                 gsub(/\t/, " ", title); gsub(/\t/, " ", waiting); gsub(/\t/, " ", nxt)
-                print id "\037" title "\037" opened "\037" step "\037" waiting "\037" nxt "\037" parent "\037" total + 0 "\037" passed + 0 "\037" failed + 0 "\037" maxatt + 0 "\037" stalled
+                print id "\037" title "\037" opened "\037" step "\037" (nw==1 ? waiting : "") "\037" (nn==1 ? nxt : "") "\037" parent "\037" total + 0 "\037" passed + 0 "\037" failed + 0 "\037" maxatt + 0 "\037" stalled "\037" presence(nw,waiting) "\037" presence(nn,nxt)
             }' "$path"
     done
     return 0

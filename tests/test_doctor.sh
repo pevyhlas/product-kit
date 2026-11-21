@@ -480,7 +480,7 @@ assert_contains "$OUTPUT" "Code path not in the repository (2): missing.py at sp
 git checkout -q -- specs; rm -rf src
 
 it "trace: planned: names an open change, else a closed or an unknown one"
-mkdir -p specs/changes; printf '# Change: export\n' > specs/changes/012-export.md
+mkdir -p specs/changes; printf '# Change: export\n## State\n**Waiting on**: nothing\n**Next**: build\n' > specs/changes/012-export.md
 printf -- '- 2026-10-10 010-import: imported.\n' > specs/log.md
 cat >> specs/product.md <<'MD'
 - **R-03 Export** (hypothesis, planned: 012-export): users export.

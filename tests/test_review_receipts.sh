@@ -209,7 +209,7 @@ assert_eq 1 "$(awk -F '\037' '$1=="R" { print $2 }' "$RC_FILE")" 'repair inherit
 receipt 7; fetch
 assert_eq '' "$(problems)" 'later full PASS clears the restated FAIL'
 reset_host; receipt 7 . '{"editor":{"login":"admin"}}'; receipt 7 '.restates="1001"'; fetch
-assert_eq 2 "$RC_INVALID" 'a visible original id must match'
+assert_eq 0 "$RC_INVALID" 'a receipt id in an edited body cannot veto the original publisher repair'
 reset_host; receipt 7; receipt 7 '.restates="1001"'; fetch
 assert_eq 1 "$RC_INVALID" 'restatement cannot remove a valid receipt'
 
@@ -227,7 +227,7 @@ for author in '{"__typename":"Bot","databaseId":1004,"login":"other[bot]"}' '{"_
     receipt 7 '.id="00000000000000000000000000000001"|.restates="1001"' "$(jq -cn --argjson author "$author" '{author:$author}')"
     fetch
     assert_eq 2 "$RC_INVALID" 'original invalid receipt and unauthorized restatement both block'
-    assert_contains "$(problems)" 'same id and publisher'
+    assert_contains "$(problems)" 'same publisher'
     assert_contains "$(problems)" 'edited receipt'
 done
 
@@ -293,6 +293,23 @@ assert_contains "$(problems)" 'isolation required'
 RC_ISOLATION=shared; fetch
 assert_eq 0 "$RC_INVALID"
 assert_contains "${RC_NOTES[*]}" "not the reviewer's independence"
+
+it 'required isolation is immutable on the source PR, including edited reviews'
+reset_host
+malformed='.restates="123"|.restates_chain=["invalid"]'
+receipt 7 "$malformed" '{"author":{"databaseId":1005}}'
+receipt 7 "$malformed"
+fetch
+assert_eq 1 "$RC_IGNORED" 'unlisted authors do not enter schema validation'
+assert_eq 1 "$RC_INVALID" 'malformed trusted chain is one invalid receipt'
+assert_contains "$(problems)" 'invalid repair chain'
+reset_host
+fx_closed_pr 6 "$HEAD_SHA" '{"author":{"databaseId":1001}}'
+receipt 6 . '{"editor":{"login":"admin"}}'
+receipt 7 '.id="00000000000000000000000000000001"|.restates="1001"|.restates_pr=6'
+fetch
+assert_contains "$(problems)" 'isolation required'
+assert_eq 2 "$RC_INVALID" 'source policy failure and unusable repair remain'
 
 it 'closed-unmerged standing FAILs carry, but closed PASSes never cover'
 reset_host; fx_closed_pr 6 "$HEAD_SHA"

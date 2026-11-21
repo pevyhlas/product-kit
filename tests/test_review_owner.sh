@@ -271,6 +271,8 @@ for reviewer in owner ''; do
         fi
         AT="$(git rev-parse HEAD)"; use_gh_stub; fx_pr 7 "$AT"
         if [ "$mode" = carrier ]; then
+            # This fixture's new host allocates review IDs from the start.
+            rm -rf "$PROJ/.git/prdkit/receipts"
             run bash .prdkit/scripts/bash/publish-review.sh "$CHANGE" --pr "$PR" --reviewer code --verdict PASS --counts 0,0,0,0 --report https://example.invalid/report --head HEAD
             assert_eq 0 "$STATUS" "$OUTPUT"
         fi
