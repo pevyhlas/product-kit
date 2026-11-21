@@ -99,6 +99,16 @@ assert_eq 'untracked owner direction' "$(cat specs/inbox.md)" "untracked content
 assert_file specs/changes/094-explicit.md "new record created"
 
 # ---------------------------------------------------------------------------
+it "fixture Git reads neither user nor system configuration"
+conf="$(mktemp -d)"; track_tmp "$conf"
+git config --file "$conf/global" diff.statNameWidth 6
+git config --file "$conf/system" test.system inherited
+# shellcheck disable=SC2016 # Positional argument belongs to the fixture shell.
+run env GIT_CONFIG_GLOBAL="$conf/global" GIT_CONFIG_SYSTEM="$conf/system" GIT_CONFIG_NOSYSTEM=0 \
+    bash -c 'source "$1"; git config --get-regexp "^(diff.statnamewidth|test.system)$"' _ "$TESTS_DIR/lib.sh"
+assert_eq 1 "$STATUS" 'neither injected configuration is visible'
+assert_eq '' "$OUTPUT" 'no inherited values'
+
 it "build-review-package.sh rejects path-escaping change ids"
 BRP="$PK_ROOT/scripts/build-review-package.sh"
 cd "$PROJ" || exit 1

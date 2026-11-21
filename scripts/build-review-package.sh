@@ -286,7 +286,7 @@ for d in "$REVIEW_DIR"/round-*/; do
         if review_file_without_nul "$d/completed.tsv" &&
             awk -F '\t' 'NR!=1 || NF!=7 { bad=1 } END { exit (bad || NR!=1) }' "$d/completed.tsv" &&
             IFS=$'\t' read -r version bound_id bound_head bound_base bound_tip bound_policy bound_comparison < "$d/completed.tsv" &&
-            [ "$version" = package1 ] && [ "$bound_id" = "$CHANGE_ID" ] && [ "$bound_comparison" = known ] &&
+            [ "$version" = package2 ] && [ "$bound_id" = "$CHANGE_ID" ] && [ "$bound_comparison" = known ] &&
             [[ "$bound_head" =~ ^[0-9a-f]{40}$ && "$bound_tip" =~ ^[0-9a-f]{40}$ && "$bound_policy" =~ ^[0-9a-f]{40}$ ]] &&
             [[ "$bound_base" == refs/remotes/* ]]; then
             COMPLETED="$n"; COMPLETED_HEAD="$bound_head"
@@ -473,7 +473,7 @@ done < "$PACKAGE_DIR/manifest.tsv"
 # Completion is written LAST, never to an interrupted round. It is a comparison binding, not
 # approval: later calls recompute the prior head's content from immutable objects.
 comparison=unknown; [ -z "$FINGERPRINT" ] || comparison=known
-printf 'package1\t%s\t%s\t%s\t%s\t%s\t%s\n' "$CHANGE_ID" "$HEAD_SHA" "$FP_REF" "$FP_BASE_AT" "$POLICY_AT" "$comparison" > "$PACKAGE_DIR/completed.pending"
+printf 'package2\t%s\t%s\t%s\t%s\t%s\t%s\n' "$CHANGE_ID" "$HEAD_SHA" "$FP_REF" "$FP_BASE_AT" "$POLICY_AT" "$comparison" > "$PACKAGE_DIR/completed.pending"
 mv "$PACKAGE_DIR/completed.pending" "$PACKAGE_DIR/completed.tsv"
 
 printf '{"ROUND":%d,"BASE_SHA":"%s","HEAD_SHA":"%s","PACKAGE_DIR":"%s","REPORT_PATH":"%s","INDEX_PATH":"%s","SINCE_SHA":"%s","FINGERPRINT":"%s","SINCE_FINGERPRINT":"%s"}\n' "$ROUND" "$BASE_SHA" "$HEAD_SHA" "$(json_escape "$PACKAGE_DIR")" "$(json_escape "$PACKAGE_DIR/report.md")" "$(json_escape "$PACKAGE_DIR/index.md")" "$SINCE" "$FINGERPRINT" "$SINCE_FINGERPRINT"
