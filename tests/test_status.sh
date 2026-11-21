@@ -339,6 +339,32 @@ run bash "$STATUS_SH" --json
 assert_contains "$OUTPUT" '"compaction":{"closed_since_last":11,"last":"2026-10-22","due":true}' "a new entry on top adds to the count"
 rm specs/log.md
 
+it "an unreadable tracked folded log refuses status and produces a structured doctor finding"
+awk 'BEGIN { for (i = 101; i <= 110; i++) printf "- 2026-10-17 %d-c: done\n", i }' > specs/log.md
+git add -- specs/log.md
+run bash "$STATUS_SH" --json
+assert_eq 0 "$STATUS" "status succeeds while the folded log is readable"
+assert_contains "$OUTPUT" '"compaction":{"closed_since_last":10,"last":null,"due":true}' "ten readable closes make compaction due"
+chmod 000 specs/log.md || exit 1
+if cat specs/log.md >/dev/null 2>&1; then
+    _ok "skipped unreadable-log checks: this user can read mode-000 files"
+else
+    run env LC_ALL=C awk 1 specs/log.md
+    log_read_status="$STATUS"
+    run bash -c 'bash "$1" --json 2> status.stderr' _ "$STATUS_SH"
+    assert_eq "$log_read_status" "$STATUS" "status preserves the native read failure"
+    assert_eq '' "$OUTPUT" "status emits no JSON rather than due:false"
+    assert_contains "$(cat status.stderr)" "specs/log.md" "status names the unreadable log on stderr"
+    run bash -c 'bash "$1" --json 2> doctor.stderr' _ "$PROJ/.prdkit/scripts/bash/doctor.sh"
+    assert_eq 1 "$STATUS" "doctor exits with a finding rather than the raw read error"
+    assert_eq fail "$(jq -r '.result' <<< "$OUTPUT")" "doctor emits valid failure JSON"
+    assert_contains "$(jq -r '.findings[]' <<< "$OUTPUT")" "Compaction reader failed:" "doctor reports unverified compaction"
+    assert_not_contains "$OUTPUT" "Compaction due" "doctor does not infer a compaction count"
+    rm status.stderr doctor.stderr
+fi
+chmod 600 specs/log.md
+git rm -fq -- specs/log.md
+
 it "live 0.x canon beside the 1.0 spec is two canons; values with quotes stay valid JSON"
 mkdir -p specs/targets/t1; : > specs/targets/t1/target.md
 printf '2026-10-07 owner "say \\"hi\\" \\\\ now" → open\n' >> specs/inbox.md

@@ -29,10 +29,12 @@ cat > specs/product/lifecycle.md <<'MD'
 [Detail](lifecycle/stable.md).
 MD
 printf '# Stable\n\n**Now**: Not a canonical declaration\n' > specs/product/lifecycle/stable.md
+awk 'BEGIN { for (i = 0; i < 149; i++) print "Stage notes." }' >> specs/product/lifecycle/stable.md
 
 it "three owner-selected stages drive status, bounds and doctor from the same order"
-run bash "$SCRIPTS/doctor.sh"
+run bash "$SCRIPTS/doctor.sh" --json
 assert_eq 0 "$STATUS" "custom lifecycle is accepted"
+assert_eq 2 "$(printf '%s\n' "$OUTPUT" | jq '.budget_excess_reading_lines')" "custom stage detail contributes only its reading-budget excess"
 assert_not_contains "$OUTPUT" "names no stage" "custom from: markers are known"
 assert_not_contains "$OUTPUT" "Q-01 at" "future quality needs no current allocation"
 assert_not_contains "$OUTPUT" "shows J-" "custom journey columns agree"

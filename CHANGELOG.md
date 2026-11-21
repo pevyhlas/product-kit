@@ -8,6 +8,13 @@ change by change.
 
 ## [Unreleased]
 
+- **Doctor reports reading-budget excess and overdue compaction.** Text and `--json`
+  add the total reading lines over budget (`budget_excess_reading_lines`), independently
+  of advisory count. Doctor shares status's compaction accounting, including pending
+  log entry files, and advises at ten closes. CI guidance distinguishes the default-branch
+  ref and objects needed for "Merged without closing" from the full history recommended for
+  "Closed without a log entry."
+
 - A recorded HOLD still applies after its `until=` date or condition. Status and doctor flag a
   past date as a reminder for the owner to confirm or lift the hold. Text output and JSON keep
   their formats; a past-date HOLD now reads `DUE` (`state: "due"` in JSON) instead of `EXPIRED`
