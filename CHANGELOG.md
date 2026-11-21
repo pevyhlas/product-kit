@@ -8,6 +8,9 @@ change by change.
 
 ## [Unreleased]
 
+- Document the Git identity used by `close-change.sh` and how to set an agent's author and
+  committer identity for the closing commit.
+
 - **Pinned-source installation proof (#103).** `check-adoption.sh --require-source`
   compares installed kit-owned bytes, Git executable modes, command links and managed
   sections with local source objects at the consumer's committed gitlink. `--head <commit>`
