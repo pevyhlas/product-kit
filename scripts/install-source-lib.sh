@@ -338,7 +338,8 @@ install_source_verify() { # consumer-root consumer-revision-or-empty scratch
         if grep -q '^agents-section:' "$work/manifest"; then echo 'Deselected agents harness retains managed-section metadata'; fi
         if [ -f "$work/agents" ]; then
             if ! review_file_without_nul "$work/agents"; then echo 'Unreadable AGENTS.md'
-            elif grep -Fx -e "$AGENTS_BEGIN" -e "$AGENTS_END" "$work/agents" >/dev/null; then
+            elif grep -Fx -e "$AGENTS_BEGIN" -e "$AGENTS_END" \
+                -e "$AGENTS_BEGIN"$'\r' -e "$AGENTS_END"$'\r' "$work/agents" >/dev/null; then
                 echo 'Deselected agents harness retains managed-section markers'
             elif [ "$?" -ne 1 ]; then echo 'Unreadable AGENTS.md'; fi
         fi ;;

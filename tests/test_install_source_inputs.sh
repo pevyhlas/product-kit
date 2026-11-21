@@ -109,13 +109,17 @@ fixture_reject; fixture_reject --head HEAD
 rm "$FIXTURE/current" "$FIXTURE/AGENTS.md"; mv "$FIXTURE/policy/main.md" "$FIXTURE/AGENTS.md"
 
 it 'deselected agents harness accepts private prose but no kit markers or metadata'
-for state in block metadata prose; do
+for state in block crlf metadata prose; do
     sed 's/^harnesses: .*/harnesses: claude/' "$_SCRATCH_CWD/manifest" > "$MANIFEST"
     if [ "$state" != metadata ]; then
         sed '/^agents-section:/d' "$MANIFEST" > "$_SCRATCH_CWD/next"
         cp "$_SCRATCH_CWD/next" "$MANIFEST"
     fi
-    if [ "$state" != block ]; then printf 'Project instructions.\n' > "$FIXTURE/AGENTS.md"; fi
+    case "$state" in
+        block) ;;
+        crlf) awk '{printf "%s\r\n", $0}' "$KIT/scripts/agents-section.md" > "$FIXTURE/AGENTS.md" ;;
+        *) printf 'Project instructions.\n' > "$FIXTURE/AGENTS.md" ;;
+    esac
     fixture_commit
     if [ "$state" = prose ]; then
         fixture_check; assert_eq 0 "$STATUS" "$OUTPUT"
