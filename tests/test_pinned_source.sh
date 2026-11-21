@@ -10,6 +10,8 @@ git rm -rq --cached .product-kit || exit 1
 git -C .product-kit init -q
 git -C .product-kit config user.name test
 git -C .product-kit config user.email t@example.com
+# Exercise the 1.x-to-2.0 upgrade path independently of the checkout's release version.
+printf '1.5.0\n' > .product-kit/VERSION
 printf '#!/bin/sh\nexit 0\n' > .product-kit/scripts/retired-c7a.sh
 printf '# Retired fixture command\n' > .product-kit/commands/prdkit-retired.md
 git -C .product-kit add -A
