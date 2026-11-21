@@ -15,8 +15,10 @@ Humans own product intent and consequential choices. Read project instructions a
 `.prdkit/memory/constitution.md` first; harness and user instructions keep their authority. A
 generated plan never grants permission to commit, push, merge, publish, spend or deploy: use
 explicit user authorization or the constitution's action policy, resolved per action, with the
-source and scope of each hold; a hold wins until its issuer lifts it. Missing authority is not
-approval; standing authorization need not be repeated.
+source and scope of each hold. Record an owner's stop as a HOLD in `specs/records.md` with their
+verbatim words, source, date and stated scope; ask the owner before applying a narrower or wider
+reading. Its `until=` is a reminder: the hold stands until its issuer explicitly names and lifts it.
+Missing authority is not approval; standing authorization need not be repeated.
 
 While work is held, put read-only observations and attempt classification in State. Leave held
 Tasks, Acceptance and original evidence unchanged until authorized; reporting a hold is not a rerun

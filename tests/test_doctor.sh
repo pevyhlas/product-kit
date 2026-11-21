@@ -67,7 +67,7 @@ run bash "$DOCTOR" --strict
 assert_eq 1 "$STATUS" "--strict fails on advisories"
 git rm -qf tests/test_old.py scripts/test-ci-evidence.py; rm -f NOTES.txt
 
-it "records: malformed lines fail, expired holds and waivers are advisories"
+it "records: malformed lines fail, due hold reminders and expired waivers are advisories"
 cat > specs/records.md <<'MD'
 # Records
 
@@ -80,9 +80,9 @@ DEPLOY web env=prod rev=abc123 date=2026-10-11 by=https://example.invalid/run/1
 MD
 run bash "$DOCTOR"
 assert_eq 0 "$STATUS" "valid records pass"
-assert_contains "$OUTPUT" "advisory: Expired HOLD H-1" "expired hold"
-assert_contains "$OUTPUT" "advisory: Expired HOLD H-5" "a note after a date does not stop it expiring"
-assert_contains "$OUTPUT" "advisory: Expired WAIVER W-1" "expired waiver"
+assert_contains "$OUTPUT" "advisory: HOLD H-1 due (owner alex, until 2026-10-05): it still applies; ask the owner to confirm or lift it" "due reminder, not a lift"
+assert_contains "$OUTPUT" "advisory: HOLD H-5 due" "a note after a date does not suppress the reminder"
+assert_contains "$OUTPUT" "advisory: Expired WAIVER W-1 (owner alex, until 2026-09-30): it no longer applies; the owner renews or removes it" "unchanged waiver expiry"
 assert_not_contains "$OUTPUT" "H-2" "a condition-based hold does not expire by date"
 {
     printf 'HOLD H-3 owner=alex scope=P1\nATTEST A-1 by=agent what=x env=prod version=abc date=17.10.2026 — link\nNOTE something\n'
@@ -194,7 +194,7 @@ printf 'DEPLOY web env=test rev=abc1234 date=2026-10-17 by=https://example.inval
 run bash "$DOCTOR"
 assert_eq 0 "$STATUS" "budgets stay advisories"
 assert_contains "$OUTPUT" "advisory: Budget: specs/inbox.md has 156 lines, over its 150-line reading budget; incorporate answered items" "the inbox drains"
-assert_contains "$OUTPUT" "advisory: Budget: specs/records.md has 1 line that reads as 161 at 100 characters a line, over its 150-line reading budget; remove lifted or expired" "superseded records leave"
+assert_contains "$OUTPUT" "advisory: Budget: specs/records.md has 1 line that reads as 161 at 100 characters a line, over its 150-line reading budget; remove lifted holds, expired waivers" "superseded records leave"
 rm specs/inbox.md specs/records.md
 
 it "a 1.0 product.md with one-digit journey bullets still passes, with an advisory"

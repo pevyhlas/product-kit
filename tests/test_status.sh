@@ -19,6 +19,20 @@ assert_contains "$OUTPUT" "No DEPLOY records — what is live is unknown." "live
 assert_contains "$OUTPUT" "None: no open changes, holds or owner questions." "no longest pole"
 
 mkdir -p specs/parts specs/changes specs/product
+it "a past-date hold still blocks until the owner lifts that specific hold"
+cat > specs/records.md <<'MD'
+HOLD H-1 owner=alex scope=P1 since=2026-10-01 until=2026-10-05 — "pause P1" (owner meeting, 2026-10-01)
+HOLD H-2 owner=alex scope=P2 since=2026-10-01 until=review complete — "pause P2" (owner meeting, 2026-10-01)
+MD
+run bash "$STATUS_SH"
+assert_contains "$OUTPUT" "HOLD H-1 on P1 — waits on alex lifting it" "the due hold is still a blocker"
+# Apply the owner's statement, “Lift H-1”: remove only that line from the current records.
+sed -i.bak '/^HOLD H-1 /d' specs/records.md && rm specs/records.md.bak
+run bash "$STATUS_SH"
+assert_not_contains "$OUTPUT" "H-1" "lifted hold no longer listed"
+assert_contains "$OUTPUT" "HOLD H-2 on P2 — waits on alex lifting it" "other hold still blocks"
+rm specs/records.md
+
 it "State diagnostics report missing, blank and duplicate fields at the open record"
 for fields in 'missing present' 'present missing' 'missing missing' 'present present' 'blank duplicate'; do
     read -r ws ns <<< "$fields"
@@ -184,6 +198,7 @@ cat > specs/records.md <<'MD'
 HOLD H-1 owner=alex scope=P2 since=2026-10-01 until=2026-10-05 — "pause export" (owner, 2026-10-01)
 HOLD H-2 owner=alex scope=env:TEST since=2026-10-01 until=v2 and the security review — "synthetic until v2" (owner)
 WAIVER W-1 owner=alex check=A2 scope=004-export expires=2026-12-01 — "skip live" (owner, 2026-10-02)
+WAIVER W-2 owner=alex check=A1 scope=004-export expires=2026-10-05 — "skip preview" (owner, 2026-10-02)
 DEPLOY web env=prod rev=HEADREV date=2026-10-11 by=https://example.invalid/run/2
 DEPLOY web env=prod rev=0000000 date=2026-10-09 by=https://example.invalid/run/1
 DEPLOY web env=test rev=none date=2026-10-12 by=agent — test environment torn down
@@ -237,10 +252,11 @@ assert_contains "$OUTPUT" "web prod: $DEPLOYED on 2026-10-11 (1 commit(s) on" "n
 assert_not_contains "$OUTPUT" "0000000 on" "older deploy superseded"
 assert_contains "$OUTPUT" "web test: nothing deployed since 2026-10-12" "known-empty environment"
 
-it "holds and waivers with expiry, owner queue with age and missing dispositions"
-assert_contains "$OUTPUT" "HOLD H-1 on P2 by alex, until 2026-10-05 — EXPIRED" "expired hold flagged"
+it "hold reminders and waiver expiry, owner queue with age and missing dispositions"
+assert_contains "$OUTPUT" "HOLD H-1 on P2 by alex, until 2026-10-05 — DUE, still applies; owner to confirm or lift" "due hold flagged"
 assert_contains "$OUTPUT" "HOLD H-2 on env:TEST by alex, until v2 and the security review" "a condition keeps all its words"
 assert_contains "$OUTPUT" "WAIVER W-1 on 004-export (check A2) by alex, until 2026-12-01" "active waiver"
+assert_contains "$OUTPUT" "WAIVER W-2 on 004-export (check A1) by alex, until 2026-10-05 — EXPIRED, no longer applies" "expired waiver"
 assert_contains "$OUTPUT" "2026-10-05 agent, 12 days:" "open question with age"
 assert_contains "$OUTPUT" "(no disposition)" "line without a disposition surfaced"
 assert_not_contains "$OUTPUT" "Add CSV export" "folded line is not queued"
@@ -256,6 +272,7 @@ assert_contains "$OUTPUT" "Merged, live and validated are distinct" "claims kept
 it "JSON carries the same derived state and parses"
 run bash "$STATUS_SH" --json
 assert_eq 0 "$STATUS" "json exits 0"
+assert_eq 'H-1:due H-2:active W-1:active W-2:expired' "$(jq -r '[.holds[] | .id+":"+.state] | join(" ")' <<< "$OUTPUT")" "only the past-date hold changes state"
 assert_contains "$OUTPUT" '"layout":"1.0"' "layout"
 assert_contains "$OUTPUT" '"stage":{"now":"MVP","next":"Private preview","later":"R-02 (ga)"}' "the stage"
 assert_contains "$OUTPUT" '"id":"R-02","title":"Export CSV","maturity":"hypothesis","planned":"004-export"' "item"
