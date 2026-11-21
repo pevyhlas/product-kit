@@ -170,7 +170,7 @@ upgrade_destinations_safe() (
     work="$(mktemp -d)" || return 1
     trap 'rm -rf "$work"' EXIT
     : > "$work/planned"
-    while IFS=$'\t' read -r src rel; do printf '%s\037installed %s\n' "$TARGET/$rel" "$rel"; done < <(list_kit_files) > "$work/roles"
+    while IFS=$'\t' read -r src rel; do printf '%s\037installed %s\n' "$TARGET/$rel" "$rel"; done <<< "$KIT_FILES" > "$work/roles"
     for rel in .prdkit/.manifest .prdkit/.manifest.tmp .prdkit/.install-state .prdkit/.install-lock; do
         printf '%s\037installer metadata %s\n' "$TARGET/$rel" "$rel" >> "$work/roles"
     done
@@ -224,7 +224,7 @@ upgrade_render_expected() { # caller-owned work directory -> head/, rendered/, p
     upgrade_head_file .prdkit/.manifest "$work/head/.prdkit/.manifest" "$work/head-links/.prdkit/.manifest" || return 1
     # The last committed manifest, never a dirty intermediate, is the ownership baseline.
     local MANIFEST="$work/head/.prdkit/.manifest"
-    list_kit_files > "$work/files" || return 1
+    printf '%s\n' "$KIT_FILES" > "$work/files" || return 1
     : > "$work/paths" || return 1
     while IFS=$'\t' read -r src rel; do
         printf '%s\0' "$rel" >> "$work/paths" || return 1
@@ -255,7 +255,7 @@ upgrade_render_expected() { # caller-owned work directory -> head/, rendered/, p
             cp -p "$work/head/$rel" "$dest" || return 1
         fi
         cp "$src" "$dest" || return 1
-        case "$rel" in .prdkit/scripts/bash/*) chmod +x "$dest" || return 1 ;; esac
+        case "$rel" in .prdkit/scripts/bash/*.sh) chmod +x "$dest" || return 1 ;; esac
     done < "$work/files"
     # Every retired recorded path is part of the planned deletion set, even after a retry
     # already deleted it. Project-owned customized retired conffiles remain untouched.

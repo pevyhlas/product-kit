@@ -37,7 +37,8 @@ before a merge; only `CI` gates releases (CONTRIBUTING.md, "CI and the merge rul
 - **Consumer paths vs. repo paths.** Command files reference installed paths
   (`.prdkit/scripts/bash/…`, `.prdkit/templates/…`, `.prdkit/workflows/…`).
   The mapping from this repo's `scripts/`, `templates/`, `commands/`, `workflows/` to those
-  locations lives in `scripts/init.sh` — keep it in sync when adding files.
+  locations lives in `scripts/install-lib.sh`, shared by `scripts/init.sh` and the
+  pinned-source verifier — keep it in sync when adding files.
 
 ## Repo conventions
 

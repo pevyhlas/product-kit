@@ -80,7 +80,7 @@ assert_eq 1 "$(grep -cxF '.prdkit/retrospective/' "$PROJ/.gitignore")" "entry pr
 it "manifest covers every installed file and includes workflow hashes"
 assert_contains "$(cat "$PROJ/.prdkit/.manifest")" "version: $(cat "$PK_ROOT/VERSION")" "version recorded"
 expected=0
-for file in "$PROJ"/.product-kit/commands/*.md "$PROJ"/.product-kit/workflows/*.md "$PROJ"/.product-kit/templates/*.md "$PROJ"/.product-kit/scripts/*.sh; do
+for file in "$PROJ"/.product-kit/commands/*.md "$PROJ"/.product-kit/workflows/*.md "$PROJ"/.product-kit/templates/*.md "$PROJ"/.product-kit/scripts/*.sh "$PROJ"/.product-kit/scripts/agents-section.md; do
     case "$(basename "$file")" in
         init.sh|render-agents.sh|agent-definition-template.md) ;;   # bootstrap; optional agent tiers
         *) expected=$((expected + 1)) ;;
@@ -461,8 +461,8 @@ ln -s CLAUDE.md "$PROJ14/AGENTS.md"
 run bash -c "cd '$PROJ14' && bash .product-kit/scripts/init.sh --harness claude,agents"
 assert_eq 0 "$STATUS" "install through an in-project link succeeds"
 assert_contains "$(cat "$PROJ14/CLAUDE.md")" 'BEGIN PRODUCT-KIT MANAGED SECTION' "the section lands in the link target"
-sed 's/## Product-Kit workflow/## Product-Kit workflow updated/' "$PROJ14/.product-kit/scripts/install-lib.sh" > "${PROJ14%/proj}/edited" &&
-    cat "${PROJ14%/proj}/edited" > "$PROJ14/.product-kit/scripts/install-lib.sh"
+sed 's/## Product-Kit workflow/## Product-Kit workflow updated/' "$PROJ14/.product-kit/scripts/agents-section.md" > "${PROJ14%/proj}/edited" &&
+    cat "${PROJ14%/proj}/edited" > "$PROJ14/.product-kit/scripts/agents-section.md"
 snapshot_upgrade_fixture "$PROJ14" || exit 1
 run bash -c "cd '$PROJ14' && bash .product-kit/scripts/init.sh --upgrade"
 assert_eq 0 "$STATUS" "upgrade through an in-project link succeeds"
