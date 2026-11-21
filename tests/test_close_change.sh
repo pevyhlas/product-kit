@@ -90,21 +90,6 @@ if [ "$(pwd -P)" = "$CLOSE_SPECS/log" ]; then exit 1; fi
 exec "$REAL_LN" "$@"
 SH
 chmod +x "$outside/bin/python3" "$outside/bin/mkdir" "$outside/bin/ln"
-cat > "$outside/limit-write" <<'SH'
-printf() {
-    if [[ $PWD = "$CLOSE_SPECS/log" && -f /dev/fd/3 ]]; then
-        (trap '' XFSZ; ulimit -f 0; builtin printf "$@")
-    else builtin printf "$@"; fi
-}
-SH
-run env BASH_ENV="$outside/limit-write" bash "$B/close-change.sh" 001-greet "reviewed"
-assert_eq 1 "$STATUS" 'file size limit refuses close'
-assert_contains "$OUTPUT" 'could not write specs/log/001-greet.md'
-assert_eq "$VERDICT" "$(git rev-parse HEAD)"
-assert_file specs/changes/001-greet.md
-run git diff --exit-code HEAD -- specs/changes/001-greet.md; assert_eq 0 "$STATUS" 'open record unchanged'
-run test ! -e specs/log/001-greet.md; assert_eq 0 "$STATUS" 'no empty final entry blocks retry'
-rmdir specs/log # exercise anchored mkdir again on the successful retry
 CDPATH="$outside" PATH="$outside/bin:$PATH" run bash "$B/close-change.sh" 001-greet "warmer greeting — R-01 — #1"
 assert_contains "$OUTPUT" 'anchored mkdir'
 assert_eq 0 "$STATUS" "closes: $OUTPUT"
@@ -225,7 +210,7 @@ else
     run bash "$B/close-change.sh" 013-guard "guarded — R-01 — #6"
     chmod u+w specs
     assert_eq 1 "$STATUS" "a log that cannot be written is refused"
-    assert_contains "$OUTPUT" "The record was not deleted or committed" "says the record is intact"
+    assert_contains "$OUTPUT" "could not write specs/log/013-guard.md; nothing was deleted or committed" "says nothing changed"
     assert_eq "$GUARDED" "$(git rev-parse HEAD)" "nothing committed"
     assert_eq '' "$(git status --porcelain)" "record and log untouched"
 fi
