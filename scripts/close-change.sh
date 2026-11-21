@@ -23,7 +23,7 @@ while [ "$#" -gt 0 ]; do
                 [ "$#" -gt 1 ] || { echo "$usage" >&2; exit 2; }
                 case "$1" in --pr) pr="$2" ;; --base) base_args=(--base "$2") ;; --date) day="$2" ;; *) message="$2" ;; esac
                 shift 2; continue ;;
-            --help|-h) echo "$usage"; exit 0 ;;
+            --help|-h) echo "$usage"; echo 'Publishing the entry requires hard-link support in specs/log/.'; exit 0 ;;
             --) options=false; shift; continue ;;
             -*) echo "Unknown option: $1" >&2; exit 2 ;;
         esac
@@ -71,10 +71,15 @@ fi
 check_paths
 # The process cwd pins a directory just like a directory descriptor. Verify
 # its physical identity *after* entering it, before any relative write.
-if ! (
+(
     cd -P "$root/specs" && [ "$(pwd -P)" = "$root/specs" ] || exit 1
-    if [ ! -d ./log ]; then mkdir ./log || exit 1; fi
+    created_log=false
+    if [ ! -d ./log ]; then mkdir ./log || exit 1; created_log=true; fi
     [ ! -L ./log ] && cd -P ./log && [ "$(pwd -P)" = "$root/specs/log" ] || exit 1
+    if $created_log; then
+        # Restore an initially absent log on refusal. rmdir preserves concurrent entries.
+        trap 'if [ "$?" -ne 0 ] && [[ . -ef "$root/specs/log" ]]; then rmdir "$root/specs/log" 2>/dev/null || :; fi' EXIT
+    fi
     stage="$(mktemp -d .close-XXXXXXXX)" || exit 1
     (
         cd -P "./$stage" && [ "$(pwd -P)" = "$root/specs/log/$stage" ] || exit 1
@@ -91,13 +96,20 @@ if ! (
         # disappear, but can never redirect the destination to its new parent.
         (
             cd -P "$root/specs/log" && [ "$(pwd -P)" = "$root/specs/log" ] || exit 1
-            ln "./$stage/$id.md" .
-        ) || exit 1
+            if ! ln "./$stage/$id.md" .; then
+                if [ -e "./$id.md" ] || [ -L "./$id.md" ]; then exit 3; fi
+                exit 4
+            fi
+        ) || exit "$?"
         [[ ! -L "$root/$entry" && "./$id.md" -ef "$root/$entry" ]]
     )
-); then
-    refuse "could not write $entry; nothing was deleted or committed"
-fi
+) || {
+    case $? in
+        3) refuse "the log already has an entry for $id; nothing was deleted or committed" ;;
+        4) refuse "could not create the hard link for $entry; nothing was deleted or committed. Closing requires hard-link support in specs/log/" ;;
+        *) refuse "could not write $entry; nothing was deleted or committed" ;;
+    esac
+}
 check_paths
 git -C "$root" add -- "$entry"
 git -C "$root" rm -q -- "$path"

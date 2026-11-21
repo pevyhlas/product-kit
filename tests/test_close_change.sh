@@ -90,6 +90,23 @@ if [ "$(pwd -P)" != "$CLOSE_SPECS/log" ] || [ "${2:-}" != . ]; then exit 1; fi
 exec "$REAL_LN" "$@"
 SH
 chmod +x "$outside/bin/python3" "$outside/bin/mkdir" "$outside/bin/ln"
+mkdir "$outside/no-links"
+cat > "$outside/no-links/ln" <<'SH'
+#!/bin/sh
+echo 'ln: hard links not supported' >&2
+exit 1
+SH
+chmod +x "$outside/no-links/ln"
+run env PATH="$outside/no-links:$PATH" bash "$B/close-change.sh" 001-greet "warmer greeting — R-01 — #1"
+assert_eq 1 "$STATUS" 'close refuses without hard links'
+assert_contains "$OUTPUT" 'ln: hard links not supported' 'preserves the filesystem diagnostic'
+assert_contains "$OUTPUT" 'could not create the hard link for specs/log/001-greet.md; nothing was deleted or committed'
+assert_not_contains "$OUTPUT" 'already has an entry'
+assert_eq "$VERDICT" "$(git rev-parse HEAD)" 'unsupported hard links leave HEAD unchanged'
+run git diff --cached --quiet; assert_eq 0 "$STATUS" 'index unchanged'
+run git diff --quiet HEAD -- specs/changes/001-greet.md; assert_eq 0 "$STATUS" 'open record unchanged'
+run test ! -e specs/log; assert_eq 0 "$STATUS" 'no log directory or staging files left after refusal'
+# Retry the same close with a working ln, without repairing the checkout.
 CDPATH="$outside" PATH="$outside/bin:$PATH" run bash "$B/close-change.sh" 001-greet "warmer greeting — R-01 — #1"
 assert_contains "$OUTPUT" 'anchored mkdir'
 assert_eq 0 "$STATUS" "closes: $OUTPUT"
@@ -243,6 +260,8 @@ it "publication preserves another writer's entry, including a FIFO"
 for kind in file fifo; do
     run env PATH="$outside/collision:$PATH" COLLISION="$kind" bash "$B/close-change.sh" 013-guard "guarded — R-01 — #6"
     assert_eq 1 "$STATUS" "refuses a concurrent $kind"
+    assert_contains "$OUTPUT" 'the log already has an entry for 013-guard'
+    assert_not_contains "$OUTPUT" 'Closing requires hard-link support'
     if [ "$kind" = fifo ]; then
         run test -p specs/log/013-guard.md; assert_eq 0 "$STATUS" 'FIFO is still there'
     else
