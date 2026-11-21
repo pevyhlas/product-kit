@@ -87,6 +87,46 @@ for harnesses in '   ' 'claude unknown'; do
 done
 cp "$_SCRATCH_CWD/manifest" "$MANIFEST"
 
+it 'managed files and adoption policy resolve only through in-repository components'
+mkdir "$FIXTURE/policy"
+mv "$FIXTURE/AGENTS.md" "$FIXTURE/policy/main.md"
+mv "$CONFIG" "$FIXTURE/policy/config.md"
+ln -s policy "$FIXTURE/current"
+ln -s current/main.md "$FIXTURE/AGENTS.md"
+ln -s ../../current/config.md "$CONFIG"
+fixture_commit
+fixture_check; assert_eq 0 "$STATUS" "$OUTPUT"
+fixture_check --head HEAD; assert_eq 0 "$STATUS" "$OUTPUT"
+printf '## Configuration\n- adoption-pin: wrong\n' > "$FIXTURE/policy/config.md"
+fixture_commit
+fixture_reject; assert_contains "$OUTPUT" 'Kit pin drift'
+fixture_reject --head HEAD; assert_contains "$OUTPUT" 'Kit pin drift'
+rm "$CONFIG"; mv "$FIXTURE/policy/config.md" "$CONFIG"
+printf '## Configuration\n' > "$CONFIG"
+rm "$FIXTURE/current"; ln -s .. "$FIXTURE/current"
+fixture_commit
+fixture_reject; fixture_reject --head HEAD
+rm "$FIXTURE/current" "$FIXTURE/AGENTS.md"; mv "$FIXTURE/policy/main.md" "$FIXTURE/AGENTS.md"
+
+it 'deselected agents harness accepts private prose but no kit markers or metadata'
+for state in block metadata prose; do
+    sed 's/^harnesses: .*/harnesses: claude/' "$_SCRATCH_CWD/manifest" > "$MANIFEST"
+    if [ "$state" != metadata ]; then
+        sed '/^agents-section:/d' "$MANIFEST" > "$_SCRATCH_CWD/next"
+        cp "$_SCRATCH_CWD/next" "$MANIFEST"
+    fi
+    if [ "$state" != block ]; then printf 'Project instructions.\n' > "$FIXTURE/AGENTS.md"; fi
+    fixture_commit
+    if [ "$state" = prose ]; then
+        fixture_check; assert_eq 0 "$STATUS" "$OUTPUT"
+        fixture_check --head HEAD; assert_eq 0 "$STATUS" "$OUTPUT"
+    else
+        fixture_reject; fixture_reject --head HEAD
+    fi
+done
+cp "$KIT/scripts/agents-section.md" "$FIXTURE/AGENTS.md"
+cp "$_SCRATCH_CWD/manifest" "$MANIFEST"
+
 it 'installed path membership treats every character literally'
 extra="$FIXTURE/.prdkit/workflows/"'wor\153.md'
 printf 'extra\n' > "$extra"

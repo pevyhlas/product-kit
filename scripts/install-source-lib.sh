@@ -76,9 +76,42 @@ install_normalize_path() { # repo-relative path; reject escape, empty or absolut
     printf '%s\n' "$out"
 }
 
+# Resolve one component at a time in the selected lane; never inspect a worktree
+# child through an unresolved parent. Return 2 for absence, 1 for an invalid alias.
+install_resolve_path() { # root revision-or-empty path scratch
+    local rest="$3" dir='' part path mode link hops=0
+    while [ -n "$rest" ]; do
+        part="${rest%%/*}"
+        if [ "$part" = "$rest" ]; then rest=''; else rest="${rest#*/}"; fi
+        case "$part" in
+            ''|.) continue ;;
+            ..) [ -n "$dir" ] || return 1
+                case "$dir" in */*) dir="${dir%/*}" ;; *) dir='' ;; esac; continue ;;
+            .[gG][iI][tT]) return 1 ;;
+        esac
+        path="${dir:+$dir/}$part"
+        mode="$(install_candidate_mode "$1" "$2" "$path")" || return 1
+        case "$mode" in
+            120000)
+                hops=$((hops+1)); [ "$hops" -le 40 ] || return 1
+                install_candidate_read "$1" "$2" "$path" > "$4/link" &&
+                    review_file_without_nul "$4/link" || return 1
+                link="$(cat "$4/link" && printf '.')" || return 1; link="${link%.}"
+                case "$link" in ''|/*|*$'\n'*|*$'\r'*|*$'\t'*) return 1 ;; esac
+                case "$link" in */) link="${link}." ;; esac
+                rest="$link${rest:+/$rest}" ;;
+            '') [ "$hops" -eq 0 ] || return 1; return 2 ;;
+            *) [ -z "$rest" ] || [ "$mode" = 040000 ] || return 1
+                dir="$path" ;;
+        esac
+    done
+    [ -n "$dir" ] || return 1
+    printf '%s\n' "$dir"
+}
+
 install_source_verify() { # consumer-root consumer-revision-or-empty scratch
     local root="$1" head="$2" work="$3" source pin restriction manifest_hash repo entry
-    local version harnesses selection options mode src dest oid smode expected actual line hash path n parent link
+    local version harnesses selection options mode src dest oid smode expected actual line hash path n parent
     # Public result fields are consumed by check-adoption.sh, not this library.
     # shellcheck disable=SC2034
     INSTALL_SOURCE_REVISION=''
@@ -88,13 +121,15 @@ install_source_verify() { # consumer-root consumer-revision-or-empty scratch
     INSTALL_CONSUMER_REVISION="$(install_object_git -C "$root" rev-parse --verify "${head:-HEAD}^{commit}" 2>/dev/null)" ||
         { echo 'Source proof unavailable: consumer commit is absent'; return; }
     if [ -n "$head" ]; then head="$INSTALL_CONSUMER_REVISION"; fi
-    case "$(install_candidate_mode "$root" "$head" .prdkit/memory/config.md)" in
-        '') : > "$work/config" ;;
-        100644|100755)
-            install_candidate_read "$root" "$head" .prdkit/memory/config.md > "$work/config" 2>/dev/null ||
+    if path="$(install_resolve_path "$root" "$head" .prdkit/memory/config.md "$work")"; then
+        case "$(install_candidate_mode "$root" "$head" "$path")" in
+            100644|100755) install_candidate_read "$root" "$head" "$path" > "$work/config" 2>/dev/null ||
                 { echo 'Unreadable adoption configuration'; return; } ;;
-        *) echo 'Adoption configuration must be a regular file'; return ;;
-    esac
+            *) echo 'Adoption configuration must be a regular file'; return ;;
+        esac
+    elif [ "$?" -eq 2 ]; then : > "$work/config"
+    else echo 'Cannot resolve adoption configuration inside repository'; return
+    fi
     review_file_without_nul "$work/config" || { echo 'Invalid or unreadable adoption configuration'; return; }
     source="$(install_config_value "$work/config" adoption-source)" ||
         { echo 'Ambiguous adoption-source restriction'; return; }
@@ -264,21 +299,16 @@ install_source_verify() { # consumer-root consumer-revision-or-empty scratch
         [ -z "$(install_candidate_mode "$root" "$head" "$path")" ] ||
             echo "Installer runtime artifact prevents source proof: $path"
     done
-    case " $harnesses " in *' agents '*)
-        path=AGENTS.md
-        for ((n=0; n<40; n++)); do
-            [ "$(install_candidate_mode "$root" "$head" "$path")" = 120000 ] || break
-            install_candidate_read "$root" "$head" "$path" > "$work/link" || break
-            review_file_without_nul "$work/link" || { path=''; break; }
-            link="$(cat "$work/link" && printf '.')"; link="${link%.}"
-            case "$link" in /*|*$'\n'*|*$'\r'*|*$'\t'*) path=''; break ;; esac
-            parent="${path%/*}"; [ "$parent" != "$path" ] || parent=.
-            path="$(install_normalize_path "$parent/$link")" || { path=''; break; }
-        done
+    if path="$(install_resolve_path "$root" "$head" AGENTS.md "$work")"; then
         actual="$(install_candidate_mode "$root" "$head" "$path")"
-        if [ -z "$path" ] || { [ "$actual" != 100644 ] && [ "$actual" != 100755 ]; } ||
-            ! install_candidate_read "$root" "$head" "$path" > "$work/agents" 2>/dev/null ||
-            ! managed_agents_section "$work/agents" > "$work/section"; then
+        if { [ "$actual" != 100644 ] && [ "$actual" != 100755 ]; } ||
+            ! install_candidate_read "$root" "$head" "$path" > "$work/agents" 2>/dev/null; then
+            echo 'Cannot read AGENTS.md inside repository'; return
+        fi
+    elif [ "$?" -ne 2 ]; then echo 'Cannot resolve AGENTS.md inside repository'; return
+    fi
+    case " $harnesses " in *' agents '*)
+        if ! managed_agents_section "$work/agents" > "$work/section"; then
             echo 'Missing or malformed Product-Kit managed section in AGENTS.md'
         elif ! install_object_git -C "$repo" cat-file blob "$pin:scripts/agents-section.md" > "$work/expected-section" 2>/dev/null; then
             echo 'Missing pinned managed-section source object'
@@ -287,6 +317,14 @@ install_source_verify() { # consumer-root consumer-revision-or-empty scratch
             expected="$(install_hash_stream < "$work/expected-section")"
             [ "$(install_manifest_value "$work/manifest" agents-section || true)" = "$expected" ] ||
                 echo 'Manifest managed-section hash differs from pinned source'
+        fi ;;
+    *)
+        if grep -q '^agents-section:' "$work/manifest"; then echo 'Deselected agents harness retains managed-section metadata'; fi
+        if [ -f "$work/agents" ]; then
+            if ! review_file_without_nul "$work/agents"; then echo 'Unreadable AGENTS.md'
+            elif grep -Fx -e "$AGENTS_BEGIN" -e "$AGENTS_END" "$work/agents" >/dev/null; then
+                echo 'Deselected agents harness retains managed-section markers'
+            elif [ "$?" -ne 1 ]; then echo 'Unreadable AGENTS.md'; fi
         fi ;;
     esac
 }
