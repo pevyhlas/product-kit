@@ -8,20 +8,43 @@ change by change.
 
 ## [Unreleased]
 
+## [2.0.2] — 2026-11-21 — safer worktree cleanup and complete review patches
+
+### Fixed
+
 - A recorded HOLD still applies after its `until=` date or condition. Status and doctor flag a
   past date as a reminder for the owner to confirm or lift the hold. Text output and JSON keep
   their formats; a past-date HOLD now reads `DUE` (`state: "due"` in JSON) instead of `EXPIRED`
   (`"expired"`) and remains eligible as the longest pole. WAIVER expiry is unchanged.
-
-- Document the Git identity used by `close-change.sh` and how to set an agent's author and
-  committer identity for the closing commit.
-
-### Fixed
-
 - A failed close no longer leaves an empty log entry behind. Retry the same close
   after the write error clears; the change record and index remain intact. Publishing
   requires hard links in `specs/log/`. If the filesystem does not support them,
   move the checkout to one that does and retry.
+- Removing a worktree leaves unrelated stale registrations alone. Explicit pruning refuses
+  stale registrations with submodule data. Cleanup also refuses embedded submodule stores
+  and submodules that administer linked worktrees, including with `--force`.
+- Pruning checks that a surviving branch or tag retains the stale checkout's HEAD and
+  reflog commits. Plain paths still work with older Git; relative registration pointers
+  are resolved from their administrative directory.
+- Before removing a worktree with submodule stores, cleanup moves the stores into the
+  common Git directory under `prdkit-retired/` and reports their location. Inspect them
+  for late writes and retain any needed refs before manually purging that archive.
+- Cleanup no longer merges legacy ledger spools. If one remains, cleanup stops so you can
+  archive and remove it without losing events.
+- Review packages show changed submodule pins even when configured as ignored. Full and
+  focused patch paths are checked against the Git trees before the round can complete.
+
+### Documentation
+
+- Document the Git identity used by `close-change.sh` and how to set an agent's author and
+  committer identity for the closing commit.
+
+### Adoption
+
+From 2.0.1, pin `v2.0.2` and run `bash .product-kit/scripts/init.sh --upgrade`.
+There is no record, receipt or configuration migration. Old review packages remain on disk
+but do not prevent a new round. Regenerate and independently re-review packages that may
+have omitted a submodule pin; an existing verdict does not establish review of an unseen patch.
 
 ## [2.0.1] — 2026-11-20 — review recovery and change lifecycle fixes
 

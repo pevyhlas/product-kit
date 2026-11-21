@@ -335,4 +335,43 @@ assert_contains "$(cat "$(pkg_of "$out")/delta.patch")" 'evil' "origin/release, 
 cd_run 001-x "$X" "$H" --since "$R"
 assert_eq 1 "$STATUS" "and a branch commit is still refused"
 
+it "a changed submodule pin appears in both patches and the diffstat despite ignore=all"
+pins="$(setup_fixture_repo)"; track_tmp "$pins"
+pg() { git -C "$pins" "$@"; }
+old="$(pg rev-parse HEAD)"
+pg config -f .gitmodules submodule.dep.path vendor/dep
+pg add .gitmodules
+pg update-index --add --cacheinfo "160000,$old,vendor/dep"
+pg commit -qm baseline
+pinbase="$(pg rev-parse HEAD)"
+trust_at "$pins" main "$pinbase"
+pg config submodule.dep.ignore all
+echo 'other work' >> "$pins/seed.txt"
+pg add seed.txt
+pg commit -qm reviewed
+reviewed="$(pg rev-parse HEAD)"
+pg update-index --cacheinfo "160000,$reviewed,vendor/dep"
+pg commit -qm 'update pin'
+out="$(cd "$pins" && bash "$SCRIPT" 012-pins "$pinbase" --since "$reviewed")"
+pkg="$(pkg_of "$out")"
+for patch in diff.patch delta.patch; do
+    assert_contains "$(cat "$pkg/$patch")" "+Subproject commit $reviewed" "$patch shows updated pin"
+done
+assert_contains "$(cat "$pkg/diffstat.txt")" 'vendor/dep' "diffstat names submodule"
+
+it "an incomplete patch cannot complete a review round"
+shim="$(mktemp -d)"; track_tmp "$shim"
+# Simulate a generator returning success after writing no patch.
+cat > "$shim/git" <<'SH'
+#!/bin/sh
+case " $* " in *" diff "*" --binary "*) exit 0 ;; esac
+exec "$REAL_GIT" "$@"
+SH
+chmod +x "$shim/git"
+cd "$pins"
+run env PATH="$shim:$PATH" REAL_GIT="$(command -v git)" bash "$SCRIPT" 013-incomplete "$pinbase"
+assert_eq 1 "$STATUS" "incomplete patch refused"
+assert_contains "$OUTPUT" 'path inventory differs'
+run test ! -e "$pins/.prdkit/cache/evidence/013-incomplete/reviews/round-1/completed.tsv"
+assert_eq 0 "$STATUS" "no completed binding"
 finish

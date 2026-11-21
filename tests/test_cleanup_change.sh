@@ -61,6 +61,62 @@ assert_eq 0 "$STATUS" "already-gone worktree handled"
 assert_contains "$OUTPUT" "already gone" "explains it only needed pruning"
 assert_not_contains "$(git -C "$PROJ" worktree list --porcelain)" "013-gone" "registration cleared"
 
+it "stale HEAD and historical reflog commits need surviving refs"
+stale="$PROJ/.worktrees/105-stale-history"
+git worktree add -q --detach "$stale"
+git -C "$stale" commit -q --allow-empty -m historical
+historical="$(git -C "$stale" rev-parse HEAD)"
+git -C "$stale" checkout -q --detach HEAD^
+git -C "$stale" commit -q --allow-empty -m detached
+detached="$(git -C "$stale" rev-parse HEAD)"
+rm -rf "$stale"
+run bash "$CLEAN" 105-stale-history
+assert_eq 1 "$STATUS" "unique detached HEAD blocks prune"
+git branch keep-detached "$detached"
+run bash "$CLEAN" --prune
+assert_eq 1 "$STATUS" "reflog-only commit still blocks prune"
+assert_contains "$(git worktree list --porcelain)" '105-stale-history'
+git tag keep-historical "$historical"
+run bash "$CLEAN" 105-stale-history
+assert_eq 0 "$STATUS" "both roots now reachable through shared refs"
+
+it "stale relative administration pointers can be matched without the missing checkout"
+relative="$PROJ/.worktrees/106-relative"
+git worktree add -qb 106-relative "$relative"
+reladmin="$(git -C "$relative" rev-parse --absolute-git-dir)"
+printf '../../../.worktrees/106-relative/.git\n' > "$reladmin/gitdir"
+rm -rf "$relative"
+# Older Git does not interpret relative registrations; exercise its ordinary path
+# there, and the actual relative-pointer behavior on versions supporting it.
+if git worktree list --porcelain | grep -Fqx "worktree $relative"; then
+    run bash "$CLEAN" 106-relative
+    assert_eq 0 "$STATUS" "Git's relative pointer resolves against its own admin directory"
+    run test ! -e "$reladmin"; assert_eq 0 "$STATUS" "exact registration retired"
+else
+    printf '%s/.git\n' "$relative" > "$reladmin/gitdir"
+    run bash "$CLEAN" 106-relative
+    assert_eq 0 "$STATUS" "absolute fallback for older fixture Git"
+fi
+
+it "old Git supports plain worktrees and refuses ambiguous listings before removal"
+legacy="$(mktemp -d)"; track_tmp "$legacy"
+cat > "$legacy/git" <<'SH'
+#!/bin/sh
+case " $* " in *" worktree list --porcelain -z "*) exit 129 ;; esac
+exec "$FIXTURE_GIT" "$@"
+SH
+chmod +x "$legacy/git"
+git worktree add -qb 107-old-git "$PROJ/.worktrees/107-old-git"
+run env FIXTURE_GIT="$(command -v git)" PATH="$legacy:$PATH" bash "$CLEAN" 107-old-git
+assert_eq 0 "$STATUS" "ordinary cleanup works without porcelain -z"
+git worktree add -qb 108-safe "$PROJ/.worktrees/108-safe"
+odd="$PROJ/.worktrees/"$'two\nlines'
+git worktree add -qb 109-odd "$odd"
+run env FIXTURE_GIT="$(command -v git)" PATH="$legacy:$PATH" bash "$CLEAN" 108-safe
+assert_eq 1 "$STATUS" "ambiguous legacy listing refuses even an unrelated target"
+run test -d "$PROJ/.worktrees/108-safe"; assert_eq 0 "$STATUS" "nothing removed"
+git worktree remove "$odd"
+
 it "refuses to remove the worktree it is run from"
 git -C "$PROJ" worktree add -qb 014-current "$PROJ/.worktrees/014-current" >/dev/null 2>&1
 run bash -c 'cd "$2" && bash "$1" 014-current' _ "$CLEAN" "$PROJ/.worktrees/014-current"
@@ -90,7 +146,7 @@ assert_eq "Verdict: PASS" "$(cat "$PROJ/.prdkit/cache/evidence/016-evidence/revi
 assert_eq "lessons" "$(cat "$PROJ/.prdkit/cache/retrospectives/016-evidence.md" 2>/dev/null)" "retrospective kept"
 assert_eq '{"tokens":{"total":1}}' "$(cat "$PROJ/.prdkit/retrospective/016-evidence.enrich.json" 2>/dev/null)" "enrichment input kept"
 
-it "every change's evidence in the worktree and its ledger events survive removal"
+it "every change's evidence survives removal; a legacy spool needs explicit archival"
 # new-change.sh run inside a worktree opens the next change there, so one worktree can hold
 # several changes' evidence; the ledger spool is per checkout and gitignored too.
 git -C "$PROJ" worktree add -qb 018-first "$PROJ/.worktrees/018-first" >/dev/null 2>&1
@@ -103,24 +159,21 @@ printf '{"event":"a"}\n{"event":"b"}\n{"event":"c"}\n' > "$EV/ledger/events.json
 run bash "$CLEAN" 019-second
 assert_eq 1 "$STATUS" "no worktree named for the second change"
 run bash "$CLEAN" 018-first
+assert_eq 1 "$STATUS" "legacy spool retained for manual archival"
+assert_contains "$OUTPUT" "archive the legacy ledger spool"
+assert_eq '{"event":"a"}' "$(cat "$PROJ/.prdkit/ledger/events.jsonl")" "main spool unchanged"
+mv "$EV/ledger/events.jsonl" "$PROJ/.prdkit/ledger/archived.jsonl"
+run bash "$CLEAN" 018-first
 assert_eq 0 "$STATUS" "worktree removed"
 assert_eq "first" "$(cat "$PROJ/.prdkit/cache/evidence/018-first/report.md" 2>/dev/null)" "its own evidence kept"
 assert_eq "second" "$(cat "$PROJ/.prdkit/cache/evidence/019-second/report.md" 2>/dev/null)" "the other change's evidence kept"
-assert_contains "$OUTPUT" "appended 2 ledger event(s)" "events reported"
-assert_eq '{"event":"a"}
-{"event":"b"}
-{"event":"c"}' "$(cat "$PROJ/.prdkit/ledger/events.jsonl")" "events merged without duplicates"
-
-it "events reach a main checkout that has no spool yet"
+it "a linked legacy spool leaves the retained spool unchanged"
 git -C "$PROJ" worktree add -qb 021-spool "$PROJ/.worktrees/021-spool" >/dev/null 2>&1
 mkdir -p "$PROJ/.worktrees/021-spool/.prdkit/ledger"
-printf '{"event":"x"}\n{"event":"y"}\n' > "$PROJ/.worktrees/021-spool/.prdkit/ledger/events.jsonl"
-rm -f "$PROJ/.prdkit/ledger/events.jsonl"
+ln -s "$PROJ/.prdkit/ledger/archived.jsonl" "$PROJ/.worktrees/021-spool/.prdkit/ledger/events.jsonl"
 run bash "$CLEAN" 021-spool
-assert_eq 0 "$STATUS" "worktree removed"
-assert_contains "$OUTPUT" "appended 2 ledger event(s)" "events reported"
-assert_eq '{"event":"x"}
-{"event":"y"}' "$(cat "$PROJ/.prdkit/ledger/events.jsonl" 2>/dev/null)" "every event kept"
+assert_eq 1 "$STATUS" "cleanup refuses a linked spool"
+assert_eq '{"event":"a"}' "$(cat "$PROJ/.prdkit/ledger/events.jsonl")" "main spool unchanged"
 
 it "a refused removal copies nothing; the worktree's own copy of the script refuses"
 git -C "$PROJ" worktree add -qb 020-refused "$PROJ/.worktrees/020-refused" >/dev/null 2>&1
@@ -193,9 +246,6 @@ sub_worktree 051-sub-clean
 mkdir -p "$PROJ2/.worktrees/051-sub-clean/.prdkit/cache/evidence/051-sub-clean" "$PROJ2/.worktrees/051-sub-clean/.prdkit/cache/retrospectives"
 printf 'kept\n' > "$PROJ2/.worktrees/051-sub-clean/.prdkit/cache/evidence/051-sub-clean/out.txt"
 printf 'lessons\n' > "$PROJ2/.worktrees/051-sub-clean/.prdkit/cache/retrospectives/051-sub-clean.md"
-mkdir -p "$PROJ2/.worktrees/051-sub-clean/.prdkit/ledger"
-printf '{"event":"sub"}\n' > "$PROJ2/.worktrees/051-sub-clean/.prdkit/ledger/events.jsonl"
-rm -f "$PROJ2/.prdkit/ledger/events.jsonl"
 run bash "$CLEAN2" --json 051-sub-clean
 assert_eq 0 "$STATUS" "removed"
 assert_contains "$OUTPUT" '"result":"ok"' "reports success"
@@ -205,7 +255,6 @@ assert_eq 0 "$STATUS" "worktree directory gone"
 assert_not_contains "$(git -C "$PROJ2" worktree list --porcelain)" "051-sub-clean" "registration cleared"
 assert_eq "kept" "$(cat "$PROJ2/.prdkit/cache/evidence/051-sub-clean/out.txt" 2>/dev/null)" "evidence kept"
 assert_eq "lessons" "$(cat "$PROJ2/.prdkit/cache/retrospectives/051-sub-clean.md" 2>/dev/null)" "retrospective kept"
-assert_eq '{"event":"sub"}' "$(cat "$PROJ2/.prdkit/ledger/events.jsonl" 2>/dev/null)" "ledger event kept"
 assert_eq "$(git -C "$PROJ2" rev-parse HEAD)" "$(git -C "$PROJ2" rev-parse refs/heads/051-sub-clean)" "branch kept"
 
 it "the same repository: an untracked file refuses the worktree as dirty, and it stays"
@@ -251,20 +300,12 @@ assert_contains "$OUTPUT" "locked working tree" "git's reason reported"
 git -C "$PROJ" worktree unlock "$PROJ/.worktrees/055-locked"
 git -C "$PROJ" worktree remove --force "$PROJ/.worktrees/055-locked" >/dev/null 2>&1 || true
 
-it "negative control: without the forced retry the submodule worktree is refused and kept"
+it "a deinitialized submodule's unused store is also retired before removal"
 sub_worktree 056-sub-control
-NORETRY="$PROJ2/.prdkit/scripts/bash/cleanup-noretry.sh"
-# shellcheck disable=SC2016 # sed pattern: the $ are literal script text
-sed 's/if \[ "\$locked" = true \] || ! submodule_refusal "\$rm_err"; then/if true; then/' "$CLEAN2" > "$NORETRY"
-if cmp -s "$CLEAN2" "$NORETRY"; then _no "negative control built" "the retry condition was not found in the script"; else _ok "negative control built"; fi
-run bash "$NORETRY" 056-sub-control
-assert_eq 1 "$STATUS" "refused without the retry"
-assert_contains "$OUTPUT" "submodules" "git's refusal reported"
-run test -d "$PROJ2/.worktrees/056-sub-control"
-assert_eq 0 "$STATUS" "worktree kept"
+git -C "$PROJ2/.worktrees/056-sub-control" submodule deinit -q -- vendor/sub
 run bash "$CLEAN2" 056-sub-control
-assert_eq 0 "$STATUS" "the real script removes the same worktree"
-rm -f "$NORETRY"
+assert_eq 0 "$STATUS" "clean worktree removed"
+assert_contains "$OUTPUT" "retained submodule stores at"
 
 it "detection does not rest on git's wording: a gitlink in the index is enough"
 # A git whose message is worded or translated differently still refuses the same way.
@@ -309,6 +350,36 @@ nowhere_else() { # commit: true when neither the submodule's origin nor the main
 mutex_of() { # change id: the path of the removal mutex in the worktree's git directory
     printf '%s/prdkit-cleanup.lock' "$(git -C "$PROJ2/.worktrees/$1" rev-parse --absolute-git-dir)"
 }
+
+it "an embedded submodule store is retained, even under --force"
+embedded="$PROJ2/.worktrees/101-embedded"
+git -C "$PROJ2" worktree add -qb 101-embedded "$embedded"
+git clone -q "$SUBSRC" "$embedded/vendor/sub"
+embedded_tip="$(sub_commit 101-embedded)"
+run bash "$CLEAN2" --force 101-embedded
+assert_eq 1 "$STATUS" "embedded store refused"
+assert_contains "$OUTPUT" 'unsupported submodule layout'
+assert_eq "$embedded_tip" "$(git -C "$embedded/vendor/sub" rev-parse HEAD)" "local commit preserved"
+git -C "$embedded" submodule absorbgitdirs >/dev/null 2>&1
+run bash "$CLEAN2" 101-embedded
+assert_eq 1 "$STATUS" "absorbing the store alone does not prove retention"
+assert_contains "$OUTPUT" "$embedded_tip"
+git -C "$PROJ2/vendor/sub" -c protocol.file.allow=always fetch -q "$embedded/vendor/sub" HEAD:refs/heads/from-embedded
+run bash "$CLEAN2" 101-embedded
+assert_eq 0 "$STATUS" "supported layout with a retained copy can be cleaned"
+assert_eq "$embedded_tip" "$(git -C "$PROJ2/vendor/sub" rev-parse 'from-embedded^{commit}')" "commit survives removal"
+
+it "a retiring submodule cannot strand its own linked worktree"
+sub_worktree 102-linked
+module="$PROJ2/.worktrees/102-linked/vendor/sub"
+linked="$(mktemp -d)"; track_tmp "$linked"
+git -C "$module" worktree add -q --detach "$linked"
+git -C "$linked" "${GITID[@]}" commit -q --allow-empty -m 'linked checkout work'
+linked_tip="$(git -C "$linked" rev-parse HEAD)"
+run bash "$CLEAN2" --force 102-linked
+assert_eq 1 "$STATUS" "dependent checkout refused"
+assert_contains "$OUTPUT" 'administers linked worktrees'
+assert_eq "$linked_tip" "$(git -C "$linked" rev-parse 'HEAD^{commit}')" "linked checkout and commit survive"
 
 it "an unpushed submodule commit the branch records refuses the removal, with and without --force"
 sub_worktree 080-sub-unpushed
@@ -400,7 +471,40 @@ run test -d "$PROJ2/.worktrees/082-sub-branch"
 assert_eq 0 "$STATUS" "worktree kept"
 git -C "$PROJ2" worktree remove --force --force "$PROJ2/.worktrees/082-sub-branch" >/dev/null 2>&1 || true
 
-it "negative control: without the submodule-commit check the removal deletes the only copy"
+it "a commit arriving after inspection survives automatic and explicit forced removal"
+late="$(mktemp -d)"; track_tmp "$late"
+cat > "$late/write" <<'SH'
+#!/bin/sh
+[ -e "$LATE_OID" ] && exit 0
+"$FIXTURE_GIT" -C "$LATE_WT" -c user.email=test@example.invalid -c user.name=test commit -q --allow-empty -m late &&
+    "$FIXTURE_GIT" -C "$LATE_WT" rev-parse HEAD > "$LATE_OID"
+SH
+cat > "$late/mv" <<'SH'
+#!/bin/sh
+case "$1" in */modules) "$LATE_WRITE" || exit 1 ;; esac
+exec "$FIXTURE_MV" "$@"
+SH
+cat > "$late/git" <<'SH'
+#!/bin/sh
+case " $* " in *" worktree remove --force "*) "$LATE_WRITE" || exit 1 ;; esac
+exec "$FIXTURE_GIT" "$@"
+SH
+chmod +x "$late/git" "$late/mv" "$late/write"
+for mode in auto explicit; do
+    id="110-late-$mode"; sub_worktree "$id"
+    work="$PROJ2/.worktrees/$id/vendor/sub"
+    args=(); [ "$mode" = auto ] || args=(--force)
+    run env FIXTURE_GIT="$REAL_GIT" FIXTURE_MV="$(command -v mv)" LATE_WRITE="$late/write" \
+        LATE_WT="$work" LATE_OID="$late/$mode" PATH="$late:$PATH" bash "$CLEAN2" ${args[@]+"${args[@]}"} "$id"
+    assert_eq 0 "$STATUS" "late write and $mode cleanup succeed: $OUTPUT"
+    archived="$(find "$PROJ2/.git/prdkit-retired" -path "*/$id.*/modules/vendor/sub/HEAD" -print 2>/dev/null)"
+    assert_contains "$OUTPUT" "$PROJ2/.git/prdkit-retired/$id." "recovery location reported"
+    run git --git-dir="${archived%/HEAD}" --work-tree="$late" rev-parse 'HEAD^{commit}'
+    assert_eq 0 "$STATUS" "quarantined ref and object readable"
+    assert_eq "$(cat "$late/$mode")" "$OUTPUT" "the late commit survived $mode cleanup"
+done
+
+it "negative control: bypassing the submodule check still leaves recoverable storage"
 sub_worktree 083-sub-control
 c83="$(sub_commit 083-sub-control)"
 NOCHECK="$PROJ2/.prdkit/scripts/bash/cleanup-nocheck.sh"
@@ -408,7 +512,7 @@ sed 's/check_submodule_commits ||/true ||/' "$CLEAN2" > "$NOCHECK"
 if cmp -s "$CLEAN2" "$NOCHECK"; then _no "negative control built" "the check was not found in the script"; else _ok "negative control built"; fi
 run bash "$NOCHECK" 083-sub-control
 assert_eq 0 "$STATUS" "removed without the check"
-if nowhere_else "$c83"; then _ok "the commit the branch records is gone everywhere"; else _no "the commit the branch records is gone everywhere"; fi
+if nowhere_else "$c83"; then _ok "the commit was not copied into the main or upstream repository"; else _no "unexpected main or upstream copy"; fi
 assert_eq "$c83" "$(git -C "$PROJ2" ls-tree refs/heads/083-sub-control vendor/sub | awk '{ print $3 }')" "while the branch still records it"
 rm -f "$NOCHECK"
 
@@ -427,11 +531,15 @@ M84="$(mutex_of 084-sub-lock)"
 run env PATH="$SHIM2:$PATH" bash "$CLEAN2" 084-sub-lock
 assert_eq 1 "$STATUS" "the simulated failure refuses"
 assert_contains "$OUTPUT" "simulated failure" "git's reason reported"
+assert_contains "$OUTPUT" "recover submodule stores from" "failure reports the retained copy"
 assert_eq "$M84" "$(cat "$SHIM2/list")" "the mutex is held during the forced removal"
 run test ! -e "$M84"
 assert_eq 0 "$STATUS" "and released after the failure"
+archive="$(find "$PROJ2/.git/prdkit-retired" -type d -path '*/084-sub-lock.*/modules' -prune)"
+assert_file "$archive/vendor/sub/HEAD" "failed removal retained recoverable repository"
+mv "$archive" "${M84%/*}/modules"
 run bash "$CLEAN2" 084-sub-lock
-assert_eq 0 "$STATUS" "a later run removes it"
+assert_eq 0 "$STATUS" "a later run removes it after restoring the archive"
 
 it "a worktree someone has locked with git is refused by --force with git's reason"
 sub_worktree 085-sub-held
@@ -754,14 +862,14 @@ assert_contains "$OUTPUT" "060-closed-clean" "the clean worktree closed by its e
 assert_contains "$OUTPUT" '"skipped":[' "skipped list"
 assert_contains "$OUTPUT" "062-closed-dirty\",\"reason\":\"uncommitted or untracked changes" "dirty one skipped as dirty"
 assert_contains "$OUTPUT" "063-closed-locked\",\"reason\":\"git refused the removal: cannot remove a locked working tree" "locked one skipped with git's reason"
-assert_contains "$OUTPUT" "069-stale" "the stale registration is reported pruned"
+assert_contains "$OUTPUT" '"pruned":[]' "closed cleanup reports no incidental prune"
 run test ! -d "$PROJ/.worktrees/060-closed-clean"
 assert_eq 0 "$STATUS" "060-closed-clean removed"
 for id in 061-open 062-closed-dirty 063-closed-locked 064-self-claimed 065-logged-record 066-never-logged; do
     run test -d "$PROJ/.worktrees/$id"
     assert_eq 0 "$STATUS" "$id kept"
 done
-assert_not_contains "$(git -C "$PROJ" worktree list --porcelain)" "069-stale" "stale registration pruned"
+assert_contains "$(git -C "$PROJ" worktree list --porcelain)" "069-stale" "stale registration left alone"
 assert_eq "kept" "$(cat "$PROJ/.prdkit/cache/evidence/060-closed-clean/out.txt" 2>/dev/null)" "evidence preserved"
 run test -f "$PROJ/.worktrees/062-closed-dirty/scratch.txt"
 assert_eq 0 "$STATUS" "the dirty worktree's file kept"
@@ -825,6 +933,10 @@ done
 
 it "--closed removes a closed change's clean worktree that has submodules"
 for id in 070-sub-closed 071-sub-open; do sub_worktree "$id"; done
+sub_worktree 103-stale-sub
+stale_tip="$(sub_commit 103-stale-sub)"
+store="$(git -C "$PROJ2/.worktrees/103-stale-sub/vendor/sub" rev-parse --absolute-git-dir)"
+rm -rf "$PROJ2/.worktrees/103-stale-sub"
 mkdir -p "$PROJ2/specs/changes"
 printf -- '- 2026-11-10 070-sub-closed: x\n' > "$PROJ2/specs/log.md"
 printf '# 071-sub-open\n' > "$PROJ2/specs/changes/071-sub-open.md"
@@ -838,5 +950,16 @@ run test ! -d "$PROJ2/.worktrees/070-sub-closed"
 assert_eq 0 "$STATUS" "the closed change's worktree removed"
 run test -d "$PROJ2/.worktrees/071-sub-open"
 assert_eq 0 "$STATUS" "the open change's worktree kept"
+git -C "$PROJ2" worktree add -qb 104-stale-plain "$PROJ2/.worktrees/104-stale-plain"
+rm -rf "$PROJ2/.worktrees/104-stale-plain"
+run bash "$CLEAN2" 104-stale-plain
+assert_eq 0 "$STATUS" "pruning a plain registration by ID does not prune others"
+for arg in --prune 103-stale-sub; do
+    run bash "$CLEAN2" "$arg"
+    assert_eq 1 "$STATUS" "$arg refuses stale submodule metadata"
+    assert_contains "$OUTPUT" 'submodule data'
+done
+run git --git-dir="$store" --work-tree="$PROJ2" cat-file -e "$stale_tip^{commit}"
+assert_eq 0 "$STATUS" "unrelated removal and explicit pruning retain the only submodule commit"
 
 finish

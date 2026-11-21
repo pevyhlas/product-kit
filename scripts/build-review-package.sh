@@ -286,7 +286,7 @@ for d in "$REVIEW_DIR"/round-*/; do
         if review_file_without_nul "$d/completed.tsv" &&
             awk -F '\t' 'NR!=1 || NF!=7 { bad=1 } END { exit (bad || NR!=1) }' "$d/completed.tsv" &&
             IFS=$'\t' read -r version bound_id bound_head bound_base bound_tip bound_policy bound_comparison < "$d/completed.tsv" &&
-            [ "$version" = package1 ] && [ "$bound_id" = "$CHANGE_ID" ] && [ "$bound_comparison" = known ] &&
+            [ "$version" = package2 ] && [ "$bound_id" = "$CHANGE_ID" ] && [ "$bound_comparison" = known ] &&
             [[ "$bound_head" =~ ^[0-9a-f]{40}$ && "$bound_tip" =~ ^[0-9a-f]{40}$ && "$bound_policy" =~ ^[0-9a-f]{40}$ ]] &&
             [[ "$bound_base" == refs/remotes/* ]]; then
             COMPLETED="$n"; COMPLETED_HEAD="$bound_head"
@@ -323,9 +323,29 @@ if ! git -C "$REPO_ROOT" check-ignore -q "$PACKAGE_DIR/diff.patch" 2>/dev/null; 
 fi
 
 # --- Write the package over the FULL range (never HEAD~1) --------------------
+patch_options=(--no-ext-diff --no-textconv --no-color --no-renames --no-relative
+    --src-prefix=a/ --dst-prefix=b/ --ignore-submodules=none --submodule=short)
+write_patch() { # old tree, new tree, destination
+    local from="$1" to="$2" dest="$3"
+    git -C "$REPO_ROOT" diff "${patch_options[@]}" --binary "$from" "$to" -- > "$dest"
+    # Read the actual patch's paths with Git's patch parser, then compare with
+    # the tree objects. Git quotes special characters in both line inventories;
+    # a type change can emit two patch records for the same path.
+    git -C "$REPO_ROOT" -c core.quotepath=true diff-tree --no-commit-id -r --name-only \
+        --no-renames --ignore-submodules=none "$from" "$to" -- > "$PACKAGE_SCRATCH/tree-paths"
+    : > "$PACKAGE_SCRATCH/numstat"
+    if [ -s "$dest" ]; then
+        git -C "$REPO_ROOT" -c core.quotepath=true apply --numstat -p1 < "$dest" > "$PACKAGE_SCRATCH/numstat"
+    fi
+    cut -f3- "$PACKAGE_SCRATCH/numstat" > "$PACKAGE_SCRATCH/patch-paths"
+    LC_ALL=C sort -u "$PACKAGE_SCRATCH/patch-paths" > "$PACKAGE_SCRATCH/actual"
+    LC_ALL=C sort -u "$PACKAGE_SCRATCH/tree-paths" > "$PACKAGE_SCRATCH/expected"
+    cmp -s "$PACKAGE_SCRATCH/actual" "$PACKAGE_SCRATCH/expected" ||
+        { echo "ERROR: patch path inventory differs from the object delta; incomplete round retained" >&2; exit 1; }
+}
 git -C "$REPO_ROOT" log "$BASE_SHA..$HEAD_SHA" --oneline > "$PACKAGE_DIR/commits.txt"
-git -C "$REPO_ROOT" diff --no-ext-diff --no-textconv --stat "$BASE_SHA..$HEAD_SHA" > "$PACKAGE_DIR/diffstat.txt"
-git -C "$REPO_ROOT" diff --no-ext-diff --no-textconv --binary "$BASE_SHA..$HEAD_SHA" > "$PACKAGE_DIR/diff.patch"
+git -C "$REPO_ROOT" diff "${patch_options[@]}" --stat "$BASE_SHA" "$HEAD_SHA" -- > "$PACKAGE_DIR/diffstat.txt"
+write_patch "$BASE_SHA" "$HEAD_SHA" "$PACKAGE_DIR/diff.patch"
 
 printf 'file\tbytes\tblob_oid\tsource\n' > "$PACKAGE_DIR/manifest.tsv"
 inventory() {
@@ -369,11 +389,16 @@ if [ -n "$SINCE" ]; then
         fi
     fi
     if [ -n "$delta_from" ]; then
-        git -C "$REPO_ROOT" diff --no-ext-diff --no-textconv --binary "$delta_from" "$HEAD_SHA" > "$PACKAGE_DIR/delta.patch"
+        write_patch "$delta_from" "$HEAD_SHA" "$PACKAGE_DIR/delta.patch"
     else
         source_label="$HEAD_SHA ^$SINCE ^$BASE_SHA (non-merge commit patches)"
-        git -C "$REPO_ROOT" log --reverse --no-merges --no-color --no-decorate --format=medium --no-ext-diff --no-textconv --binary -p \
-            "$HEAD_SHA" --not "$SINCE" "$BASE_SHA" > "$PACKAGE_DIR/delta.patch"
+        git -C "$REPO_ROOT" rev-list --reverse --no-merges --parents "$HEAD_SHA" --not "$SINCE" "$BASE_SHA" > "$PACKAGE_SCRATCH/commits"
+        while read -r commit parent; do
+            [ -n "$parent" ] || parent="$(git -C "$REPO_ROOT" hash-object -t tree --stdin < /dev/null)"
+            git -C "$REPO_ROOT" show -s --no-color --no-decorate --format=medium "$commit"
+            write_patch "$parent" "$commit" "$PACKAGE_SCRATCH/commit.patch"
+            cat "$PACKAGE_SCRATCH/commit.patch"
+        done < "$PACKAGE_SCRATCH/commits" > "$PACKAGE_DIR/delta.patch"
         merges="$(git -C "$REPO_ROOT" rev-list --min-parents=2 "$HEAD_SHA" --not "$SINCE" "$BASE_SHA" | tr '\n' ' ' | sed 's/ $//')"
         DELTA="$SINCE..$HEAD_SHA without what the base brought: the patches of the non-merge commits since $SINCE that $BASE_SHA does not contain, oldest first, as the automatic merge was unavailable (merge-tree --write-tree needs Git 2.38+ and full history)."
         git -C "$REPO_ROOT" merge-base --is-ancestor "$SINCE" "$HEAD_SHA" ||
@@ -448,7 +473,7 @@ done < "$PACKAGE_DIR/manifest.tsv"
 # Completion is written LAST, never to an interrupted round. It is a comparison binding, not
 # approval: later calls recompute the prior head's content from immutable objects.
 comparison=unknown; [ -z "$FINGERPRINT" ] || comparison=known
-printf 'package1\t%s\t%s\t%s\t%s\t%s\t%s\n' "$CHANGE_ID" "$HEAD_SHA" "$FP_REF" "$FP_BASE_AT" "$POLICY_AT" "$comparison" > "$PACKAGE_DIR/completed.pending"
+printf 'package2\t%s\t%s\t%s\t%s\t%s\t%s\n' "$CHANGE_ID" "$HEAD_SHA" "$FP_REF" "$FP_BASE_AT" "$POLICY_AT" "$comparison" > "$PACKAGE_DIR/completed.pending"
 mv "$PACKAGE_DIR/completed.pending" "$PACKAGE_DIR/completed.tsv"
 
 printf '{"ROUND":%d,"BASE_SHA":"%s","HEAD_SHA":"%s","PACKAGE_DIR":"%s","REPORT_PATH":"%s","INDEX_PATH":"%s","SINCE_SHA":"%s","FINGERPRINT":"%s","SINCE_FINGERPRINT":"%s"}\n' "$ROUND" "$BASE_SHA" "$HEAD_SHA" "$(json_escape "$PACKAGE_DIR")" "$(json_escape "$PACKAGE_DIR/report.md")" "$(json_escape "$PACKAGE_DIR/index.md")" "$SINCE" "$FINGERPRINT" "$SINCE_FINGERPRINT"

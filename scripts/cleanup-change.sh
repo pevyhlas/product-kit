@@ -9,7 +9,7 @@
 # session that was operating inside that directory then fails to re-enter it on
 # resume ("can't enter the worktree at startup"). This helper removes a
 # finished change's worktree the safe way (git worktree remove, non-forced)
-# and prunes stale registrations so nothing dangles. With --closed it does so
+# and leaves unrelated registrations alone. With --closed it does so
 # for every worktree whose change is closed on the trusted integration branch.
 #
 # Run it from the MAIN checkout, never from inside the worktree being removed.
@@ -60,8 +60,8 @@ Options:
                 removal as a single change id; a dirty, locked or otherwise refused
                 worktree is reported and skipped, the run continues, and the exit
                 status is 1 if any was refused. Never forces. Skips the main checkout
-                and any worktree holding the current directory, and clears stale
-                registrations. Refused when no trusted branch resolves (set
+                and any worktree holding the current directory. Stale registrations
+                are left for --prune. Refused when no trusted branch resolves (set
                 origin/HEAD: git remote set-head origin --auto). Branches are never
                 deleted; that stays your choice.
   --help, -h    Show this help message
@@ -71,17 +71,17 @@ A worktree is removed non-forced by default: uncommitted or untracked changes
 refuse the removal until they are committed, stashed or discarded. Committed
 work is not checked for integration; it stays on the change's branch, which
 is never deleted. Ignored files go with the worktree, except evidence,
-retrospectives, usage-enrichment inputs and ledger events, which are first
-copied to this checkout.
+retrospectives and usage-enrichment inputs, which are first copied to this
+checkout. Archive and remove any legacy ledger spool yourself before cleanup.
 
-Git refuses to remove any worktree that contains submodules, even a clean one.
-When the worktree is clean and that is the only reason, the removal is retried
-with --force, under a lock no second run can take, after re-checking that it is
-still clean, so nothing is discarded. Any other git refusal, such as a locked worktree, is reported with
-git's reason.
+For worktrees with submodules, Git removal may require --force even when
+clean. Cleanup rechecks cleanliness under its removal lock before using this
+mode automatically. Locked worktrees stay locked.
 
-A worktree keeps its own copy of each submodule repository, which the removal
-deletes. Every removal, --force included, is refused while such a copy holds a
+A worktree keeps its own copy of each submodule repository. Before removal it
+is moved to a reported prdkit-retired directory under the common Git directory.
+Only the operator purges a retained copy, after checking its refs and reflogs.
+Every removal, --force included, is refused while such a copy holds a
 commit (HEAD, any ref or retained reflog entry, or a gitlink the worktree records)
 that is not reachable from HEAD or a non-tracking ref in an independent main
 checkout's submodule. Fetch it into a local branch or tag there, then rerun.
@@ -146,7 +146,7 @@ MATCH_PATH=""
 MATCH_PRUNABLE=false
 MATCH_LOCKED=false
 KNOWN=()
-REMOVED=(); SKIPPED_PATH=(); SKIPPED_WHY=(); PRUNED=()
+REMOVED=(); SKIPPED_PATH=(); SKIPPED_WHY=()
 
 cur_path=""; cur_branch=""; cur_prunable=false; cur_locked=false; cur_bare=false
 flush_entry() {
@@ -168,7 +168,32 @@ flush_entry() {
     cur_path=""; cur_branch=""; cur_prunable=false; cur_locked=false; cur_bare=false
 }
 
-while IFS= read -r line; do
+# Inspect raw gitdir pointers before using older Git's newline-delimited
+# porcelain. A literal newline in a registered path can resemble another field.
+common_dir="$(git -C "$ROOT" rev-parse --git-common-dir)"
+common_dir="$(cd "$ROOT" && cd "$common_dir" && pwd -P)"
+legacy_listing_safe() (
+    local dir target
+    case "$ROOT$common_dir" in *[[:cntrl:]]*) return 1 ;; esac
+    if [ ! -e "$common_dir/worktrees" ]; then return 0; fi
+    [ -r "$common_dir/worktrees" ] && [ -x "$common_dir/worktrees" ] || return 1
+    shopt -s nullglob dotglob
+    for dir in "$common_dir/worktrees"/*; do
+        [ ! -L "$dir" ] && [ -f "$dir/gitdir" ] && [ ! -L "$dir/gitdir" ] &&
+            target="$(cat "$dir/gitdir")" || return 1
+        case "$target" in *[[:cntrl:]]*) return 1 ;; */.git) ;; *) return 1 ;; esac
+    done
+)
+registrations="$(mktemp)"; delimiter=''
+if ! git -C "$ROOT" worktree list --porcelain -z > "$registrations" 2>/dev/null; then
+    delimiter=$'\n'
+    if ! legacy_listing_safe || ! git -C "$ROOT" worktree list --porcelain > "$registrations"; then
+        rm -f "$registrations"
+        echo "[prdkit] Cannot inspect worktree registrations unambiguously." >&2
+        exit 1
+    fi
+fi
+while IFS= read -r -d "$delimiter" line; do
     case "$line" in
         "worktree "*) flush_entry; cur_path="${line#worktree }" ;;
         "branch refs/heads/"*) cur_branch="${line#branch refs/heads/}" ;;
@@ -176,7 +201,8 @@ while IFS= read -r line; do
         "locked"*) cur_locked=true ;;
         "bare") cur_bare=true ;;
     esac
-done < <(git -C "$ROOT" worktree list --porcelain 2>/dev/null || true)
+done < "$registrations"
+rm -f "$registrations"
 flush_entry
 
 emit_json() {
@@ -192,10 +218,67 @@ emit_json() {
         "$result" "$action" "$(json_escape "$message")" "$items"
 }
 
+stale_commits_retained() (
+    local dir="$1" path log head roots oid refs orig=""
+    set -o pipefail
+    export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
+    # Only the ordinary files backend, HEAD and its log are supported. Refuse
+    # per-worktree refs, pseudo-refs and other operation state rather than omit roots.
+    shopt -s nullglob dotglob
+    for path in "$dir"/*; do
+        [ ! -L "$path" ] || return 1
+        case "${path##*/}" in
+            HEAD|gitdir|commondir|index|COMMIT_EDITMSG) [ -f "$path" ] || return 1 ;;
+            ORIG_HEAD) [ -f "$path" ] && orig="$(git --git-dir="$dir" rev-parse --verify 'ORIG_HEAD^{commit}')" || return 1 ;;
+            logs) [ -d "$path" ] && [ -r "$path" ] && [ -x "$path" ] || return 1
+                  for log in "$path"/*; do
+                      [ "$log" = "$dir/logs/HEAD" ] && [ ! -L "$log" ] && [ -f "$log" ] || return 1
+                  done ;;
+            refs) [ -d "$path" ] && roots="$(find "$path" ! -type d -print)" && [ -z "$roots" ] || return 1 ;;
+            *) return 1 ;;
+        esac
+    done
+    [ ! -e "$common_dir/info/grafts" ] && [ -z "${GIT_GRAFT_FILE:-}" ] || return 1
+    head="$(git --git-dir="$dir" rev-parse --verify 'HEAD^{commit}')" || return 1
+    roots="$head"
+    if [ -e "$dir/logs/HEAD" ]; then
+        # Include BOTH endpoints: Git's log walker can omit a log's oldest old OID.
+        roots="$(LC_ALL=C awk -v len="${#head}" '
+          length($1)!=len || length($2)!=len || $1$2 ~ /[^0-9a-f]/ {exit 1}
+          {if ($1 !~ /^0+$/) print $1; if ($2 !~ /^0+$/) print $2}' "$dir/logs/HEAD")" || return 1
+        roots="$head
+$roots"
+    fi
+    roots="$(printf '%s\n' "$roots" "$orig" | LC_ALL=C sort -u)" || return 1
+    while IFS= read -r oid; do
+        [ -n "$oid" ] || continue
+        refs="$(git -C "$ROOT" for-each-ref --contains="$oid" --format='%(refname)' refs/heads refs/tags)" &&
+            [ -n "$refs" ] || return 1
+    done <<< "$roots"
+)
+prunable_without_store() (
+    local path="$1" admins="$common_dir/worktrees" dir target matches=0
+    [ ! -e "$path" ] && [ ! -L "$path" ] || return 1
+    [ -r "$admins" ] && [ -x "$admins" ] || return 1
+    shopt -s nullglob dotglob
+    for dir in "$admins"/*; do
+        [ -d "$dir" ] && [ ! -L "$dir" ] && [ -r "$dir" ] && [ -x "$dir" ] &&
+            [ -f "$dir/gitdir" ] && [ ! -L "$dir/gitdir" ] && target="$(cat "$dir/gitdir")" || return 1
+        case "$target" in
+            /*) ;;
+            */.git) target="$(git -C "$dir" --git-dir=. rev-parse --path-format=absolute --git-path "$target")" || return 1 ;;
+            *) return 1 ;;
+        esac
+        [ "$target" = "$path/.git" ] || continue
+        [ ! -e "$dir/modules" ] && [ ! -L "$dir/modules" ] || return 1
+        stale_commits_retained "$dir" || return 1
+        matches=$((matches + 1))
+    done
+    [ "$matches" -eq 1 ]
+)
 prune_stale() {
-    # Clear registrations whose directories are gone. Reports the paths git drops.
-    git -C "$ROOT" worktree prune >/dev/null 2>&1 || true
-    if [ "${#STALE_PATHS[@]}" -eq 0 ]; then
+    local p msg
+    if [ "$#" -eq 0 ]; then
         if $JSON_MODE; then
             emit_json ok prune "No stale worktree registrations to prune."
         else
@@ -203,16 +286,26 @@ prune_stale() {
         fi
         return 0
     fi
-    if $JSON_MODE; then
-        emit_json ok prune "Pruned ${#STALE_PATHS[@]} stale worktree registration(s)." "${STALE_PATHS[@]}"
-    else
-        echo "[prdkit] Pruned ${#STALE_PATHS[@]} stale worktree registration(s):"
-        for p in "${STALE_PATHS[@]}"; do echo "  $p"; done
-    fi
+    for p in "$@"; do
+        if ! prunable_without_store "$p"; then
+            msg="Refusing to prune $p: registration is ambiguous, has submodule data or cannot prove every local commit is retained. Recover its state and retain its commits on a shared branch or tag first."
+            if $JSON_MODE; then emit_json refused prune "$msg"; else echo "[prdkit] $msg" >&2; fi
+            return 1
+        fi
+    done
+    for p in "$@"; do
+        if ! prunable_without_store "$p" || ! git -C "$ROOT" worktree remove -- "$p"; then
+            msg="Could not prune $p; inspect the current registrations before retrying."
+            if $JSON_MODE; then emit_json refused prune "$msg"; else echo "[prdkit] $msg" >&2; fi
+            return 1
+        fi
+    done
+    msg="Pruned $# stale worktree registration(s) whose directories were already gone."
+    if $JSON_MODE; then emit_json ok prune "$msg" "$@"; else echo "[prdkit] $msg"; printf '  %s\n' "$@"; fi
 }
 
 if [ "$PRUNE_ONLY" = true ]; then
-    prune_stale
+    prune_stale "${STALE_PATHS[@]}"
     exit 0
 fi
 
@@ -230,13 +323,12 @@ wt_dirty() {
     [ -n "$out" ]
 }
 
-# Review packages, check outputs, retrospectives, usage-enrichment inputs and the ledger spool live
-# in the worktree's gitignored .prdkit/cache/, .prdkit/retrospective/ and .prdkit/ledger/, which
+# Review packages, check outputs, retrospectives and usage-enrichment inputs live
+# in the worktree's gitignored .prdkit/cache/ and .prdkit/retrospective/, which
 # `git worktree remove` deletes without counting them as dirty. Copy every evidence, retrospective
 # and enrichment file into this checkout's .prdkit/ and verify it first; a copy that fails or
 # would overwrite a different file refuses the removal.
-# The worktree's ledger events are appended to this checkout's spool, skipping lines it has.
-PRESERVED=0; EVENTS=0; CONFLICT=""
+PRESERVED=0; CONFLICT=""
 preserve() { # path relative to .prdkit/ (a directory or a file)
     local src="$WT/.prdkit/$1" dest="$ROOT/.prdkit/$1" file rel
     [ -e "$src" ] || return 0
@@ -251,17 +343,6 @@ preserve() { # path relative to .prdkit/ (a directory or a file)
             PRESERVED=$((PRESERVED + 1))
         fi
     done < <(find "$src" -type f -print0)
-}
-merge_events() {
-    local src="$WT/.prdkit/ledger/events.jsonl" dest="$ROOT/.prdkit/ledger/events.jsonl" new
-    [ -s "$src" ] || return 0
-    CONFLICT="$dest"
-    mkdir -p "$(dirname "$dest")" && touch "$dest" || return 1
-    # FILENAME, not NR == FNR: with an empty spool here, NR == FNR would hold through the worktree's.
-    new="$(awk 'FILENAME == ARGV[1] { seen[$0] = 1; next } !seen[$0]++' "$dest" "$src")" || return 1
-    [ -n "$new" ] || return 0
-    printf '%s\n' "$new" >> "$dest" || return 1
-    EVENTS="$(printf '%s\n' "$new" | wc -l | tr -d ' ')"
 }
 
 # git refuses `worktree remove` for any worktree that contains submodules, clean or not. True when
@@ -376,6 +457,9 @@ $(printf '%s\n' "$own" | awk '$2 == "commit" { print $3 }')" ;;
         mod="${head%/HEAD}"
         [ -d "$mod/objects" ] || continue
         rel="${mod#"$mods"/}"
+        if [ -e "$mod/worktrees" ] || [ -L "$mod/worktrees" ]; then
+            UNSAFE_MODULE="$rel administers linked worktrees"; return 4
+        fi
         if ! independent_store "$common/modules/$rel"; then
             UNSAFE_MODULE="$rel"; return 3
         fi
@@ -427,19 +511,40 @@ modules_readable() { # modules dir
     rm -f "$list"
     return "$state"
 }
+# Every populated checkout, including nested ones, must use a gitfile pointing
+# into the administrative tree scanned below. An embedded store is not scanned.
+supported_gitfiles() {
+    local admin="$1" file mod
+    while IFS= read -r -d '' file; do
+        [ "$file" != "$WT/.git" ] || continue
+        UNSAFE_MODULE="${file#"$WT"/}"
+        [ -f "$file" ] && [ ! -L "$file" ] || return 4
+        mod="$(git rev-parse --resolve-git-dir "$file")" && mod="$(cd -P "$mod" && pwd -P)" || return 4
+        case "$mod" in "$admin/modules/"*) ;; *) return 4 ;; esac
+        [ -d "$mod/objects" ] && [ -f "$mod/HEAD" ] && [ ! -L "$mod/HEAD" ] || return 4
+    done < "$2"
+}
 submodule_commits_held() {
     local admin list state=0
     local GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
     export GIT_NO_REPLACE_OBJECTS GIT_NO_LAZY_FETCH
     UNSAFE_MODULE=""; UNSAFE_COMMIT=""; UNREADABLE=""
     admin="$(git -C "$WT" rev-parse --absolute-git-dir 2>/dev/null)" || return 2
+    list="$(mktemp)" || return 2
+    if find "$WT" -iname .git -prune -print0 > "$list"; then
+        supported_gitfiles "$admin" "$list" || state=$?
+    else
+        state=2
+    fi
+    rm -f "$list"
+    [ "$state" -eq 0 ] || return "$state"
     # A modules entry this run cannot see, or one that is not a directory, is not an absent one.
     { [ -r "$admin" ] && [ -x "$admin" ]; } || { UNREADABLE="$admin"; return 2; }
     if [ ! -e "$admin/modules" ]; then
         [ -L "$admin/modules" ] && { UNREADABLE="$admin/modules"; return 2; }
         return 0
     fi
-    [ -d "$admin/modules" ] || { UNREADABLE="$admin/modules"; return 2; }
+    [ -d "$admin/modules" ] && [ ! -L "$admin/modules" ] || { UNREADABLE="$admin/modules"; return 2; }
     modules_readable "$admin/modules" || return 2
     list="$(mktemp 2>/dev/null)" || return 2
     if find "$admin/modules" -type f -name HEAD -print0 > "$list" 2>/dev/null; then
@@ -460,6 +565,8 @@ check_submodule_commits() {
             "Refusing to remove $WT: its copy of submodule $UNSAFE_MODULE holds commit $UNSAFE_COMMIT, which is not proven reachable in the main checkout's submodule. Fetch it into a local branch or tag in that copy before retrying." ;;
         3) refuse_with "independent store not verified for $UNSAFE_MODULE" \
             "Refusing to remove $WT: cannot verify an independent object store for submodule $UNSAFE_MODULE. Use a self-contained main-checkout copy without links or alternates before retrying." ;;
+        4) refuse_with "unsupported submodule layout: $UNSAFE_MODULE" \
+            "Refusing to remove $WT: unsupported submodule layout: $UNSAFE_MODULE. Preserve its commits and relocate dependent checkouts before retrying." ;;
         *) if [ -n "$UNREADABLE" ]; then
                refuse_with "cannot read $UNREADABLE" \
                    "Refusing to remove $WT: this run cannot read $UNREADABLE, so it cannot tell whether the worktree's copy of a submodule holds commits that exist nowhere else, and git would not say. Restore read access (and search access for a directory), then rerun."
@@ -477,18 +584,47 @@ check_submodule_commits() {
 # and later runs refuse until it is removed.
 MUTEX=""
 release_mutex() {
-    [ -z "$MUTEX" ] || rmdir "$MUTEX" 2>/dev/null || true
+    if [ -n "$MUTEX" ]; then
+        if [ -f "$MUTEX/modules" ]; then
+            if [ ! -L "${MUTEX%/*}/modules" ] && [ "${MUTEX%/*}/modules" -ef "$MUTEX/modules" ]; then
+                rm -f "${MUTEX%/*}/modules"
+            fi
+            rm -f "$MUTEX/modules"
+        fi
+        rmdir "$MUTEX" 2>/dev/null || true
+    fi
     MUTEX=""
 }
 trap release_mutex EXIT
 trap 'release_mutex; exit 130' INT
 trap 'release_mutex; exit 143' TERM
+RETIRED=""
+retire_modules() { # admin: preserve the directory itself, including late Git writes
+    local admin="$1" src="$1/modules" root="$common_dir/prdkit-retired" probe hazards
+    [ -e "$src" ] || { [ ! -L "$src" ]; return; }
+    case "$root/" in "$WT"/*) return 1 ;; esac
+    [ ! -L "$src" ] && [ -d "$src" ] && [ ! -L "$root" ] && mkdir -p "$root" || return 1
+    # Relative dependencies would not necessarily resolve after relocation.
+    hazards="$(find "$src" \( -type l -o -name commondir -o -path '*/objects/info/alternates' \) -print)" &&
+        [ -z "$hazards" ] || return 1
+    RETIRED="$(mktemp -d "$root/${admin##*/}.XXXXXXXX")" || return 1
+    # A cross-device mv can silently copy then delete, missing concurrent writes.
+    # Require the same filesystem before moving, including when modules is mounted.
+    probe="$(mktemp "$src/.prdkit-device.XXXXXXXX")" || return 1
+    if ! ln "$probe" "$RETIRED/device"; then rm -f "$probe"; return 1; fi
+    rm "$probe" "$RETIRED/device" || return 1
+    echo "[prdkit] Retiring submodule stores to $RETIRED/modules" >&2
+    mv "$src" "$RETIRED/modules"
+}
+refuse_mutex() {
+    refuse_with "another cleanup-change.sh run is removing it" \
+        "Refusing to remove $WT: another cleanup-change.sh run holds $1/prdkit-cleanup.lock and is removing it. If no run is active, inspect its retained stores before removing the lock and retrying."
+}
 forced_remove() { # recheck_clean (true for the submodule retry)
     local admin err state
     admin="$(git -C "$WT" rev-parse --absolute-git-dir 2>/dev/null)" || { refuse_git "git could not resolve the worktree's git directory"; return 1; }
     if ! mkdir "$admin/prdkit-cleanup.lock" 2>/dev/null; then
-        refuse_with "another cleanup-change.sh run is removing it" \
-            "Refusing to remove $WT: another cleanup-change.sh run holds $admin/prdkit-cleanup.lock and is removing it. If no run is active, remove that directory, then rerun."
+        refuse_mutex "$admin"
         return 1
     fi
     MUTEX="$admin/prdkit-cleanup.lock"
@@ -500,14 +636,28 @@ forced_remove() { # recheck_clean (true for the submodule retry)
         esac
     fi
     check_submodule_commits || { release_mutex; return 1; }
-    err="$(LC_ALL=C git -C "$ROOT" worktree remove --force "$WT" 2>&1 >/dev/null)" || { release_mutex; refuse_git "$err"; return 1; }
+    # Reserve the modules name even if it was absent at inspection. Refuse if
+    # a writer already created another directory. Git removes only our guard.
+    if ! retire_modules "$admin" || ! { : > "$MUTEX/modules" && ln "$MUTEX/modules" "$admin" &&
+        [ ! -L "$admin/modules" ] && [ "$admin/modules" -ef "$MUTEX/modules" ]; }; then
+        release_mutex; refuse_with "could not retire submodule stores${RETIRED:+ at $RETIRED}" \
+            "Refusing to remove $WT: could not retire submodule stores safely. Inspect $admin/modules${RETIRED:+ and $RETIRED} before retrying."; return 1
+    fi
+    err="$(LC_ALL=C git -C "$ROOT" worktree remove --force "$WT" 2>&1 >/dev/null)" || {
+        release_mutex; refuse_git "$err${RETIRED:+; recover submodule stores from $RETIRED/modules}"; return 1;
+    }
     MUTEX=""   # removed with the worktree's git directory
 }
 
 RESULT_REASON=""; RESULT_MSG=""; RETRIED=false
 remove_worktree() { # path label locked
-    local label="$2" locked="$3" rm_err state
-    WT="$1"; PRESERVED=0; EVENTS=0; CONFLICT=""; RETRIED=false
+    local label="$2" locked="$3" rm_err state admin
+    WT="$1"; PRESERVED=0; CONFLICT=""; RETRIED=false; RETIRED=""
+    admin="$(git -C "$WT" rev-parse --absolute-git-dir)" || { refuse_git "cannot resolve worktree administration"; return 1; }
+    if [ -e "$admin/prdkit-cleanup.lock" ]; then refuse_mutex "$admin"; return 1; fi
+    if [ "$locked" = true ]; then
+        refuse_git "cannot remove a locked working tree, lock reason: $(cat "$admin/locked")"; return 1
+    fi
     # Refuse before copying anything, so a refused removal leaves this checkout's cache untouched.
     if [ "$FORCE" = false ]; then
         state=0; wt_dirty || state=$?
@@ -519,8 +669,13 @@ remove_worktree() { # path label locked
     # --force discards uncommitted changes only, never a commit that exists nowhere else.
     check_submodule_commits || return 1
 
-    if ! preserve cache/evidence || ! preserve cache/retrospectives || ! preserve retrospective ||
-        ! merge_events; then
+    if [ -L "$WT/.prdkit" ] || [ -L "$WT/.prdkit/ledger" ] ||
+        [ -L "$WT/.prdkit/ledger/events.jsonl" ] || [ -e "$WT/.prdkit/ledger/events.jsonl" ]; then
+        refuse_with "legacy ledger spool or linked ledger path" \
+            "Refusing to remove $WT: archive the legacy ledger spool if needed, then remove it or the linked ledger path before retrying."
+        return 1
+    fi
+    if ! preserve cache/evidence || ! preserve cache/retrospectives || ! preserve retrospective; then
         refuse_with "could not preserve its evidence at $CONFLICT" \
             "Refusing to remove $WT: could not preserve its evidence at $CONFLICT (a different file is already there, or the copy failed). Resolve it, then rerun."
         return 1
@@ -528,6 +683,11 @@ remove_worktree() { # path label locked
 
     if [ "$FORCE" = true ]; then
         forced_remove false || return 1
+    elif [ -e "$admin/modules" ]; then
+        # Even a deinitialized submodule may still have a store. Git needn't
+        # refuse ordinary removal in that case, so retire it before either path.
+        RETRIED=true
+        forced_remove true || return 1
     elif ! rm_err="$(LC_ALL=C git -C "$ROOT" worktree remove "$WT" 2>&1 >/dev/null)"; then
         # Cleanliness was proven above, but a worktree with submodules is refused regardless.
         # Retry forced under the mutex, after re-checking cleanliness and the submodule commits: with
@@ -539,11 +699,10 @@ remove_worktree() { # path label locked
         RETRIED=true
         forced_remove true || return 1
     fi
-    git -C "$ROOT" worktree prune >/dev/null 2>&1 || true
     RESULT_REASON="removed"
     RESULT_MSG="Removed worktree for '$label': $WT"
+    [ -z "$RETIRED" ] || RESULT_MSG="$RESULT_MSG; retained submodule stores at $RETIRED/modules"
     [ "$PRESERVED" -eq 0 ] || RESULT_MSG="$RESULT_MSG; preserved $PRESERVED evidence file(s) in $ROOT/.prdkit/"
-    [ "$EVENTS" -eq 0 ] || RESULT_MSG="$RESULT_MSG; appended $EVENTS ledger event(s) to $ROOT/.prdkit/ledger/events.jsonl"
     [ "$RETRIED" = false ] || RESULT_MSG="$RESULT_MSG; the worktree contains submodules, which git refuses to remove without --force, so it was removed with --force after confirming it had no uncommitted or untracked changes and no submodule commit kept only there"
     return 0
 }
@@ -587,8 +746,8 @@ worktree_closed() { # branch path
 }
 
 run_closed() {
-    local i path branch locked top msg result removed_n=0 skipped_n=0 open_n=0 failed=0 p
-    REMOVED=(); SKIPPED_PATH=(); SKIPPED_WHY=(); PRUNED=()
+    local i path branch locked top msg result removed_n=0 skipped_n=0 open_n=0 failed=0
+    REMOVED=(); SKIPPED_PATH=(); SKIPPED_WHY=()
     CLOSED_REFS="$(spec_trusted_refs "$ROOT")"
     if [ -z "$CLOSED_REFS" ]; then
         msg="Refusing --closed: no trusted integration branch resolves, so no change can be called closed. Set origin/HEAD (git remote set-head origin --auto) and fetch, then rerun."
@@ -600,7 +759,7 @@ run_closed() {
     # Entry 0 is the main checkout.
     for ((i = 1; i < ${#ENT_PATH[@]}; i++)); do
         path="${ENT_PATH[$i]}"; branch="${ENT_BRANCH[$i]}"; locked="${ENT_LOCKED[$i]}"
-        # A bare repository, or a registration whose directory is gone (pruned below), is no candidate.
+        # A bare repository or a registration whose directory is gone is no candidate.
         if [ "${ENT_BARE[$i]}" = true ] || [ "${ENT_PRUNABLE[$i]}" = true ]; then continue; fi
         top="$(CDPATH="" cd "$path" 2>/dev/null && pwd -P)" || top="$path"
         [ "$top" != "$ROOT_TOP" ] || continue
@@ -620,15 +779,7 @@ run_closed() {
         fi
     done
 
-    git -C "$ROOT" worktree prune >/dev/null 2>&1 || true
-    if [ "${#STALE_PATHS[@]}" -gt 0 ]; then
-        result="$(git -C "$ROOT" worktree list --porcelain 2>/dev/null || true)"
-        for p in "${STALE_PATHS[@]}"; do
-            printf '%s\n' "$result" | grep -Fqx -- "worktree $p" || PRUNED+=("$p")
-        done
-    fi
-
-    msg="Removed $removed_n closed change worktree(s), skipped $skipped_n, left $open_n for open or unrelated work, pruned ${#PRUNED[@]} stale registration(s)."
+    msg="Removed $removed_n closed change worktree(s), skipped $skipped_n, left $open_n for open or unrelated work."
     if $JSON_MODE; then
         local skipped_json="" sep=""
         i=0
@@ -637,15 +788,10 @@ run_closed() {
             sep=","; i=$((i + 1))
         done
         result=ok; [ "$failed" -eq 0 ] || result=refused
-        printf '{"result":"%s","action":"closed","message":"%s","paths":%s,"skipped":[%s],"pruned":%s}\n' \
-            "$result" "$(json_escape "$msg")" "$(json_array ${REMOVED[@]+"${REMOVED[@]}"})" "$skipped_json" \
-            "$(json_array ${PRUNED[@]+"${PRUNED[@]}"})"
+        printf '{"result":"%s","action":"closed","message":"%s","paths":%s,"skipped":[%s],"pruned":[]}\n' \
+            "$result" "$(json_escape "$msg")" "$(json_array ${REMOVED[@]+"${REMOVED[@]}"})" "$skipped_json"
     else
         echo "[prdkit] $msg"
-        if [ "${#PRUNED[@]}" -gt 0 ]; then
-            echo "[prdkit] Pruned:"
-            for p in "${PRUNED[@]}"; do echo "  $p"; done
-        fi
         if [ "${#SKIPPED_PATH[@]}" -gt 0 ]; then
             >&2 echo "[prdkit] Skipped:"
             i=0
@@ -679,9 +825,7 @@ fi
 
 # A prunable match means the directory is already gone; just drop the registration.
 if [ "$MATCH_PRUNABLE" = true ]; then
-    git -C "$ROOT" worktree prune >/dev/null 2>&1 || true
-    msg="Worktree for '$TARGET' was already gone; pruned its stale registration."
-    if $JSON_MODE; then emit_json ok prune "$msg" "$MATCH_PATH"; else echo "[prdkit] $msg"; fi
+    prune_stale "$MATCH_PATH"
     exit 0
 fi
 
