@@ -127,6 +127,18 @@ done
 cp "$KIT/scripts/agents-section.md" "$FIXTURE/AGENTS.md"
 cp "$_SCRATCH_CWD/manifest" "$MANIFEST"
 
+it 'only direct definition files activate agent tiers'
+mkdir -p "$FIXTURE/.prdkit/agents/examples.md"
+printf 'Nested note\n' > "$FIXTURE/.prdkit/agents/examples.md/notes.md"
+fixture_commit
+fixture_check; assert_eq 0 "$STATUS" 'nested note is not a definition'
+fixture_check --head HEAD; assert_eq 0 "$STATUS" 'committed nested note is not a definition'
+printf 'Active definition\n' > "$FIXTURE/.prdkit/agents/reviewer.md"
+fixture_commit
+fixture_reject; assert_contains "$OUTPUT" 'Agent tiers are in use'
+fixture_reject --head HEAD; assert_contains "$OUTPUT" 'Agent tiers are in use'
+rm "$FIXTURE/.prdkit/agents/reviewer.md"
+
 it 'installed path membership treats every character literally'
 extra="$FIXTURE/.prdkit/workflows/"'wor\153.md'
 printf 'extra\n' > "$extra"

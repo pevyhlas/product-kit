@@ -193,16 +193,32 @@ install_source_verify() { # consumer-root consumer-revision-or-empty scratch
     case "$options" in none|'agent-tiers') ;; *) echo "Unknown manifest options: $options"; return ;; esac
     if [ "$options" = none ]; then
         if [ -n "$head" ]; then
-            install_object_git -C "$root" ls-tree -r --name-only "$head" -- .prdkit/agents/ .prdkit/agent-library/ > "$work/tier-paths"
+            if path="$(install_resolve_path "$root" "$head" .prdkit/agent-library "$work")"; then
+                if [ "$(install_candidate_mode "$root" "$head" "$path")" = 040000 ]; then
+                    echo 'Agent tiers are in use but the manifest deselects agent-tiers'
+                fi
+            elif [ "$?" -ne 2 ]; then echo 'Cannot resolve agent library'; fi
+            if parent="$(install_resolve_path "$root" "$head" .prdkit/agents "$work")"; then
+                if [ "$(install_candidate_mode "$root" "$head" "$parent")" = 040000 ]; then
+                    install_object_git -C "$root" ls-tree -z --name-only "$head:$parent" > "$work/definitions" ||
+                        { echo 'Cannot inventory agent definitions'; return; }
+                    while IFS= read -r -d '' path; do
+                        case "$path" in .*) continue ;; *.md) ;; *) continue ;; esac
+                        if dest="$(install_resolve_path "$root" "$head" "$parent/$path" "$work")"; then
+                            case "$(install_candidate_mode "$root" "$head" "$dest")" in
+                                100644|100755) echo 'Agent tiers are in use but the manifest deselects agent-tiers'; break ;;
+                            esac
+                        else echo 'Cannot resolve agent definition'; fi
+                    done < "$work/definitions"
+                fi
+            elif [ "$?" -ne 2 ]; then echo 'Cannot resolve agent definitions directory'; fi
         else
             : > "$work/tier-paths"
             [ ! -d "$root/.prdkit/agent-library" ] || echo .prdkit/agent-library/ >> "$work/tier-paths"
             for path in "$root"/.prdkit/agents/*.md; do
                 [ ! -f "$path" ] || printf '%s\n' "${path#"$root"/}" >> "$work/tier-paths"
             done
-        fi
-        if grep -qE '^\.prdkit/(agent-library/|agents/.*\.md$)' "$work/tier-paths"; then
-            echo 'Agent tiers are in use but the manifest deselects agent-tiers'
+            if [ -s "$work/tier-paths" ]; then echo 'Agent tiers are in use but the manifest deselects agent-tiers'; fi
         fi
     fi
     mode="$(install_manifest_value "$work/manifest" mode)" ||
