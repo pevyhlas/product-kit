@@ -54,12 +54,20 @@ assert_eq 1 "$STATUS" "unknown target fails"
 bash "$READER" --raw "$FILE" > raw.md
 assert_eq "$before" "$(git hash-object raw.md)" "raw read is byte-for-byte"
 
-it "doctor uses prose budgets but instruction-file byte budgets remain raw"
+it "doctor excludes valid navigation from reading-budget excess and counts invalid navigation"
 # Make 158 raw lines fit the 150-line observed budget after only generated navigation is omitted.
 cp "$FILE" specs/observed.md
-run bash "$PROJ/.prdkit/scripts/bash/doctor.sh"
+run bash "$PROJ/.prdkit/scripts/bash/doctor.sh" --json
+assert_eq 0 "$STATUS" "doctor accepts the valid footer"
 assert_not_contains "$OUTPUT" 'Budget: specs/observed.md' "doctor does not count valid navigation"
 assert_not_contains "$OUTPUT" 'Generated navigation retained' "valid footer needs no advisory"
+assert_eq 0 "$(printf '%s\n' "$OUTPUT" | jq '.budget_excess_reading_lines')" "valid footer contributes no excess"
+sed 's/v1 end/v2 end/' "$FILE" > specs/observed.md
+run bash "$PROJ/.prdkit/scripts/bash/doctor.sh" --json
+assert_eq 0 "$STATUS" "retaining the invalid footer is advisory"
+assert_contains "$OUTPUT" 'specs/observed.md: Generated navigation retained' "invalid footer gets a diagnostic"
+assert_eq 8 "$(printf '%s\n' "$OUTPUT" | jq '.budget_excess_reading_lines')" "all 158 lines count when the footer is invalid"
+rm specs/observed.md
 
 it "CRLF, UTF-8 and missing final newline retain correct counts and source locations"
 printf '# Café\nTracking: [A-1][nav-a]\n<!-- prdkit:navigation:v1 begin -->\n[nav-a]: https://example.test/items/A-1\n<!-- prdkit:navigation:v1 end -->' > "$FILE"
