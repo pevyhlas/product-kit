@@ -74,11 +74,9 @@ is never deleted. Ignored files go with the worktree, except evidence,
 retrospectives and usage-enrichment inputs, which are first copied to this
 checkout. Archive and remove any legacy ledger spool yourself before cleanup.
 
-Git refuses to remove any worktree that contains submodules, even a clean one.
-When the worktree is clean and that is the only reason, the removal is retried
-with --force, under a lock no second run can take, after re-checking that it is
-still clean, so nothing is discarded. Any other git refusal, such as a locked worktree, is reported with
-git's reason.
+For worktrees with submodules, Git removal may require --force even when
+clean. Cleanup rechecks cleanliness under its removal lock before using this
+mode automatically. Locked worktrees stay locked.
 
 A worktree keeps its own copy of each submodule repository. Before removal it
 is moved to a reported prdkit-retired directory under the common Git directory.
@@ -222,6 +220,7 @@ emit_json() {
 
 stale_commits_retained() (
     local dir="$1" path log head roots oid refs orig=""
+    set -o pipefail
     export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
     # Only the ordinary files backend, HEAD and its log are supported. Refuse
     # per-worktree refs, pseudo-refs and other operation state rather than omit roots.
@@ -250,7 +249,7 @@ stale_commits_retained() (
         roots="$head
 $roots"
     fi
-    roots="$(printf '%s\n' "$roots" "$orig" | LC_ALL=C sort -u)"
+    roots="$(printf '%s\n' "$roots" "$orig" | LC_ALL=C sort -u)" || return 1
     while IFS= read -r oid; do
         [ -n "$oid" ] || continue
         refs="$(git -C "$ROOT" for-each-ref --contains="$oid" --format='%(refname)' refs/heads refs/tags)" &&
@@ -603,6 +602,7 @@ RETIRED=""
 retire_modules() { # admin: preserve the directory itself, including late Git writes
     local admin="$1" src="$1/modules" root="$common_dir/prdkit-retired" probe hazards
     [ -e "$src" ] || { [ ! -L "$src" ]; return; }
+    case "$root/" in "$WT"/*) return 1 ;; esac
     [ ! -L "$src" ] && [ -d "$src" ] && [ ! -L "$root" ] && mkdir -p "$root" || return 1
     # Relative dependencies would not necessarily resolve after relocation.
     hazards="$(find "$src" \( -type l -o -name commondir -o -path '*/objects/info/alternates' \) -print)" &&
