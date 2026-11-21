@@ -8,6 +8,11 @@ change by change.
 
 ## [Unreleased]
 
+- A recorded HOLD still applies after its `until=` date or condition. Status and doctor flag a
+  past date as a reminder for the owner to confirm or lift the hold. Text output and JSON keep
+  their formats; a past-date HOLD now reads `DUE` (`state: "due"` in JSON) instead of `EXPIRED`
+  (`"expired"`) and remains eligible as the longest pole. WAIVER expiry is unchanged.
+
 - Document the Git identity used by `close-change.sh` and how to set an agent's author and
   committer identity for the closing commit.
 

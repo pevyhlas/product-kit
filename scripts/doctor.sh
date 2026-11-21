@@ -126,7 +126,7 @@ budget 300 "$root"/specs/product/requirements.md "$root"/specs/product/qualities
 budget 200 "$root"/specs/parts/*.md "$root"/specs/parts/*/*.md
 budget_fix 150 "condense its older entries into specs/archive.md at the next compaction (compact.md)" "$root"/specs/log.md
 budget_fix 150 "incorporate answered items (spec.md, Resolve owner answers), review the rest with the owner (/prdkit-inbox), and keep each item's context in the files it links" "$root"/specs/inbox.md
-budget_fix 150 "remove lifted or expired holds and waivers, and DEPLOY and ATTEST lines a newer one supersedes; git keeps them" "$root"/specs/records.md
+budget_fix 150 "remove lifted holds, expired waivers, and DEPLOY and ATTEST lines a newer one supersedes; git keeps them" "$root"/specs/records.md
 
 # --- IDs ---------------------------------------------------------------------------------------
 items="$(spec_items "$root")"
@@ -560,7 +560,11 @@ while IFS="$SEP" read -r line type name who _ _ _ date until _ reason; do
         INVALID) findings+=("Malformed record at specs/records.md:$line: $reason") ;;
         HOLD|WAIVER)
             if spec_is_date "$until" && [ "$(spec_days_between "$until" "$today")" -gt 0 ]; then
-                advisories+=("Expired $type $name (owner $who, until $until): it no longer applies; the owner renews or removes it")
+                if [ "$type" = HOLD ]; then
+                    advisories+=("HOLD $name due (owner $who, until $until): it still applies; ask the owner to confirm or lift it")
+                else
+                    advisories+=("Expired WAIVER $name (owner $who, until $until): it no longer applies; the owner renews or removes it")
+                fi
             fi ;;
     esac
 done < <(spec_records "$root")
