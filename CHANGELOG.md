@@ -8,6 +8,9 @@ change by change.
 
 ## [Unreleased]
 
+- Document the Git identity used by `close-change.sh` and how to set an agent's author and
+  committer identity for the closing commit.
+
 ### Fixed
 
 - A failed close no longer leaves an empty log entry behind. Retry the same close
