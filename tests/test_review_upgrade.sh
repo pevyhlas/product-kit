@@ -31,11 +31,13 @@ trusted_tip() {
     git -C "$PROJ" update-ref refs/remotes/origin/main HEAD
     git -C "$PROJ" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
 }
-transition_project() {
+make_transition_seed() {
     PROJ="$(make_inited_project --copy)"; track_tmp "$PROJ"
     PROJ="$(cd "$PROJ" && pwd -P)"
     git -C "$PROJ" remote add origin https://github.com/owner/repo.git
-    # Release ownership stays with the maintainer; a fixture explicitly models the 2.0 source.
+    # Keep the installed fixture at 1.5 even when the source already identifies as 2.0.
+    sed 's/^version: .*/version: 1.5.0/' "$PROJ/.prdkit/.manifest" > "$PROJ/manifest.next" &&
+        mv "$PROJ/manifest.next" "$PROJ/.prdkit/.manifest" || exit 1
     printf '2.0.0\n' > "$PROJ/.product-kit/VERSION"
     cat > "$PROJ/.prdkit/memory/constitution.md" <<'EOF'
 # Constitution
@@ -51,6 +53,19 @@ EOF
 EOF
     printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n| security | reviewer |\n' >> "$PROJ/.prdkit/memory/agents.md"
     commit_fixture policy; trusted_tip
+}
+# Build the common starting history once. Every case changes its own full copy,
+# including its own .git directory, ignored files, and installed kit.
+TRANSITION_SEED=
+transition_project() {
+    if [ -z "$TRANSITION_SEED" ]; then
+        make_transition_seed || exit 1
+        TRANSITION_SEED="$PROJ"
+    fi
+    PROJ="$(mktemp -d)" || exit 1
+    track_tmp "$PROJ"
+    PROJ="$(cd "$PROJ" && pwd -P)" || exit 1
+    cp -Rp "$TRANSITION_SEED/." "$PROJ/" || exit 1
 }
 upgrade() { run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade "$@"; }
 retry_marker() {
@@ -101,7 +116,7 @@ transition_project
 run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --migrate-reviews
 assert_eq 2 "$STATUS" 'migration needs --upgrade'
 printf '1.5.0\n' > "$PROJ/.product-kit/VERSION"
-upgrade --migrate-reviews; assert_eq 2 "$STATUS" 'old kit refuses migration'
+upgrade --migrate-reviews; assert_eq 2 "$STATUS" '2.0 parser refuses migration with an older source version'
 for flags in '--dry-run' '--json' '--check --migrate-reviews'; do
     # Deliberate splitting: these are fixture option lists, not paths.
     # shellcheck disable=SC2086
@@ -195,6 +210,19 @@ for source in trusted checkout; do
     unchanged
 done
 
+it 'an installed 2.0 project needs no second review migration to take a patch'
+transition_project
+sed 's/^version: 1.5.0$/version: 2.0.0/' "$PROJ/.prdkit/.manifest" > "$PROJ/manifest.next"
+mv "$PROJ/manifest.next" "$PROJ/.prdkit/.manifest"
+mkdir -p "$PROJ/specs/changes"
+printf '# Record\n## State\n**Review**: legacy FAIL\n' > "$PROJ/specs/changes/001-work.md"
+commit_fixture installed; trusted_tip
+printf '2.0.1\n' > "$PROJ/.product-kit/VERSION"; commit_fixture pin
+upgrade
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_contains "$(cat "$PROJ/.prdkit/.manifest")" 'version: 2.0.1'
+assert_contains "$(cat "$PROJ/specs/changes/001-work.md")" '**Review**: legacy FAIL'
+
 it 'a same-source retry accepts rendered command bytes but no unrelated work'
 for kind in pristine unrelated edited staged outside wrong-source mode; do
     transition_project
@@ -285,9 +313,14 @@ printf 'Untracked ignored bytes\000remain\n' > "$PROJ/specs/changes/local-only/d
 ln -s data "$PROJ/specs/changes/local-only/link"
 BEFORE="$(git -C "$PROJ" status --porcelain --untracked-files=all)"
 RECORDS_BEFORE="$(tree_snapshot "$PROJ/specs/changes")"
-upgrade --migrate-reviews --dry-run --json
+git -C "$PROJ" remote set-url origin https://github.com/old/location.git
+git -C "$PROJ" config url.https://github.com/owner/repo.git.insteadOf https://github.com/old/location.git
+GH_HOST=other.invalid upgrade --migrate-reviews --dry-run --json
 assert_eq 0 "$STATUS" "$OUTPUT"
 REPORT="$OUTPUT"
+assert_contains "$(cat "$GH_STUB_DIR/requests")" 'repos/owner/repo/pulls?state=open'
+assert_contains "$(cat "$GH_STUB_DIR/requests")" '--hostname github.com --method GET repos/owner/repo/pulls?state=open'
+assert_not_contains "$(cat "$GH_STUB_DIR/requests")" 'repos/old/location/pulls'
 assert_eq prdkit.review-transition.v1 "$(printf '%s' "$REPORT" | jq -r .schema)" 'JSON report schema'
 assert_eq 1 "$(printf '%s' "$REPORT" | jq .totals.records_with_blockers)" '1.x-cleared FAIL still reported'
 assert_eq 1 "$(printf '%s' "$REPORT" | jq .totals.blockers_per_reviewer.code)" 'totals by reviewer'
@@ -314,6 +347,7 @@ it 'API failure is reported, not an upgrade blocker'
 run env GH_STUB_OFFLINE=true bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --migrate-reviews --dry-run --json
 assert_eq 0 "$STATUS" "$OUTPUT"
 assert_contains "$OUTPUT" 'host API is unavailable' 'API omission explicit'
+assert_eq '[null,null,null]' "$(printf '%s' "$OUTPUT" | jq -c '[.open_prs,.totals.open_prs,.totals.reviews_owed]')" 'unknown inventory is not zero'
 assert_not_contains "$(cat "$GH_STUB_DIR/requests")" POST 'unavailable report never posts'
 
 it 'a missing local PR head is an unavailable scan, not a claim of zero blockers'
@@ -474,6 +508,78 @@ upgrade --migrate-reviews --dry-run --json
 assert_eq 0 "$STATUS" "$OUTPUT"
 assert_eq '["code"]' "$(printf '%s' "$OUTPUT" | jq -c '.open_prs[0].reviews_owed')" 'unrelated inherited PASS creates no review obligation on this PR'
 
+gate_upgrade_fixture() {
+    run bash "$PROJ/.prdkit/scripts/bash/check-review.sh" --repo "$PROJ" --json --base origin/main --pr "https://github.com/owner/repo/pull/$1" "$2"
+}
+publish_upgrade_fixture() {
+    local pr="$1" change="$2" reviewer="$3"; shift 3
+    # The publisher entry point is trusted kit source; --repo supplies only local fixture objects.
+    run bash "$PK_ROOT/scripts/publish-review.sh" "$change" --repo "$PROJ" --pr "https://github.com/owner/repo/pull/$pr" \
+        --reviewer "$reviewer" --verdict PASS --counts 0,0,0,0 --report https://example.invalid/report --head HEAD "$@"
+    assert_eq 0 "$STATUS" "$OUTPUT"
+}
+
+it 'the upgrade PR itself passes native review after adding and closing its post-install carrier'
+transition_project
+use_gh_stub
+mkdir -p "$PROJ/specs/changes"
+printf '# Existing change\n**Tier**: T1\n## State\n%s\n' "$PASS" > "$PROJ/specs/changes/001-existing.md"
+
+# Represent both source pins as gitlinks without network access or a release tag
+# in this checkout (hosted CI may be shallow). The seed models a 1.5 manifest.
+KIT="$PROJ/.product-kit"
+git -C "$PROJ" rm -qr --cached -- .product-kit || exit 1
+git -C "$KIT" init -q || exit 1
+git -C "$KIT" config user.name test && git -C "$KIT" config user.email t@example.com || exit 1
+printf '1.5.0\n' > "$KIT/VERSION"
+git -C "$KIT" add -A && git -C "$KIT" commit -qm '1.5 fixture pin' || exit 1
+git -C "$PROJ" update-index --add --cacheinfo "160000,$(git -C "$KIT" rev-parse HEAD),.product-kit" || exit 1
+commit_fixture 'trusted policy and 1.5 pin'; trusted_tip
+git -C "$PROJ" checkout -qb kit-upgrade || exit 1
+printf '2.0.0\n' > "$KIT/VERSION"
+git -C "$KIT" add VERSION && git -C "$KIT" commit -qm '2.0 fixture pin' || exit 1
+upgrade --migrate-reviews
+assert_eq 1 "$STATUS" 'an uncommitted source pin blocks installation'
+assert_contains "$OUTPUT" 'checkout must be clean' 'preflight names the dirty checkout'
+commit_fixture 'pin the release'
+assert_eq 160000 "$(git -C "$PROJ" ls-tree HEAD -- .product-kit | awk '{print $1}')" 'the pin is a gitlink'
+
+RECORDS_BEFORE="$(tree_snapshot "$PROJ/specs/changes")"
+upgrade --migrate-reviews
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_contains "$OUTPUT" 'create its numbered change record after installation' 'upgrade tells gated consumers the next step'
+assert_eq "$RECORDS_BEFORE" "$(tree_snapshot "$PROJ/specs/changes")" 'installer leaves the consumer records unchanged'
+commit_fixture 'install the kit'
+fx_pr 10 "$(git -C "$PROJ" rev-parse HEAD)" '{"head":{"ref":"kit-upgrade"}}'
+publish_upgrade_fixture 10 002-kit-upgrade code
+gate_upgrade_fixture 10 002-kit-upgrade
+assert_eq 1 "$STATUS" 'a valid receipt does not replace the upgrade carrier'
+assert_eq host "$(printf '%s' "$OUTPUT" | jq -r .authority)" 'the missing record fails under host authority'
+assert_eq 1 "$(printf '%s' "$OUTPUT" | jq '.problems | length')" 'the missing record is the only blocker'
+assert_contains "$OUTPUT" 'No change record specs/changes/002-kit-upgrade.md' 'the gate names the missing carrier'
+
+run bash -c 'cd "$1" && bash .prdkit/scripts/bash/new-change.sh --json --no-branch --short-name kit-upgrade "Upgrade Product-Kit to 2.0" > .git/upgrade-record.json' _ "$PROJ"
+assert_eq 0 "$STATUS" "$OUTPUT"
+CHANGE_ID="$(jq -er .CHANGE_ID "$PROJ/.git/upgrade-record.json")" || exit 1
+assert_eq 002-kit-upgrade "$CHANGE_ID" 'the helper allocates the expected ID'
+assert_eq kit-upgrade "$(git -C "$PROJ" symbolic-ref --short HEAD)" 'the helper keeps the upgrade branch'
+record="$PROJ/specs/changes/$CHANGE_ID.md"
+sed 's/<T0–T3>/T1/' "$record" > "$PROJ/carrier.next" && mv "$PROJ/carrier.next" "$record" || exit 1
+commit_fixture 'add the upgrade review carrier'
+fx_pr 10 "$(git -C "$PROJ" rev-parse HEAD)" '{"head":{"ref":"kit-upgrade"}}'
+gate_upgrade_fixture 10 "$CHANGE_ID"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq true "$(printf '%s' "$OUTPUT" | jq .record_open)" 'the receipt passes with the committed carrier'
+
+run bash -c 'cd "$1" && bash .prdkit/scripts/bash/close-change.sh --pr https://github.com/owner/repo/pull/10 --base origin/main "$2" "Upgrade Product-Kit to 2.0"' _ "$PROJ" "$CHANGE_ID"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_file "$PROJ/specs/log/$CHANGE_ID.md" 'closing logged the upgrade'
+fx_pr 10 "$(git -C "$PROJ" rev-parse HEAD)" '{"head":{"ref":"kit-upgrade"}}'
+gate_upgrade_fixture 10 "$CHANGE_ID"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq false "$(printf '%s' "$OUTPUT" | jq .record_open)" 'the final PR head passes with the carrier in history'
+assert_eq "$RECORDS_BEFORE" "$(tree_snapshot "$PROJ/specs/changes")" 'closing does not change the pre-existing record'
+
 it 'end to end: upgrade, re-review an open 1.x PR, then close a merged-open legacy record'
 transition_project
 use_gh_stub
@@ -496,16 +602,6 @@ commit_fixture upgraded; trusted_tip
 git -C "$PROJ" checkout -q 002-open
 git -C "$PROJ" merge -qm 'merge upgraded default' "$BASE_BRANCH" || exit 1
 fx_pr 7 "$(git -C "$PROJ" rev-parse HEAD)" '{"head":{"ref":"002-open"}}'
-gate_upgrade_fixture() {
-    run bash "$PROJ/.prdkit/scripts/bash/check-review.sh" --repo "$PROJ" --json --pr "https://github.com/owner/repo/pull/$1" "$2"
-}
-publish_upgrade_fixture() {
-    local pr="$1" change="$2" reviewer="$3"; shift 3
-    # The publisher entry point is trusted kit source; --repo supplies only local fixture objects.
-    run bash "$PK_ROOT/scripts/publish-review.sh" "$change" --repo "$PROJ" --pr "https://github.com/owner/repo/pull/$pr" \
-        --reviewer "$reviewer" --verdict PASS --counts 0,0,0,0 --report https://example.invalid/report --head HEAD "$@"
-    assert_eq 0 "$STATUS" "$OUTPUT"
-}
 gate_upgrade_fixture 7 002-open
 assert_eq 1 "$STATUS" '1.x PASS is not native coverage'
 assert_contains "$OUTPUT" 'legacy blocker' 'open PR legacy FAIL stands'

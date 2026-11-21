@@ -612,8 +612,7 @@ if $CHECK; then
             case "$rel" in
                 .prdkit/memory/*) CUSTOMIZED+=("$rel") ;;
                 .claude/commands/*|.opencode/commands/*|.prdkit/scripts/bash/*|.prdkit/workflows/*)
-                    # Kit-owned: --upgrade overwrites these, so do not claim they
-                    # are preserved. Reported as a distinct bucket below.
+                    # Kit-owned edits are distinct from supported customization.
                     KITMOD+=("$rel|$src") ;;
                 *)                MODIFIED+=("$rel|$src") ;;
             esac
@@ -669,9 +668,13 @@ if $CHECK; then
     fi
     if [ ${#KITMOD[@]} -gt 0 ]; then
         drift=1
-        echo "KIT-OWNED EDITS — commands/scripts you changed since install. These are kit-owned, so"
-        echo "--upgrade will OVERWRITE them with the kit version (your edits are NOT preserved). Back up"
-        echo "the change, or express project-specific behavior in .prdkit/memory/constitution.md instead:"
+        echo "KIT-OWNED EDITS — managed files or text you changed since install:"
+        if upgrade_source_2; then
+            echo "--upgrade refuses to overwrite these customizations. Reconcile them before upgrading."
+        else
+            echo "This older installer may overwrite these customizations during --upgrade; back them up first."
+        fi
+        echo "Move project-specific policy to .prdkit/memory/constitution.md where appropriate:"
         for entry in "${KITMOD[@]}"; do
             rel="${entry%%|*}"
             src="${entry#*|}"
@@ -791,6 +794,10 @@ current_manifest=absent
 if [ "$INITIAL_MANIFEST" != "$current_manifest" ]; then
     echo 'Error: manifest changed while preparing the install; retry to resolve current ownership/harness settings.' >&2
     exit 1
+fi
+prior_version=''
+if $UPGRADE && upgrade_source_2; then
+    prior_version="$(install_manifest_value "$MANIFEST" version 2>/dev/null)" || prior_version=''
 fi
 record_progress() {
     INSTALL_PHASE="$1"; INSTALL_PATH="$2"
@@ -1184,6 +1191,12 @@ if $UPGRADE; then
     echo
     echo "Upgrade complete (commands re-linked, scripts refreshed, unmodified templates/memory updated, modified templates/memory preserved)."
     echo "Run 'bash .product-kit/scripts/init.sh --check' anytime to see install drift."
+    case "$prior_version" in
+        1.*)
+            echo "If the upgrade PR uses the native review gate, create its numbered change record after installation."
+            echo "See .product-kit/docs/migrating-to-2.0.md for the review and closing steps."
+            ;;
+    esac
     echo "Run /prdkit-status for the current state."
     exit 0
 fi
@@ -1198,6 +1211,7 @@ Next steps:
   2. Describe a product outcome with /prdkit
   3. Use /prdkit-status for visibility and /prdkit-doctor for diagnostics
 
-Upgrade later with:
-  git submodule update --remote .product-kit && bash .product-kit/scripts/init.sh --upgrade
+To upgrade later, choose a release tag and commit the .product-kit pin in this project first.
+Run 'bash .product-kit/scripts/init.sh --check' (drift is expected on a new pin), then follow
+the selected release's upgrade instructions. For 1.5 to 2.0, see docs/migrating-to-2.0.md in the kit.
 EOF

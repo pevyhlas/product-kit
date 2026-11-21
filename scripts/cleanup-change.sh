@@ -82,10 +82,9 @@ git's reason.
 
 A worktree keeps its own copy of each submodule repository, which the removal
 deletes. Every removal, --force included, is refused while such a copy holds a
-commit (its HEAD, a local branch, tag or stash, any reflog entry of those, or a
-gitlink the worktree records) that no remote-tracking ref there and no ref in the main checkout's
-copy of that submodule contains. Push it, or fetch it into the main checkout's
-submodule, then rerun.
+commit (HEAD, any ref or retained reflog entry, or a gitlink the worktree records)
+that is not reachable from HEAD or a non-tracking ref in an independent main
+checkout's submodule. Fetch it into a local branch or tag there, then rerun.
 
 Examples:
   cleanup-change.sh 007-user-auth      # remove that change's worktree
@@ -296,19 +295,34 @@ refuse_git() { # git's reason
 # Each linked worktree keeps its own copy of every submodule repository under its git directory
 # (<git-dir>/modules/<name>), and removing the worktree deletes it. A commit made there, even one
 # the superproject branch records as a gitlink, then exists nowhere unless something outside the
-# worktree holds it. Every commit such a copy keeps for itself (HEAD, every ref outside
-# refs/remotes/, every entry in their reflogs, such as an older stash) and each gitlink in the
-# worktree's index and HEAD tree that it contains must be contained in a remote-tracking ref of
-# that copy, or in a ref or HEAD of the main checkout's copy of the same submodule.
+# worktree holds it. Every commit such a copy keeps (HEAD, every ref including tracking refs,
+# every entry in their reflogs, such as an older stash) and each gitlink in the
+# worktree's index and HEAD tree that it contains must be reachable in the surviving copy.
 # submodule_commits_held sets UNSAFE_MODULE and UNSAFE_COMMIT and returns 1 for the first commit
 # that is not, and returns 2 when git cannot say: an inspection that fails never passes.
 UNSAFE_MODULE=""; UNSAFE_COMMIT=""
-held_outside() { # module git dir, main checkout's module git dir, commit
-    [ -n "$(git --git-dir="$1" for-each-ref --contains "$3" refs/remotes 2>/dev/null)" ] && return 0
-    [ -d "$2/objects" ] || return 1
-    git --git-dir="$2" cat-file -e "$3^{commit}" 2>/dev/null || return 1
-    git --git-dir="$2" merge-base --is-ancestor "$3" HEAD 2>/dev/null && return 0
-    [ -n "$(git --git-dir="$2" for-each-ref --contains "$3" 2>/dev/null)" ]
+independent_store() { # conservative: only accept a self-contained main repository
+    local module="$1" links rc
+    [ -z "${GIT_OBJECT_DIRECTORY:-}${GIT_ALTERNATE_OBJECT_DIRECTORIES:-}${GIT_COMMON_DIR:-}" ] &&
+        [ "$(CDPATH='' cd -P "$module" && pwd -P)" = "$module" ] &&
+        [ -d "$module/objects" ] && [ ! -e "$module/commondir" ] &&
+        [ ! -s "$module/objects/info/alternates" ] &&
+        [ ! -e "$module/shallow" ] && [ ! -e "$module/info/grafts" ] &&
+        [ -z "${GIT_SHALLOW_FILE:-}${GIT_GRAFT_FILE:-}" ] &&
+        links="$(find "$module" \( -type l -o -name '*.promisor' \) -print)" && [ -z "$links" ] || return 1
+    # The config can precede the first promisor pack. Read failures are not absence.
+    rc=0
+    git --git-dir="$module" config --get-regexp '^(extensions\.partialclone|remote\..*\.(promisor|partialclonefilter))$' >/dev/null || rc=$?
+    [ "$rc" = 1 ] && [ "$(git --git-dir="$module" rev-parse --is-shallow-repository)" = false ] &&
+        git --git-dir="$module" fsck --connectivity-only --no-reflogs >/dev/null 2>&1
+}
+held_outside() { # main checkout's module git dir, commit
+    local refs
+    [ -d "$1/objects" ] || return 1
+    git --git-dir="$1" cat-file -e "$2^{commit}" 2>/dev/null || return 1
+    git --git-dir="$1" merge-base --is-ancestor "$2" HEAD 2>/dev/null && return 0
+    refs="$(git --git-dir="$1" for-each-ref --contains "$2" --format='%(refname)' 2>/dev/null)" &&
+        printf '%s\n' "$refs" | awk 'NF && !/^refs\/remotes\// { found=1 } END { exit !found }'
 }
 # HEAD of a repository (git options in "$@"): prints it and returns 0; returns 1 when it is unborn
 # (a symbolic ref to a branch with no commit yet) and 2 when git cannot say.
@@ -320,12 +334,10 @@ head_of() {
     [ -z "$found" ] || return 2
     return 1
 }
-# The commits a submodule copy keeps for itself, one per line: HEAD, every ref outside
-# refs/remotes/ and every entry in their reflogs. Fails when git cannot list them.
+# HEAD, all refs and all their retained reflog entries, including tracking-only commits.
 module_commits() { # module git dir
     local mod="$1" refs ref state=0
     refs="$(git --git-dir="$mod" for-each-ref --format='%(refname)' 2>/dev/null)" || return 1
-    refs="$(printf '%s\n' "$refs" | awk 'NF && index($0, "refs/remotes/") != 1')"
     head_of --git-dir="$mod" >/dev/null || state=$?
     case "$state" in
         0) refs="HEAD
@@ -364,13 +376,16 @@ $(printf '%s\n' "$own" | awk '$2 == "commit" { print $3 }')" ;;
         mod="${head%/HEAD}"
         [ -d "$mod/objects" ] || continue
         rel="${mod#"$mods"/}"
+        if ! independent_store "$common/modules/$rel"; then
+            UNSAFE_MODULE="$rel"; return 3
+        fi
         own="$(module_commits "$mod")" || return 2
         while IFS= read -r c; do
             [ -n "$c" ] || continue
             c="$(git --git-dir="$mod" rev-parse --verify -q "$c^{}" 2>/dev/null)" || return 2
             t="$(git --git-dir="$mod" cat-file -t "$c" 2>/dev/null)" || return 2
             [ "$t" = commit ] || continue   # a tag of a tree or blob holds no commit
-            held_outside "$mod" "$common/modules/$rel" "$c" && continue
+            held_outside "$common/modules/$rel" "$c" && continue
             UNSAFE_MODULE="$rel"; UNSAFE_COMMIT="$c"
             return 1
         done <<EOF
@@ -381,7 +396,7 @@ EOF
         present="$(printf '%s\n' "$links" | git --git-dir="$mod" cat-file --batch-check 2>/dev/null)" || return 2
         while IFS= read -r c; do
             [ -n "$c" ] || continue
-            held_outside "$mod" "$common/modules/$rel" "$c" && continue
+            held_outside "$common/modules/$rel" "$c" && continue
             UNSAFE_MODULE="$rel"; UNSAFE_COMMIT="$c"
             return 1
         done <<EOF
@@ -414,6 +429,8 @@ modules_readable() { # modules dir
 }
 submodule_commits_held() {
     local admin list state=0
+    local GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
+    export GIT_NO_REPLACE_OBJECTS GIT_NO_LAZY_FETCH
     UNSAFE_MODULE=""; UNSAFE_COMMIT=""; UNREADABLE=""
     admin="$(git -C "$WT" rev-parse --absolute-git-dir 2>/dev/null)" || return 2
     # A modules entry this run cannot see, or one that is not a directory, is not an absent one.
@@ -440,7 +457,9 @@ check_submodule_commits() {
     case "$state" in
         0) return 0 ;;
         1) refuse_with "unpushed submodule commit $UNSAFE_COMMIT in $UNSAFE_MODULE" \
-            "Refusing to remove $WT: its copy of submodule $UNSAFE_MODULE holds commit $UNSAFE_COMMIT, which no remote-tracking ref there and no ref in the main checkout's copy of that submodule contains, so removing the worktree would delete it. Push it from the submodule (or fetch it into the main checkout's submodule), then rerun." ;;
+            "Refusing to remove $WT: its copy of submodule $UNSAFE_MODULE holds commit $UNSAFE_COMMIT, which is not proven reachable in the main checkout's submodule. Fetch it into a local branch or tag in that copy before retrying." ;;
+        3) refuse_with "independent store not verified for $UNSAFE_MODULE" \
+            "Refusing to remove $WT: cannot verify an independent object store for submodule $UNSAFE_MODULE. Use a self-contained main-checkout copy without links or alternates before retrying." ;;
         *) if [ -n "$UNREADABLE" ]; then
                refuse_with "cannot read $UNREADABLE" \
                    "Refusing to remove $WT: this run cannot read $UNREADABLE, so it cannot tell whether the worktree's copy of a submodule holds commits that exist nowhere else, and git would not say. Restore read access (and search access for a directory), then rerun."

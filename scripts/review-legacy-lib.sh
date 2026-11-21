@@ -140,10 +140,27 @@ review_legacy_inventory() ( # root at rigor work output
     mv "$output.next" "$output"
 )
 
+# Index each fork once for this scan. Identity uses the record basename rather than
+# its directory: moving the same change preserves history, renaming it starts another.
+_legacy_change_key() { # avoid path separators, case folding and normalization in cache keys
+    printf '%s' "${1##*/}" | review_sha256
+}
+_legacy_fork_index() {
+    local dir="$ll_rows.fork-$1" entry key
+    [ ! -d "$dir" ] || return 0
+    mkdir "$dir" && _legacy_tree "$1" || return 1
+    while IFS= read -r -d '' entry; do
+        _legacy_record "$entry" || continue
+        _legacy_lines "$LL_BLOB" "$LL_PATH" || return 1
+        [ -s "$LL_LINES" ] || continue
+        key="$(_legacy_change_key "$LL_PATH")" && cat "$LL_LINES" >> "$dir/$key" || return 1
+    done < "$LL_TREE"
+}
+
 review_legacy_collect() ( # subshell contains Git environment and scratch outputs
     local ll_root="$1" checked="$2" base="$3" head="$4" ll_rigor="$5" ll_work="$6" output="$7"
     local checked_path="${8:-specs/changes/$2.md}"
-    local start entry record_path blob parent fork commit parents bases status start_tree tree fork_tree unchanged
+    local start entry record_path blob parent fork fork_lines key commit parents bases status start_tree tree unchanged
     local parent_blobs=()
     local LL_TREE LL_ENTRY LL_PATH LL_BLOB LL_LINES ll_rows ll_locations
     local ll_awk_nul=false ll_error="$output.error"
@@ -175,14 +192,7 @@ review_legacy_collect() ( # subshell contains Git environment and scratch output
         parents="${parents#"$commit"}"
         if bases="$(git -C "$ll_root" merge-base --all "$commit" "$start")"; then :
         else status=$?; [ "$status" -eq 1 ] && [ -z "$bases" ] || return 1; fi
-        : > "$ll_work/fork-lines" || return 1
-        for fork in $bases; do
-            _legacy_tree "$fork" || return 1; fork_tree="$LL_TREE"
-            while IFS= read -r -d '' entry; do
-                _legacy_record "$entry" || continue
-                _legacy_lines "$LL_BLOB" "$LL_PATH" && cat "$LL_LINES" >> "$ll_work/fork-lines" || return 1
-            done < "$fork_tree"
-        done
+        for fork in $bases; do _legacy_fork_index "$fork" || return 1; done
         _legacy_tree "$commit" || return 1; tree="$LL_TREE"
         while IFS= read -r -d '' entry; do
             _legacy_record "$entry" || continue
@@ -197,7 +207,12 @@ review_legacy_collect() ( # subshell contains Git environment and scratch output
             done
             # An identical eligible record in any parent contains every parsed line already.
             $unchanged && continue
-            cat "$ll_work/fork-lines" > "$ll_work/excluded" || return 1
+            : > "$ll_work/excluded" || return 1
+            key="$(_legacy_change_key "$record_path")" || return 1
+            for fork in $bases; do
+                fork_lines="$ll_rows.fork-$fork/$key"
+                [ ! -f "$fork_lines" ] || cat "$fork_lines" >> "$ll_work/excluded" || return 1
+            done
             for parent in ${parent_blobs[@]+"${parent_blobs[@]}"}; do
                 _legacy_lines "$parent" "$record_path" && cat "$LL_LINES" >> "$ll_work/excluded" || return 1
             done
@@ -230,7 +245,7 @@ review_legacy_resolve() { # root checked base head rigor registry work scoped-re
     local root="$1" checked="$2" base="$3" head="$4" rigor="$5" registry="$6" work="$7" receipts="$8" pr="$9"
     local identity change reviewer reason cleared current row evidence current_fp="" empty_ok
     local type seq origin review time receipt_id rchange rreviewer from to rhead since rbase base_at verdict c h m l report carried
-    local LL_EVIDENCE OWNER_APPROVED_COMMIT="" owner_checked=false owner_valid=false
+    local LL_EVIDENCE owner_valid=false
     LL_BLOCKERS=(); LL_PROBLEMS=(); LL_EMPTY_VALID=(); LL_EMPTY_ALLOWED=()
     LL_NUL_UNAVAILABLE=false; LL_NUL_ERROR=""
     mkdir -p "$work" || { LL_PROBLEMS+=('legacy scan: cannot allocate history evidence'); return 1; }
@@ -267,11 +282,10 @@ review_legacy_resolve() { # root checked base head rigor registry work scoped-re
     while IFS=$'\037' read -r identity change reviewer reason; do
         cleared=false
         if [ "$reviewer" = owner ] || [ "$reviewer" = '(unnamed)' ]; then
-            if ! $owner_checked; then
-                owner_checked=true
-                if [ -n "$receipts" ] && owner_native_approval_valid "$root" "$checked" "$base" "$head" &&
-                    [ -n "$OWNER_APPROVED_COMMIT" ]; then owner_valid=true; fi
-            fi
+            # The caller evaluated native owner state once, before any exemption. Legacy
+            # clearance additionally proves historical inclusion; it is not barrier clearance.
+            if [ -n "$receipts" ] && ${OWNER_VALID:-false} &&
+                [ -n "${OWNER_APPROVED_COMMIT:-}" ]; then owner_valid=true; fi
             if $owner_valid && _legacy_evidence "$root" "$checked" "$base" "$OWNER_APPROVED_COMMIT" "$rigor" "$work" &&
                 awk -F '\037' -v id="$identity" '$1==id { found=1 } END { exit !found }' "$LL_EVIDENCE"; then cleared=true; fi
         elif [ -n "$receipts" ] && [ "$(review_eligibility "$registry" "$reviewer")" = reviewer ]; then

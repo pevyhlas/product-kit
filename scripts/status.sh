@@ -34,12 +34,13 @@ ju() { if [[ "$1" =~ ^(0|[1-9][0-9]*)$ ]]; then printf '%s' "$1"; else printf nu
 ji() { if [[ "$1" =~ ^(0|-?[1-9][0-9]*)$ ]]; then printf '%s' "$1"; else printf null; fi; }
 
 items="$(spec_items "$root")"
-now_next="$(spec_stage_now "$root")"; stage_now="${now_next%%"$SEP"*}"; stage_next="${now_next#*"$SEP"}"
+spec_lifecycle_require "$root"
+stage_now="$SPEC_STAGE_NOW"; stage_next="$SPEC_STAGE_NEXT"
 # Live items marked for a stage after the current one: needed later, not now.
 later="$(if [ -n "$stage_now" ]; then
     { printf '%s\n' "$items" | awk -F "$SEP" 'NF && $5 == "yes" { print "R" FS $1 }'
       spec_stages "$root" | awk -F "$SEP" '{ print "S" FS $1 FS $2 }'; } |
-    awk -F "$SEP" -v now="$stage_now" "$SPEC_STAGE_AWK"'
+    awk -F "$SEP" -v now="$stage_now" -v stage_order="$SPEC_STAGE_ORDER" -v stage_custom="$SPEC_STAGE_CUSTOM" "$SPEC_STAGE_AWK"'
         $1 == "R" { gone[$2] = 1; next }
         !($2 in gone) && stage_rank($3) > stage_rank(now) { out = out (out ? ", " : "") $2 " (" $3 ")" }
         END { print out }'
@@ -53,7 +54,7 @@ records="$(spec_records "$root")"
 # Use the same winning worktree record. Children reference the parent; ordinary standalone
 # changes have no outcome row. A referenced but missing/incomplete parent stays visibly unknown.
 parents="$(printf '%s\n' "$changes" | awk -F '\037' '$7 != "" && $7 != "none" { print $7 }' | sort -u)"
-progress="$(while IFS="$SEP" read -r id title _ _ _ _ parent _ _ _ _ _ loc; do
+progress="$(while IFS="$SEP" read -r id title _ _ _ _ parent _ _ _ _ _ _ _ loc; do
     [ -n "$id" ] || continue
     required=false
     if printf '%s\n' "$parents" | grep -qxF "$id"; then required=true
@@ -194,12 +195,12 @@ if $json; then
         sep=,
     done <<< "$items"
     printf '],"changes":['; sep=""
-    while IFS="$SEP" read -r id title opened step waits nxt parent total passed failed maxatt stalled_items loc; do
+    while IFS="$SEP" read -r id title opened step waits nxt parent total passed failed maxatt stalled_items ws ns loc; do
         [ -n "$id" ] || continue
         flag=false; case "$unclosed" in *" $id "*) flag=true ;; esac
-        printf '%s{"id":%s,"title":%s,"opened":%s,"age_days":%s,"step":%s,"waiting_on":%s,"next":%s,"parent":%s,"location":%s,"merged_unclosed":%s,"acceptance":{"total":%s,"passed":%s,"failed_or_blocked":%s,"max_attempts":%s,"stalled":%s}}' "$sep" \
+        printf '%s{"id":%s,"title":%s,"opened":%s,"age_days":%s,"step":%s,"waiting_on":%s,"next":%s,"parent":%s,"location":%s,"merged_unclosed":%s,"state_fields":{"waiting_on":"%s","next":"%s"},"acceptance":{"total":%s,"passed":%s,"failed_or_blocked":%s,"max_attempts":%s,"stalled":%s}}' "$sep" \
             "$(js "$id")" "$(js "$title")" "$(js "$opened")" "$(ji "$(age "$opened")")" "$(js "$step")" "$(js "$waits")" \
-            "$(js "$nxt")" "$(js "$parent")" "$(js "$loc")" "$flag" \
+            "$(js "$nxt")" "$(js "$parent")" "$(js "$loc")" "$flag" "$ws" "$ns" \
             "$(ju "$total")" "$(ju "$passed")" "$(ju "$failed")" "$(ju "$maxatt")" "$(js "$stalled_items")"
         sep=,
     done <<< "$changes"
@@ -314,7 +315,7 @@ printf '%s\n' "$items" | awk -F '\037' '
 
 printf '\nIn flight\n'
 if [ -z "$changes" ] && [ -z "$leftover" ]; then printf '  No open changes.\n'; fi
-while IFS="$SEP" read -r id title opened step waits nxt parent total passed failed maxatt stalled_items loc; do
+while IFS="$SEP" read -r id title opened step waits nxt parent total passed failed maxatt stalled_items ws ns loc; do
     [ -n "$id" ] || continue
     a="$(age "$opened")"
     printf '  %s — %s\n' "$id" "$title"
@@ -326,6 +327,8 @@ while IFS="$SEP" read -r id title opened step waits nxt parent total passed fail
     [ -z "$stalled_items" ] || printf '    stalled: %s (alternatives note and owner decision due)\n' "$stalled_items"
     [ -z "$waits" ] || printf '    waiting on: %s\n' "$waits"
     [ -z "$nxt" ] || printf '    next: %s\n' "$nxt"
+    [ "$ws" = present ] || printf '    State: Waiting on is %s\n' "$ws"
+    [ "$ns" = present ] || printf '    State: Next is %s\n' "$ns"
     case "$parent" in ''|none) ;; *) printf '    parent: %s\n' "$parent" ;; esac
     case "$unclosed" in *" $id "*) printf '    merged without closing: record on %s, with no child or outcome checkpoint keeping it open; close it in the next relevant PR, or give a change spanning PRs a checkpoint (review.md, Closing)\n' "$base" ;; esac
 done <<< "$changes"

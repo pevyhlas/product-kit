@@ -103,7 +103,10 @@ receipt_host() { # root change head [base]; intentionally test-only legacy recip
                 body="$(jq -r .body "$GH_STUB_DIR/posted.json")"
                 # The recipe's order, not whether this body was cached, sets fixture time.
                 # POST/read-back has completed; align the replay metadata with fx_review.
-                jq '.[-1].submittedAt="2026-01-02T00:00:00Z"' "$GH_STUB_DIR/reviews/7.json" > "$GH_STUB_DIR/reviews/7.next" &&
+                jq --arg id "$((1000+serial))" '.[-1] |=
+                    (.submittedAt="2026-01-02T00:00:00Z" | .fullDatabaseId=$id |
+                     .url=("https://github.com/owner/repo/pull/7#pullrequestreview-"+$id))' \
+                    "$GH_STUB_DIR/reviews/7.json" > "$GH_STUB_DIR/reviews/7.next" &&
                     mv "$GH_STUB_DIR/reviews/7.next" "$GH_STUB_DIR/reviews/7.json" || return 1
                 published=true
             fi

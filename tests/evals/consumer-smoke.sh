@@ -9,9 +9,9 @@ dirty=false; [ -z "$(git -C "$PK_ROOT" status --porcelain)" ] || dirty=true
 failed=0; rows=''; sep=''
 check() {
     local label="$1"; shift
-    if ! "$@" > "$PROJ/smoke.out" 2>&1; then
+    if ! "$@" > "$PROJ/.git/smoke.out" 2>&1; then
         printf 'Consumer smoke (%s): %s\n' "$harness" "$label" >&2
-        cat "$PROJ/smoke.out" >&2; failed=$((failed + 1))
+        cat "$PROJ/.git/smoke.out" >&2; failed=$((failed + 1))
     fi
 }
 for harness in claude opencode codex agents; do
@@ -24,6 +24,7 @@ for harness in claude opencode codex agents; do
     check status bash "$scripts/status.sh" --json
     printf '\nOwned policy stays byte-identical.\n' >> "$PROJ/.prdkit/memory/constitution.md"
     custom="$(install_hash_stream < "$PROJ/.prdkit/memory/constitution.md")"
+    check 'commit install and trusted base' snapshot_upgrade_fixture "$PROJ"
     for round in 1 2; do
         check "upgrade $round" bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade
         check preservation test "$custom" = "$(install_hash_stream < "$PROJ/.prdkit/memory/constitution.md")"

@@ -37,6 +37,7 @@ done
 # Simulate a pre-fix ignore file; upgrade must add both entries idempotently.
 sed '/^\.prdkit\/\.install-/d' .gitignore > .git/ignore.saved
 cp .git/ignore.saved .gitignore
+snapshot_upgrade_fixture "$PROJ" || exit 1
 run bash .product-kit/scripts/init.sh --upgrade --copy
 assert_eq 0 "$STATUS" 'upgrade installs runtime ignore entries'
 for artifact in .install-lock .install-state; do

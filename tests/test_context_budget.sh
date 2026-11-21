@@ -29,6 +29,17 @@ assert_contains "$OUTPUT" "over context-budget-bytes 16384" "default budget name
 assert_contains "$OUTPUT" "--strict" "strict mode explained"
 assert_eq "$BEFORE" "$(cat "$PROJ/CLAUDE.md")" "doctor leaves the context file unchanged"
 
+it "context bytes do not contribute to reading-line excess"
+run bash "$DOCTOR" --json
+assert_contains "$OUTPUT" "Context budget: CLAUDE.md" "oversized context remains advisory"
+assert_eq 0 "$(printf '%s\n' "$OUTPUT" | jq '.budget_excess_reading_lines')" "context overflow alone contributes zero"
+mkdir -p specs
+awk 'BEGIN { for (i = 0; i < 153; i++) print "Spec notes." }' > specs/observed.md
+run bash "$DOCTOR" --json
+assert_contains "$OUTPUT" "Context budget: CLAUDE.md" "both checks run together"
+assert_eq 3 "$(printf '%s\n' "$OUTPUT" | jq '.budget_excess_reading_lines')" "only the spec's three excess lines count"
+rm specs/observed.md
+
 it "--strict turns context-budget advisories into failing findings"
 run bash "$DOCTOR" --json --strict
 assert_eq 1 "$STATUS" "strict doctor fails on an over-budget file"

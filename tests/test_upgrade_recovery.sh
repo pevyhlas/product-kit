@@ -11,17 +11,19 @@ tool="${0##*/}"; last="${!#}"
 source_path="${1:-}"; [ "$source_path" != -p ] || source_path="${2:-}"
 case "$tool:$FAULT" in
     cp:copy|cp:interrupt|cp:kill)
-        if [ "$source_path" = "$FAULT_ROOT/.product-kit/templates/change-template.md" ]; then
+        if [ "$source_path" = "$FAULT_ROOT/.product-kit/templates/change-template.md" ] &&
+            [[ "$last" == "$FAULT_ROOT"/.prdkit/templates/change-template.md.prdkit-install.*/payload ]]; then
             printf 'partial bytes\n' > "$last"
             if [ "$FAULT" = interrupt ]; then kill -TERM "$INSTALL_PID"; fi
             if [ "$FAULT" = kill ]; then kill -KILL "$INSTALL_PID"; fi
             exit 73
         fi ;;
     cp:hold)
-        if [ "$source_path" = "$FAULT_ROOT/.product-kit/commands/prdkit.md" ]; then
-            : > "$FAULT_ROOT/ready"
+        if [ "$source_path" = "$FAULT_ROOT/.product-kit/commands/prdkit.md" ] &&
+            [[ "$last" == "$FAULT_ROOT"/.claude/commands/prdkit.md.prdkit-install.*/payload ]]; then
+            : > "$FAULT_ROOT/.git/ready"
             for ((i=0;i<300;i++)); do
-                [ ! -f "$FAULT_ROOT/release" ] || exec "$REAL_CP" "$@"
+                [ ! -f "$FAULT_ROOT/.git/release" ] || exec "$REAL_CP" "$@"
                 sleep 0.1
             done
             exit 78
@@ -68,6 +70,7 @@ for fault in copy interrupt kill retire agents manifest storage; do
     printf '\n' >> "$PROJ/.product-kit/scripts/install-lib.sh"
     sed 's/## Product-Kit workflow/## Product-Kit workflow updated/' "$PROJ/.product-kit/scripts/install-lib.sh" > "$PROJ/new-lib"
     mv "$PROJ/new-lib" "$PROJ/.product-kit/scripts/install-lib.sh"
+    snapshot_upgrade_fixture "$PROJ" || exit 1
     # shellcheck disable=SC2016 # The child expands its own PID, not the test runner's.
     run env PATH="$SHIMS:$PATH" FAULT="$fault" FAULT_ROOT="$PROJ" bash -c 'export INSTALL_PID=$$; exec bash "$1/.product-kit/scripts/init.sh" --target "$1" --upgrade' _ "$PROJ"
     if [ "$STATUS" -ne 0 ]; then _ok 'failed operation exits nonzero'; else _no "masked $fault failure"; fi
@@ -105,6 +108,7 @@ for fault in copy interrupt kill retire agents manifest storage; do
     run bash "$PROJ/.prdkit/scripts/bash/check-adoption.sh" --json
     assert_eq 0 "$STATUS" "retry restores manifest integrity: $OUTPUT"
     stable="$(install_hash_stream < "$PROJ/.prdkit/.manifest")"
+    snapshot_upgrade_fixture "$PROJ" || exit 1
     run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade
     assert_eq 0 "$STATUS" 'second retry is idempotent'
     assert_eq "$stable" "$(install_hash_stream < "$PROJ/.prdkit/.manifest")" 'second retry keeps manifest bytes'
@@ -113,17 +117,18 @@ done
 it "overlapping writers refuse before mutation and the original writer finishes coherently"
 PROJ="$(make_inited_project)"; track_tmp "$PROJ"
 PROJ="$(CDPATH='' cd "$PROJ" && pwd -P)"
-env PATH="$SHIMS:$PATH" FAULT=hold FAULT_ROOT="$PROJ" bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade > "$PROJ/first.log" 2>&1 &
+snapshot_upgrade_fixture "$PROJ" || exit 1
+env PATH="$SHIMS:$PATH" FAULT=hold FAULT_ROOT="$PROJ" bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade > "$PROJ/.git/first.log" 2>&1 &
 first=$!
-for ((i=0;i<300;i++)); do [ ! -f "$PROJ/ready" ] || break; sleep 0.1; done
-assert_file "$PROJ/ready" 'first writer reached synchronized copy boundary'
+for ((i=0;i<300;i++)); do [ ! -f "$PROJ/.git/ready" ] || break; sleep 0.1; done
+assert_file "$PROJ/.git/ready" 'first writer reached synchronized copy boundary'
 before="$(install_hash_stream < "$PROJ/.prdkit/.manifest")"
 run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade
 assert_eq 1 "$STATUS" 'overlapping writer is refused'
 assert_contains "$OUTPUT" 'write lock exists' 'refusal names active lock'
 assert_eq "$before" "$(install_hash_stream < "$PROJ/.prdkit/.manifest")" 'contender cannot publish a manifest'
-: > "$PROJ/release"
-if wait "$first"; then _ok 'original writer completes'; else _no "original writer failed: $(cat "$PROJ/first.log")"; fi
+: > "$PROJ/.git/release"
+if wait "$first"; then _ok 'original writer completes'; else _no "original writer failed: $(cat "$PROJ/.git/first.log")"; fi
 run bash "$PROJ/.prdkit/scripts/bash/check-adoption.sh" --json
 assert_eq 0 "$STATUS" 'serialized install is coherent'
 

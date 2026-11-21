@@ -157,7 +157,7 @@ assert_eq "$refs_before" "$(git -C "$PROJ" show-ref)" 'caller refs remain untouc
 # out of the scan: nothing it assigns is tainted and no regex on it is checked. Give the reason.
 # The macOS job runs the suites under macOS awk and is the behavioural backstop.
 regex_on_substr() { # file... -> "file:line: text" for each offending line
-    awk '
+    awk -v inventory="${SCRIPT_COMMAND_INVENTORY:-0}" '
         # One character is tested with ==, != or index(), never a regex: this scan runs under macOS awk.
         function isdig(c) { return c != "" && index("0123456789", c) > 0 }
         function isids(c) { return c != "" && index("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_", c) > 0 }
@@ -208,6 +208,40 @@ regex_on_substr() { # file... -> "file:line: text" for each offending line
                 break
             }
             if (w > n) return
+            if (inventory) {
+                if (lit=="case") { pat[x,++cases[x]]=1; return }
+                if (lit=="esac" && cases[x]) { delete pat[x,cases[x]--]; return }
+                if (pat[x,cases[x]] || arraylit[x] || cond[x]) return
+                if (lit=="[[") { cond[x]=1; for (k=w+1;k<=n;k++) if (wlit(x,k)=="]]") cond[x]=0; return }
+                if (lit=="/usr/bin/env") w++
+                while (w<=n && (substr(wlit(x,w),1,1)=="-" || isassign(x,w))) w++
+                if (w>n) return
+                lit=""
+                for (p=1;p<=CWN[x,w];p++) lit=lit CWX[x,w,p]
+                sub(/^.*\//,"",lit)
+                if (lit ~ /^[a-zA-Z][a-zA-Z0-9_.+-]*$/)
+                    print FNAME ":" CWL[x,w,1] ":" lit
+                if (lit=="find") for (k=w+1;k<n;k++) {
+                    first=wlit(x,k)
+                    if (first=="-exec" || first=="-execdir" || first=="-ok" || first=="-okdir") {
+                        k++; first=""
+                        for (p=1;p<=CWN[x,k];p++) first=first CWX[x,k,p]
+                        sub(/^.*\//,"",first)
+                        if (first ~ /^[a-zA-Z][a-zA-Z0-9_.+-]*$/) print FNAME ":" CWL[x,k,1] ":" first
+                    }
+                }
+                if (lit=="sh" || lit=="bash") {
+                    for (k=w+1;k<n && wlit(x,k) ~ /^-/;k++) if (wlit(x,k) ~ /c/) {
+                        # Queue literal shell programs so parsing them cannot
+                        # disturb the outer command or its quoting state.
+                        k++; first=""
+                        for (p=1;p<=CWN[x,k];p++) first=first CWX[x,k,p]
+                        inline[++ninline]=first; inlinef[ninline]=FNAME; inlinel[ninline]=CWL[x,k,1]
+                        break
+                    }
+                }
+                return
+            }
             lit = wlit(x, w)
             sub(/.*\//, "", lit)
             if (lit != "awk" && lit != "gawk" && lit != "mawk" && lit != "nawk") return
@@ -268,6 +302,7 @@ regex_on_substr() { # file... -> "file:line: text" for each offending line
                     for (j = i + 2; j <= n; j++) { d = substr(s, j, 1); if (d == "\\") j++; else if (d == "\047") break }
                     if (LIT[x] == "") LITL[x] = ln; LIT[x] = LIT[x] substr(s, i, j - i + 1); i = j; continue
                 }
+                if (inventory && substr(s,i,2)=="[[" && !WACT[x] && LIT[x]=="" && substr(s,i+2,1) ~ /[ \t]/) cond[x]=1
                 if (c == "(" && substr(s, i + 1, 1) == "(") {   # (( arithmetic )), where << is a shift
                     dep = 0; for (j = i; j <= n; j++) { d = substr(s, j, 1); if (d == "(") dep++; else if (d == ")" && --dep == 0) break }
                     endword(x); i = j; continue
@@ -279,15 +314,25 @@ regex_on_substr() { # file... -> "file:line: text" for each offending line
                 }
                 if (c == "$" && substr(s, i + 1, 1) == "{") { j = braceend(s, i); if (LIT[x] == "") LITL[x] = ln; LIT[x] = LIT[x] substr(s, i, j - i + 1); i = j; continue }
                 if (c == " " || c == "\t") { endword(x); continue }
+                if (inventory && substr(s,i,2)=="]]" && !WACT[x] && LIT[x]=="" && cond[x]) { cond[x]=0; endword(x); NW[x]=0; i++; continue }
+                if (inventory && c==";" && substr(s,i,2)==";;") {
+                    endword(x); endcmd(x); if (cases[x]) pat[x,cases[x]]=1
+                    i++; continue
+                }
                 if (c == "\n") {
                     endword(x); endcmd(x)
                     if (HPEND != "") { if (HPQ) { HDEL = HPEND } else { ST[x] = "H"; HDH[x] = HPEND; HSTR[x] = HSTRIP } HPEND = "" }
                     continue
                 }
                 if (c == ";" || c == "&" || c == "|") { endword(x); endcmd(x); continue }
-                if (c == "(") { endword(x); endcmd(x); PAR[x]++; continue }
+                if (c == "(") {
+                    if (inventory && LIT[x] ~ /[+]?=$/) arraylit[x]=PAR[x]+1
+                    endword(x); endcmd(x); PAR[x]++; continue
+                }
                 if (c == ")") {
                     endword(x); endcmd(x)
+                    if (inventory && arraylit[x] && arraylit[x]==PAR[x]) { arraylit[x]=0; if (substr(s,i+1) ~ /^[ \t]*[A-Za-z_][A-Za-z_0-9]*(=|[ ;\n])/) LIT[x]="local" }
+                    if (inventory && pat[x,cases[x]]) pat[x,cases[x]]=0
                     if (PAR[x] > 0) PAR[x]--
                     else if (CD > 0) { CD--; if (ST[CD] == "D") { SB[CD] = ""; SBL[CD] = ln } }
                     continue
@@ -301,12 +346,17 @@ regex_on_substr() { # file... -> "file:line: text" for each offending line
                     for (; i <= n; i++) { d = substr(s, i, 1); if (d == " " || d == "\t" || d == "\n" || d == ";" || d == ")" || d == "|" || d == "&") break; if (d != "\047" && d != "\"" && d != "\\") del = del d; else HPQ = 1 }
                     HPEND = del; i--; continue
                 }
-                if (c == "<" || c == ">") { endword(x); continue }
+                if (c == "<" || c == ">") {
+                    endword(x)
+                    # A leading redirect after a compound command has no executable.
+                    if (inventory && !NW[x] && substr(s,i+1) !~ /^[ \t]*[<(]/) { LIT[x]=":"; endword(x) }
+                    continue
+                }
                 if (LIT[x] == "") LITL[x] = ln
                 LIT[x] = LIT[x] c; WACT[x] = 1
             }
         }
-        function lexreset() { CD = 0; ST[0] = "N"; HPQ = 0; PAR[0] = 0; NW[0] = 0; WPN[0] = 0; WACT[0] = 0; LIT[0] = ""; HDEL = ""; HPEND = "" }
+        function lexreset() { CD = 0; ST[0] = "N"; HPQ = 0; PAR[0] = 0; NW[0] = 0; WPN[0] = 0; WACT[0] = 0; LIT[0] = ""; HDEL = ""; HPEND = ""; split("",cases); split("",pat); split("",cond); split("",arraylit) }
 
         # ---- awk programs: text with a source line per program line ----------------------------------
         function ptext(k, t, f, ln,   n, parts, j) {   # append t (from file f, first line ln) to program k
@@ -604,11 +654,22 @@ regex_on_substr() { # file... -> "file:line: text" for each offending line
         function lost() { if (NFILE && (CD > 0 || ST[0] != "N" || PAR[0] > 0 || HDEL != "" || HPEND != "")) { HIT[FNAME SUBSEP "EOF"] = 1; HORD[++NHIT] = FNAME SUBSEP "EOF" } }
         FNR == 1 { lost(); FNAME = FILENAME; FIDX[FNAME] = ++NFILE; lexreset() }
         {
+            if (inventory && $0 ~ /^#!/) {
+                interp=$0; sub(/^#![ \t]*/,"",interp); split(interp,iw,/[ \t]+/)
+                interp=iw[1]; sub(/^.*\//,"",interp)
+                if (interp=="env") { a=2; if (iw[a]=="-S") a++; interp=iw[a] }
+                print FNAME ":" FNR ":" interp
+            }
             RAW[FNAME, FNR] = $0
             lexline($0, FNR)
         }
         END {
             lost()
+            if (inventory) {
+                for (i=1;i<=ninline;i++) { FNAME=inlinef[i]; lexreset(); lexline(inline[i],inlinel[i]); lost() }
+                for (i=1;i<=NHIT;i++) if (split(HORD[i],w,SUBSEP) && w[2]=="EOF") print w[1] ":EOF:unparsed-shell"
+                exit
+            }
             # Each awk program as awk sees it: the program word, its shell variables expanded.
             for (np = 1; np <= NPW; np++) {
                 NP++; PLN[NP] = 0
@@ -697,6 +758,39 @@ assert_eq "lost.sh:EOF: scan lost track" "$(cd "$SCAN" && regex_on_substr lost.s
 assert_eq "" "$(cd "$SCAN" && regex_on_substr clean.sh)" "comparisons, index(), measured cuts, comments, strings, other programs, here-documents and justified lines pass"
 scripts=(); while IFS= read -r f; do scripts+=("$f"); done < <(cd "$PK_ROOT" && find scripts -type f -name '*.sh' | sort)
 assert_eq "" "$(cd "$PK_ROOT" && regex_on_substr "${scripts[@]}")" "every script under scripts/ passes the scan"
+
+it "kit scripts use the approved runtime allowlist"
+# A new runtime needs a justified, owner-approved change to this allowlist.
+# Keep language runtimes distinct from ordinary system tools and the existing
+# GitHub/JSON CLIs. This best-effort check inventories static commands and shebangs.
+runtime_allowlist=(sh bash awk sed jq)
+kit_tools=(basename cat chmod cmp cp cut date dd dirname env find gh git grep head hostname ln mkdir mkfifo mktemp mv od openssl ps readlink rm rmdir sha256sum shasum sleep sort tail touch tr uname wc)
+runtime_check() (
+    local file
+    {
+        printf '%s\n' "${runtime_allowlist[@]}" "${kit_tools[@]}"
+        compgen -b; compgen -k
+        for file; do
+            sed -nE 's/^[[:space:]]*([[:alpha:]_][[:alnum:]_]*)\(\)[[:space:]]*[(\{].*/\1/p' "$file"
+        done
+    } > "$SCAN/allowed"
+    SCRIPT_COMMAND_INVENTORY=1 regex_on_substr "$@" > "$SCAN/commands" || exit 1
+    awk -F: 'NR==FNR { ok[$0]=1; next } !($NF in ok)' "$SCAN/allowed" "$SCAN/commands"
+)
+cat > "$SCAN/runtime-probe" <<'SH'
+#!/usr/bin/env python3
+env perl -e '1'
+env -i LC_ALL=C python3 --version
+find . -exec /usr/bin/python3 -V \; -execdir 'perl' -v \;
+if /usr/bin/python -V; then hypothetical-runtime; fi
+printf '%s\n' "python3 is a word in this message"
+allowed="$(sh -c true)"
+sh -c 'echo example; exec ruby -v'
+SH
+assert_eq $'python3\nperl\npython3\npython3\nperl\npython\nhypothetical-runtime\nruby' "$(runtime_check "$SCAN/runtime-probe" | cut -d: -f3)" "unlisted runtimes are rejected, including find actions, env assignments and a previously unknown name"
+scripts=()
+while IFS= read -r -d '' file; do scripts+=("$file"); done < <(cd "$PK_ROOT" && find scripts -type f -print0)
+assert_eq "" "$(cd "$PK_ROOT" && runtime_check "${scripts[@]}")" "every file beneath scripts/ stays within the runtime allowlist"
 
 it "status, doctor and bounds read arrows, dashes and accents beside IDs, links and names"
 MB="$(make_inited_project)"; track_tmp "$MB"

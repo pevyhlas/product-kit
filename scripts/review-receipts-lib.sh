@@ -189,20 +189,25 @@ review_receipts_fetch() { # URL root work; policy already read; caller supplies 
             elif has("restates") and ((.restates|type)!="string" or (.restates|test("^[1-9][0-9]*$")|not)) then "invalid restates review id"
             elif has("restates_pr") and (has("restates")|not) then "restates_pr requires restates"
             elif has("restates_pr") and ((.restates_pr|nat|not) or .restates_pr==0 or .restates_pr==$n) then "invalid restates_pr"
+            elif has("restates_chain") and (has("restates")|not) then "repair chain requires restates"
+            elif has("restates_chain") and ((.restates_chain|type)!="array" or
+                (all(.restates_chain[]; type=="object" and (.pr|nat) and .pr>0 and (.review|type)=="string" and (.review|test("^[1-9][0-9]*$")))|not)) then "invalid repair chain"
             else "" end;
         [ .[] as $s | $s.reviews[] | select(.state!="PENDING") | . as $r |
           (.body // "" | if type=="string" then . else "" end | payload) as $b |
           (($r.author.__typename // "") as $t | (if $t=="Bot" then "bot:" elif $t=="User" then "user:" else "?:" end)+($r.author.databaseId|tostring)) as $actor |
           ($publishers|split("\n")|index($actor)!=null) as $trusted |
-          select(($s.pr.number==$current or ($s.pr.merged|not)) or $b.parsed.restates? != null) |
           {origin:$s.pr.number,review:($r.fullDatabaseId|tostring),time:$r.submittedAt,url:$r.url,
-           merged:$s.pr.merged,raw_id:(if ($b.parsed|type)=="object" then $b.parsed.id else null end),payload:$b.parsed,trusted:$trusted,
+           merged:$s.pr.merged,payload:$b.parsed,trusted:$trusted,
+           original_id:(if $r.lastEditedAt==null and $r.editor==null then $b.parsed.id? // null else null end),
             actor:$actor,ignored:($trusted|not),shaped:($b.starts>0),
+            isolated:($isolation!="required" or $r.author.databaseId!=$s.pr.author.databaseId),
            note:(if $trusted and $isolation=="shared" and $r.author.databaseId==$s.pr.author.databaseId then
                "receipts are authenticated to \($r.author.login), which also authored this PR: they bind content, order and counts, not the reviewer\u0027s independence" else "" end),
-           error:(if $r.lastEditedAt!=null or $r.editor!=null then "edited receipt"
+            error:(if ($trusted|not) then ""
+                   elif $isolation=="required" and $r.author.databaseId==$s.pr.author.databaseId then "publisher also authored this PR (isolation required)"
+                   elif $r.lastEditedAt!=null or $r.editor!=null then "edited receipt"
                   elif $b.starts!=1 or $b.ends!=1 or $b.inside then "expected exactly one receipt block"
-                  elif $isolation=="required" and $r.author.databaseId==$s.pr.author.databaseId then "publisher also authored this PR (isolation required)"
                   else ($b.parsed|schema_error($s.pr.number)) end)} ] |
         sort_by(.time, (.review|length), .review) | to_entries[] | .value + {seq:(.key+1)}
         ' "$work/sources" > "$work/classified"; then RC_ERROR='could not normalize host reviews'; return 1; fi
@@ -221,17 +226,27 @@ review_receipts_fetch() { # URL root work; policy already read; caller supplies 
     # Resolve repairs before extracting carry. A repair replaces, never deletes, an invalid row
     # and inherits its origin, sequence and timestamp; its transport fields do not grant scope.
     if ! jq -s --argjson current "$RC_PR" '
-        . as $all |
-        reduce (.[] | select(.error=="" and .payload.restates? != null)) as $r
-          ($all;
-           ($r.payload.restates_pr // $r.origin) as $origin |
-           ([range(0;length) as $i | select(.[$i].origin==$origin and .[$i].review==$r.payload.restates) | $i][0]) as $i |
-           if $i!=null and (.[$i].error!="" or (.[$i].repaired==true and .[$i].payload==($r.payload|del(.restates,.restates_pr)|.pr=$origin))) and .[$i].seq<$r.seq and
-               .[$i].actor==$r.actor and (.[$i].raw_id==null or .[$i].raw_id==$r.payload.id) then
-               .[$i] = (.[$i] + {error:"",repaired:true,payload:($r.payload|del(.restates,.restates_pr)|.pr=$origin),raw_id:$r.payload.id}) |
-               map(if .seq==$r.seq then .consumed=true else . end)
-            else map(if .seq==$r.seq then .error="restatement does not replace an earlier invalid receipt with the same id and publisher" else . end) end) |
-        map(select(.consumed!=true)) |
+        def restore($r):
+            ($r.payload.restates_pr // $r.origin) as $origin |
+            ($r.payload.restates_chain // []) as $chain |
+            ($r.payload | del(.restates,.restates_pr,.restates_chain) | .pr=$origin |
+                if ($chain|length)>0 then .restates=$chain[0].review |
+                    if $chain[0].pr!=$origin then .restates_pr=$chain[0].pr else . end |
+                    if ($chain|length)>1 then .restates_chain=$chain[1:] else . end
+                else . end) as $saved |
+            ([range(0;length) as $i | select(.[$i].origin==$origin and .[$i].review==$r.payload.restates) | $i][0]) as $i |
+            if $i==null or (.[$i].isolated|not) or .[$i].actor!=$r.actor or .[$i].seq>=$r.seq or
+                (.[$i].original_id!=null and .[$i].original_id!=$saved.id) or
+                (.[$i].error=="" and ((.[$i].repaired|not) or .[$i].payload!=$saved)) then
+                error("invalid repair")
+            else map(if .seq==$r.seq then .consumed=true else . end) |
+                .[$i] += {error:"",repaired:true,payload:$saved} |
+                if $saved.restates then restore(.[$i]) else . end
+            end;
+        reduce (.[] | select(.error=="" and .payload.restates? != null)) as $r (.;
+            . as $before | try restore($r) catch ($before |
+                map(if .seq==$r.seq then .error="restatement does not replace an earlier invalid review by the same publisher" else . end))) |
+        map(select(.consumed!=true and (.origin==$current or (.merged|not)))) |
         # Replays fix their first position. A conflicting id invalidates every occurrence.
         . as $resolved |
         map(. as $r | if .error=="" then
@@ -257,7 +272,7 @@ review_receipts_write() { # destination; writer never changes RC_FILE
     local destination="$1" temp
     temp="$(mktemp "${destination}.XXXXXX")" || { RC_ERROR='cannot create snapshot'; return 1; }
     if ! {
-        printf 'prdkit-receipts 1\037repo=%s\037pr=%s\037pr_head=%s\037pr_created=%s\037base=%s\037fetched=%s\037isolation=%s\037pr_author=%s\n' \
+        printf 'prdkit-receipts 2\037repo=%s\037pr=%s\037pr_head=%s\037pr_created=%s\037base=%s\037fetched=%s\037isolation=%s\037pr_author=%s\n' \
             "$RC_REPO" "$RC_PR" "$RC_PR_HEAD" "$RC_PR_CREATED" "$RC_BASE" "$RC_FETCHED" "$RC_ISOLATION" "$RC_PR_AUTHOR"
         cat "$RC_FILE"
     } > "$temp" || ! mv "$temp" "$destination"; then rm -f "$temp"; RC_ERROR='cannot write snapshot'; return 1; fi
@@ -270,10 +285,11 @@ review_receipts_read() { # snapshot work; no gh or jq, including on errors
         function digits(s) { return s ~ /^[0-9]+$/ }
         # Spell out digits for older mawk as well as BSD awk (no interval dependency).
         function timestamp(s) { return s ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/ }
-        NR==1 { if (NF!=9 || $1!="prdkit-receipts 1") bad=1; next }
+        NR==1 { if (NF!=9 || $1!="prdkit-receipts 2") bad=1; next }
         $1=="R" { if (NF!=21 || !digits($2) || !digits($3) || !digits($4) || !timestamp($5) || ($21!="0" && $21!="1") || $2<=last) bad=1; last=$2; next }
         $1=="X" { if (NF!=5 || !digits($2) || !digits($3) || !digits($4) || $5=="" || $2<=last) bad=1; last=$2; next }
-        $1=="O" { if (NF!=6 || !digits($2) || !timestamp($3) || $4 !~ /^(APPROVED|CHANGES_REQUESTED|DISMISSED)$/) bad=1; next }
+        $1=="O" { if (NF!=7 || $2 !~ /^[1-9][0-9]*$/ || !timestamp($3) ||
+            $4 !~ /^(APPROVED|CHANGES_REQUESTED|DISMISSED)$/ || $7 !~ /^user:[1-9][0-9]*$/ || seen_owner[$2]++) bad=1; next }
         { bad=1 } END { exit (bad || NR==0) }' "$file"; then RC_ERROR='malformed receipt snapshot'; return 1; fi
     IFS= read -r header < "$file" || { RC_ERROR='empty receipt snapshot'; return 1; }
     IFS=$'\037' read -r magic repo pr prhead created base fetched isolation author <<< "$header"
@@ -313,11 +329,12 @@ review_receipts_scope() { # change rigor registry work root; local checks also r
     local type seq origin review time receipt_id change reviewer from to rhead since base base_at verdict c h m l report carried reason row
     local n k j candidate clear block scope start_fp scoped
     local rs=() origins=() changes=() reviewers=() froms=() tos=() blocks=() seqs=() links=()
-    RC_PROBLEMS=(); RC_COVERAGE="$work/coverage"; RC_INVALID=0; RC_CARRIED=0; RC_RECEIPTS=0
+    RC_PROBLEMS=(); RC_SCOPE_BLOCKERS=(); RC_REFERENCES=(); RC_CURRENT_REVIEWERS=(); RC_COVERAGE="$work/coverage"; RC_INVALID=0; RC_CARRIED=0; RC_RECEIPTS=0
     : > "$RC_COVERAGE" || { RC_ERROR='cannot write receipt coverage'; return 1; }
     scoped="$(mktemp "$work/scoped.XXXXXX")" || { RC_ERROR='cannot allocate scoped receipts'; return 1; }
     while IFS= read -r row; do
         IFS=$'\037' read -r type seq origin review time receipt_id change reviewer from to rhead since base base_at verdict c h m l report carried <<< "$row"
+        case "$type" in R|X) RC_REFERENCES+=("https://github.com/$RC_REPO/pull/$origin#pullrequestreview-$review") ;; esac
         case "$type" in
             O) printf '%s\n' "$row" >> "$scoped"; continue ;;
             X)
@@ -334,6 +351,8 @@ review_receipts_scope() { # change rigor registry work root; local checks also r
             printf 'X\037%s\037%s\037%s\037%s\n' "$seq" "$origin" "$review" "$RC_ERROR" >> "$scoped"
             [ "$origin" = "$RC_PR" ] || RC_CARRIED=$((RC_CARRIED+1)); continue
         fi
+        # Scope/identity fact only. Foreign-change rows on this PR still grant no coverage.
+        [ "$origin" != "$RC_PR" ] || RC_CURRENT_REVIEWERS+=("$reviewer")
         block=false; if _receipts_blocking "$verdict" "$c" "$h" "$m" "$scope_rigor"; then block=true; fi
         rs+=("$row"); origins+=("$origin"); changes+=("$change"); reviewers+=("$reviewer"); froms+=("$from"); tos+=("$to"); blocks+=("$block"); seqs+=("$seq")
         links+=("https://github.com/$RC_REPO/pull/$origin#pullrequestreview-$review")
@@ -373,6 +392,7 @@ review_receipts_scope() { # change rigor registry work root; local checks also r
                 fi
             done
             if ! $clear; then
+                RC_SCOPE_BLOCKERS+=("${rs[k]}")
                 RC_PROBLEMS+=("receipt ${links[k]}: ${reviewers[k]} ${changes[k]} blocking verdict stands: no later clean PASS in scope")
                 [ "${origins[k]}" = "$RC_PR" ] || RC_CARRIED=$((RC_CARRIED+1))
                 [ "${origins[k]}" = "$RC_PR" ] || printf '%s\n' "${rs[k]}" >> "$scoped"

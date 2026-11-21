@@ -22,7 +22,7 @@
 # e_from, e_to, g_from, g_to, i, k, reviewer, x, block, what, resolved_by, m, j, n,
 # where, from, to, verdict, label, kind, end and from_fp. Only the helpers' original
 # local variables are local; coverage failures are appended to problems, not returned.
-# shellcheck disable=SC2154 # Inputs are caller globals, documented above.
+# shellcheck disable=SC2154,SC2034 # Inputs and additive diagnostic outputs cross sourced interfaces.
 
 # The content a revision carries, as review-fingerprint-lib.sh computes it against fp_base: the
 # whole change ("full"). Cached per commit; sets content_fp and
@@ -96,6 +96,8 @@ review_coverage_evaluate() {
     # any tier and links nothing. Standing lines are evaluated in every mode, record-only
     # included: that mode exempts coverage, never an unresolved FAIL.
     l_idx=(); l_block=(); l_fromfp=(); l_tofp=(); e_from=(); e_to=()
+    # Additive facts for package planning. These never participate in a gate decision.
+    coverage_standing=(); coverage_clean=(); coverage_end=(); coverage_eligible=()
     if [ -n "$fp_base" ]; then
         for i in ${v_rev[@]+"${!v_rev[@]}"}; do
             [ "${v_rev[i]}" != owner ] || continue
@@ -135,6 +137,7 @@ review_coverage_evaluate() {
                 m=$((m + 1))
             done
             if [ -z "$resolved_by" ]; then
+                coverage_standing+=("$i")
                 if [ -n "$x" ]; then
                     where="${v_to[i]}"; review_is_fp "$where" && where="$(shown_fp "$where")"
                     problems+=("$reviewer (${v_round[i]}): $what at $where stands: no later clean PASS from $reviewer reaches that content")
@@ -159,8 +162,12 @@ review_coverage_evaluate() {
     for i in ${latest[@]+"${latest[@]}"}; do
         reviewer="${v_rev[i]}"; from="${v_from[i]}"; to="${v_to[i]}"; verdict="${v_verdict[i]}"
         label="$reviewer (${v_round[i]})"
+        coverage_clean[i]=false; coverage_end[i]=false; coverage_eligible[i]=false
+        for k in ${l_idx[@]+"${!l_idx[@]}"}; do
+            if [ "${l_idx[k]}" = "$i" ] && ! ${l_block[k]}; then coverage_clean[i]=true; fi
+        done
         [ "$verdict" = PASS ] || problems+=("$label: verdict ${verdict:-missing}, not PASS")
-        if eligible "$reviewer"; then independent=$((independent + 1)); fi
+        if eligible "$reviewer"; then independent=$((independent + 1)); coverage_eligible[i]=true; fi
         for kind in critical high medium; do
             case "$kind" in critical) n="${v_c[i]}" ;; high) n="${v_h[i]}" ;; medium) n="${v_m[i]}" ;; esac
             [ "$kind" != medium ] || [ "$rigor" != light ] || continue
@@ -182,7 +189,7 @@ review_coverage_evaluate() {
         if [ "$from_fp" = "$tok_fp" ] && [ "${v_empty_clearance[i]:-false}" != true ]; then
             problems+=("$label: the range $from..$to is empty"); continue
         fi
-        covered "$tok_fp" && continue
+        if covered "$tok_fp"; then coverage_end[i]=true; continue; fi
         problems+=("$label: changed since the reviewed content $(shown_fp "$tok_fp"): no recorded verdict carries it to this head's content ($(shown_fp "$head_fp"))")
     done
 }
