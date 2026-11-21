@@ -201,7 +201,8 @@ durable_copy() (
     [ -s "$src" ] || return 1
     tmp="$(mktemp "$dir/.publish-XXXXXXXX")" || return 1
     trap 'rm -f "$tmp"' EXIT
-    cat "$src" > "$tmp" && sync_log_path "$tmp" || return 1
+    # Report writeback errors on the descriptor that wrote the bytes, before linking.
+    dd if="$src" of="$tmp" conv=fsync 2>/dev/null || return 1
     [ ! -d "$dst" ] || return 1
     if ! ln "$tmp" "$dst" 2>/dev/null; then
         [ -f "$dst" ] && [ ! -L "$dst" ] && cmp -s "$src" "$dst" && sync_log_path "$dst" || return 1

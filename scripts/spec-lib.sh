@@ -840,50 +840,6 @@ spec_changes() { # root
                 v = line; sub("^.*\\*\\*" name "\\*\\*:[[:space:]]*", "", v); sub(/[[:space:]]+·.*/, "", v); return trim(v)
             }
             function presence(n,v) { return !n ? "missing" : n>1 ? "duplicate" : v=="" ? "blank" : "present" }
-            # Skip only matched code spans: an unmatched backtick is literal,
-            # and a longer/shorter backtick run cannot close a span.
-            function closing_ticks(s,n,i,   j) {
-                for (;i<=length(s);i=j) {
-                    if (substr(s,i,1)!="`") { j=i+1; continue }
-                    for (j=i+1;substr(s,j,1)=="`";j++) {}
-                    if (j-i==n) return j-1
-                }
-                return 0
-            }
-            function visible(s,   out,k,n,m,r) {
-                if (FNR<endrow) return ""
-                if (FNR==endrow) { s=substr(s,endcol+1); out=" "; endrow=0 }
-                while (length(s)) {
-                    if (comment) {
-                        k=index(s,"-->"); if (!k) break
-                        s=substr(s,k+3); comment=0
-                    } else if (substr(s,1,1)=="\\") {
-                        # Only consume the following character when it is one of
-                        # our ASCII delimiters; never cut a UTF-8 character in two.
-                        if (match(s,/^\\[\\`<]/)) {
-                            out=out substr(s,1,RLENGTH); s=substr(s,RLENGTH+1)
-                        } else { out=out "\\"; s=substr(s,2) }
-                    } else if (substr(s,1,1)=="`") {
-                        match(s,/^`+/); n=RLENGTH
-                        m=closing_ticks(s,n,n+1)
-                        if (m) n=m
-                        else for (r=FNR+1;r<=lines;r++) {
-                            if (doc[r] ~ /^[[:space:]]*$/ || doc[r] ~ /^ ? ? ?(#+[[:space:]]|```+|~~~+|>|\|)/) break
-                            m=closing_ticks(doc[r],n,1)
-                            if (m) { endrow=r; endcol=m; return out s }
-                        }
-                        out=out substr(s,1,n); s=substr(s,n+1)
-                    } else if (substr(s,1,4)=="<!--") {
-                        s=substr(s,5); comment=1
-                    } else {
-                        if (!match(s,/[\\`<]/)) return out s
-                        n=RSTART>1 ? RSTART-1 : 1
-                        out=out substr(s,1,n); s=substr(s,n+1)
-                    }
-                }
-                return out
-            }
-            NR==FNR { doc[FNR]=$0; lines=FNR; next }
             {
                 gsub(/\037/, " "); sub(/\r$/, "")
                 # Ignore complete fenced examples, including inner shorter fences.
@@ -893,8 +849,8 @@ spec_changes() { # root
                     if (length(ending)>=length(code) && (ending ~ /^`+$/ || ending ~ /^~+$/) && substr(ending,1,1)==substr(code,1,1)) code=""
                     next
                 }
-                if (!comment && match(marker,/^```+|^~~~+/)) { code=substr(marker,1,RLENGTH); next }
-                $0=visible($0)
+                if (comment || /^[[:space:]]*<!--/) { comment=!index($0,"-->"); next }
+                if (match(marker,/^```+|^~~~+/)) { code=substr(marker,1,RLENGTH); next }
             }
             FNR == 1 && /^# / { title = $0; sub(/^#[[:space:]]+(Change:[[:space:]]*)?/, "", title) }
             /\*\*Opened\*\*:/ { opened = field($0, "Opened") }
@@ -917,7 +873,7 @@ spec_changes() { # root
             END {
                 gsub(/\t/, " ", title); gsub(/\t/, " ", waiting); gsub(/\t/, " ", nxt)
                 print id "\037" title "\037" opened "\037" step "\037" (nw==1 ? waiting : "") "\037" (nn==1 ? nxt : "") "\037" parent "\037" total + 0 "\037" passed + 0 "\037" failed + 0 "\037" maxatt + 0 "\037" stalled "\037" presence(nw,waiting) "\037" presence(nn,nxt)
-            }' "$path" "$path"
+            }' "$path"
     done
     return 0
 }

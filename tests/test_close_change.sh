@@ -82,7 +82,14 @@ if [ "$*" = ./log ] && [ "$(pwd -P)" = "$CLOSE_SPECS" ]; then echo 'anchored mkd
 exec "$REAL_MKDIR" "$@"
 SH
 export CLOSE_SPECS="$PROJ/specs"
-chmod +x "$outside/bin/python3" "$outside/bin/mkdir"
+REAL_LN="$(command -v ln)"; export REAL_LN
+cat > "$outside/bin/ln" <<'SH'
+#!/usr/bin/env bash
+# Closing must succeed without resolving a staged source from the log directory.
+if [ "$(pwd -P)" = "$CLOSE_SPECS/log" ]; then exit 1; fi
+exec "$REAL_LN" "$@"
+SH
+chmod +x "$outside/bin/python3" "$outside/bin/mkdir" "$outside/bin/ln"
 CDPATH="$outside" PATH="$outside/bin:$PATH" run bash "$B/close-change.sh" 001-greet "warmer greeting — R-01 — #1"
 assert_contains "$OUTPUT" 'anchored mkdir'
 assert_eq 0 "$STATUS" "closes: $OUTPUT"

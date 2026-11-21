@@ -21,6 +21,8 @@ change by change.
   open-PR inventory from a successful empty list.
 - Review packages read Parent independently of Opened. Doctor advises on missing, blank or
   duplicate Waiting on and Next fields in State; status reports each field's condition.
+  State ignores fenced examples and HTML comment blocks whose `<!--` starts a line
+  (after optional whitespace). A comment marker after prose or a field value is literal text.
 
 ### Adoption
 

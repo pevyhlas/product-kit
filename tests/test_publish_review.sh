@@ -108,36 +108,40 @@ REAL_DD="$(command -v dd)"; export REAL_DD
 cat > "$sync_lib/dd" <<'EOF'
 #!/usr/bin/env bash
 set -eu
-[ "$*" = 'if=/dev/null conv=notrunc,fsync' ]
-if [ -d /dev/fd/1 ]; then boundary=dir
-else
-    boundary=file
-    # Save what reached the actual sync descriptor, before calling real dd.
-    cat <&1 > "$GH_STUB_DIR/synced-${SYNC_SEQ:-payload}"
-    if [ -f "$GH_STUB_DIR/post-request.json" ]; then
-        cp "$GH_STUB_DIR/synced-payload" "$GH_STUB_DIR/synced-posted-$(wc -c < "$GH_STUB_DIR/synced-payload" | tr -d ' ')"
-    else cp "$GH_STUB_DIR/synced-payload" "$GH_STUB_DIR/synced-before"; fi
-fi
-[ ! -f "$GH_STUB_DIR/post-request.json" ] || boundary="posted-$boundary"
-[ "$boundary" != "$SYNC_FAULT" ] || exit 1
-exec "$REAL_DD" "$@"
+case "$*" in
+    'if=/dev/null conv=notrunc,fsync')
+        [ -d /dev/fd/1 ]; boundary=dir
+        [ ! -f "$GH_STUB_DIR/post-request.json" ] || boundary=posted-dir
+        "$REAL_DD" "$@" ;;
+    *)
+        [ "$#" = 3 ] && [[ $1 == if=* && $2 == of=* && $3 == conv=fsync ]] || exit 1
+        boundary=file
+        [ ! -f "$GH_STUB_DIR/post-request.json" ] || boundary=posted-file
+        [[ $1 != */review-id ]] || boundary=binding-file
+        # Real dd opens one output description, writes, fsyncs, then closes.
+        "$REAL_DD" "$@"
+        cp "${2#of=}" "$GH_STUB_DIR/synced-$boundary" ;;
+esac
+[ "$boundary" != "$SYNC_FAULT" ]
 EOF
 chmod +x "$sync_lib/dd"
 fresh
 PATH="$sync_lib:$PATH" SYNC_FAULT=none post
 assert_eq 0 "$STATUS" 'both file syncs see the complete payload'
 saved="$(payload | jq -r .id)"
-bytes="$(wc -c < "$LOG_ROOT/7/$saved.json" | tr -d ' ')"
-for copy in synced-before "synced-posted-$bytes"; do
+for copy in synced-file synced-posted-file; do
     run cmp "$LOG_ROOT/7/$saved.json" "$GH_STUB_DIR/$copy"
     assert_eq 0 "$STATUS" 'file sync sees exactly the submitted payload bytes'
 done
-for boundary in file dir posted-file posted-dir; do
+assert_eq 1001 "$(cat "$GH_STUB_DIR/synced-binding-file")" 'host-ID binding was written and synced'
+for boundary in file dir posted-file posted-dir binding-file; do
     fresh
     PATH="$sync_lib:$PATH" SYNC_FAULT="$boundary" post
     assert_eq 1 "$STATUS" "$boundary fails"
     case "$boundary" in
-        posted-*) assert_contains "$OUTPUT" 'could not durably retain review'
+        posted-*|binding-file)
+            if [ "$boundary" = binding-file ]; then assert_contains "$OUTPUT" 'could not durably bind this attempt'
+            else assert_contains "$OUTPUT" 'could not durably retain review'; fi
             assert_eq PENDING "$(jq -r '.[0].state' "$GH_STUB_DIR/reviews/7.json")"
             saved="$(jq -r '.body|split("\n")[1]|fromjson|.id' "$GH_STUB_DIR/post-request.json")"
             run bash "$PUB" --pr "$PR" --resume "$saved.json"

@@ -213,14 +213,23 @@ regex_on_substr() { # file... -> "file:line: text" for each offending line
                 if (lit=="esac" && cases[x]) { delete pat[x,cases[x]--]; return }
                 if (pat[x,cases[x]] || arraylit[x] || cond[x]) return
                 if (lit=="[[") { cond[x]=1; for (k=w+1;k<=n;k++) if (wlit(x,k)=="]]") cond[x]=0; return }
-                if (lit=="env" || lit=="/usr/bin/env") { w++; while (w<=n && isassign(x,w)) w++ }
-                while (w<=n && substr(wlit(x,w),1,1)=="-") w++
+                if (lit=="/usr/bin/env") w++
+                while (w<=n && (substr(wlit(x,w),1,1)=="-" || isassign(x,w))) w++
                 if (w>n) return
                 lit=""
                 for (p=1;p<=CWN[x,w];p++) lit=lit CWX[x,w,p]
                 sub(/^.*\//,"",lit)
                 if (lit ~ /^[a-zA-Z][a-zA-Z0-9_.+-]*$/)
                     print FNAME ":" CWL[x,w,1] ":" lit
+                if (lit=="find") for (k=w+1;k<n;k++) {
+                    first=wlit(x,k)
+                    if (first=="-exec" || first=="-execdir" || first=="-ok" || first=="-okdir") {
+                        k++; first=""
+                        for (p=1;p<=CWN[x,k];p++) first=first CWX[x,k,p]
+                        sub(/^.*\//,"",first)
+                        if (first ~ /^[a-zA-Z][a-zA-Z0-9_.+-]*$/) print FNAME ":" CWL[x,k,1] ":" first
+                    }
+                }
                 if (lit=="sh" || lit=="bash") {
                     for (k=w+1;k<n && wlit(x,k) ~ /^-/;k++) if (wlit(x,k) ~ /c/) {
                         # Queue literal shell programs so parsing them cannot
@@ -753,7 +762,7 @@ assert_eq "" "$(cd "$PK_ROOT" && regex_on_substr "${scripts[@]}")" "every script
 it "kit scripts use the approved runtime allowlist"
 # A new runtime needs a justified, owner-approved change to this allowlist.
 # Keep language runtimes distinct from ordinary system tools and the existing
-# GitHub/JSON CLIs. Check static command positions and shebangs, not prose.
+# GitHub/JSON CLIs. This best-effort check inventories static commands and shebangs.
 runtime_allowlist=(sh bash awk sed jq)
 kit_tools=(basename cat chmod cmp cp cut date dd dirname env find gh git grep head hostname ln mkdir mkfifo mktemp mv od openssl ps readlink rm rmdir sha256sum shasum sleep sort tail touch tr uname wc)
 runtime_check() (
@@ -771,12 +780,14 @@ runtime_check() (
 cat > "$SCAN/runtime-probe" <<'SH'
 #!/usr/bin/env python3
 env perl -e '1'
+env -i LC_ALL=C python3 --version
+find . -exec /usr/bin/python3 -V \; -execdir 'perl' -v \;
 if /usr/bin/python -V; then hypothetical-runtime; fi
 printf '%s\n' "python3 is a word in this message"
 allowed="$(sh -c true)"
 sh -c 'echo example; exec ruby -v'
 SH
-assert_eq $'python3\nperl\npython\nhypothetical-runtime\nruby' "$(runtime_check "$SCAN/runtime-probe" | cut -d: -f3)" "unlisted runtimes are rejected, including a previously unknown name"
+assert_eq $'python3\nperl\npython3\npython3\nperl\npython\nhypothetical-runtime\nruby' "$(runtime_check "$SCAN/runtime-probe" | cut -d: -f3)" "unlisted runtimes are rejected, including find actions, env assignments and a previously unknown name"
 scripts=()
 while IFS= read -r -d '' file; do scripts+=("$file"); done < <(cd "$PK_ROOT" && find scripts -type f -print0)
 assert_eq "" "$(cd "$PK_ROOT" && runtime_check "${scripts[@]}")" "every file beneath scripts/ stays within the runtime allowlist"

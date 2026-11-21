@@ -75,17 +75,12 @@ if ! (
     cd -P "$root/specs" && [ "$(pwd -P)" = "$root/specs" ] || exit 1
     if [ ! -d ./log ]; then mkdir ./log || exit 1; fi
     [ ! -L ./log ] && cd -P ./log && [ "$(pwd -P)" = "$root/specs/log" ] || exit 1
-    stage="$(mktemp -d .close-XXXXXXXX)" || exit 1
-    # Prepare in a private same-filesystem directory. Link into "." using the
-    # source basename: existing entries (even directories) cannot be replaced.
-    rc=0
-    (
-        cd -P "./$stage" && [ "$(pwd -P)" = "$root/specs/log/$stage" ] || exit 1
-        set -C
-        printf -- '- %s %s: %s\n' "$day" "$id" "$text" > "$id.md"
-    ) && ln "./$stage/$id.md" . || rc=1
-    (cd -P "./$stage" && [ "$(pwd -P)" = "$root/specs/log/$stage" ] && rm -f "./$id.md") &&
-        rmdir "./$stage" && exit "$rc"
+    # Create the entry directly from the pinned log directory. Bash noclobber
+    # uses O_EXCL for an absent file. Write only through the opened regular fd.
+    [ ! -e "./$id.md" ] && [ ! -L "./$id.md" ] || exit 1
+    set -C
+    exec 3>"./$id.md" || exit 1
+    [ -f /dev/fd/3 ] && printf -- '- %s %s: %s\n' "$day" "$id" "$text" >&3
 ); then
     refuse "could not write $entry; nothing was deleted or committed"
 fi
