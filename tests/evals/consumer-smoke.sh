@@ -12,6 +12,10 @@ check() {
     if ! "$@" > "$PROJ/.git/smoke.out" 2>&1; then
         printf 'Consumer smoke (%s): %s\n' "$harness" "$label" >&2
         cat "$PROJ/.git/smoke.out" >&2; failed=$((failed + 1))
+        case "$label" in 'upgrade '*)
+            git -C "$PROJ" status --porcelain >&2
+            git -C "$PROJ" diff --stat HEAD >&2 ;;
+        esac
     fi
 }
 for harness in claude opencode codex agents; do

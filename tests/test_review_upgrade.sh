@@ -315,9 +315,12 @@ BEFORE="$(git -C "$PROJ" status --porcelain --untracked-files=all)"
 RECORDS_BEFORE="$(tree_snapshot "$PROJ/specs/changes")"
 git -C "$PROJ" remote set-url origin https://github.com/old/location.git
 git -C "$PROJ" config url.https://github.com/owner/repo.git.insteadOf https://github.com/old/location.git
-GH_HOST=other.invalid upgrade --migrate-reviews --dry-run --json
-assert_eq 0 "$STATUS" "$OUTPUT"
-REPORT="$OUTPUT"
+# The JSON interface is stdout. Keep stderr available for diagnosing failures
+# without feeding a shell or tool diagnostic to all ten report queries.
+GH_HOST=other.invalid bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --migrate-reviews --dry-run --json \
+    > "$GH_STUB_DIR/report.json" 2> "$GH_STUB_DIR/report.err"
+assert_eq 0 "$?" "JSON dry-run succeeds: $(cat "$GH_STUB_DIR/report.err")"
+REPORT="$(cat "$GH_STUB_DIR/report.json")"
 assert_contains "$(cat "$GH_STUB_DIR/requests")" 'repos/owner/repo/pulls?state=open'
 assert_contains "$(cat "$GH_STUB_DIR/requests")" '--hostname github.com --method GET repos/owner/repo/pulls?state=open'
 assert_not_contains "$(cat "$GH_STUB_DIR/requests")" 'repos/old/location/pulls'
@@ -455,8 +458,8 @@ it 'retry accepts a rendered managed section, including a resolved root-file tar
 for mode in regular alias; do
     transition_project
     if [ "$mode" = alias ]; then mv "$PROJ/AGENTS.md" "$PROJ/CLAUDE.md"; ln -s CLAUDE.md "$PROJ/AGENTS.md"; fi
-    sed 's/## Product-Kit workflow/## Product-Kit workflow upgraded/' "$PROJ/.product-kit/scripts/install-lib.sh" > "$PROJ/source.next"
-    mv "$PROJ/source.next" "$PROJ/.product-kit/scripts/install-lib.sh"
+    sed 's/## Product-Kit workflow/## Product-Kit workflow upgraded/' "$PROJ/.product-kit/scripts/agents-section.md" > "$PROJ/source.next"
+    mv "$PROJ/source.next" "$PROJ/.product-kit/scripts/agents-section.md"
     commit_fixture source
     sed 's/## Product-Kit workflow/## Product-Kit workflow upgraded/' "$PROJ/AGENTS.md" > "$PROJ/agents.next"
     cat "$PROJ/agents.next" > "$PROJ/AGENTS.md"; rm "$PROJ/agents.next"
@@ -468,8 +471,8 @@ done
 it 'a real managed-section replacement preserves a suffix without a final newline through retry'
 transition_project
 printf '\nOutside bytes without final newline' >> "$PROJ/AGENTS.md"
-sed 's/## Product-Kit workflow/## Product-Kit workflow upgraded/' "$PROJ/.product-kit/scripts/install-lib.sh" > "$PROJ/source.next"
-mv "$PROJ/source.next" "$PROJ/.product-kit/scripts/install-lib.sh"
+sed 's/## Product-Kit workflow/## Product-Kit workflow upgraded/' "$PROJ/.product-kit/scripts/agents-section.md" > "$PROJ/source.next"
+mv "$PROJ/source.next" "$PROJ/.product-kit/scripts/agents-section.md"
 commit_fixture source
 run env PATH="$FAULTS:$PATH" FAULT_ROOT="$PROJ" FAULT_PHASE=published bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --migrate-reviews
 assert_eq 1 "$([ "$STATUS" -ne 0 ] && echo 1 || echo 0)" 'managed section was installed before interruption'
