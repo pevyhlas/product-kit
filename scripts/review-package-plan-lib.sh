@@ -124,8 +124,8 @@ review_plan_write() {
         review_delta_stream "$REPO_ROOT" "$CHANGE_ID" "$FP_BASE_AT" "$HEAD_SHA" > "$PACKAGE_SCRATCH/head.stream"
         review_stream_paths "$PACKAGE_SCRATCH/since.stream" "$PACKAGE_SCRATCH/head.stream" >> "$PACKAGE_SCRATCH/paths"
         if [ -n "${delta_from:-}" ]; then
-            git -C "$REPO_ROOT" -c core.quotepath=true diff --name-only --no-renames "$delta_from" "$HEAD_SHA" >> "$PACKAGE_SCRATCH/paths"
-        else git -C "$REPO_ROOT" -c core.quotepath=true diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" >> "$PACKAGE_SCRATCH/paths"; fi
+            git -C "$REPO_ROOT" -c core.quotepath=true diff --ignore-submodules=none --name-only --no-renames "$delta_from" "$HEAD_SHA" >> "$PACKAGE_SCRATCH/paths"
+        else git -C "$REPO_ROOT" -c core.quotepath=true diff --ignore-submodules=none --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" >> "$PACKAGE_SCRATCH/paths"; fi
     fi
     LC_ALL=C sort -u "$PACKAGE_SCRATCH/paths" > "$PACKAGE_DIR/delta-paths.txt"
     inventory delta-paths.txt "complete conservative whole-entry accounting (fallback includes full diff)"

@@ -252,7 +252,7 @@ review_context_build() {
     fi
     # Changed canon: include complete changed sections; additions without supported headings
     # stay visible as gaps as well as in the unabridged diff.
-    if ! git -C "$REPO_ROOT" diff -z --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" > "$CTX_TMP/changed-paths"; then
+    if ! git -C "$REPO_ROOT" diff --ignore-submodules=none -z --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" > "$CTX_TMP/changed-paths"; then
         context_gap changed-spec "cannot completely enumerate changed canon"
     fi
     while IFS= read -r -d '' path; do
