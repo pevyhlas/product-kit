@@ -12,8 +12,6 @@ change by change.
 
 ### Fixed
 
-- A failed close no longer leaves an empty log entry behind. Retry the same close
-  after the write error clears; the change record and index remain intact.
 - Removing a worktree leaves unrelated stale registrations alone. Explicit pruning refuses
   stale registrations with submodule data. Cleanup also refuses embedded submodule stores
   and submodules that administer linked worktrees, including with `--force`.
