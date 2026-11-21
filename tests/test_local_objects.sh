@@ -19,7 +19,9 @@ if [ "${PROBE_CONFIG_ERROR:-false}" = true ] && [ "$1" = -C ] && [ "$2" = "$SOUR
 for arg in "$@"; do
     case "$arg" in
         fetch) printf 'fetch attempted\n' >> "$LOCAL_PROBE/fetch" ;;
-        cat-file|ls-tree)
+        cat-file|ls-tree|rev-parse)
+            if [ "$1" = -C ] && [ "$2" = "${CONSUMER_REPO:-}" ]; then printf 'consumer lookup\n' >> "$LOCAL_PROBE/consumer-reads"; fi
+            [ "$arg" != rev-parse ] || continue
             if [ "$1" = -C ] && [ "$2" = "$SOURCE_REPO" ]; then printf 'source object read\n' >> "$LOCAL_PROBE/reads"; fi ;;
     esac
 done
@@ -35,7 +37,7 @@ cp "$object_file" "$CONTROL/object"
 git -C "$KIT" config remote.origin.promisor true
 export PATH="$CONTROL/bin:$PATH"
 
-clear_signals() { : > "$CONTROL/fetch"; : > "$CONTROL/upload"; : > "$CONTROL/reads"; : > "$CONTROL/trace"; }
+clear_signals() { : > "$CONTROL/fetch"; : > "$CONTROL/upload"; : > "$CONTROL/reads"; : > "$CONTROL/trace"; : > "$CONTROL/consumer-reads"; }
 guarded_check() {
     clear_signals
     before="$(fixture_snapshot "$FIXTURE")"
@@ -73,12 +75,18 @@ done
 object_file="$blob_file"
 
 it 'the local-only assertion detects removal of the verifier protection'
-cp "$FIXTURE/.prdkit/scripts/bash/install-source-lib.sh" "$CONTROL/library"
-sed 's/GIT_NO_LAZY_FETCH=1 //' "$CONTROL/library" > "$FIXTURE/.prdkit/scripts/bash/install-source-lib.sh"
-clear_signals
-run bash -c 'unset GIT_NO_LAZY_FETCH; GIT_TRACE="$LOCAL_PROBE/trace" bash "$1" --head HEAD --json' _ "$CHECKER"
-assert_contains "$(cat "$CONTROL/upload")" 'local upload-pack attempted' 'a disposable verifier mutation reaches the sentinel'
-cp "$CONTROL/library" "$FIXTURE/.prdkit/scripts/bash/install-source-lib.sh"
+if spec_objects_local "$KIT"; then
+    cp "$FIXTURE/.prdkit/scripts/bash/install-source-lib.sh" "$CONTROL/library"
+    sed 's/GIT_NO_LAZY_FETCH=1 //' "$CONTROL/library" > "$FIXTURE/.prdkit/scripts/bash/install-source-lib.sh"
+    clear_signals
+    run bash -c 'unset GIT_NO_LAZY_FETCH; GIT_TRACE="$LOCAL_PROBE/trace" bash "$1" --head HEAD --json' _ "$CHECKER"
+    assert_contains "$(cat "$CONTROL/upload")" 'local upload-pack attempted' 'a disposable verifier mutation reaches the sentinel'
+    cp "$CONTROL/library" "$FIXTURE/.prdkit/scripts/bash/install-source-lib.sh"
+else
+    guarded_check --head HEAD
+    assert_contains "$OUTPUT" 'source Git cannot guarantee local-only object reads'
+    assert_eq '' "$(cat "$CONTROL/reads")" 'legacy Git refuses before source object reads'
+fi
 
 it 'Git Boolean settings are interpreted consistently on unsupported Git'
 export PROBE_OLD_GIT=true
@@ -93,6 +101,18 @@ git -C "$FIXTURE" config remote.origin.promisor yes
 guarded_check --head HEAD
 assert_contains "$OUTPUT" 'consumer Git cannot guarantee' 'consumer guard also refuses unsupported Git'
 git -C "$FIXTURE" config --unset remote.origin.promisor
+git -C "$KIT" config --unset remote.origin.promisor
+export CONSUMER_REPO="$FIXTURE"
+for repo in "$KIT" "$FIXTURE"; do
+    git -C "$repo" config remote.origin.partialclonefilter blob:none
+    guarded_check --head HEAD
+    assert_contains "$OUTPUT" 'cannot guarantee local-only object reads' 'filter alone requires local-only support'
+    assert_eq '' "$(cat "$CONTROL/reads")" 'filter-only guard precedes source object reads'
+    if [ "$repo" = "$FIXTURE" ]; then
+        assert_eq '' "$(cat "$CONTROL/consumer-reads")" 'filter-only consumer guard precedes revision lookup'
+    fi
+    git -C "$repo" config --unset remote.origin.partialclonefilter
+done
 cp "$CONTROL/object" "$object_file"
 for value in false no off 0 ''; do
     git -C "$KIT" config remote.origin.promisor "$value"

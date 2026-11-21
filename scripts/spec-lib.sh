@@ -1042,6 +1042,12 @@ spec_objects_local() { # root
     else
         status=$?; [ "$status" -eq 1 ] || return 1
     fi
+    # A remote filter alone registers a promisor remote, even without a Boolean flag.
+    if git -C "$1" config --name-only --get-regexp '^remote\..*\.partialclonefilter$' >/dev/null 2>&1; then
+        partial=true
+    else
+        status=$?; [ "$status" -eq 1 ] || return 1
+    fi
     $partial || return 0
     version="$(git version 2>/dev/null)" || return 1
     [[ "$version" =~ ^git[[:space:]]version[[:space:]]([0-9]+)\.([0-9]+) ]] || return 1
