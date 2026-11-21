@@ -17,13 +17,12 @@ partial_mapping_proof() (
     source "$PK_ROOT/scripts/common.sh"
     source "$PK_ROOT/scripts/install-source-lib.sh"
     # Wrap the real mapper in this caller only; pinned and installed fixture bytes stay pristine.
-    source <(declare -f install_file_targets | sed '1s/install_file_targets/complete_mapping/')
     install_file_targets() {
         if [ "$1" = templates/config-template.md ]; then
             printf '%s.prdkit/templates/config-template.md\n' "${4:-}"
             return 1
         fi
-        complete_mapping "$@"
+        (source "$PK_ROOT/scripts/install-lib.sh" && install_file_targets "$@")
     }
     local work
     work="$(mktemp -d)" || exit 1
