@@ -8,6 +8,11 @@ change by change.
 
 ## [Unreleased]
 
+### Fixed
+
+- A failed close no longer leaves an empty log entry behind. Retry the same close
+  after the write error clears; the change record and index remain intact.
+
 ## [2.0.1] — 2026-11-20 — review recovery and change lifecycle fixes
 
 - Receipt repair restores the publisher's saved verdict for the original host review.

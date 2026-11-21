@@ -215,9 +215,59 @@ else
     assert_eq '' "$(git status --porcelain)" "record and log untouched"
 fi
 
-it "a CRLF log is left byte for byte; a second close of the same change is refused"
+it "publication preserves another writer's entry, including a FIFO"
+mkdir -p specs/log
+mkdir "$outside/collision"
+cat > "$outside/collision/ln" <<'SH'
+#!/usr/bin/env bash
+case "$COLLISION" in
+    file) echo 'another writer' > "$CLOSE_SPECS/log/013-guard.md" ;;
+    fifo) mkfifo "$CLOSE_SPECS/log/013-guard.md" ;;
+esac
+exec "$REAL_LN" "$@"
+SH
+chmod +x "$outside/collision/ln"
+for kind in file fifo; do
+    run env PATH="$outside/collision:$PATH" COLLISION="$kind" bash "$B/close-change.sh" 013-guard "guarded — R-01 — #6"
+    assert_eq 1 "$STATUS" "refuses a concurrent $kind"
+    if [ "$kind" = fifo ]; then
+        run test -p specs/log/013-guard.md; assert_eq 0 "$STATUS" 'FIFO is still there'
+    else
+        assert_eq 'another writer' "$(cat specs/log/013-guard.md)" 'preserves the winning entry'
+    fi
+    rm -f specs/log/013-guard.md
+done
+
+it "a failed entry write leaves the change open for an ordinary retry"
+printf -- '- 2026-11-01 099-other: elsewhere\n' > specs/log/099-other.md
+other_blob="$(git hash-object specs/log/099-other.md)"
+cat > "$outside/limit-write" <<'SH'
+cat() (
+    if [[ $PWD = "$CLOSE_SPECS"/log/.close-* ]]; then
+        trap '' XFSZ
+        ulimit -f 0 || exit 1
+        command cat "$@" || { echo 'limited entry write failed' >&2; exit 1; }
+        exit 0
+    fi
+    command cat "$@"
+)
+SH
+run env BASH_ENV="$outside/limit-write" bash "$B/close-change.sh" --date 2026-11-01 013-guard "guarded — R-01 — #6"
+assert_eq 1 "$STATUS" 'the limited write refuses close'
+assert_contains "$OUTPUT" 'limited entry write failed'
+assert_contains "$OUTPUT" 'could not write specs/log/013-guard.md'
+assert_eq "$GUARDED" "$(git rev-parse HEAD)" 'HEAD unchanged'
+run git diff --cached --quiet; assert_eq 0 "$STATUS" 'index unchanged'
+run git diff --quiet HEAD -- specs/changes/013-guard.md; assert_eq 0 "$STATUS" 'open record unchanged'
+assert_eq '099-other.md' "$(ls -A specs/log)" 'no failed entry or staging file blocks retry'
+assert_eq "$other_blob" "$(git hash-object specs/log/099-other.md)" 'unrelated entry unchanged'
+
 run bash "$B/close-change.sh" --date 2026-11-01 013-guard "guarded — R-01 — #6"
 assert_eq 0 "$STATUS" "closes: $OUTPUT"
+assert_eq "$GUARDED" "$(git rev-parse HEAD~1)" 'retry creates one close commit'
+assert_eq '- 2026-11-01 013-guard: guarded — R-01 — #6' "$(git show HEAD:specs/log/013-guard.md)" 'retry commits the expected entry'
+assert_eq "$other_blob" "$(git hash-object specs/log/099-other.md)" 'retry preserves unrelated entry'
+rm specs/log/099-other.md
 assert_eq '' "$(git diff HEAD~1 HEAD -- specs/log.md)" "the CRLF log is untouched"
 assert_eq 0 "$(grep -cv "$(printf '\r')\$" specs/log.md)" "every line still ends in CRLF"
 git checkout -q -b 013-again HEAD~1
