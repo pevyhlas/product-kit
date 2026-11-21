@@ -12,6 +12,10 @@ change by change.
 
 ### Fixed
 
+- A recorded HOLD still applies after its `until=` date or condition. Status and doctor flag a
+  past date as a reminder for the owner to confirm or lift the hold. Text output and JSON keep
+  their formats; a past-date HOLD now reads `DUE` (`state: "due"` in JSON) instead of `EXPIRED`
+  (`"expired"`) and remains eligible as the longest pole. WAIVER expiry is unchanged.
 - A failed close no longer leaves an empty log entry behind. Retry the same close
   after the write error clears; the change record and index remain intact. Publishing
   requires hard links in `specs/log/`. If the filesystem does not support them,
