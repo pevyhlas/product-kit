@@ -461,8 +461,8 @@ ln -s CLAUDE.md "$PROJ14/AGENTS.md"
 run bash -c "cd '$PROJ14' && bash .product-kit/scripts/init.sh --harness claude,agents"
 assert_eq 0 "$STATUS" "install through an in-project link succeeds"
 assert_contains "$(cat "$PROJ14/CLAUDE.md")" 'BEGIN PRODUCT-KIT MANAGED SECTION' "the section lands in the link target"
-sed 's/## Product-Kit workflow/## Product-Kit workflow updated/' "$PROJ14/.product-kit/scripts/install-lib.sh" > "${PROJ14%/proj}/edited" &&
-    cat "${PROJ14%/proj}/edited" > "$PROJ14/.product-kit/scripts/install-lib.sh"
+sed 's/## Product-Kit workflow/## Product-Kit workflow updated/' "$PROJ14/.product-kit/scripts/agents-section.md" > "${PROJ14%/proj}/edited" &&
+    cat "${PROJ14%/proj}/edited" > "$PROJ14/.product-kit/scripts/agents-section.md"
 snapshot_upgrade_fixture "$PROJ14" || exit 1
 run bash -c "cd '$PROJ14' && bash .product-kit/scripts/init.sh --upgrade"
 assert_eq 0 "$STATUS" "upgrade through an in-project link succeeds"
