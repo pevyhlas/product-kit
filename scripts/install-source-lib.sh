@@ -227,13 +227,13 @@ install_source_verify() { # consumer-root consumer-revision-or-empty scratch
     mode="$(install_manifest_value "$work/manifest" mode)" ||
         { echo 'Manifest must record exactly one command mode'; return; }
     case "$mode" in copy|symlink) ;; *) echo "Unknown manifest command mode: $mode"; return ;; esac
-    : > "$work/mapping"
+    : > "$work/mapping" || { echo 'Unable to build installation mapping'; return; }
     while IFS=$'\t' read -r entry src; do
         # Only flat kit directories are installable. Quoted/unusual Git paths are never operands.
         [[ "$src" =~ ^(commands|scripts|templates|workflows)/[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || continue
-        while IFS= read -r dest; do
-            printf '%s\t%s\t%s\n' "$entry" "$src" "$dest" >> "$work/mapping"
-        done < <(install_file_targets "$src" "$harnesses" "$options")
+        install_file_targets "$src" "$harnesses" "$options" "$entry"$'\t'"$src"$'\t' >> "$work/mapping" || {
+            echo "Unable to build installation mapping: $src"; return
+        }
     done < "$work/source-tree"
     [ -s "$work/mapping" ] || { echo 'Pinned source provides no installation mapping'; return; }
     while IFS=$'\t' read -r entry src dest; do

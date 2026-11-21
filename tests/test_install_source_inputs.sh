@@ -12,6 +12,29 @@ assert_eq 0 "$STATUS" "$OUTPUT"
 fixture_check --head HEAD
 assert_eq 0 "$STATUS" "$OUTPUT"
 
+it 'strict verification receives a finding if the mapper emits only the first seed target'
+partial_mapping_proof() (
+    source "$PK_ROOT/scripts/common.sh"
+    source "$PK_ROOT/scripts/install-source-lib.sh"
+    # Wrap the real mapper in this caller only; pinned and installed fixture bytes stay pristine.
+    source <(declare -f install_file_targets | sed '1s/install_file_targets/complete_mapping/')
+    install_file_targets() {
+        if [ "$1" = templates/config-template.md ]; then
+            printf '%s.prdkit/templates/config-template.md\n' "${4:-}"
+            return 1
+        fi
+        complete_mapping "$@"
+    }
+    local work
+    work="$(mktemp -d)" || exit 1
+    trap 'rm -rf "$work"' EXIT
+    install_source_verify "$FIXTURE" "$1" "$work"
+)
+for revision in '' HEAD; do
+    run partial_mapping_proof "$revision"
+    assert_eq 'Unable to build installation mapping: templates/config-template.md' "$OUTPUT" 'partial seed mapping stops proof'
+done
+
 it 'an explicit empty head does not select worktree proof'
 fixture_check --head ''
 assert_eq 2 "$STATUS" 'explicit empty revision is a usage error'
