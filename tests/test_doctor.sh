@@ -39,6 +39,7 @@ run bash "$DOCTOR" --json
 assert_eq 0 "$STATUS" "doctor passes"
 assert_contains "$OUTPUT" '"findings":[],"advisories":[],"trace":{"code-path":0,"planned-closed":0,"planned-unknown":0,"retired-cited":0,"unallocated":0,"part-need":0,"change-restates":0,"change-undefined":0}' "nothing to report; each trace check counted by its code"
 assert_contains "$OUTPUT" '"readiness":"not-evaluated"' "never a readiness claim"
+assert_eq 0 "$(printf '%s\n' "$OUTPUT" | jq '.budget_excess_reading_lines')" "no reading-budget excess"
 
 it "malformed, duplicate and misplaced IDs are failing findings"
 printf -- '- **R-1 Short id** (validated): x.\n- **R-01 Again** (validated): y.\n' >> specs/product.md
@@ -171,7 +172,27 @@ it "budgets are advisories, never targets"
 run bash "$DOCTOR"
 assert_eq 0 "$STATUS" "an overflow does not fail doctor"
 assert_contains "$OUTPUT" "advisory: Budget: specs/product.md has 163 lines, over its 150-line reading budget" "overflow reported"
+assert_contains "$OUTPUT" "Reading lines over budget (total): 13" "text reports only the excess"
 git checkout -q -- specs/product.md
+
+it "total excess measures size independently of advisory count and ignores spare budget"
+for file in specs/product.md specs/observed.md; do
+    { i=0; while [ "$i" -lt 160 ]; do echo "line $i"; i=$((i + 1)); done; } > "$file"
+done
+run bash "$DOCTOR" --json
+assert_eq 0 "$STATUS" "excess stays advisory"
+assert_eq 20 "$(printf '%s\n' "$OUTPUT" | jq '.budget_excess_reading_lines')" "two ten-line excesses sum; under-budget files do not offset them"
+assert_eq 2 "$(printf '%s\n' "$OUTPUT" | jq '[.advisories[] | select(startswith("Budget:"))] | length')" "two budget advisories"
+git checkout -q -- specs/product.md
+{ i=0; while [ "$i" -lt 181 ]; do echo "line $i"; i=$((i + 1)); done; } > specs/observed.md
+run bash "$DOCTOR" --json
+assert_eq 31 "$(printf '%s\n' "$OUTPUT" | jq '.budget_excess_reading_lines')" "excess rises even when advisory count falls"
+assert_eq 1 "$(printf '%s\n' "$OUTPUT" | jq '[.advisories[] | select(startswith("Budget:"))] | length')" "one budget advisory remains"
+run bash "$DOCTOR" --json --strict
+assert_eq 1 "$STATUS" "strict promotes the budget advisory"
+assert_eq 31 "$(printf '%s\n' "$OUTPUT" | jq '.budget_excess_reading_lines')" "strict preserves the size metric"
+assert_eq 0 "$(printf '%s\n' "$OUTPUT" | jq '.advisories | length')" "strict retains its existing empty-advisories contract"
+rm specs/observed.md
 
 it "a line counts once per 100 characters, so long rows cannot dodge a budget"
 long="$(printf '%0400d' 0)"; dashes="$(i=0; while [ "$i" -lt 100 ]; do printf '—'; i=$((i + 1)); done)"
@@ -179,10 +200,68 @@ long="$(printf '%0400d' 0)"; dashes="$(i=0; while [ "$i" -lt 100 ]; do printf '�
 run bash "$DOCTOR"
 assert_eq 0 "$STATUS" "still an advisory"
 assert_contains "$OUTPUT" "advisory: Budget: specs/product.md has 42 lines that read as 202 at 100 characters a line, over its 150-line reading budget" "40 rows of 400 characters read as 200 lines"
+run bash "$DOCTOR" --json
+assert_eq 52 "$(printf '%s\n' "$OUTPUT" | jq '.budget_excess_reading_lines')" "long-row excess uses reading lines, not physical lines"
 { printf '# Demo — product\n'; i=0; while [ "$i" -lt 149 ]; do echo "$dashes"; i=$((i + 1)); done; } > specs/product.md
 run bash "$DOCTOR"
 assert_not_contains "$OUTPUT" "Budget: specs/product.md" "a character is counted once, however many bytes it takes"
+run bash "$DOCTOR" --json
+assert_eq 0 "$(printf '%s\n' "$OUTPUT" | jq '.budget_excess_reading_lines')" "UTF-8 characters do not inflate excess; exactly at budget is zero"
 git checkout -q -- specs/product.md
+
+it "compaction counts pending entry files without log.md, at the ten-close boundary"
+mkdir -p specs/log
+i=1; while [ "$i" -le 9 ]; do
+    printf -- '- 2026-10-17 %03d-c: done\n' "$((i + 100))" > "specs/log/$((i + 100))-c.md"
+    i=$((i + 1))
+done
+run bash "$DOCTOR" --json
+assert_eq 0 "$STATUS" "nine valid entry files pass: $OUTPUT"
+assert_not_contains "$OUTPUT" "Compaction due" "nine closes are current"
+printf -- '- 2026-10-17 110-c: done\n' > specs/log/110-c.md
+run bash "$DOCTOR"
+assert_eq 0 "$STATUS" "compaction due is advisory"
+assert_contains "$OUTPUT" "advisory: Compaction due: 10 changes closed and no pass recorded in specs/log.md" "pending files alone make compaction due"
+run bash "$DOCTOR" --json --strict
+assert_eq 1 "$STATUS" "strict fails overdue compaction"
+assert_eq 1 "$(printf '%s\n' "$OUTPUT" | jq '[.findings[] | select(startswith("Compaction due:"))] | length')" "strict promotes the compaction advisory"
+rm specs/log/110-c.md
+# A symlink is not an entry, even when its target has a valid close line.
+printf -- '- 2026-10-17 110-c: done\n' > pending-close.txt
+ln -s ../../pending-close.txt specs/log/110-c.md
+run bash "$DOCTOR" --json
+assert_not_contains "$OUTPUT" "Compaction due" "a symlink does not add a close"
+rm specs/log/110-c.md pending-close.txt
+rm specs/log/*.md; rmdir specs/log
+
+it "compaction shares status's mixed-log accounting in both log orders"
+for order in newest oldest; do
+    {
+        printf '# Closed changes\n\n'
+        if [ "$order" = newest ]; then
+            printf -- '- 2026-10-17 101-c: new\n- 2026-10-17 compaction: latest\n- 2026-10-16 100-c: old\n- 2026-10-15 compaction: earlier\n'
+        else
+            printf -- '- 2026-10-15 compaction: earlier\n- 2026-10-16 100-c: old\n- 2026-10-17 compaction: latest\n- 2026-10-17 101-c: new\n'
+        fi
+    } > specs/log.md
+    mkdir -p specs/log
+    i=102; while [ "$i" -le 109 ]; do
+        printf -- '- 2026-10-17 %03d-c: pending\n' "$i" > "specs/log/$i-c.md"; i=$((i + 1))
+    done
+    run bash "$DOCTOR" --json
+    assert_not_contains "$OUTPUT" "Compaction due" "$order: one new folded entry plus eight pending is current"
+    printf -- '- 2026-10-17 110-c: pending\n' > specs/log/110-c.md
+    run bash "$DOCTOR" --json
+    assert_eq 0 "$STATUS" "$order: compaction due stays advisory"
+    assert_contains "$OUTPUT" "Compaction due: 10 changes closed since the last pass (2026-10-17)" "$order: only entries since the latest pass plus pending files count"
+    assert_eq 1 "$(printf '%s\n' "$OUTPUT" | jq '[.advisories[] | select(startswith("Compaction due:"))] | length')" "$order: exactly one overdue advisory"
+    run bash "$PROJ/.prdkit/scripts/bash/status.sh" --json
+    assert_contains "$OUTPUT" '"compaction":{"closed_since_last":10,"last":"2026-10-17","due":true}' "$order: status and doctor agree"
+    rm specs/log/*.md; rmdir specs/log
+    run bash "$DOCTOR" --json
+    assert_not_contains "$OUTPUT" "Compaction due" "$order: folded history before the latest pass does not make compaction overdue"
+done
+rm specs/log.md
 
 it "the log, inbox and records have budgets, each with its way out"
 { i=0; while [ "$i" -lt 151 ]; do printf -- '- 2026-10-17 %03d-c: done — R-01 — #%d\n' "$((i + 100))" "$i"; i=$((i + 1)); done; } > specs/log.md

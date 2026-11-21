@@ -387,3 +387,16 @@ agent context files (`CLAUDE.md`, `AGENTS.md`, ...) over `context-budget-bytes` 
 `--strict` promotes advisories to failing findings, which makes it an opt-in CI gate; `--json`
 reports `{result, findings, advisories, trace, strict, ...}`, where `trace` counts each trace
 check by a stable code, so CI can ratchet a count down without failing on every advisory.
+
+Text and JSON also report total reading lines over budget (`budget_excess_reading_lines`):
+the sum of each reading-budget file's excess, not its whole size or the advisory count.
+The total uses the same reading-line count as the advisories: validated generated
+navigation is excluded, and a reader failure makes the total incomplete and fails doctor.
+Byte-based agent context budgets are separate. Compaction due is an advisory at ten closes
+since the latest compaction line in either log order, including pending `specs/log/<id>.md`
+files.
+
+The "Merged without closing" advisory needs the default-branch ref and its tree and blob
+objects locally; it does not need branch ancestry. Fetch full history (for example, use
+`actions/checkout` with `fetch-depth: 0`) for the separate history-based "Closed without
+a log entry" check.
