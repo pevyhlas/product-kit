@@ -131,11 +131,17 @@ budget_fix 150 "incorporate answered items (spec.md, Resolve owner answers), rev
 budget_fix 150 "remove lifted or expired holds and waivers, and DEPLOY and ATTEST lines a newer one supersedes; git keeps them" "$root"/specs/records.md
 
 # Share status's log-order and entry-file accounting; compaction is due at ten closes.
-read -r closed_since last_pass <<< "$(spec_compaction "$root")"
-if [ "$closed_since" -ge 10 ]; then
-    since="and no pass recorded in specs/log.md"
-    [ -z "$last_pass" ] || since="since the last pass ($last_pass)"
-    advisories+=("Compaction due: $closed_since changes closed $since (.prdkit/workflows/compact.md, Compaction)")
+compaction_verified=true
+if compaction="$(spec_compaction "$root")"; then
+    read -r closed_since last_pass <<< "$compaction"
+    if [ "$closed_since" -ge 10 ]; then
+        since="and no pass recorded in specs/log.md"
+        [ -z "$last_pass" ] || since="since the last pass ($last_pass)"
+        advisories+=("Compaction due: $closed_since changes closed $since (.prdkit/workflows/compact.md, Compaction)")
+    fi
+else
+    compaction_verified=false
+    findings+=("Compaction reader failed: could not count closes from specs/log.md and specs/log/; compaction status is unverified")
 fi
 
 # --- IDs ---------------------------------------------------------------------------------------
@@ -616,7 +622,12 @@ while IFS= read -r file; do path_files+=("$file"); done < <(
         done
     fi)
 if [ "${#path_files[@]}" -gt 0 ]; then
-    present=(); for file in "${path_files[@]}"; do [ -f "$root/$file" ] && present+=("$file"); done
+    present=()
+    for file in "${path_files[@]}"; do
+        # Report the compaction finding even when the unreadable folded log is tracked.
+        if [ "$file" = specs/log.md ] && ! $compaction_verified; then continue; fi
+        [ -f "$root/$file" ] && present+=("$file")
+    done
     [ "${#present[@]}" -gt 0 ] || present=(/dev/null)
     local_paths="$(cd "$root" && awk '
         /^[[:space:]]*>/ { next }
@@ -637,15 +648,17 @@ for entry_file in "$root"/specs/log/* "$root"/specs/log/.[!.]* "$root"/specs/log
     findings+=("Malformed log entry specs/log/${entry_file##*/}: a plain file <id>.md holding one line, '- <date> <id>: <what changed>', for the change its name gives (close-change.sh writes it)")
 done
 if git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    unlogged=""; through="$(spec_archive_log_through "$root")"; entries="$(spec_log_entries "$root")"
-    while IFS= read -r id; do
-        [ -n "$id" ] && [ ! -f "$root/specs/changes/$id.md" ] || continue
-        # Entries condensed into specs/archive.md (compact.md) left the log on purpose.
-        case "${id%%-*}" in ''|*[!0-9]*) ;; *) [ "$((10#${id%%-*}))" -gt "${through:-0}" ] || continue ;; esac
-        grep -q "^- [0-9-]* $id:" <<< "$entries" || unlogged="${unlogged:+$unlogged, }$id"
-    done < <(git -C "$root" log -M --diff-filter=D --name-only --format= -- 'specs/changes/*.md' 2>/dev/null |
-        sed -n 's|^specs/changes/\(.*\)\.md$|\1|p' | sort -u)
-    [ -z "$unlogged" ] || findings+=("Closed without a log entry: $unlogged; the change that deletes its record adds specs/log/<id>.md, '- <date> <id>: <what changed>' (close-change.sh)")
+    if $compaction_verified; then
+        unlogged=""; through="$(spec_archive_log_through "$root")"; entries="$(spec_log_entries "$root")"
+        while IFS= read -r id; do
+            [ -n "$id" ] && [ ! -f "$root/specs/changes/$id.md" ] || continue
+            # Entries condensed into specs/archive.md (compact.md) left the log on purpose.
+            case "${id%%-*}" in ''|*[!0-9]*) ;; *) [ "$((10#${id%%-*}))" -gt "${through:-0}" ] || continue ;; esac
+            grep -q "^- [0-9-]* $id:" <<< "$entries" || unlogged="${unlogged:+$unlogged, }$id"
+        done < <(git -C "$root" log -M --diff-filter=D --name-only --format= -- 'specs/changes/*.md' 2>/dev/null |
+            sed -n 's|^specs/changes/\(.*\)\.md$|\1|p' | sort -u)
+        [ -z "$unlogged" ] || findings+=("Closed without a log entry: $unlogged; the change that deletes its record adds specs/log/<id>.md, '- <date> <id>: <what changed>' (close-change.sh)")
+    fi
     # A reviewed record still on the default branch and in this checkout: its change merged
     # without closing. A branch that closes it (record deleted, log line added) is not flagged.
     base="$(spec_default_branch "$root")"

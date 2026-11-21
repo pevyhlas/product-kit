@@ -396,6 +396,7 @@ Byte-based agent context budgets are separate. Compaction due is an advisory at 
 since the latest compaction line in either log order, including pending `specs/log/<id>.md`
 files.
 
-The "Merged without closing" advisory requires full Git history and the default-branch
-ref. CI steps running doctor must fetch full history, for example with
-`actions/checkout`'s `fetch-depth: 0`; a shallow checkout cannot establish its absence.
+The "Merged without closing" advisory needs the default-branch ref and its tree and blob
+objects locally; it does not need branch ancestry. Fetch full history (for example, use
+`actions/checkout` with `fetch-depth: 0`) for the separate history-based "Closed without
+a log entry" check.

@@ -30,11 +30,13 @@ for reading budgets, not the number of advisories or the files' whole lengths. T
 excluded, malformed blocks still count, and a reader failure is a finding, not evidence
 of zero excess. Byte-based agent context budgets are separate.
 Compaction due is an advisory at ten closes since the latest compaction
-line, in either log order, plus every pending `specs/log/<id>.md` entry.
+line, in either log order, plus every pending `specs/log/<id>.md` entry. If the folded
+log cannot be read, doctor reports a finding instead of a count.
 
-The "Merged without closing" advisory needs full Git history and the default-branch ref.
-CI checkouts running this check must fetch full history (for example, `fetch-depth: 0`
-with `actions/checkout`), not infer a clean result from a shallow checkout.
+The "Merged without closing" advisory needs the default-branch ref and its tree and blob
+objects locally, not full history. CI checkouts should fetch full history (for example,
+`fetch-depth: 0` with `actions/checkout`) for the separate history-based
+"Closed without a log entry" check.
 
 Ordinary text and JSON also separate installed kit version (manifest), observed spec layout and
 layout-derived migration state. `required` means legacy 0.x; `incomplete` means competing canons

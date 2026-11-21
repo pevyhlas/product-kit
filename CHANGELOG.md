@@ -11,8 +11,9 @@ change by change.
 - **Doctor reports reading-budget excess and overdue compaction.** Text and `--json`
   add the total reading lines over budget (`budget_excess_reading_lines`), independently
   of advisory count. Doctor shares status's compaction accounting, including pending
-  log entry files, and advises at ten closes. CI guidance requires full history for
-  the "Merged without closing" advisory.
+  log entry files, and advises at ten closes. CI guidance distinguishes the default-branch
+  ref and objects needed for "Merged without closing" from the full history recommended for
+  "Closed without a log entry."
 
 ## [2.0.1] — 2026-11-20 — review recovery and change lifecycle fixes
 

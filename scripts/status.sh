@@ -25,6 +25,8 @@ today="$(spec_today)"
 layout="$(spec_layout "$root")"
 mixed="$(spec_mixed_forms "$root")"
 SEP="$SPEC_SEP"
+compaction="$(spec_compaction "$root")" || exit "$?"
+read -r closed_since last_pass <<< "$compaction"
 
 age() { # date -> days since, or blank
     if spec_is_date "$1"; then spec_days_between "$1" "$today"; fi
@@ -47,7 +49,6 @@ later="$(if [ -n "$stage_now" ]; then
 fi)"
 changes="$(spec_open_changes "$root")"
 leftover="$(spec_leftover_features "$root")"
-read -r closed_since last_pass <<< "$(spec_compaction "$root")"
 inbox="$(spec_inbox "$root")"
 records="$(spec_records "$root")"
 
