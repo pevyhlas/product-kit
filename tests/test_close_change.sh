@@ -36,6 +36,12 @@ branch_with_code() { # id
     git add -A >/dev/null; git commit -qm "$1: code" >/dev/null
 }
 
+it "help documents the ambient Git identity and the agent overrides"
+receipt_raw_run bash "$B/close-change.sh" --help
+assert_eq 0 "$STATUS" "help succeeds without PR arguments"
+assert_contains "$OUTPUT" "The closing commit uses the checkout's ambient Git identity."
+assert_contains "$OUTPUT" "GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL"
+
 it "one command closes a reviewed change: log entry, record deleted, one commit, gate passes"
 branch_with_code 001-greet
 START="$(git merge-base HEAD "$DEFAULT")"; REVIEWED="$(git rev-parse HEAD)"
@@ -90,12 +96,19 @@ if [ "$(pwd -P)" = "$CLOSE_SPECS/log" ]; then exit 1; fi
 exec "$REAL_LN" "$@"
 SH
 chmod +x "$outside/bin/python3" "$outside/bin/mkdir" "$outside/bin/ln"
-CDPATH="$outside" PATH="$outside/bin:$PATH" run bash "$B/close-change.sh" 001-greet "warmer greeting — R-01 — #1"
+CDPATH="$outside" PATH="$outside/bin:$PATH" run env \
+    GIT_AUTHOR_NAME='Close Author' GIT_AUTHOR_EMAIL=close-author@example.com \
+    GIT_COMMITTER_NAME='Close Committer' GIT_COMMITTER_EMAIL=close-committer@example.com \
+    bash "$B/close-change.sh" 001-greet "warmer greeting — R-01 — #1"
 assert_contains "$OUTPUT" 'anchored mkdir'
 assert_eq 0 "$STATUS" "closes: $OUTPUT"
 assert_contains "$OUTPUT" "PASS 001-greet" "reports the gate at the closed head"
 assert_not_contains "$OUTPUT" "Note:" "no open-record note once closed"
 assert_eq "$VERDICT" "$(git rev-parse HEAD~1)" "one commit on top of the verdict commit"
+assert_eq 'Close Author' "$(git log -1 --format=%an HEAD)" "closing commit author name"
+assert_eq 'close-author@example.com' "$(git log -1 --format=%ae HEAD)" "closing commit author email"
+assert_eq 'Close Committer' "$(git log -1 --format=%cn HEAD)" "closing commit committer name"
+assert_eq 'close-committer@example.com' "$(git log -1 --format=%ce HEAD)" "closing commit committer email"
 assert_eq "$(printf 'specs/changes/001-greet.md\nspecs/log/001-greet.md')" "$(git diff --name-only HEAD~1 HEAD)" "the commit holds only the record and its log entry"
 assert_eq '- 2026-11-09 001-greet: warmer greeting — R-01 — #1' "$(cat specs/log/001-greet.md)" "the log entry"
 assert_eq '' "$(git ls-files specs/log.md)" "no specs/log.md is created"
