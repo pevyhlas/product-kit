@@ -8,10 +8,24 @@ change by change.
 
 ## [Unreleased]
 
+## [2.0.2] — 2026-11-21 — safer worktree cleanup and complete review patches
+
 ### Fixed
 
 - A failed close no longer leaves an empty log entry behind. Retry the same close
   after the write error clears; the change record and index remain intact.
+- Removing a worktree leaves unrelated stale registrations alone. Explicit pruning refuses
+  stale registrations with submodule data. Cleanup also refuses embedded submodule stores
+  and submodules that administer linked worktrees, including with `--force`.
+- Cleanup no longer merges legacy ledger spools. If one remains, cleanup stops so you can
+  archive and remove it without losing events.
+- Review packages show changed submodule pins even when configured as ignored. Full and
+  focused patch paths are checked against the Git trees before the round can complete.
+
+### Adoption
+
+From 2.0.1, pin `v2.0.2` and run `bash .product-kit/scripts/init.sh --upgrade`.
+There is no record, receipt or configuration migration.
 
 ## [2.0.1] — 2026-11-20 — review recovery and change lifecycle fixes
 
