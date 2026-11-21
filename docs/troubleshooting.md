@@ -31,6 +31,7 @@
 | Merged but not live | Deployment is a separate claim: look for a `DEPLOY` record in status |
 | `new-change.sh`: branch already exists | Continue it (`git checkout <id>`) or choose another short name |
 | Harness cannot enter or resume a worktree | A worktree directory was removed without `git worktree remove`; run `.prdkit/scripts/bash/cleanup-change.sh --prune` |
+| Cleanup refuses a stale registration with submodule data or an unsupported submodule layout | Retain the commits before changing any registration. Recover the missing checkout, move embedded stores into a supported layout, or relocate dependent linked checkouts as appropriate. `--force` cannot bypass these checks. |
 | Finished change worktree lingers | From the main checkout, run `.prdkit/scripts/bash/cleanup-change.sh <change-id>`, or `cleanup-change.sh --closed` for every closed change's worktree (needs `origin/HEAD`: `git remote set-head origin --auto`) |
 | `cleanup-change.sh` says git refused the removal | The message carries git's reason, such as a locked worktree (`git worktree unlock <path>`); uncommitted changes are reported as such. Submodules alone never block it |
 | `cleanup-change.sh` refuses submodule retention | Fetch the named commit into a local branch or tag in a complete, independent main-checkout submodule, then rerun. Cleanup checks tracking tips and retained reflog entries too. Tracking refs are not proof of remote availability. A linked, alternate-backed, shallow or partial store is not proof; use a full local copy. |
