@@ -17,6 +17,7 @@
 | Doctor: a stage "runs in none of the environments" | Name the environment in the stage's **Environment** line as `specs/architecture/environments.md` spells it, or add a row for it there; `none` suits a stage with nothing running |
 | Doctor: "Link at … points to …, which does not exist" | Fix the path; name a file removed from main on purpose as code, `git show <sha>:<path>`, not as a link |
 | Doctor: closed without a log entry | Add `specs/log/<id>.md` holding `- <date> <id>: <what changed>` in the PR that deletes the change record |
+| Closing a change | Give the close helper exclusive write access to `specs/log/` for the duration of the close; other writers must wait before creating, replacing or moving entries there. |
 | Status or doctor: missing, blank or duplicate State field | In `## State`, give `**Waiting on**:` and `**Next**:` one nonblank line each. For examples, use a fence or start an HTML comment on its own line. Inline `<!--` is ordinary field text. |
 | Doctor: malformed log entry | Make `specs/log/<id>.md` one line, `- <date> <id>: <what changed>`, naming the change its file name gives |
 | Status or doctor: merged without closing | Close it in the next relevant PR, carried by that PR's record before its final review ([review workflow](../workflows/review.md#closing)); a change that spans PRs is a parent with an outcome checkpoint |

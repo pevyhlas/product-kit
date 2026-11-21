@@ -80,9 +80,17 @@ if ! (
     [ ! -e "./$id.md" ] && [ ! -L "./$id.md" ] || exit 1
     set -C
     exec 3>"./$id.md" || exit 1
-    [ -f /dev/fd/3 ] && printf -- '- %s %s: %s\n' "$day" "$id" "$text" >&3
+    [ -f /dev/fd/3 ] || exit 1
+    line="- $day $id: $text"
+    (trap '' XFSZ; printf '%s\n' "$line" >&3) && exit 0
+    # Keep the fd open: remove only our empty file or an exact partial write.
+    if [[ ! -L ./$id.md && ./$id.md -ef /dev/fd/3 ]] &&
+        { [ ! -s /dev/fd/3 ] || { bytes="$(wc -c < "./$id.md" | tr -d '[:space:]')" &&
+            printf '%s\n' "$line" | head -c "$bytes" | cmp -s - "./$id.md"; }; } &&
+        [[ ! -L ./$id.md && ./$id.md -ef /dev/fd/3 ]]; then rm "./$id.md"; fi
+    exit 1
 ); then
-    refuse "could not write $entry; nothing was deleted or committed"
+    refuse "could not write $entry; inspect any remaining entry before retrying. The record was not deleted or committed"
 fi
 check_paths
 git -C "$root" rm -q -- "$path"
