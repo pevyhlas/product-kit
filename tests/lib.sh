@@ -20,6 +20,7 @@ fi
 # meets "not a git repository" instead of the caller's checkout.
 GIT_CEILING_DIRECTORIES="$(dirname "$_TMP_PROBE")"; export GIT_CEILING_DIRECTORIES
 export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
 cd "$_TMP_PROBE" || exit 1
 _SCRATCH_CWD="$_TMP_PROBE"
 unset _TMP_PROBE

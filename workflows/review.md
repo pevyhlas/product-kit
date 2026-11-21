@@ -240,7 +240,7 @@ record is its review carrier; never fabricate acceptance or open a cleanup-only 
 run `.prdkit/scripts/bash/cleanup-change.sh <id>` from the main checkout; it keeps the worktree's
 evidence before moving the checkout and its Git registration into the reported quarantine.
 A clean worktree with supported submodules needs no `--force`. Inspect and recover any needed
-work before manually purging its quarantine slot.
+work before manually purging its retention refs and quarantine slot.
 `cleanup-change.sh --closed` sweeps every `.worktrees/<id>` on branch `<id>` whose change is closed
 on the trusted integration branch (record gone, log entry present), skipping dirty or locked ones
 and leaving branches alone; run it after merges so finished worktrees do not pile up.

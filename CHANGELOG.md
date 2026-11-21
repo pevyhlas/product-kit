@@ -35,8 +35,12 @@ change by change.
   requires hard links in `specs/log/`. If the filesystem does not support them,
   move the checkout to one that does and retry.
 - Cleanup moves the entire worktree registration and any live checkout into a reported
-  `prdkit-retired/` slot. Its index, reflogs, submodule stores and a local backup of shared
-  objects remain available until manual purge. Explicit pruning quarantines only stale
+  `prdkit-retired/` slot. It roots the retired HEAD, reflog objects and staged tree under
+  `refs/prdkit-retired/<slot>/` in the main repository; no mirror is needed. Never retire an
+  active checkout. Busy registrations and unmerged indexes are refused. Batch pruning checks
+  all candidates first and reports progress if a later retirement fails. New changes leave
+  stale registrations alone. Cleanup checks recovery objects before reporting success and
+  refuses linked evidence paths in either checkout. Explicit pruning targets only stale
   registrations; removing one change leaves unrelated registrations alone.
 - Cleanup refuses unsupported layouts, including embedded submodule stores, dependent
   linked checkouts and cross-filesystem moves. Plain paths still work on older Git;

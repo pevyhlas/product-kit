@@ -105,8 +105,10 @@ git config --file "$conf/global" diff.statNameWidth 6
 git config --file "$conf/system" test.system inherited
 # shellcheck disable=SC2016 # Positional argument belongs to the fixture shell.
 run env GIT_CONFIG_GLOBAL="$conf/global" GIT_CONFIG_SYSTEM="$conf/system" GIT_CONFIG_NOSYSTEM=0 \
-    bash -c 'source "$1"; git config --get-regexp "^(diff.statnamewidth|test.system)$"' _ "$TESTS_DIR/lib.sh"
-assert_eq 1 "$STATUS" 'neither injected configuration is visible'
+    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=test.count GIT_CONFIG_VALUE_0=inherited \
+    GIT_CONFIG_PARAMETERS="'test.parameters=inherited'" \
+    bash -c 'source "$1"; git config --get-regexp "^(diff.statnamewidth|test\\.(system|count|parameters))$"' _ "$TESTS_DIR/lib.sh"
+assert_eq 1 "$STATUS" 'no injected configuration is visible'
 assert_eq '' "$OUTPUT" 'no inherited values'
 
 it "build-review-package.sh rejects path-escaping change ids"

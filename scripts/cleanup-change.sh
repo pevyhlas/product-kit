@@ -75,8 +75,9 @@ spool yourself before cleanup.
 
 Cleanup moves the entire registration (including index, reflogs and submodule
 stores) and any live checkout to the reported prdkit-retired directory. It
-also retains shared Git objects there. Locked worktrees stay locked. Review
-the slot and retain needed work before manually purging it.
+roots shared objects in refs/prdkit-retired/<slot>/ in the main repository.
+Never clean a worktree in use. Stop writers and finish in-progress operations
+first. Review the slot and retention refs before manually purging either.
 
 Examples:
   cleanup-change.sh 007-user-auth      # remove that change's worktree
@@ -275,31 +276,102 @@ same_mount() (
     trap 'rm -f "$probe"' EXIT
     ln "$probe" "$2/device" && rm "$2/device"
 )
+idle_index() ( # check read-only before moving anything, including on --force
+    local admin="$1" p busy conflicts
+    for p in "$admin"/{MERGE_HEAD,REBASE_HEAD,CHERRY_PICK_HEAD,REVERT_HEAD,BISECT_START,rebase-apply,rebase-merge,sequencer} \
+        "$common_dir"/{gc.pid,index.lock,HEAD.lock} "$common_dir"/objects/{pack,info}/*.lock; do
+        [ ! -e "$p" ] && [ ! -L "$p" ] || return 1
+    done
+    for p in "$admin" "$common_dir"; do
+        busy="$(find "$p" \( -name prdkit-retired -o -name objects -o -name worktrees \) -type d -prune -o \
+            -name '*.lock' ! -type d -print)" && [ -z "$busy" ] || return 1
+    done
+    [ -f "$admin/commondir" ] && [ ! -L "$admin/commondir" ] && [ ! -L "$admin/index" ] &&
+        conflicts="$(GIT_INDEX_FILE="$admin/index" git --git-dir="$admin" --work-tree="$ROOT" -c core.fsmonitor=false ls-files --unmerged)" && [ -z "$conflicts" ]
+)
+
+check_objects() { # Git exits zero for a missing batch item; check its response too.
+    git --git-dir="$1" --work-tree="$ROOT" cat-file --batch-check='%(objecttype)' |
+        LC_ALL=C awk '!/^(commit|tree|blob|tag)$/ {bad=1} END {exit bad}'
+}
+
+# The rename is the cutover. Read the retired admin, not the former pathname
+# or a snapshot taken before the move. One create-only transaction publishes
+# GC roots in the actual common repository, independent of upload-pack rules.
+retain_refs() (
+    set -o pipefail
+    local slot="$1" admin="$1/admin" ns="refs/prdkit-retired/${1##*/}" head tree index oid log repo
+    export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
+    archived() { git --git-dir="$admin" --work-tree="$ROOT" "$@"; }
+    head="$(archived rev-parse --verify 'HEAD^{commit}')" || return 1
+    tree="$(GIT_INDEX_FILE="$admin/index" archived write-tree)" || return 1
+    index="$(archived -c user.name=Product-Kit -c user.email=retirement@localhost commit-tree "$tree" -p "$head" -m 'Retained worktree index')" || return 1
+    archived for-each-ref --format='%(objectname)' refs/bisect refs/rewritten refs/worktree > "$slot/oids" || return 1
+    if [ -f "$admin/ORIG_HEAD" ]; then archived rev-parse --verify ORIG_HEAD >> "$slot/oids" || return 1; fi
+    if [ -d "$admin/logs" ]; then
+        find "$admin/logs" -type f -print0 > "$slot/log-list" || return 1
+        while IFS= read -r -d '' log; do
+            LC_ALL=C awk -v n="${#head}" '
+                length($1)!=n || length($2)!=n || $1$2 ~ /[^0-9a-f]/ {exit 1}
+                {if ($1 !~ /^0+$/) print $1; if ($2 !~ /^0+$/) print $2}' "$log" >> "$slot/oids" || return 1
+        done < "$slot/log-list"
+    fi
+    if [ -d "$admin/reftable" ]; then
+        # Git enumerates both reflog endpoints, including common reflog roots.
+        archived rev-list --single-worktree --reflog --no-walk >> "$slot/oids" || return 1
+    fi
+    LC_ALL=C sort -u "$slot/oids" > "$slot/unique" || return 1
+    {
+        printf 'create %s/HEAD %s\ncreate %s/index %s\n' "$ns" "$head" "$ns" "$index"
+        while IFS= read -r oid; do printf 'create %s/objects/%s %s\n' "$ns" "$oid" "$oid"; done < "$slot/unique"
+    } | git -C "$ROOT" update-ref --stdin || return 1
+    # Inspect through the published refs. A gitlink refers to a different
+    # repository; verify populated module stores against their own HEAD below.
+    printf '%s\n' "$ns/HEAD^{commit}" "$ns/index^{tree}" > "$slot/check" || return 1
+    while IFS= read -r oid; do printf '%s/objects/%s\n' "$ns" "$oid"; done < "$slot/unique" >> "$slot/check" || return 1
+    git -C "$ROOT" ls-tree -r "$ns/index" | awk '$1!="160000" {print $3}' >> "$slot/check" || return 1
+    check_objects "$common_dir" < "$slot/check" || return 1
+    if [ -d "$admin/modules" ]; then
+        find "$admin/modules" -name HEAD -type f -print0 > "$slot/log-list" || return 1
+        while IFS= read -r -d '' log; do
+            repo="${log%/HEAD}"; [ -d "$repo/objects" ] || continue
+            printf 'HEAD^{commit}\n' | check_objects "$repo" || return 1
+        done < "$slot/log-list"
+    fi
+    rm -f "$slot/oids" "$slot/unique" "$slot/log-list" "$slot/check"
+)
 retire() (
     local path="$1" mode="$2" admin root="$common_dir/prdkit-retired" slot state=0 lock config_rc=0
     admin="$(registration "$path")" || { echo "ambiguous worktree registration: $path"; return 1; }
     lock="$admin/prdkit-cleanup.lock"
-    mkdir "$lock" 2>/dev/null || { echo "another cleanup-change.sh run holds $lock"; return 1; }
-    trap 'rmdir "$lock" 2>/dev/null || :' EXIT
+    if [ "$mode" != preflight ]; then
+        mkdir "$lock" 2>/dev/null || { echo "another cleanup-change.sh run holds $lock"; return 1; }
+        trap 'rmdir "$lock" 2>/dev/null || :' EXIT
+    elif [ -e "$lock" ]; then echo "another cleanup-change.sh run holds $lock"; return 1; fi
     if [ -e "$admin/locked" ]; then echo "cannot remove a locked working tree: $(cat "$admin/locked")"; return 1; fi
     [ ! -L "$path" ] || return 1
+    supported_layout "$admin" "$path" || { echo "unsupported submodule layout: $path"; return 1; }
     case "$mode" in
-        stale) [ ! -e "$path" ] || { echo "checkout is no longer missing"; return 1; } ;;
+        stale|preflight) [ ! -e "$path" ] || { echo "checkout is no longer missing"; return 1; } ;;
         *) [ -d "$path" ] || return 1
            if [ "$FORCE" = false ]; then
                wt_dirty || state=$?
                [ "$state" -eq 1 ] || { echo "cannot confirm worktree is still clean"; return 1; }
            fi ;;
     esac
-    supported_layout "$admin" "$path" || { echo "unsupported submodule layout: $path"; return 1; }
-    # Refuse rather than make a backup that borrows objects from an external store.
-    [ -z "${GIT_OBJECT_DIRECTORY:-}${GIT_ALTERNATE_OBJECT_DIRECTORIES:-}${GIT_COMMON_DIR:-}${GIT_SHALLOW_FILE:-}" ] &&
+    # Retention refs must protect objects in the common repository itself.
+    [ -z "${GIT_OBJECT_DIRECTORY:-}${GIT_ALTERNATE_OBJECT_DIRECTORIES:-}${GIT_COMMON_DIR:-}${GIT_SHALLOW_FILE:-}${GIT_INDEX_FILE:-}" ] &&
         [ "$(git -C "$ROOT" rev-parse --is-shallow-repository)" = false ] &&
         [ ! -e "$common_dir/objects/info/alternates" ] && [ ! -L "$common_dir/objects/info/alternates" ] ||
         { echo "unsupported shared object store"; return 1; }
     git -C "$ROOT" config --get-regexp '^(extensions\.partialclone|remote\..*\.(promisor|partialclonefilter))$' >/dev/null || config_rc=$?
     [ "$config_rc" = 1 ] || { echo "cannot verify complete local object storage"; return 1; }
     case "$root/" in "$path"/*) return 1 ;; esac
+    idle_index "$admin" || { echo "registration is busy, unreadable or has an unmerged index"; return 1; }
+    if ! git check-ref-format "refs/prdkit-retired/${admin##*/}.slot/HEAD" || [ -L "$root" ]; then
+        echo "unsupported quarantine location"; return 1
+    fi
+    [ "$mode" != preflight ] || return 0
     [ ! -L "$root" ] && mkdir -p "$root" &&
         slot="$(mktemp -d "$root/${admin##*/}.$(date -u +%Y%m%dT%H%M%SZ).XXXXXXXX")" || return 1
     printf '[prdkit] Quarantine: %s\n' "$slot" >&2
@@ -314,25 +386,44 @@ retire() (
     if [ "$mode" != stale ]; then
         mv "$path" "$slot/checkout" || { echo "checkout move failed; inspect locked registration $admin and $slot"; return 1; }
     fi
-    # The registration still roots detached HEAD, index and reflog objects
-    # during backup. Local clone retains their objects even without shared refs.
-    git -c gc.auto=0 clone -q --local --mirror "$common_dir" "$slot/common.git" ||
-        { echo "shared object backup failed; inspect locked registration $admin and $slot"; return 1; }
+    # Keep the real common store resolvable on either side of the rename.
+    if ! printf '%s\n' "$common_dir" > "$slot/common-path" || ! mv "$slot/common-path" "$admin/commondir"; then
+        echo "could not bind registration $admin to the common store; inspect $slot"; return 1
+    fi
     # Renaming the entire admin unregisters it in one step. No later removal
     # touches its former name, even if a concurrent writer recreates it.
     mv "$admin" "$slot/admin" || { echo "registration move failed: $slot"; return 1; }
     lock="$slot/admin/prdkit-cleanup.lock"
+    if ! retain_refs "$slot"; then
+        # Keep GC roots registered even if publishing refs fails (e.g. a ref
+        # transaction hook rejects the write). Never replace a recreated admin.
+        if [ ! -e "$admin" ] && [ ! -L "$admin" ] && ln -s "$slot/admin" "$admin"; then
+            echo "could not publish retention refs; locked registration retained for recovery at $slot"
+        else
+            echo "retired $path at $slot; retention refs incomplete; do not prune Git objects or purge the slot"
+        fi
+        return 1
+    fi
     printf '%s\n' "$slot"
 )
 prune_stale() {
-    local path slot msg slots=""
+    local path slot msg slots="" retired=()
     for path in "$@"; do
-        if ! slot="$(retire "$path" stale)"; then
-            msg="Could not quarantine stale registration $path: $slot"
+        if ! msg="$(retire "$path" preflight)"; then
+            msg="Cannot prune $path: $msg"
             if $JSON_MODE; then emit_json refused prune "$msg"; else echo "[prdkit] $msg" >&2; fi
             return 1
         fi
+    done
+    for path in "$@"; do
+        if ! slot="$(retire "$path" stale)"; then
+            if [[ "$slot" = "retired $path at "* ]]; then retired+=("$path"); fi
+            msg="Could not finish stale registration $path: $slot.${slots:+ Previously retired:$slots}"
+            if $JSON_MODE; then emit_json refused prune "$msg" ${retired[@]+"${retired[@]}"}; else echo "[prdkit] $msg" >&2; fi
+            return 1
+        fi
         slots="$slots $slot"
+        retired+=("$path")
     done
     msg="Pruned $# stale worktree registration(s) whose directories were already gone.${slots:+ Quarantine:$slots}"
     if $JSON_MODE; then emit_json ok prune "$msg" "$@"; else echo "[prdkit] $msg"; fi
@@ -353,7 +444,7 @@ ROOT_TOP="$(CDPATH="" cd "$ROOT" 2>/dev/null && pwd -P)" || ROOT_TOP="$ROOT"
 WT=""
 wt_dirty() {
     local out
-    out="$(git -C "$WT" status --porcelain --untracked-files=all 2>/dev/null)" || return 2
+    out="$(git -C "$WT" -c core.fsmonitor=false -c core.hooksPath=/dev/null status --porcelain --untracked-files=all 2>/dev/null)" || return 2
     [ -n "$out" ]
 }
 
@@ -363,20 +454,34 @@ wt_dirty() {
 # and enrichment file into this checkout's .prdkit/ and verify it first; a copy that fails or
 # would overwrite a different file refuses the removal.
 PRESERVED=0; CONFLICT=""
+unlinked_path() { # absolute child and trusted checkout root
+    local p="$1"
+    while [ "$p" != "$2" ]; do
+        case "$p" in "$2"/*) ;; *) return 1 ;; esac
+        [ ! -L "$p" ] || { CONFLICT="$p"; return 1; }
+        p="${p%/*}"
+    done
+}
 preserve() { # path relative to .prdkit/ (a directory or a file)
-    local src="$WT/.prdkit/$1" dest="$ROOT/.prdkit/$1" file rel
+    local src="$WT/.prdkit/$1" dest="$ROOT/.prdkit/$1" file rel list rc=0
+    unlinked_path "$src" "$WT" && unlinked_path "$dest" "$ROOT" || return 1
     [ -e "$src" ] || return 0
+    list="$(mktemp)" || return 1
+    if ! find -P "$src" -type f -print0 > "$list"; then rm -f "$list"; return 1; fi
     while IFS= read -r -d '' file; do
         rel="${file#"$src"}"
+        if ! unlinked_path "$file" "$WT" || ! unlinked_path "$dest$rel" "$ROOT"; then rc=1; break; fi
         if [ -e "$dest$rel" ]; then
-            cmp -s "$file" "$dest$rel" || { CONFLICT="$dest$rel"; return 1; }
+            cmp -s "$file" "$dest$rel" || { CONFLICT="$dest$rel"; rc=1; break; }
         else
             if ! { mkdir -p "$(dirname "$dest$rel")" && cp -p "$file" "$dest$rel" && cmp -s "$file" "$dest$rel"; }; then
-                CONFLICT="$dest$rel"; return 1
+                CONFLICT="$dest$rel"; rc=1; break
             fi
             PRESERVED=$((PRESERVED + 1))
         fi
-    done < <(find "$src" -type f -print0)
+    done < "$list"
+    rm -f "$list"
+    return "$rc"
 }
 
 # One line from git's own words: no "fatal:" prefix, no line breaks.
@@ -408,6 +513,7 @@ remove_worktree() { # path label locked
         refuse_git "cannot remove a locked working tree, lock reason: $(cat "$admin/locked")"; return 1
     fi
     # Refuse before copying anything, so a refused removal leaves this checkout's cache untouched.
+    if ! supported_layout "$admin" "$WT"; then refuse_git "unsupported submodule layout: $WT"; return 1; fi
     if [ "$FORCE" = false ]; then
         state=0; wt_dirty || state=$?
         case "$state" in

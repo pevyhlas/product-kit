@@ -347,13 +347,16 @@ elif [ "$HAS_GIT" = true ]; then
             echo ".worktrees/" >> "$REPO_ROOT/.gitignore"
             echo "[prdkit] Added '.worktrees/' to .gitignore so isolated worktrees stay untracked." >&2
         fi
-        git worktree prune >/dev/null 2>&1 || true
         if WT_ERR="$(git worktree add "$WORKTREE_DIR" -b "$BRANCH_NAME" 2>&1 >/dev/null)"; then
             WORKTREE_PATH="$WORKTREE_DIR"
             CREATED_WORKTREE=true
         else
             echo "[prdkit] Warning: Could not create a worktree at $WORKTREE_DIR:" >&2
             echo "[prdkit]   ${WT_ERR:-unknown git error}" >&2
+            if git worktree list --porcelain | grep '^prunable' >/dev/null; then
+                echo "[prdkit] Inspect stale registrations with cleanup-change.sh --prune before retrying." >&2
+                exit 1
+            fi
             # Falling back switches the MAIN checkout onto the new branch; never do that
             # on top of uncommitted work.
             if [ -n "$(git status --porcelain --untracked-files=all 2>/dev/null)" ]; then

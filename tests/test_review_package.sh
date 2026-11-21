@@ -374,4 +374,18 @@ assert_eq 1 "$STATUS" "incomplete patch refused"
 assert_contains "$OUTPUT" 'path inventory differs'
 run test ! -e "$pins/.prdkit/cache/evidence/013-incomplete/reviews/round-1/completed.tsv"
 assert_eq 0 "$STATUS" "no completed binding"
+
+it "a valid full patch cannot mask an incomplete focused patch"
+cat > "$shim/git" <<'SH'
+#!/bin/sh
+case " $* " in *" diff "*" --binary $FOCUSED_FROM "*) exit 0 ;; esac
+exec "$REAL_GIT" "$@"
+SH
+run env PATH="$shim:$PATH" REAL_GIT="$(command -v git)" FOCUSED_FROM="$reviewed" \
+    bash "$SCRIPT" 014-incomplete-focus "$pinbase" --since "$reviewed"
+assert_eq 1 "$STATUS" "focused patch independently refused"
+assert_contains "$OUTPUT" 'path inventory differs'
+round="$pins/.prdkit/cache/evidence/014-incomplete-focus/reviews/round-1"
+assert_contains "$(cat "$round/diff.patch")" "+Subproject commit $reviewed" "full patch was complete"
+run test ! -e "$round/completed.tsv"; assert_eq 0 "$STATUS" "no completed binding"
 finish
