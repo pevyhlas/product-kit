@@ -22,6 +22,14 @@ change by change.
   past date as a reminder for the owner to confirm or lift the hold. Text output and JSON keep
   their formats; a past-date HOLD now reads `DUE` (`state: "due"` in JSON) instead of `EXPIRED`
   (`"expired"`) and remains eligible as the longest pole. WAIVER expiry is unchanged.
+- **Pinned-source installation proof (#103).** `check-adoption.sh --require-source`
+  compares installed kit-owned bytes, Git executable modes, command links and managed
+  sections with local source objects at the consumer's committed gitlink. `--head <commit>`
+  verifies committed installation objects independently of index/worktree substitutions.
+  Installer and verifier share the path mapping; customized conffiles and unmanaged text
+  remain project-owned. Explicit adoption pin/hash restrictions still bind. Strict failures
+  never fetch or install; source-less integrity checks report `source_verification:"not-requested"`.
+  This is installation proof, not review exemption, source provenance or release approval.
 - A failed close no longer leaves an empty log entry behind. Retry the same close
   after the write error clears; the change record and index remain intact. Publishing
   requires hard links in `specs/log/`. If the filesystem does not support them,

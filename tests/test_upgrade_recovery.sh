@@ -41,6 +41,19 @@ EOF
 chmod +x "$SHIMS/fault"
 for tool in cp mv rm mktemp; do ln -s fault "$SHIMS/$tool"; done
 
+it 'a partial mapping cannot become a successful partial install'
+PROJ="$(make_project)"; track_tmp "$PROJ"
+cat >> "$PROJ/.product-kit/scripts/install-lib.sh" <<'EOF'
+install_file_targets() {
+    printf '%s.claude/commands/prdkit.md\n' "${4:-}"
+    return 1
+}
+EOF
+run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --copy
+assert_eq 1 "$STATUS" 'enumeration failure reaches the installer'
+assert_contains "$OUTPUT" 'Cannot enumerate kit files' 'failure names the incomplete plan'
+if [ ! -e "$PROJ/.prdkit" ] && [ ! -e "$PROJ/.claude" ]; then _ok 'no partial install'; else _no 'partial install created'; fi
+
 for fault in copy interrupt kill retire agents manifest storage; do
     it "$fault failure remains explicit and the same-source retry preserves consumer bytes"
     PROJ="$(make_project)"; track_tmp "$PROJ"
@@ -67,9 +80,8 @@ for fault in copy interrupt kill retire agents manifest storage; do
     printf '\nNew pristine template.\n' >> "$PROJ/.product-kit/templates/change-template.md"
     rm "$PROJ/.product-kit/scripts/retired-probe.sh"
     # Change only the generated section, retaining the same delimiters.
-    printf '\n' >> "$PROJ/.product-kit/scripts/install-lib.sh"
-    sed 's/## Product-Kit workflow/## Product-Kit workflow updated/' "$PROJ/.product-kit/scripts/install-lib.sh" > "$PROJ/new-lib"
-    mv "$PROJ/new-lib" "$PROJ/.product-kit/scripts/install-lib.sh"
+    sed 's/## Product-Kit workflow/## Product-Kit workflow updated/' "$PROJ/.product-kit/scripts/agents-section.md" > "$PROJ/new-section"
+    mv "$PROJ/new-section" "$PROJ/.product-kit/scripts/agents-section.md"
     snapshot_upgrade_fixture "$PROJ" || exit 1
     # shellcheck disable=SC2016 # The child expands its own PID, not the test runner's.
     run env PATH="$SHIMS:$PATH" FAULT="$fault" FAULT_ROOT="$PROJ" bash -c 'export INSTALL_PID=$$; exec bash "$1/.product-kit/scripts/init.sh" --target "$1" --upgrade' _ "$PROJ"
