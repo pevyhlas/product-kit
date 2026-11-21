@@ -121,6 +121,16 @@ Keep the publisher log outside every working tree, under the absolute Git common
 `$(git -C <fetch-clone> rev-parse --git-common-dir)/prdkit/receipts/<pr>/<receipt-id>.json`.
 It must **never be maker-writable**; protect it with the publisher credential. Symlinked log
 components are refused. Old `.prdkit/cache/receipts/` logs are never read or migrated.
+Online publishing syncs the payload and its directory entries before creating a pending
+review, then syncs its ID mapping before submitting it as a COMMENT. Pending reviews do not
+count. If the response or mapping write fails, use `publish-review.sh --pr <url> --resume
+<attempt-filename>` from the same trusted publisher. It requires exactly one unedited host
+review matching the saved body, PR and publisher, restores the mapping, and submits only
+if still pending. Each new repair carries a unique attempt marker outside the verdict;
+once its review ID is recorded, resume verifies that exact review. An ambiguous or edited
+match needs independent evidence; do not guess.
+Repair reads `<pr>/reviews/<review-id>.json`; `--receipt-id` must match. A repair of a
+repair preserves the original review's PR and position. Isolation applies at each hop.
 Only the original review author's typename and numeric id may restate it. Restate the **full
 original verdict**, never reconstruct it from a corrupted, maker-editable host body:
 

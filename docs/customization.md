@@ -61,23 +61,26 @@ findings block under both. No universal persona or end-to-end test count applies
 
 ## Ownership on upgrade
 
-Templates and memory are preserved when edited. Commands, internal workflows, and scripts
-are kit-owned and refreshed; `--check` reports KIT-OWNED EDITS honestly. Files under `specs/`
-are not managed installer files. Customize policy and templates instead of forking operational
-instructions. `--force` deliberately resets template/memory copies to kit defaults.
+Ordinary upgrades preserve edited templates and memory and refresh unmodified kit-owned
+commands, internal workflows, and scripts. `--check` reports changes to those files as
+KIT-OWNED EDITS. Starting with 2.0, `--upgrade` requires a clean, committed checkout and a
+local trusted default ref. It refuses to overwrite or delete customized managed content,
+even when committed or ignored. Files under `specs/` are not managed installer files.
+Customize policy and templates instead of forking operational instructions.
 
 The installer writes and deletes only inside the project. It refuses, before writing anything,
 when a directory it writes into (`.prdkit/` and its subdirectories, or a selected harness's
 `.claude/commands/` or `.opencode/commands/`) is a symlink or resolves outside the project, or when
-a directory sits where it installs a file. A kit-owned file replaced by a symlink is replaced
-again by a regular file, never written through. A symlinked template or memory file is
-project-owned: it is kept and reported, even with `--force`, so a shared policy can be a link.
-AGENTS.md and `.gitignore` are edited through a symlink only while its target stays inside the
-project (`AGENTS.md` linking to `CLAUDE.md` works); otherwise they are left untouched with a
-warning. A manifest entry outside the installed layout is ignored with a warning, never deleted.
+a directory sits where it installs a file. Replacing a kit-owned file with a custom symlink
+blocks a 2.0 upgrade; the installer never writes through it. A plain upgrade keeps symlinked
+templates and memory files. `--upgrade --force` still has to pass the overwrite checks.
+`AGENTS.md` and `.gitignore` may link to a file inside the project (for example, `AGENTS.md`
+can link to `CLAUDE.md`). A 2.0 upgrade refuses links to root files outside the project.
+A manifest entry outside the installed layout is ignored with a warning, never deleted.
 
 The manifest records selected harnesses and pristine hashes. It supports drift detection and
 safe ordinary upgrades, not automatic conversion of a 0.x spec ([migrating to 1.0](migrating-to-1.0.md)).
+See [migrating to 2.0](migrating-to-2.0.md) for preflight and retry rules.
 Commands the kit no longer ships (retired, disabled or unsupported entry points) are
 reported by `--check` as RETIRED and removed by `--upgrade` when the previous manifest
 recorded them or they are symlinks into the kit's `commands/`; retired workflows and helpers

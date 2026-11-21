@@ -190,6 +190,7 @@ it "upgrade preserves the project-owned declaration and template"
 before="$(git hash-object specs/SPEC.md)"
 printf '\nOwner customization.\n' >> .prdkit/templates/lifecycle-template.md
 template_before="$(git hash-object .prdkit/templates/lifecycle-template.md)"
+snapshot_upgrade_fixture "$PROJ" || exit 1
 run bash "$PK_ROOT/scripts/init.sh" --target "$PROJ" --upgrade
 assert_eq 0 "$STATUS" "upgrade succeeds: $OUTPUT"
 assert_eq "$before" "$(git hash-object specs/SPEC.md)" "upgrade never edits lifecycle source"

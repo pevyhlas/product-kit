@@ -19,6 +19,55 @@ assert_contains "$OUTPUT" "No DEPLOY records — what is live is unknown." "live
 assert_contains "$OUTPUT" "None: no open changes, holds or owner questions." "no longest pole"
 
 mkdir -p specs/parts specs/changes specs/product
+it "State diagnostics report missing, blank and duplicate fields at the open record"
+for fields in 'missing present' 'present missing' 'missing missing' 'present present' 'blank duplicate'; do
+    read -r ws ns <<< "$fields"
+    waiting="\`nothing\`"
+    probe=specs/changes/001-state.md
+    cat > "$probe" <<'MD'
+# State probe
+**Next**: header
+## State
+> **Waiting on**: quote
+Unmatched tick before a comment: `
+<!--
+`
+**Waiting on**: comment
+**Next**: comment
+-->
+~~~~
+**Waiting on**: example
+~~~~
+```
+**Next**: example
+```
+An unmatched tick before a thematic break: `
+***
+MD
+    case "$ws" in present) printf '**Waiting on**: %s\n' "$waiting" >> "$probe" ;; blank) echo '**Waiting on**:' >> "$probe" ;; esac
+    case "$ns" in present) echo '**Next**: review' >> "$probe" ;; duplicate) printf '**Next**: one\n**Next**: two\n' >> "$probe" ;; esac
+    printf '## Notes\n**Waiting on**: note\n**Next**: note\n' >> "$probe"
+    printf '## Acceptance\n| ok | description | note | 1 | PASS |\n' >> "$probe"
+    run bash "$STATUS_SH" --json
+    assert_eq "$ws $ns" "$(jq -r '.changes[0].state_fields | .waiting_on+" "+.next' <<< "$OUTPUT")"
+    [ "$ns" = present ] || assert_eq '' "$(jq -r '.changes[0].next' <<< "$OUTPUT")"
+    [ "$ws" = present ] || assert_eq '' "$(jq -r '.changes[0].waiting_on' <<< "$OUTPUT")"
+    assert_eq 1 "$(jq '.changes[0].acceptance.passed' <<< "$OUTPUT")"
+    if [ "$ws $ns" = 'present present' ]; then
+        assert_eq "$waiting/review" "$(jq -r '.changes[0]|.waiting_on+"/"+.next' <<< "$OUTPUT")"
+    fi
+    run bash "$STATUS_SH"
+    [ "$ws" = present ] || assert_contains "$OUTPUT" "State: Waiting on is $ws"
+    [ "$ns" = present ] || assert_contains "$OUTPUT" "State: Next is $ns"
+    run bash .prdkit/scripts/bash/doctor.sh --json
+    assert_eq 0 "$STATUS" 'ordinary doctor remains advisory'
+    advises="$(jq -r '.advisories[]' <<< "$OUTPUT")"
+    for item in "Waiting on is $ws" "Next is $ns"; do
+        if [[ "$item" == *' is present' ]]; then assert_not_contains "$advises" "$probe (## State): ${item% present} "
+        else assert_contains "$advises" "$probe (## State): $item"; fi
+    done
+done
+rm "$probe"
 printf '# Demo — lifecycle\n\n**Now**: MVP since 2026-10-01 · **Next**: Private preview\n' > specs/product/lifecycle.md
 cat > specs/product.md <<'MD'
 # Demo — product

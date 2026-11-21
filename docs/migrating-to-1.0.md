@@ -7,9 +7,11 @@ never edits `specs/`, and a one-time cutover between changes, which an agent doe
 
 ## Before you upgrade
 
-If continuing to 2.0, `record-review.sh` and `review-reports-lib.sh` are also retired.
-Use `publish-review.sh` and the online `check-review.sh --pr <url>` receipt gate instead;
-see [the review workflow](../workflows/review.md) for native owner approval and legacy blockers.
+Use a 1.x kit (for example `v1.5.0`) for this upgrade and cutover. The 2.0 installer will
+not upgrade a 0.x manifest directly. After completing the cutover, follow
+[Migrating to 2.0](migrating-to-2.0.md) to adopt the online receipt gate. If you installed
+an unreleased build with `record-review.sh` or `review-reports-lib.sh`, those helpers are
+retired in 2.0; use `publish-review.sh` and `check-review.sh --pr <url>` instead.
 
 - **CI calls to removed helpers.** 1.0 removes `artifact-lib.sh`, `check-artifacts.sh`,
   `check-canon.sh`, `check-implement-gates.sh`, `check-prerequisites.sh`, `check-signoff.sh`,

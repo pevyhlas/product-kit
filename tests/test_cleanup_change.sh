@@ -318,7 +318,7 @@ if nowhere_else "$c80"; then _ok "fixture: the commit exists only in the worktre
 run bash "$CLEAN2" 080-sub-unpushed
 assert_eq 1 "$STATUS" "refused"
 assert_contains "$OUTPUT" "submodule vendor/sub holds commit $c80" "names the submodule and the commit"
-assert_contains "$OUTPUT" "Push it" "says how to keep it"
+assert_contains "$OUTPUT" "Fetch it" "says how to keep it"
 run bash "$CLEAN2" --json 080-sub-unpushed
 assert_contains "$OUTPUT" '"result":"refused"' "JSON refuses"
 run bash "$CLEAN2" --force 080-sub-unpushed
@@ -330,14 +330,41 @@ assert_eq 0 "$STATUS" "the commit is kept"
 run test ! -e "$(mutex_of 080-sub-unpushed)"
 assert_eq 0 "$STATUS" "a refusal leaves no lock behind"
 
-it "once pushed, the same worktree is removed and the commit lives on"
+it "a stale tracking ref in the doomed copy cannot authorize removal"
 git -C "$PROJ2/.worktrees/080-sub-unpushed/vendor/sub" -c protocol.file.allow=always push -q origin HEAD:refs/heads/kept-080 >/dev/null 2>&1
+git -C "$SUBSRC" update-ref -d refs/heads/kept-080
+assert_eq "$c80" "$(git -C "$PROJ2/.worktrees/080-sub-unpushed/vendor/sub" rev-parse refs/remotes/origin/kept-080)"
+run bash "$CLEAN2" --force 080-sub-unpushed
+assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" "$c80"
+git -C "$PROJ2/vendor/sub" config protocol.file.allow never
+run git -C "$PROJ2/vendor/sub" -c protocol.file.allow=always fetch -q "$PROJ2/.worktrees/080-sub-unpushed/vendor/sub" HEAD:refs/heads/kept-080
+assert_eq 0 "$STATUS" 'fixture fetch overrides the local transport restriction'
+survivor="$(git -C "$PROJ2/vendor/sub" rev-parse --absolute-git-dir)"
+mkdir -p "$survivor/objects/info" "$PROJ2/alternate/pack"
+printf '%s\n' "$PROJ2/alternate" > "$survivor/objects/info/alternates"
+run bash "$CLEAN2" --force 080-sub-unpushed
+assert_eq 1 "$STATUS" 'refuse indirect object storage even when a local branch names the commit'
+rm "$survivor/objects/info/alternates"
+for store in shallow filtered promisor-pack; do
+    case "$store" in
+        shallow) printf '%s\n' "$c80" > "$survivor/shallow" ;;
+        filtered) git --git-dir="$survivor" config remote.origin.partialclonefilter blob:none ;;
+        promisor-pack) touch "$survivor/objects/pack/test.promisor" ;;
+    esac
+    run bash "$CLEAN2" --force 080-sub-unpushed
+    assert_eq 1 "$STATUS" "$store is not proof of complete local retention"
+    assert_contains "$OUTPUT" 'independent object store'
+    case "$store" in
+        shallow) rm "$survivor/shallow" ;;
+        filtered) git --git-dir="$survivor" config --unset remote.origin.partialclonefilter ;;
+        promisor-pack) rm "$survivor/objects/pack/test.promisor" ;;
+    esac
+done
 run bash "$CLEAN2" 080-sub-unpushed
 assert_eq 0 "$STATUS" "removed"
 run test ! -d "$PROJ2/.worktrees/080-sub-unpushed"
 assert_eq 0 "$STATUS" "worktree gone"
-run git -C "$SUBSRC" cat-file -e "$c80^{commit}"
-assert_eq 0 "$STATUS" "the commit is on the submodule's remote"
+assert_eq "$c80" "$(git -C "$PROJ2/vendor/sub" rev-parse kept-080)" "commit survives cleanup"
 
 it "a commit fetched into the main checkout's copy of the submodule is held there"
 sub_worktree 081-sub-fetched
@@ -349,6 +376,18 @@ run git -C "$PROJ2/vendor/sub" cat-file -e "$c81^{commit}"
 assert_eq 0 "$STATUS" "the main checkout's submodule still has the commit"
 
 it "a local branch in the worktree's submodule that nothing records refuses --force"
+sub_worktree 089-tracking
+tracking="$PROJ2/.worktrees/089-tracking/vendor/sub"
+for tip in older current; do
+    oid="$(git -C "$tracking" "${GITID[@]}" commit-tree HEAD: -p HEAD -m "$tip")"
+    git -C "$tracking" update-ref --create-reflog refs/remotes/example/topic "$oid"
+done
+run bash "$CLEAN2" --force 089-tracking
+assert_eq 1 "$STATUS" 'tracking-only commits need independent local retention'
+git -C "$PROJ2/vendor/sub" -c protocol.file.allow=always fetch -q "$tracking" refs/remotes/example/topic:refs/heads/retain-tip
+run bash "$CLEAN2" --force 089-tracking
+assert_eq 1 "$STATUS" 'retaining the tip alone does not retain its previous reflog entry'
+
 sub_worktree 082-sub-branch
 git -C "$PROJ2/.worktrees/082-sub-branch/vendor/sub" checkout -qb scratch >/dev/null 2>&1
 git -C "$PROJ2/.worktrees/082-sub-branch/vendor/sub" "${GITID[@]}" commit -q --allow-empty -m scratch >/dev/null 2>&1

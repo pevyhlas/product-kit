@@ -95,9 +95,12 @@ run bash -c "cd '$PROJ' && bash .prdkit/scripts/bash/check-adoption.sh"
 assert_eq 0 "$STATUS" "adoption gate passes without agent tiers: $OUTPUT"
 
 it "--with agent-tiers installs them; later upgrades keep the recorded choice"
+snapshot_upgrade_fixture "$PROJ" || exit 1
 run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --upgrade --with agent-tiers"
 tiers_assert_first_install "$PROJ"
+snapshot_upgrade_fixture "$PROJ" || exit 1
 run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --upgrade"
+assert_eq 0 "$STATUS" "plain upgrade succeeds"
 if tiers_installed "$PROJ"; then _ok "a plain upgrade keeps them"; else _no "a plain upgrade keeps them"; fi
 run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --check"
 assert_eq 0 "$STATUS" "no drift with the option recorded: $OUTPUT"
@@ -131,7 +134,7 @@ mkdir -p "$PROJ/.github/workflows" "$PROJ/scripts"
 printf 'jobs:\n  agents:\n    steps:\n      - run: bash .prdkit/scripts/bash/render-agents.sh --check\n' > "$PROJ/.github/workflows/agents.yml"
 # A tracked script that builds the renderer's path from its name.
 printf 'helper(root, "render-agents.sh")\n' > "$PROJ/scripts/tool.py"
-git -C "$PROJ" add scripts/tool.py >/dev/null 2>&1
+snapshot_upgrade_fixture "$PROJ" || exit 1
 run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --check"
 assert_contains "$OUTPUT" ".prdkit/scripts/bash/render-agents.sh" "check lists the renderer for removal"
 assert_contains "$OUTPUT" ".github/workflows/agents.yml: render-agents.sh" "check flags the CI call before the upgrade"
@@ -152,6 +155,7 @@ it "an edited agent-definition template is kept when its subsystem is dropped"
 PROJ="$(make_project)"; track_tmp "$PROJ"
 make_legacy "$PROJ" || _no "legacy manifest prepared"
 printf '\nLocal note.\n' >> "$PROJ/.prdkit/templates/agent-definition-template.md"
+snapshot_upgrade_fixture "$PROJ" || exit 1
 run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --upgrade"
 assert_eq 0 "$STATUS" "upgrade succeeds"
 assert_file "$PROJ/.prdkit/templates/agent-definition-template.md" "edited template kept"
@@ -171,7 +175,7 @@ for marker in definition baseline; do
     fi
     mkdir -p "$PROJ/scripts"
     printf 'helper(root, "render-agents.sh")\n' > "$PROJ/scripts/tool.py"
-    git -C "$PROJ" add scripts/tool.py >/dev/null 2>&1
+    snapshot_upgrade_fixture "$PROJ" || exit 1
     run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --upgrade"
     assert_eq 0 "$STATUS" "upgrade succeeds ($marker)"
     if tiers_installed "$PROJ"; then _ok "agent tiers kept ($marker)"; else _no "agent tiers kept ($marker)"; fi
@@ -187,7 +191,9 @@ printf -- '---\nname: reviewer\ntier: deep\n---\nReview.\n' > "$PROJ/.prdkit/age
 run bash -c "cd '$PROJ' && bash .prdkit/scripts/bash/doctor.sh"
 assert_contains "$OUTPUT" "Agent tiers are in use" "doctor names the missing subsystem"
 assert_contains "$OUTPUT" "--with agent-tiers" "doctor names the option"
+snapshot_upgrade_fixture "$PROJ" || exit 1
 run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --upgrade"
+assert_eq 0 "$STATUS" "plain upgrade succeeds: $OUTPUT"
 if tiers_installed "$PROJ"; then _ok "a plain upgrade installs what the project uses"; else _no "a plain upgrade installs what the project uses"; fi
 
 # Separate synthetic diagnostics: runs on healthy installers too, including native's

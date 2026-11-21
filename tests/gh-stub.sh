@@ -105,6 +105,16 @@ case "$route" in
         jq -s --arg head "${route#*head=}" '[.[] | (.head.label // "owner:feature") as $label |
             select(.state == "closed" and ($label == $head or (($label | @uri) == $head)))]' \
             "$GH_STUB_DIR"/pulls/*.json | emit ;;
+    pulls/[0-9]*/reviews/[0-9]*/events)
+        number="${route#pulls/}"; number="${number%%/*}"; review_id="${route%/events}"; review_id="${review_id##*/}"
+        [ "$method" = POST ] && jq -e '.event=="COMMENT"' "$input" >/dev/null || exit 1
+        overrides="${GH_STUB_POST_OVERRIDES:-}"; [ -n "$overrides" ] || overrides='{}'
+        jq --arg id "$review_id" --argjson overrides "$overrides" --slurpfile request "$input" '
+            map(if (.fullDatabaseId|tostring)==$id and .state=="PENDING" then
+                (.state="COMMENTED" | .body=$request[0].body) * $overrides else . end)' "$GH_STUB_DIR/reviews/$number.json" > "$GH_STUB_DIR/next.json"
+        mv "$GH_STUB_DIR/next.json" "$GH_STUB_DIR/reviews/$number.json"
+        cp "$input" "$GH_STUB_DIR/submit-request.json"
+        echo '{}' ;;
     pulls/[0-9]*/reviews/[0-9]*)
         number="${route#pulls/}"; number="${number%%/*}"; review_id="${route##*/}"
         # REST intentionally exposes no lastEditedAt/editor/edit marker (probe §9.2).
@@ -118,25 +128,31 @@ case "$route" in
             if [ -n "$input" ]; then
                 if [ "$input" = - ]; then payload="$(cat)"; else payload="$(cat "$input")"; fi
                 body="$(printf '%s' "$payload" | jq -er .body)"
-                event="$(printf '%s' "$payload" | jq -er .event)"
+                event="$(printf '%s' "$payload" | jq -r '.event // "PENDING"')"
             fi
-            [ "$event" = COMMENT ] || exit 1
+            [ "$event" = COMMENT ] || [ "$event" = PENDING ] || exit 1
             if [ -n "$input" ]; then printf '%s\n' "$payload" > "$GH_STUB_DIR/post-request.json"
             else jq -n --arg body "$body" --arg event "$event" '{event:$event,body:$body}' > "$GH_STUB_DIR/post-request.json"; fi
             # COMMENT reviews are accepted on closed PRs too (probe §9.6).
             [ -f "$GH_STUB_DIR/pulls/$number.json" ] || exit 1
             next_id="$(jq -s '[.[][] | .fullDatabaseId | tonumber] | (max // 1000) + 1' "$GH_STUB_DIR"/reviews/*.json)"
+            # Fixtures can rewind a review list, but a new POST never reuses an assigned host id.
+            if [ -f "$GH_STUB_DIR/last-post-id" ] && [ "$next_id" -le "$(cat "$GH_STUB_DIR/last-post-id")" ]; then
+                next_id=$(( $(cat "$GH_STUB_DIR/last-post-id") + 1 ))
+            fi
+            printf '%s\n' "$next_id" > "$GH_STUB_DIR/last-post-id"
             post_overrides="${GH_STUB_POST_OVERRIDES:-}"; [ -n "$post_overrides" ] || post_overrides='{}'
             jq -n --slurpfile reviews "$GH_STUB_DIR/reviews/$number.json" \
                 --slurpfile pr "$GH_STUB_DIR/pulls/$number.json" --slurpfile author "$GH_STUB_DIR/publisher.json" \
-                --argjson id "$next_id" \
+                --argjson id "$next_id" --arg event "$event" \
                 --argjson overrides "$post_overrides" \
                 --arg body "$body" --argjson number "$number" --arg time "${GH_STUB_NOW:-2026-01-02T12:00:00Z}" '
                  ({fullDatabaseId:($id|tostring),url:("https://github.com/owner/repo/pull/"+($number|tostring)+"#pullrequestreview-"+($id|tostring)),
-                 body:$body,state:"COMMENTED",submittedAt:$time,lastEditedAt:null,editor:null,
-                  author:$author[0],commit:{oid:$pr[0].head.sha}} * $overrides)' > "$GH_STUB_DIR/posted.json"
+                 body:$body,state:(if $event=="PENDING" then "PENDING" else "COMMENTED" end),submittedAt:$time,lastEditedAt:null,editor:null,
+                  author:$author[0],commit:{oid:$pr[0].head.sha}} * (if $event=="PENDING" then {} else $overrides end))' > "$GH_STUB_DIR/posted.json"
             jq --slurpfile review "$GH_STUB_DIR/posted.json" '. + $review' "$GH_STUB_DIR/reviews/$number.json" > "$GH_STUB_DIR/next.json"
             mv "$GH_STUB_DIR/next.json" "$GH_STUB_DIR/reviews/$number.json"
+            [ "${GH_STUB_LOSE_RESPONSE:-false}" != true ] || exit 1
             jq '{id:.fullDatabaseId,body,state,submitted_at:.submittedAt,commit_id:.commit.oid,
                  user:{id:.author.databaseId,login:.author.login,type:.author.__typename}}' "$GH_STUB_DIR/posted.json" | emit
         else

@@ -53,7 +53,7 @@ it "upgrade removes every recorded ledger and retrospective file"
 mkdir -p "$PROJ/.prdkit/ledger" "$PROJ/.github/workflows"
 printf '{"event":"feature.created"}\n' > "$PROJ/.prdkit/ledger/events.jsonl"
 printf 'jobs:\n  emit:\n    steps:\n      - run: bash .prdkit/scripts/bash/ledger-emit.sh feature.merged\n' > "$PROJ/.github/workflows/ledger.yml"
-git -C "$PROJ" add .github >/dev/null 2>&1
+snapshot_upgrade_fixture "$PROJ" || exit 1
 run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --upgrade"
 assert_eq 0 "$STATUS" "upgrade succeeds"
 assert_contains "$OUTPUT" "Removed 6 retired kit file(s)" "removal reported"
@@ -69,7 +69,9 @@ for file in constitution.md agents.md config.md; do assert_file "$PROJ/.prdkit/m
 assert_eq '{"event":"feature.created"}' "$(cat "$PROJ/.prdkit/ledger/events.jsonl")" "local ledger data left alone"
 run git -C "$PROJ" check-ignore -q .prdkit/ledger/events.jsonl
 assert_eq 0 "$STATUS" "local ledger data stays ignored"
+snapshot_upgrade_fixture "$PROJ" || exit 1
 run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --upgrade"
+assert_eq 0 "$STATUS" "a second upgrade succeeds"
 assert_contains "$OUTPUT" ".github/workflows/ledger.yml: ledger-emit.sh" "a CI call to a removed helper is flagged"
 assert_not_contains "$OUTPUT" "retired kit file(s)" "a second upgrade removes nothing"
 run bash -c "cd '$PROJ' && bash .prdkit/scripts/bash/doctor.sh --json"
@@ -84,6 +86,7 @@ printf 'Project policy.\n' > "$PROJ/.prdkit/memory/house-rules.md"
 printf '%s  .prdkit/memory/house-rules.md\n' "$(hash_of "$PROJ/.prdkit/memory/house-rules.md")" >> "$PROJ/.prdkit/.manifest"
 run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --check"
 assert_contains "$OUTPUT" ".prdkit/memory/task-ledger.md (edited since install; kept" "check flags the edited policy"
+snapshot_upgrade_fixture "$PROJ" || exit 1
 run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --upgrade"
 assert_eq 0 "$STATUS" "upgrade succeeds"
 assert_contains "$OUTPUT" "Removed 5 retired kit file(s)" "helpers and template removed"

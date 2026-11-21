@@ -29,6 +29,8 @@ PR=https://github.com/owner/repo/pull/7
 LOG_ROOT="$PROJ/.git/prdkit/receipts"
 fresh() {
     git reset -q --hard "$A"; git update-ref refs/remotes/origin/main "$BASE"
+    # Each synthetic host starts allocating its own database ids again.
+    rm -rf "$LOG_ROOT"
     use_gh_stub; fx_pr 7 "$A"
 }
 post() { run bash "$PUB" 001-reviewed --pr "$PR" --reviewer code --verdict PASS --counts 0,0,0,0 --report https://example.invalid/report --head HEAD "$@"; }
@@ -49,10 +51,11 @@ assert_eq 32 "$(payload | jq '.id|length')"
 it 'posting sends COMMENT without commit_id and verifies GraphQL before reporting success'
 post
 assert_eq 0 "$STATUS" "$OUTPUT"
-assert_eq COMMENT "$(jq -r .event "$GH_STUB_DIR/post-request.json")"
+assert_eq false "$(jq 'has("event")' "$GH_STUB_DIR/post-request.json")" 'create is pending'
+assert_eq COMMENT "$(jq -r .event "$GH_STUB_DIR/submit-request.json")"
 assert_eq false "$(jq 'has("commit_id")' "$GH_STUB_DIR/post-request.json")"
 assert_contains "$(cat "$GH_STUB_DIR/requests")" 'query PrdkitReviews'
-assert_not_contains "$(cat "$GH_STUB_DIR/requests")" 'pulls/7/reviews/1001' 'REST is never used to validate a review'
+assert_contains "$(cat "$GH_STUB_DIR/requests")" 'pulls/7/reviews/1001/events'
 RECEIPT_ID="$(payload | jq -r .id)"
 assert_file "$LOG_ROOT/7/$RECEIPT_ID.json"
 assert_eq "$RECEIPT_ID" "$(jq -r .id "$LOG_ROOT/7/$RECEIPT_ID.json")"
@@ -98,6 +101,90 @@ saved_log="$(printf '%s\n' "$OUTPUT" | sed 's/.*payload is retained at //;s/; in
 assert_file "$saved_log"
 assert_eq FAIL "$(jq -r .verdict "$saved_log")"
 assert_not_contains "$OUTPUT" 'Published '
+
+it 'file and directory sync failures stop publication at the correct boundary'
+sync_lib="$(mktemp -d)"; track_tmp "$sync_lib"
+REAL_DD="$(command -v dd)"; export REAL_DD
+cat > "$sync_lib/dd" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+case "$*" in
+    'if=/dev/null conv=notrunc,fsync')
+        [ -d /dev/fd/1 ]; boundary=dir
+        [ ! -f "$GH_STUB_DIR/post-request.json" ] || boundary=posted-dir
+        "$REAL_DD" "$@" ;;
+    *)
+        [ "$#" = 3 ] && [[ $1 == if=* && $2 == of=* && $3 == conv=fsync ]] || exit 1
+        boundary=file
+        [ ! -f "$GH_STUB_DIR/post-request.json" ] || boundary=posted-file
+        [[ $1 != */review-id ]] || boundary=binding-file
+        # Real dd opens one output description, writes, fsyncs, then closes.
+        "$REAL_DD" "$@"
+        cp "${2#of=}" "$GH_STUB_DIR/synced-$boundary" ;;
+esac
+[ "$boundary" != "$SYNC_FAULT" ]
+EOF
+chmod +x "$sync_lib/dd"
+fresh
+PATH="$sync_lib:$PATH" SYNC_FAULT=none post
+assert_eq 0 "$STATUS" 'both file syncs see the complete payload'
+saved="$(payload | jq -r .id)"
+for copy in synced-file synced-posted-file; do
+    run cmp "$LOG_ROOT/7/$saved.json" "$GH_STUB_DIR/$copy"
+    assert_eq 0 "$STATUS" 'file sync sees exactly the submitted payload bytes'
+done
+assert_eq 1001 "$(cat "$GH_STUB_DIR/synced-binding-file")" 'host-ID binding was written and synced'
+for boundary in file dir posted-file posted-dir binding-file; do
+    fresh
+    PATH="$sync_lib:$PATH" SYNC_FAULT="$boundary" post
+    assert_eq 1 "$STATUS" "$boundary fails"
+    case "$boundary" in
+        posted-*|binding-file)
+            if [ "$boundary" = binding-file ]; then assert_contains "$OUTPUT" 'could not durably bind this attempt'
+            else assert_contains "$OUTPUT" 'could not durably retain review'; fi
+            assert_eq PENDING "$(jq -r '.[0].state' "$GH_STUB_DIR/reviews/7.json")"
+            saved="$(jq -r '.body|split("\n")[1]|fromjson|.id' "$GH_STUB_DIR/post-request.json")"
+            run bash "$PUB" --pr "$PR" --resume "$saved.json"
+            assert_eq 0 "$STATUS" "$OUTPUT"
+            assert_eq COMMENTED "$(jq -r '.[0].state' "$GH_STUB_DIR/reviews/7.json")" ;;
+        *) assert_not_contains "$(cat "$GH_STUB_DIR/requests")" '--method POST'
+           assert_contains "$OUTPUT" 'cannot durably retain the publish payload' ;;
+    esac
+done
+
+it 'an unknown create response is recoverable only from a unique unedited host match'
+fresh
+GH_STUB_LOSE_RESPONSE=true post
+assert_eq 1 "$STATUS" 'lost create response'
+saved="$(jq -r '.body|split("\n")[1]|fromjson|.id' "$GH_STUB_DIR/post-request.json")"
+cp "$GH_STUB_DIR/reviews/7.json" .git/pending
+for invalid in '.[0].editor={"login":"editor"}' '. += [ (.[0]|.fullDatabaseId="9999") ]' '.[0].author.databaseId=1005'; do
+    jq "$invalid" .git/pending > "$GH_STUB_DIR/reviews/7.json"
+    run bash "$PUB" --pr "$PR" --resume "$saved.json"
+    assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'no unique unedited host match'
+done
+cp .git/pending "$GH_STUB_DIR/reviews/7.json"
+run bash "$PUB" --pr "$PR" --resume "$saved.json"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq 1 "$(jq length "$GH_STUB_DIR/reviews/7.json")" 'resume submits the existing review'
+
+it 'successive faithful repairs resume their own host attempts'
+fresh; post
+saved="$(payload | jq -r .id)"
+repair=(bash "$PUB" --pr "$PR" --restates 1001 --receipt-id "$saved")
+run "${repair[@]}"; assert_eq 0 "$STATUS" "$OUTPUT"
+GH_STUB_LOSE_RESPONSE=true run "${repair[@]}"
+assert_eq 1 "$STATUS" 'lost response on identical second repair'
+attempt="$(printf '%s\n' "$OUTPUT" | sed 's/.*payload is retained at //;s/; inspect the PR before retrying$//')"
+run bash "$PUB" --pr "$PR" --resume "${attempt##*/}"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq 'COMMENTED' "$(jq -r '.[2].state' "$GH_STUB_DIR/reviews/7.json")"
+assert_eq false "$(jq '.[1].body==.[2].body' "$GH_STUB_DIR/reviews/7.json")" 'transport marker distinguishes equal verdicts'
+jq '. += [(.[2]|.fullDatabaseId="9001")]' "$GH_STUB_DIR/reviews/7.json" > .git/copied-body
+mv .git/copied-body "$GH_STUB_DIR/reviews/7.json"
+run bash "$PUB" --pr "$PR" --resume "${attempt##*/}"
+assert_eq 0 "$STATUS" 'already mapped attempt verifies just the saved host ID'
+assert_contains "$OUTPUT" '#pullrequestreview-1003'
 
 it 'all b refusals occur without posting'
 fresh; git branch -f wip HEAD
@@ -179,10 +266,10 @@ sha_tool=sha256sum; command -v sha256sum >/dev/null 2>&1 || sha_tool=shasum
 for cmd in bash dirname git sed awk tr head tail grep cat mktemp rm mv mkdir wc sort jq od "$sha_tool"; do
     ln -s "$(command -v "$cmd")" "$TOOLS/$cmd"
 done
-logs_before="$(find "$LOG_ROOT" -type f | sort)"
+[ ! -e "$LOG_ROOT" ] || _no 'expected a fresh fixture with no publisher log'
 run env PATH="$TOOLS" bash "$PUB" 001-reviewed --pr "$PR" --reviewer code --verdict PASS --counts 0,0,0,0 --report https://example.invalid/report --head HEAD --dry-run
 assert_eq 0 "$STATUS" "$OUTPUT"
-assert_eq "$logs_before" "$(find "$LOG_ROOT" -type f | sort)"
+assert_eq absent "$([ -e "$LOG_ROOT" ] && echo created || echo absent)" 'dry-run creates no publisher log'
 assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
 
 it 'read-back rejects wrong typename/id, edits and changed body, retaining the log'
@@ -236,6 +323,15 @@ run bash "$CHECK" --json --pr https://github.com/owner/repo/pull/8 001-reviewed
 assert_eq 1 "$STATUS" 'identical restatement retries keep the original FAIL'
 assert_contains "$OUTPUT" '"invalid_receipts":0' 'a repeated faithful repair is a no-op, not a new invalid receipt'
 
+jq '.[0].lastEditedAt="2026-01-04T00:00:00Z"|.[0].body="edited repair"' "$GH_STUB_DIR/reviews/8.json" > .git/edited
+mv .git/edited "$GH_STUB_DIR/reviews/8.json"
+run bash "$PUB" --pr https://github.com/owner/repo/pull/8 --restates 1003 --receipt-id "$saved"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq '[{"review":"1001","pr":7}]' "$(payload | jq -c .restates_chain)"
+run bash "$CHECK" --json --pr https://github.com/owner/repo/pull/8 001-reviewed
+assert_eq 0 "$(jq .invalid_receipts <<< "$OUTPUT")" 'repair of the edited repair resolves to the same source'
+assert_eq 1 "$(jq .carried_blockers <<< "$OUTPUT")"
+
 it 'tracked and planted old in-tree logs are never used for restatement'
 for kind in planted tracked; do
     fresh; missing=00000000000000000000000000009999
@@ -249,10 +345,22 @@ for kind in planted tracked; do
     rm -f ".prdkit/cache/receipts/7/$missing.json"
 done
 
+it 'a repair requires the payload mapped to the exact host review'
+fresh; post --verdict FAIL
+first="$(payload | jq -r .id)"
+post
+second="$(payload | jq -r .id)"
+: > "$GH_STUB_DIR/requests"
+run bash "$PUB" --pr "$PR" --restates 1001 --receipt-id "$second"
+assert_eq 1 "$STATUS"; assert_not_contains "$(cat "$GH_STUB_DIR/requests")" '--method POST'
+rm "$LOG_ROOT/7/reviews/1001.json"
+run bash "$PUB" --pr "$PR" --restates 1001 --receipt-id "$first"
+assert_eq 1 "$STATUS"; assert_not_contains "$(cat "$GH_STUB_DIR/requests")" '--method POST'
+
 it 'editing FAIL and planting a tracked PASS log cannot produce host-authority PASS'
 fresh; post --verdict FAIL --counts 0,1,0,0
 assert_eq 0 "$STATUS" "$OUTPUT"; saved="$(payload | jq -r .id)"
-jq '.[0].body=(.[0].body|split("\n")|.[1]|fromjson|.verdict="PASS"|.high=0|"<!-- prdkit-review\n"+tojson+"\n-->") |
+jq '.[0].body=(.[0].body|split("\n")|.[1]|fromjson|.id="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"|.verdict="PASS"|.high=0|"<!-- prdkit-review\n"+tojson+"\n-->") |
     .[0].lastEditedAt="2026-01-03T00:00:00Z"' "$GH_STUB_DIR/reviews/7.json" > .git/edited
 mv .git/edited "$GH_STUB_DIR/reviews/7.json"
 gate; assert_eq 1 "$STATUS" 'an edited FAIL remains invalid'
@@ -299,6 +407,7 @@ git update-ref refs/remotes/origin/main "$INHERITED"
 git rm -q specs/changes/001-reviewed.md; mkdir -p specs/log
 printf -- '- 2026-01-01 001-reviewed: closed\n' > specs/log/001-reviewed.md
 git add specs/log; git commit -qm close
+rm -rf "$LOG_ROOT"
 use_gh_stub; fx_pr 7 "$(git rev-parse HEAD)"
 gate; assert_eq 1 "$STATUS" 'closing waits for the reviewer full PASS'
 post
