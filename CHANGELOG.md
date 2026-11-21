@@ -8,6 +8,11 @@ change by change.
 
 ## [Unreleased]
 
+- A recorded HOLD still applies after its `until=` date or condition. Status and doctor flag a
+  past date as a reminder for the owner to confirm or lift the hold. Text output and JSON keep
+  their formats; a past-date HOLD now reads `DUE` (`state: "due"` in JSON) instead of `EXPIRED`
+  (`"expired"`) and remains eligible as the longest pole. WAIVER expiry is unchanged.
+
 ## [2.0.1] — 2026-11-20 — review recovery and change lifecycle fixes
 
 - Receipt repair restores the publisher's saved verdict for the original host review.
