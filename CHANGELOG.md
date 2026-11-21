@@ -15,8 +15,20 @@ change by change.
   ref and objects needed for "Merged without closing" from the full history recommended for
   "Closed without a log entry."
 
+- A recorded HOLD still applies after its `until=` date or condition. Status and doctor flag a
+  past date as a reminder for the owner to confirm or lift the hold. Text output and JSON keep
+  their formats; a past-date HOLD now reads `DUE` (`state: "due"` in JSON) instead of `EXPIRED`
+  (`"expired"`) and remains eligible as the longest pole. WAIVER expiry is unchanged.
+
 - Document the Git identity used by `close-change.sh` and how to set an agent's author and
   committer identity for the closing commit.
+
+### Fixed
+
+- A failed close no longer leaves an empty log entry behind. Retry the same close
+  after the write error clears; the change record and index remain intact. Publishing
+  requires hard links in `specs/log/`. If the filesystem does not support them,
+  move the checkout to one that does and retry.
 
 ## [2.0.1] — 2026-11-20 — review recovery and change lifecycle fixes
 

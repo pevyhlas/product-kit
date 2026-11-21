@@ -27,6 +27,7 @@ while [ "$#" -gt 0 ]; do
                 shift 2; continue ;;
             --help|-h)
                 printf '%s\n' "$usage" \
+                    "Publishing the entry requires hard-link support in specs/log/." \
                     "The closing commit uses the checkout's ambient Git identity." \
                     "For an agent identity, set GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL for this invocation." \
                     "Example: GIT_AUTHOR_NAME='Agent' GIT_AUTHOR_EMAIL=agent@example.com GIT_COMMITTER_NAME='Agent' GIT_COMMITTER_EMAIL=agent@example.com bash .prdkit/scripts/bash/close-change.sh --pr https://github.com/owner/repo/pull/1 001-example 'Update behavior — R-01 — complete — #1'"
@@ -78,22 +79,48 @@ fi
 check_paths
 # The process cwd pins a directory just like a directory descriptor. Verify
 # its physical identity *after* entering it, before any relative write.
-if ! (
+(
     cd -P "$root/specs" && [ "$(pwd -P)" = "$root/specs" ] || exit 1
-    if [ ! -d ./log ]; then mkdir ./log || exit 1; fi
+    created_log=false
+    if [ ! -d ./log ]; then mkdir ./log || exit 1; created_log=true; fi
     [ ! -L ./log ] && cd -P ./log && [ "$(pwd -P)" = "$root/specs/log" ] || exit 1
-    # Create the entry directly from the pinned log directory. Bash noclobber
-    # uses O_EXCL for an absent file. Write only through the opened regular fd.
-    [ ! -e "./$id.md" ] && [ ! -L "./$id.md" ] || exit 1
-    set -C
-    exec 3>"./$id.md" || exit 1
-    [ -f /dev/fd/3 ] && printf -- '- %s %s: %s\n' "$day" "$id" "$text" >&3
-); then
-    refuse "could not write $entry; nothing was deleted or committed"
-fi
+    if $created_log; then
+        # Restore an initially absent log on refusal. rmdir preserves concurrent entries.
+        trap 'if [ "$?" -ne 0 ] && [[ . -ef "$root/specs/log" ]]; then rmdir "$root/specs/log" 2>/dev/null || :; fi' EXIT
+    fi
+    stage="$(mktemp -d .close-XXXXXXXX)" || exit 1
+    (
+        cd -P "./$stage" && [ "$(pwd -P)" = "$root/specs/log/$stage" ] || exit 1
+        # Keep cleanup in the private cwd even if that directory gets moved.
+        # shellcheck disable=SC2329 # called by the EXIT trap
+        cleanup_stage() {
+            rm -f "./$id.md"
+            if [[ . -ef "$root/specs/log/$stage" ]]; then rmdir "$root/specs/log/$stage"; fi
+        }
+        trap cleanup_stage EXIT
+        set -C
+        cat <<< "- $day $id: $text" > "./$id.md" || exit 1
+        # Pin the publishing cwd separately. A moved stage can make its source
+        # disappear, but can never redirect the destination to its new parent.
+        (
+            cd -P "$root/specs/log" && [ "$(pwd -P)" = "$root/specs/log" ] || exit 1
+            if ! ln "./$stage/$id.md" .; then
+                if [ -e "./$id.md" ] || [ -L "./$id.md" ]; then exit 3; fi
+                exit 4
+            fi
+        ) || exit "$?"
+        [[ ! -L "$root/$entry" && "./$id.md" -ef "$root/$entry" ]]
+    )
+) || {
+    case $? in
+        3) refuse "the log already has an entry for $id; nothing was deleted or committed" ;;
+        4) refuse "could not create the hard link for $entry; nothing was deleted or committed. Closing requires hard-link support in specs/log/" ;;
+        *) refuse "could not write $entry; nothing was deleted or committed" ;;
+    esac
+}
 check_paths
-git -C "$root" rm -q -- "$path"
 git -C "$root" add -- "$entry"
+git -C "$root" rm -q -- "$path"
 git -C "$root" commit -q -m "${message:-$id: close (log entry, record deleted)}" ||
     refuse "the commit failed; the record deletion and the log entry are staged"
 

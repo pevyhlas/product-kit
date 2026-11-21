@@ -115,14 +115,16 @@ if [ -n "$branches" ]; then
     done)"
 fi
 
-# --- Records: active and expired holds/waivers, latest deploy per app and environment ------
+# --- Records: holds, waivers, latest deploy per app and environment -----------------------
 holds=""; deploys=""
 while IFS="$SEP" read -r line type name who scope env rev date until check reason; do
     [ -n "$line" ] || continue
     case "$type" in
         HOLD|WAIVER)
             state=active
-            if spec_is_date "$until" && [ "$(spec_days_between "$until" "$today")" -gt 0 ]; then state=expired; fi
+            if spec_is_date "$until" && [ "$(spec_days_between "$until" "$today")" -gt 0 ]; then
+                if [ "$type" = HOLD ]; then state=due; else state=expired; fi
+            fi
             holds+="$type$SEP$name$SEP$who$SEP$scope$SEP$until$SEP$state$SEP$check$SEP$reason"$'\n' ;;
         DEPLOY)
             deploys+="$name$SEP$env$SEP$rev$SEP$date$SEP$who"$'\n' ;;
@@ -159,7 +161,7 @@ if [ -z "$pole" ]; then
     fi
 fi
 if [ -z "$pole" ]; then
-    hold="$(printf '%s' "$holds" | awk -F '\037' '$1 == "HOLD" && $6 == "active" { print; exit }')"
+    hold="$(printf '%s' "$holds" | awk -F '\037' '$1 == "HOLD" { print; exit }')"
     if [ -n "$hold" ]; then
         IFS="$SEP" read -r _ hid hwho hscope _ _ _ _ <<< "$hold"
         pole="HOLD $hid on $hscope"; pole_waits="$hwho lifting it"
@@ -362,8 +364,13 @@ printf '\nHolds and waivers\n'
 if [ -z "$holds" ]; then printf '  None recorded.\n'; fi
 while IFS="$SEP" read -r type id who scope until state check reason; do
     [ -n "$type" ] || continue
+    case "$state" in
+        due) note=' — DUE, still applies; owner to confirm or lift' ;;
+        expired) note=' — EXPIRED, no longer applies' ;;
+        *) note='' ;;
+    esac
     printf '  %s %s on %s%s by %s, until %s%s%s\n' "$type" "$id" "$scope" "${check:+ (check $check)}" "$who" "$until" \
-        "$([ "$state" = expired ] && echo ' — EXPIRED, no longer applies')" "${reason:+ — $reason}"
+        "$note" "${reason:+ — $reason}"
 done <<< "$holds"
 
 printf '\nOwner queue\n'

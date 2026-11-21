@@ -374,7 +374,7 @@ cited IDs that are undefined or retired (in spec files and tests), a reviewed ch
 still on the default branch and in the checkout with no child or outcome checkpoint keeping it
 open (merged without closing, including T0 and records with no verdict), trace
 drift (`Code:` paths not in the repository, stale `planned:` markers, unallocated R/Q items and
-parts, change records restating or citing undefined IDs), expired holds and waivers,
+parts, change records restating or citing undefined IDs), past-due hold reminders and expired waivers,
 open inbox items and their age, retained resolved items, inbox items in the old one-line form, local machine paths in
 specs and agent context, links to missing files in the spec and `specs/archive.md`, spec files
 that no chain of links from

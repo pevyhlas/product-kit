@@ -32,7 +32,7 @@ Answer the owner's question first, in plain words, with the title next to every 
    folders still on main, a cutover to finish; unmerged branches.
 4. **Live**: the latest `DEPLOY` record per app and environment (`rev=none`: nothing deployed);
    merged but not deployed.
-5. **Holds and waivers** with owner, scope and expiry; expired ones flagged.
+5. **Holds and waivers** with owner and scope; flag past-due hold reminders and expired waivers.
 6. **Owner queue**: unanswered owner questions with age. Report recorded answers and direction
    awaiting agent processing separately; a filled answer is not proof of incorporation. Legacy
    resolved or unknown-state items require reconciliation (spec.md), not automatic re-questioning.

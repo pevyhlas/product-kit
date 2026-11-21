@@ -91,11 +91,28 @@ export CLOSE_SPECS="$PROJ/specs"
 REAL_LN="$(command -v ln)"; export REAL_LN
 cat > "$outside/bin/ln" <<'SH'
 #!/usr/bin/env bash
-# Closing must succeed without resolving a staged source from the log directory.
-if [ "$(pwd -P)" = "$CLOSE_SPECS/log" ]; then exit 1; fi
+# Publication must use the pinned log as its destination.
+if [ "$(pwd -P)" != "$CLOSE_SPECS/log" ] || [ "${2:-}" != . ]; then exit 1; fi
 exec "$REAL_LN" "$@"
 SH
 chmod +x "$outside/bin/python3" "$outside/bin/mkdir" "$outside/bin/ln"
+mkdir "$outside/no-links"
+cat > "$outside/no-links/ln" <<'SH'
+#!/bin/sh
+echo 'ln: hard links not supported' >&2
+exit 1
+SH
+chmod +x "$outside/no-links/ln"
+run env PATH="$outside/no-links:$PATH" bash "$B/close-change.sh" 001-greet "warmer greeting — R-01 — #1"
+assert_eq 1 "$STATUS" 'close refuses without hard links'
+assert_contains "$OUTPUT" 'ln: hard links not supported' 'preserves the filesystem diagnostic'
+assert_contains "$OUTPUT" 'could not create the hard link for specs/log/001-greet.md; nothing was deleted or committed'
+assert_not_contains "$OUTPUT" 'already has an entry'
+assert_eq "$VERDICT" "$(git rev-parse HEAD)" 'unsupported hard links leave HEAD unchanged'
+run git diff --cached --quiet; assert_eq 0 "$STATUS" 'index unchanged'
+run git diff --quiet HEAD -- specs/changes/001-greet.md; assert_eq 0 "$STATUS" 'open record unchanged'
+run test ! -e specs/log; assert_eq 0 "$STATUS" 'no log directory or staging files left after refusal'
+# Retry the same close with a working ln, without repairing the checkout.
 CDPATH="$outside" PATH="$outside/bin:$PATH" run env \
     GIT_AUTHOR_NAME='Close Author' GIT_AUTHOR_EMAIL=close-author@example.com \
     GIT_COMMITTER_NAME='Close Committer' GIT_COMMITTER_EMAIL=close-committer@example.com \
@@ -228,9 +245,74 @@ else
     assert_eq '' "$(git status --porcelain)" "record and log untouched"
 fi
 
-it "a CRLF log is left byte for byte; a second close of the same change is refused"
+it "moving the staging directory during publication cannot redirect the entry"
+mkdir -p specs/log
+mkdir "$outside/collision"
+cat > "$outside/collision/ln" <<'SH'
+#!/usr/bin/env bash
+case "$COLLISION" in
+    move)
+        for stage in "$CLOSE_SPECS"/log/.close-*; do mv "$stage" "$MOVE_TO/stage" || exit 1; done ;;
+    file) echo 'another writer' > "$CLOSE_SPECS/log/013-guard.md" ;;
+    fifo) mkfifo "$CLOSE_SPECS/log/013-guard.md" ;;
+esac
+exec "$REAL_LN" "$@"
+SH
+chmod +x "$outside/collision/ln"
+mkdir "$outside/moved"
+run env PATH="$outside/collision:$PATH" COLLISION=move MOVE_TO="$outside/moved" bash "$B/close-change.sh" 013-guard "guarded — R-01 — #6"
+assert_eq 1 "$STATUS" 'publication refuses a moved stage'
+assert_eq 'stage' "$(ls -A "$outside/moved")" 'no entry published in the new parent'
+assert_eq '' "$(ls -A "$outside/moved/stage")" 'staged bytes cleaned from the original private directory'
+assert_eq '' "$(ls -A specs/log)" 'nothing published in the log'
+assert_eq "$GUARDED" "$(git rev-parse HEAD)" 'HEAD unchanged'
+run git diff --cached --quiet; assert_eq 0 "$STATUS" 'index unchanged'
+run git diff --quiet HEAD -- specs/changes/013-guard.md; assert_eq 0 "$STATUS" 'open record unchanged'
+
+it "publication preserves another writer's entry, including a FIFO"
+for kind in file fifo; do
+    run env PATH="$outside/collision:$PATH" COLLISION="$kind" bash "$B/close-change.sh" 013-guard "guarded — R-01 — #6"
+    assert_eq 1 "$STATUS" "refuses a concurrent $kind"
+    assert_contains "$OUTPUT" 'the log already has an entry for 013-guard'
+    assert_not_contains "$OUTPUT" 'Closing requires hard-link support'
+    if [ "$kind" = fifo ]; then
+        run test -p specs/log/013-guard.md; assert_eq 0 "$STATUS" 'FIFO is still there'
+    else
+        assert_eq 'another writer' "$(cat specs/log/013-guard.md)" 'preserves the winning entry'
+    fi
+    rm -f specs/log/013-guard.md
+done
+
+it "a failed entry write leaves the change open for an ordinary retry"
+printf -- '- 2026-11-01 099-other: elsewhere\n' > specs/log/099-other.md
+other_blob="$(git hash-object specs/log/099-other.md)"
+cat > "$outside/limit-write" <<'SH'
+cat() (
+    if [[ $PWD = "$CLOSE_SPECS"/log/.close-* ]]; then
+        trap '' XFSZ
+        ulimit -f 0 || exit 1
+        command cat "$@" || { echo 'limited entry write failed' >&2; exit 1; }
+        exit 0
+    fi
+    command cat "$@"
+)
+SH
+run env BASH_ENV="$outside/limit-write" bash "$B/close-change.sh" --date 2026-11-01 013-guard "guarded — R-01 — #6"
+assert_eq 1 "$STATUS" 'the limited write refuses close'
+assert_contains "$OUTPUT" 'limited entry write failed'
+assert_contains "$OUTPUT" 'could not write specs/log/013-guard.md'
+assert_eq "$GUARDED" "$(git rev-parse HEAD)" 'HEAD unchanged'
+run git diff --cached --quiet; assert_eq 0 "$STATUS" 'index unchanged'
+run git diff --quiet HEAD -- specs/changes/013-guard.md; assert_eq 0 "$STATUS" 'open record unchanged'
+assert_eq '099-other.md' "$(ls -A specs/log)" 'no failed entry or staging file blocks retry'
+assert_eq "$other_blob" "$(git hash-object specs/log/099-other.md)" 'unrelated entry unchanged'
+
 run bash "$B/close-change.sh" --date 2026-11-01 013-guard "guarded — R-01 — #6"
 assert_eq 0 "$STATUS" "closes: $OUTPUT"
+assert_eq "$GUARDED" "$(git rev-parse HEAD~1)" 'retry creates one close commit'
+assert_eq '- 2026-11-01 013-guard: guarded — R-01 — #6' "$(git show HEAD:specs/log/013-guard.md)" 'retry commits the expected entry'
+assert_eq "$other_blob" "$(git hash-object specs/log/099-other.md)" 'retry preserves unrelated entry'
+rm specs/log/099-other.md
 assert_eq '' "$(git diff HEAD~1 HEAD -- specs/log.md)" "the CRLF log is untouched"
 assert_eq 0 "$(grep -cv "$(printf '\r')\$" specs/log.md)" "every line still ends in CRLF"
 git checkout -q -b 013-again HEAD~1
