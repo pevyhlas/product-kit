@@ -15,6 +15,9 @@ change by change.
   ref and objects needed for "Merged without closing" from the full history recommended for
   "Closed without a log entry."
 
+- Document the Git identity used by `close-change.sh` and how to set an agent's author and
+  committer identity for the closing commit.
+
 ## [2.0.1] — 2026-11-20 — review recovery and change lifecycle fixes
 
 - Receipt repair restores the publisher's saved verdict for the original host review.
