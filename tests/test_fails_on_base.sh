@@ -178,10 +178,57 @@ assert_contains "$OUTPUT" '<code>tests/test_10_stalled.sh</code> — Not run on 
 assert_contains "$OUTPUT" '2 suite(s) not run; skipped suites are not evidence.'
 assert_contains "$OUTPUT" '0 of 2 changed test suite(s)'
 
+it "a timed-out job-controlled worker releases its lock before head runs in separate scratch"
+g checkout -q --detach "$BASE" || exit 1
+printf 'fixed\n' > "$FIXTURE/scripts/value"
+export REPLAY_TEST_RESOURCE="$_SCRATCH_CWD/shared-resource"
+mkdir "$REPLAY_TEST_RESOURCE" "$_SCRATCH_CWD/shared-temp" "$FIXTURE/tests/helpers" || exit 1
+cat > "$FIXTURE/tests/helpers/replay-lock.sh" <<'TEST'
+set -e
+mkdir "$REPLAY_TEST_RESOURCE/lock"
+trap 'rmdir "$REPLAY_TEST_RESOURCE/lock"' EXIT
+trap 'exit 0' TERM
+printf '%s\n' "$$" > "$REPLAY_TEST_CHILD"
+sleep 15 &
+wait
+TEST
+cat > "$FIXTURE/tests/test_50_shared_lock.sh" <<'TEST'
+set -e
+if [ "$(cat scripts/value)" = old ]; then
+    set -m
+    printf '%s\n' "$TMPDIR" > "$REPLAY_TEST_RESOURCE/base-tmp"
+    : > "$TMPDIR/base-fixture"
+    bash tests/helpers/replay-lock.sh &
+    wait
+else
+    if ! mkdir "$REPLAY_TEST_RESOURCE/lock"; then
+        echo 'base worker still holds the lock'
+        exit 1
+    fi
+    rmdir "$REPLAY_TEST_RESOURCE/lock"
+    test "$TMPDIR" != "$(cat "$REPLAY_TEST_RESOURCE/base-tmp")"
+    test ! -e "$TMPDIR/base-fixture"
+fi
+TEST
+LOCK_HEAD="$(commit 'job-controlled lock holder on base only')" || exit 1
+rm -f "$REPLAY_TEST_CHILD"
+TMPDIR="$_SCRATCH_CWD/shared-temp" PRDKIT_REPLAY_SUITE_SECONDS=3 compare "$BASE" "$LOCK_HEAD" 'fix: release the lock'
+assert_eq 0 "$STATUS" "head reacquires the resource and gets its own TMPDIR"
+assert_contains "$OUTPUT" '<code>tests/test_50_shared_lock.sh</code> — Base: FAIL (timed out after 3s); Head: PASS.'
+assert_contains "$OUTPUT" '1 of 1 changed test suite(s)'
+if child_stopped; then _ok 'job-controlled worker stopped'; else
+    _no 'job-controlled worker still running'
+    # Keep the negative control from leaving its fixture worker running.
+    if [ -s "$REPLAY_TEST_CHILD" ] && read -r worker < "$REPLAY_TEST_CHILD"; then
+        kill -TERM "$worker" 2>/dev/null
+    fi
+fi
+
 it "a completed row is already in the summary when a later suite is still running"
 g checkout -q --detach "$STALLED" || exit 1
 printf 'exit 0 # updated in the cancellation fixture\n' > "$FIXTURE/tests/test_20_finished.sh"
 cat > "$FIXTURE/tests/test_30_later.sh" <<'TEST'
+set -m
 trap '' TERM
 sleep 12 &
 printf '%s\n' "$!" > "$REPLAY_TEST_CHILD"
@@ -209,6 +256,11 @@ assert_eq 143 "$cancel_status" "comparator stopped on TERM"
 assert_contains "$(cat "$SUMMARY")" '<code>tests/test_20_finished.sh</code> — Base: PASS; Head: PASS.' \
     "completed row survives the comparator's cleanup"
 assert_not_contains "$(cat "$SUMMARY")" 'tests/test_30_later.sh' "interrupted suite never reports a result"
-if child_stopped; then _ok 'cancellation stopped the later descendant'; else _no 'cancelled descendant is still running'; fi
+if child_stopped; then _ok 'cancellation stopped the later job-controlled worker'; else
+    _no 'cancelled job-controlled worker is still running'
+    if [ -s "$REPLAY_TEST_CHILD" ] && read -r worker < "$REPLAY_TEST_CHILD"; then
+        kill -KILL "$worker" 2>/dev/null
+    fi
+fi
 
 finish
