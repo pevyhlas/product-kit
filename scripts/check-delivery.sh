@@ -29,22 +29,34 @@ remote_head=""; transport=BLOCKED; reasons=()
 [ -z "$changes" ] || reasons+=("Uncommitted paths remain; checkpoint intended work and identify unrelated owners")
 if [ -z "$changes" ]; then
     # The status stream alone cannot distinguish a clean state from an empty short read.
-    for scope in cached worktree; do
-        args=()
-        if [ "$scope" = cached ]; then args=(--cached HEAD); fi
-        if git --no-optional-locks -C "$root" diff --quiet --ignore-submodules=none ${args[@]+"${args[@]}"} --; then
-            :
-        elif [ "$?" -eq 1 ]; then
-            reasons+=("Status omitted changes in the $scope; checkpoint intended work")
-        else
-            reasons+=("Could not independently check the $scope for changes")
-        fi
-    done
-    untracked="$(mktemp)"
-    trap 'rm -f "$untracked"' EXIT
-    if ! git --no-optional-locks -C "$root" ls-files --others --exclude-standard -z > "$untracked"; then
+    scratch="$(mktemp -d)"
+    trap 'rm -rf "$scratch"' EXIT
+    # Porcelain diff can refresh the index even with --no-optional-locks. Use
+    # a private copy so touching a tracked file without changing bytes stays clean.
+    if index="$(verify_lines git -C "$root" rev-parse --git-path index)" && [ -n "$index" ]; then
+        case "$index" in /*) ;; *) index="$root/$index" ;; esac
+    else
+        index=""
+    fi
+    if [ -z "$index" ] || ! cp "$index" "$scratch/index" || ! cmp -s "$index" "$scratch/index"; then
+        reasons+=("Could not read a complete checkout index")
+    else
+        for scope in cached worktree; do
+            args=()
+            if [ "$scope" = cached ]; then args=(--cached HEAD); fi
+            if GIT_INDEX_FILE="$scratch/index" git --no-optional-locks -C "$root" \
+                diff --quiet --ignore-submodules=none ${args[@]+"${args[@]}"} --; then
+                :
+            elif [ "$?" -eq 1 ]; then
+                reasons+=("Status omitted changes in the $scope; checkpoint intended work")
+            else
+                reasons+=("Could not independently check the $scope for changes")
+            fi
+        done
+    fi
+    if ! git --no-optional-locks -C "$root" ls-files --others --exclude-standard -z > "$scratch/untracked"; then
         reasons+=("Could not independently check untracked paths")
-    elif [ -s "$untracked" ]; then
+    elif [ -s "$scratch/untracked" ]; then
         reasons+=("Status omitted untracked paths; checkpoint intended work")
     fi
 fi
