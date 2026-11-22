@@ -40,9 +40,10 @@ stop_group() {
 suite_tree() {
     # Seed by PID and follow PPIDs across job-control groups. A known group leader's
     # group also identifies members reparented since a previous snapshot.
-    LC_ALL=C ps -A -o pid=,ppid=,pgid=,stat= | LC_ALL=C awk -v roots="$*" '
+    # BSD awk rejects literal newlines in -v assignments; read the PID list as data.
+    LC_ALL=C ps -A -o pid=,ppid=,pgid=,stat= | LC_ALL=C REPLAY_ROOTS="$*" awk '
         BEGIN {
-            n = split(roots, root, /[[:space:]]+/)
+            n = split(ENVIRON["REPLAY_ROOTS"], root, /[[:space:]]+/)
             for (i = 1; i <= n; i++) if (root[i] != "") owned[root[i]] = 1
         }
         { parent[$1] = $2; group[$1] = $3; state[$1] = $4 }
