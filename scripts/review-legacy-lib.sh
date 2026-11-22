@@ -299,8 +299,7 @@ review_legacy_resolve() { # root checked base head rigor registry work scoped-re
                     for evidence in ${LL_EMPTY_ALLOWED[@]+"${LL_EMPTY_ALLOWED[@]}"}; do [ "$seq" != "$evidence" ] || empty_ok=true; done
                     $empty_ok || continue
                 fi
-                # An authenticated token may cover after its head vanished, but it
-                # cannot establish which legacy history that review included.
+                # Clearance also needs proof that this review included the legacy history.
                 if _legacy_evidence "$root" "$rchange" "$base_at" "$rhead" "$rigor" "$work" &&
                     awk -F '\037' -v id="$identity" '$1==id { found=1 } END { exit !found }' "$LL_EVIDENCE"; then cleared=true; break; fi
             done < "$receipts"

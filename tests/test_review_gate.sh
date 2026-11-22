@@ -18,7 +18,9 @@ cat >> .prdkit/memory/config.md <<'EOF'
 - review-publisher-isolation: required
 - review-t0-paths: docs/
 EOF
-printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n' >> .prdkit/memory/agents.md
+printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n| second | reviewer |\n' >> .prdkit/memory/agents.md
+mkdir -p specs
+printf -- '- 2026-01-02 002-earlier: completed\n' > specs/log.md
 git add -A; git commit -qm baseline
 BASE="$(git rev-parse HEAD)"
 git update-ref refs/remotes/origin/main HEAD
@@ -196,6 +198,134 @@ online
 assert_eq 0 "$STATUS" "$OUTPUT"
 assert_contains "$OUTPUT" '"head_is_pr_head":false'
 assert_contains "$OUTPUT" "\"pr_head\":\"$PR_HEAD\""
+
+it 'a legacy shared-log close preserves only its own new line as metadata'
+git checkout -qb shared-log-close "$PR_HEAD"
+printf -- '- 2026-01-03 001-reviewed: closed\n' >> specs/log.md
+git commit -qam 'write the shared log while the record is still open'
+run bash "$CHECK" --json --pr "$PR" 001-reviewed
+assert_eq 1 "$STATUS" 'an open record cannot exempt even its own log line'
+assert_contains "$OUTPUT" 'PR head does not match the content'
+git rm -q specs/changes/001-reviewed.md; git commit -qm 'close the selected change'
+SHARED_CLOSE="$(git rev-parse HEAD)"
+online
+assert_eq 0 "$STATUS" "a valid shared-log close keeps the old receipt: $OUTPUT"
+assert_eq "$FP" "$(printf '%s' "$OUTPUT" | jq -r .fingerprint)" 'the close alone leaves the fingerprint unchanged'
+git update-ref refs/remotes/origin/main "$PR_HEAD"
+online
+assert_eq 0 "$STATUS" 'a clean bridge close after the implementation merged needs no new receipt'
+assert_contains "$OUTPUT" '"record_only":true'
+git update-ref refs/remotes/origin/main "$BASE"
+sed 's/: closed$/: deferred/' specs/log.md > .git/revised-log
+cp .git/revised-log specs/log.md; git commit -qam 'revise the closing disposition'
+assert_changed_fingerprint() {
+    run review_fingerprint "$PROJ" 001-reviewed "$BASE" HEAD
+    assert_eq 0 "$STATUS" "$1: fingerprint computation succeeded"
+    if review_is_fp "$OUTPUT"; then _ok "$1: valid fingerprint"; else _no "$1: expected a fingerprint"; fi
+    assert_not_contains "$OUTPUT" "$FP" "$1"
+}
+assert_changed_fingerprint 'H2: a revised disposition is reviewed content'
+git checkout -q "$PR_HEAD"
+git rm -q specs/changes/001-reviewed.md
+printf -- '- 2026-01-03 001-reviewed: closed\rannotation\n' >> specs/log.md
+git commit -qam 'close with a multiline description'
+assert_changed_fingerprint 'M1: embedded CR is not one-line closing metadata'
+git checkout -q "$PR_HEAD"
+git rm -q specs/changes/001-reviewed.md
+printf -- '- 2026-01-03 001-reviewed: closed\r\n' >> specs/log.md
+git commit -qam 'close with CRLF'
+assert_eq "$FP" "$(review_fingerprint "$PROJ" 001-reviewed "$BASE" HEAD)" 'a CRLF-terminated close is still one line'
+git checkout -q "$SHARED_CLOSE"
+printf -- '- 2026-01-03 001-reviewed: closed\n' > specs/log.md
+git commit -qam 'drop another change from the shared log'
+online
+assert_eq 1 "$STATUS" 'dropping another close breaks the unpushed close bridge'
+assert_contains "$OUTPUT" 'PR head does not match the content'
+assert_not_contains "$OUTPUT" "\"fingerprint\":\"$FP\"" 'the shared-log loss changes the fingerprint'
+fx_pr 7 "$(git rev-parse HEAD)"
+online
+assert_eq 1 "$STATUS" 'publishing the bad merge resolution does not restore receipt coverage'
+assert_contains "$OUTPUT" 'reviewed content differs at: specs/log.md'
+BAD_HEAD="$(git rev-parse HEAD)"
+git update-ref refs/remotes/origin/main "$PR_HEAD"
+online
+assert_eq 1 "$STATUS" 'a bridge after the implementation merged still needs review for the shared-log loss'
+assert_contains "$OUTPUT" '"record_only":false'
+git update-ref refs/remotes/origin/main "$BASE"
+
+it 'old receipts keep their posted fingerprints but do not grandfather shared-log edits'
+OLD_FP="$(review_legacy_log_fingerprint "$PROJ" 001-reviewed "$BASE" "$BAD_HEAD")"
+NEW_FP="$(review_fingerprint "$PROJ" 001-reviewed "$BASE" "$BAD_HEAD")"
+assert_eq "$FP" "$(review_legacy_log_fingerprint "$PROJ" 001-reviewed "$BASE" "$PR_HEAD")" 'unchanged log is compatible at the reviewed head'
+assert_not_contains "$OLD_FP" "$NEW_FP" 'legacy and corrected provenance differ at the edited head'
+cp "$GH_STUB_DIR/reviews/7.json" "$GH_STUB_DIR/reviews-original.json"
+printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
+publish 7 ".head=\"$BAD_HEAD\"|.to=\"$OLD_FP\""
+git checkout "$SHARED_CLOSE" -- specs/log.md; git commit -qm 'restore earlier log state'
+fx_pr 7 "$(git rev-parse HEAD)"
+online
+assert_eq 1 "$STATUS" 'H1: legacy-only provenance supplies no positive coverage'
+git checkout -q "$BAD_HEAD"; fx_pr 7 "$BAD_HEAD"
+publish 7 ".id=\"00000000000000000000000000000003\"|.head=\"$BAD_HEAD\"|.to=\"$OLD_FP\"|.verdict=\"FAIL\""
+online
+assert_eq 1 "$STATUS" 'a pre-upgrade FAIL still blocks'
+assert_contains "$OUTPUT" '"invalid_receipts":0' 'old matching provenance is recognized'
+assert_contains "$OUTPUT" 'blocking verdict stands'
+publish 7 ".id=\"00000000000000000000000000000005\"|.head=\"$BAD_HEAD\"|.to=\"$OLD_FP\""
+online
+assert_contains "$OUTPUT" 'blocking verdict stands' 'H1: a legacy-only PASS does not clear a blocker'
+publish 7 ".id=\"00000000000000000000000000000004\"|.head=\"$BAD_HEAD\"|.to=\"$NEW_FP\""
+online
+assert_eq 0 "$STATUS" "a new full PASS reviews the log and clears the old blocker: $OUTPUT"
+mv "$GH_STUB_DIR/reviews-original.json" "$GH_STUB_DIR/reviews/7.json"
+
+it 'a fresh checkout without the superseded reviewed head cannot use its legacy token'
+fresh="$(mktemp -d)"; track_tmp "$fresh"; git -C "$fresh" init -q
+git -C "$fresh" fetch -q --no-tags "$PROJ" "$PR_HEAD"
+git -C "$fresh" checkout -q --detach FETCH_HEAD
+git -C "$fresh" update-ref refs/remotes/origin/main "$BASE"
+git -C "$fresh" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+run git -C "$fresh" cat-file -e "$BAD_HEAD^{commit}"
+if [ "$STATUS" != 0 ]; then _ok 'superseded object is absent'; else _no 'superseded object unexpectedly present'; fi
+cp "$GH_STUB_DIR/reviews/7.json" "$GH_STUB_DIR/saved-reviews.json"
+printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
+fx_pr 7 "$PR_HEAD"
+publish 7 ".head=\"$BAD_HEAD\"|.to=\"$OLD_FP\""
+online --repo "$fresh"
+assert_eq 1 "$STATUS" 'unverified receipt cannot cover the current head in a fresh checkout'
+publish 7 '.id="00000000000000000000000000000006"'
+online --repo "$fresh"
+assert_eq 0 "$STATUS" 'corrected full PASS restores coverage without the superseded object'
+
+it 'every reviewer needs usable latest provenance'
+git checkout -q "$PR_HEAD"
+for prior in absent present; do
+    printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
+    publish 7 '.reviewer="second"'
+    if [ "$prior" = present ]; then publish 7 '.id="00000000000000000000000000000006"'; fi
+    publish 7 ".id=\"00000000000000000000000000000007\"|.head=\"$BAD_HEAD\"|.to=\"$OLD_FP\""
+    online --diagnostics
+    assert_eq 1 "$STATUS" "another reviewer cannot cover a legacy-only latest PASS (earlier PASS $prior)"
+    assert_eq false "$(printf '%s' "$OUTPUT" | jq -r '.diagnostics.latest[]|select(.reviewer=="code")|.end_covered')" 'latest unusable review stays visible'
+    assert_contains "$OUTPUT" 'corrected full PASS'
+done
+publish 7 ".id=\"00000000000000000000000000000008\"|.since=\"$BAD_HEAD\"|.from=\"$NEW_FP\""
+online
+assert_eq 1 "$STATUS" 'a corrected narrow PASS cannot repair an unusable latest range'
+publish 7 '.id="00000000000000000000000000000009"'
+online
+assert_eq 0 "$STATUS" 'both reviewers now have usable latest verdicts'
+mv "$GH_STUB_DIR/saved-reviews.json" "$GH_STUB_DIR/reviews/7.json"
+
+it 'compaction is not closing metadata'
+git checkout -q "$SHARED_CLOSE"
+printf -- '- 2026-01-04 compaction: retain current entries\n' >> specs/log.md
+git commit -qam 'compact the shared log'
+fx_pr 7 "$PR_HEAD"
+online
+assert_eq 1 "$STATUS" 'compaction also changes the reviewed fingerprint'
+assert_contains "$OUTPUT" 'PR head does not match the content'
+git checkout -q 001-reviewed
 
 it 'record-only and T0 exempt coverage, never blocker enumeration'
 git update-ref refs/remotes/origin/main "$before"

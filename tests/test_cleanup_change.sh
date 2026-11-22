@@ -929,6 +929,113 @@ assert_eq 0 "$STATUS" "the first run removes the worktree"
 run test ! -d "$PROJ2/.worktrees/079-sub-overlap"
 assert_eq 0 "$STATUS" "worktree gone"
 
+it "concurrent cleanup of different worktrees publishes shared evidence without replacement"
+race="$(mktemp -d)"; track_tmp "$race"
+cat > "$race/cp" <<'SH'
+#!/usr/bin/env bash
+if [ "${2##*/}" = shared-race.txt ]; then
+    : > "$SYNC/$WRITER.ready"
+    case "$WRITER" in
+        first) other="$SYNC/second.ready" ;;
+        second) other="$SYNC/first.done" ;;
+    esac
+    # Hold both past the absence check, then let the first complete before the second copies.
+    for ((n=0; n<300; n++)); do
+        [ ! -e "$other" ] || break
+        sleep 0.1
+    done
+    [ -e "$other" ] || exit 1
+fi
+exec "$REAL_CP" "$@"
+SH
+chmod +x "$race/cp"
+for variant in different identical; do
+    sync="$race/$variant"; mkdir "$sync"
+    first_id="130-first-$variant"; second_id="131-second-$variant"
+    rel=".prdkit/cache/evidence/$variant/shared-race.txt"
+    for id in "$first_id" "$second_id"; do
+        work="$PROJ/.worktrees/$id"
+        git -C "$PROJ" worktree add -qb "$id" "$work" || exit 1
+        mkdir -p "$work/${rel%/*}"
+        bytes=first
+        if [ "$id" = "$second_id" ] && [ "$variant" = different ]; then bytes=second; fi
+        printf '%s\n' "$bytes" > "$work/$rel"
+    done
+    (
+        rc=0
+        env PATH="$race:$PATH" SYNC="$sync" WRITER=first REAL_CP="$(command -v cp)" bash "$CLEAN" "$first_id" || rc=$?
+        : > "$sync/first.done"
+        exit "$rc"
+    ) > "$sync/first.out" 2>&1 &
+    first=$!
+    env PATH="$race:$PATH" SYNC="$sync" WRITER=second REAL_CP="$(command -v cp)" bash "$CLEAN" "$second_id" > "$sync/second.out" 2>&1 &
+    second=$!
+    rc=0; wait "$first" || rc=$?
+    assert_eq 0 "$rc" "first cleanup succeeds: $(cat "$sync/first.out")"
+    assert_file "$sync/first.ready"; assert_file "$sync/second.ready"
+    rc=0; wait "$second" || rc=$?
+    if [ "$variant" = different ]; then
+        assert_eq 1 "$rc" "the conflicting cleanup refuses"
+        assert_contains "$(cat "$sync/second.out")" 'could not preserve its evidence'
+        assert_eq second "$(cat "$PROJ/.worktrees/$second_id/$rel")" 'refused worktree keeps its copy'
+    else
+        assert_eq 0 "$rc" "identical copies both succeed: $(cat "$sync/second.out")"
+        run test ! -e "$PROJ/.worktrees/$second_id"; assert_eq 0 "$STATUS" 'second worktree retired'
+    fi
+    assert_eq first "$(cat "$PROJ/$rel")" 'winner was not replaced'
+    assert_eq '' "$(find "$PROJ/${rel%/*}" -name '.prdkit-evidence.*')" 'no staging directories left behind'
+done
+
+it "evidence copy runs inside its private stage"
+id=132-stage; rel=".prdkit/cache/evidence/$id/report.txt"
+git -C "$PROJ" worktree add -qb "$id" "$PROJ/.worktrees/$id" || exit 1
+mkdir -p "$PROJ/.worktrees/$id/${rel%/*}"
+printf 'retained\n' > "$PROJ/.worktrees/$id/$rel"
+cat > "$race/cp" <<'SH'
+#!/usr/bin/env bash
+if [ "${2##*/}" = report.txt ]; then
+    case "$PWD" in */.prdkit-evidence.*) ;; *) exit 1 ;; esac
+    case "$3" in report.txt|./report.txt) ;; *) exit 1 ;; esac
+fi
+exec "$REAL_CP" "$@"
+SH
+chmod +x "$race/cp"
+cat > "$race/rm" <<'SH'
+#!/usr/bin/env bash
+case "${2:-}" in
+    *report.txt)
+        case "$PWD:$2" in */.prdkit-evidence.*:./report.txt) : > "$CLEANED" ;; esac ;;
+esac
+exec "$REAL_RM" "$@"
+SH
+chmod +x "$race/rm"
+run env PATH="$race:$PATH" REAL_CP="$(command -v cp)" REAL_RM="$(command -v rm)" \
+    CLEANED="$race/stage-cleaned" bash "$CLEAN" "$id"
+assert_eq 0 "$STATUS" 'M4: copy destination is relative to a pinned stage'
+assert_file "$PROJ/$rel"
+assert_file "$race/stage-cleaned" 'M4: exit trap cleans relative to the pinned stage'
+
+it "retirement rechecks the identity of previously published evidence"
+rm "$race/cp" "$race/rm"
+id=133-rotate; rel=".prdkit/cache/evidence/$id/report.txt"
+git -C "$PROJ" worktree add -qb "$id" "$PROJ/.worktrees/$id" || exit 1
+mkdir -p "$PROJ/.worktrees/$id/${rel%/*}"
+printf 'retained\n' > "$PROJ/.worktrees/$id/$rel"
+cat > "$race/mktemp" <<'SH'
+#!/usr/bin/env bash
+# Rotate a disposable evidence directory after preservation, at quarantine allocation.
+case "$*" in *"/prdkit-retired/"*)
+    mv "$DEST" "$DEST.previous" && mkdir "$DEST" || exit 1 ;;
+esac
+exec "$REAL_MKTEMP" "$@"
+SH
+chmod +x "$race/mktemp"
+run env PATH="$race:$PATH" REAL_CP="$(command -v cp)" REAL_MKTEMP="$(command -v mktemp)" \
+    DEST="$PROJ/${rel%/*}" bash "$CLEAN" "$id"
+assert_eq 1 "$STATUS" 'M4: changed canonical destination refuses retirement'
+assert_file "$PROJ/.worktrees/$id/$rel" 'M4: source still available'
+assert_file "$PROJ/${rel%/*}.previous/report.txt" 'fixture rotated the published copy'
+
 # --- --closed: sweep every closed change's worktree ----------------------------------------------
 # Closed means the record specs/changes/<id>.md is gone from, and the log (specs/log.md or the entry
 # file specs/log/<id>.md) has the line on, the trusted integration branch (origin/HEAD), never the
