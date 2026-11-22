@@ -12,6 +12,17 @@
 #   at most 300 characters. The entry is its own file, specs/log/<id>.md, so two branches that
 #   each close a change never conflict; compaction folds entries into specs/log.md (compact.md).
 #   Exit 0 closed locally; rerun the tier's gate on the new head, 1 refused or failing, 2 usage.
+#
+# Invariants:
+# Require an online gate pass before writing. Local close does not authorize the new head.
+# Refuse a dirty record, pre-existing staged changes and symlinked close paths at preflight.
+# Publish a complete per-change log entry without replacing an existing entry. An entry
+# write failure stops before staging, deleting the record or committing.
+#
+# Threat model:
+# Include competing entry creation and interrupted closes; entry publication is not a
+# transaction with the Git index and commit. Failure after publication can leave the entry,
+# staged edits or a closing commit. No protection against a hostile checkout writer.
 set -euo pipefail
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"

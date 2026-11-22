@@ -10,6 +10,17 @@
 # The package always covers the full BASE..HEAD range. Never HEAD~1: that
 # silently drops all but the last commit of a multi-commit change.
 #
+# Invariants:
+# Keep the full object-bound base-to-head patch alongside any focused delta. Check
+# emitted patch paths against the trees, including gitlinks hidden by ignore settings.
+# Validate the final artifact inventory before marking a round complete. Completion
+# is a package result, not a review verdict or proof that required evidence is present.
+#
+# Threat model:
+# Include overlapping builders, interrupted runs and changing evidence inputs.
+# Serialize allocation per change and keep older or incomplete rounds intact.
+# A hostile writer able to replace checkout paths or package artifacts is out of scope.
+#
 # Usage: ./build-review-package.sh CHANGE_ID BASE_SHA [HEAD_SHA] [options]
 #   --since REV       Add a focused delta of what the branch changed since REV, an earlier
 #                     reviewed head (any commit here but HEAD: after a rebase or squash it is no

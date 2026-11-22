@@ -10,6 +10,48 @@
 #     macOS awk aborts on it in a UTF-8 locale (status, doctor and bounds did)
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# Require a line with a letter in each named block of the leading comment preamble.
+# Headings, decorative dividers, and text after the first shell statement do not count.
+check_safety_headers() {
+    awk '
+        NR == 1 { next }
+        /^[[:blank:]]*$/ || /^#[[:blank:]]*$/ { block = ""; next }
+        !/^#/ { exit }
+        /^# Invariants:[[:blank:]]*$/ { block = "invariants"; next }
+        /^# Threat model:[[:blank:]]*$/ { block = "threat model"; next }
+        /^# shellcheck([[:blank:]]|$)/ || /^# [^[:blank:]].*:[[:blank:]]*$/ {
+            block = ""; next
+        }
+        /^#[[:blank:]]*[^[:space:]#]/ && /[[:alpha:]]/ && block != "" { described[block] = 1 }
+        END {
+            if (!described["invariants"]) print "missing or empty # Invariants: block"
+            if (!described["threat model"]) print "missing or empty # Threat model: block"
+            if (!described["invariants"] || !described["threat model"]) exit 1
+        }
+    ' "$@"
+}
+
+it "a divider alone is not prose in a script safety header"
+run check_safety_headers <<'EOF'
+#!/usr/bin/env bash
+# Invariants:
+# ----------------
+#
+# Threat model:
+# ----------------
+set -e
+EOF
+assert_eq 1 "$STATUS" "divider-only safety headers are rejected"
+assert_contains "$OUTPUT" "missing or empty # Invariants: block" "invariants require prose"
+assert_contains "$OUTPUT" "missing or empty # Threat model: block" "threat model requires prose"
+
+it "risky scripts declare non-empty invariants and threat models"
+for script in cleanup-change close-change github-reviews-lib check-adoption install-source-lib \
+    check-review check-pr-review build-review-package new-change init; do
+    run check_safety_headers "$PK_ROOT/scripts/$script.sh"
+    assert_eq 0 "$STATUS" "scripts/$script.sh has both safety blocks: $OUTPUT"
+done
+
 it "fixture Git ignores inherited repository and index selection"
 sentinel="$(make_project)"; track_tmp "$sentinel"
 refs="$(git -C "$sentinel" show-ref)"; index="$(git hash-object "$sentinel/.git/index")"

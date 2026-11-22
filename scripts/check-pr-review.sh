@@ -2,6 +2,18 @@
 # Trusted all-PR transport for the ONE native review gate. See docs/ci-gates.md.
 # SECURITY: the registered immutable workflow must sanitize BEFORE starting this shell.
 # This script cannot authenticate its own workflow registration or repair startup injection.
+#
+# Invariants:
+# Bind the event and fetched objects to the live repository, PR head, target and default
+# policy tip. Run the native gate and its helpers from that policy tip, not candidate files.
+# Accept only a consistent host pass for the exact checked head and unchanged final
+# bindings. Invalid output, timeout, cancellation or cleanup failure cannot pass.
+#
+# Threat model:
+# Include untrusted candidate PR contents (forks included), concurrent host ref changes
+# and interrupted work; bound execution and clean up owned processes and scratch.
+# Trust the registered launcher, pre-shell setup and runner. A hostile writer on the
+# runner or a caller controlling shell startup is outside this script's boundary.
 # shellcheck disable=SC2329 # finish is a trap; extract/select_carrier are bounded callbacks.
 set -euo pipefail
 

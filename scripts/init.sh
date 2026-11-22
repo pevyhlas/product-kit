@@ -36,9 +36,22 @@
 #
 # The installer records what it ships in .prdkit/.manifest: the kit version,
 # selected harnesses, the command install mode, and the pristine sha256 of every
-# installed file. That
-# manifest is what lets --check and --upgrade tell an outdated file (safe to
-# refresh) apart from one the consumer edited (never touched without --force).
+# installed file. The manifest lets --check and --upgrade distinguish outdated
+# files from consumer edits.
+#
+# Invariants:
+# --upgrade has no direct install destination under specs/. Preflight for a 2.x
+# source refuses destinations resolving into specs/changes/ and customized
+# overwrite/delete destinations. A supported root-file alias (such as a symlinked
+# AGENTS.md) can still direct edits to its target elsewhere under specs/.
+# Keep customized conffiles by default; never write through their symlinks.
+# Review migration dry-run reports without installing or publishing reviews.
+#
+# Threat model:
+# Include overlapping installers, pre-existing path aliases and interrupted writes.
+# Serialize the write phase and retain a progress marker for same-source recovery;
+# an upgrade can be partial and does not roll back as a unit. Do not assume safety
+# against a hostile source or a writer changing checkout paths during the upgrade.
 
 set -euo pipefail
 
@@ -791,7 +804,7 @@ echo "Target:     $TARGET"
 echo "Harnesses:  $HARNESSES"
 echo
 
-# specs/ is project-owned: the installer never creates or edits anything there.
+# specs/ is project-owned, not an installation destination.
 mkdir -p "$TPL_DIR" "$MEM_DIR" "$SCRIPT_OUT" "$PRDKIT_DIR/workflows" "$PRDKIT_DIR/agents"
 if has_harness claude; then mkdir -p "$CMD_DIR"; fi
 if has_harness opencode; then mkdir -p "$OC_CMD_DIR"; fi
@@ -1119,7 +1132,7 @@ INSTALL_DONE=true
 echo "✓ Manifest written to .prdkit/.manifest"
 
 # A 0.x spec layout keeps working as plain files, but 1.0 workflows need one current canon.
-# The installer never edits specs/; the cutover is agent work with the owner (compact.md).
+# The installer does not perform the spec cutover; that is agent work with the owner (compact.md).
 LAYOUT="$(spec_layout "$TARGET")"
 case "$LAYOUT" in
     0.x|both)

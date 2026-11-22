@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
 # Only an online, complete review collection can pass. Policy is read from origin/HEAD.
+#
+# Invariants:
+# Use committed policy from the trusted default branch, even for other PR targets.
+# Exit 0 requires host authority; a would-pass offline preview exits 3.
+# Require the exact PR head, its effective tier's approvals and no eligible open objection.
+# PR-authored record text does not grant approval.
+#
+# Threat model:
+# Include candidate-controlled content and review text, unavailable or partial host reads,
+# and revisions moving between runs. Trust the executing code and local Git context;
+# this script does not authenticate its own invocation or exclude a hostile checkout writer.
 set -euo pipefail
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"

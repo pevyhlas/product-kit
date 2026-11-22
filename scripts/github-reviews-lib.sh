@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 # Read a single GitHub PR's reviews. No review bodies, commit authors or credentials are inputs.
+#
+# Invariants:
+# Only the latest submitted review per eligible non-author account on the exact head counts.
+# Report open objections separately from approvals after complete, consistent pagination.
+#
+# Threat model:
+# Review text and candidate policy are untrusted. Trust the authenticated GitHub response;
+# a host failure, malformed page or changed PR binding cannot produce a host verdict.
 # shellcheck disable=SC2034,SC2016 # Public outputs; jq/GraphQL variables are literal.
 
 github_review_policy() {
