@@ -171,7 +171,8 @@ remote branch) fails. At the policy snapshot it reads:
   directory (for example `- review-t0-paths: docs/, README.md`). A T0 change passes only when
   every path it changes since its start, outside its record and closing metadata, is a regular
   non-executable file under one of them, and none is under `.prdkit/`, `.product-kit`, another
-  change record or the L0/L1 spec. Unset, T0 covers only the record and the log.
+  change record or the L0/L1 spec. Unset, T0 covers only the record and its validated closing
+  metadata. Other shared-log edits follow the normal tier and allowlist rules.
 
 The tier is the record's one `**Tier**:` field, whose whole value (up to the next `·`) is exactly
 one of T0–T3 (`T1/T3`, `T1-T3`, `T1, T3` or a second field, even in a comment, fails). It may

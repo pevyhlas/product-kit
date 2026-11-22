@@ -13,14 +13,16 @@ change by change.
 ### Fixed
 
 - Review fingerprints bind shared-log edits, including compaction and changes to other
-  entries. Only the selected change's validated new close line is exempt when closing
-  through the shared log. A close that changes anything else there needs review.
+  entries. T0 automatically exempts only the record and its validated closing metadata.
+  The shared-log line must match the one at record deletion; other edits follow normal
+  tier and allowlist rules. A legacy-only receipt match cannot cover them or clear a blocker.
 - Concurrent cleanup runs publish evidence without replacing an existing copy. Matching
   bytes are accepted; a conflict leaves the losing worktree in place. Publishing new
-  evidence requires hard-link support in the destination directory.
+  evidence requires hard-link support in the destination directory. Cleanup pins its
+  private staging directory and rechecks the published copy's identity before retirement.
 - Review package reuse compares the previous range against its original base tip and
-  checks the range start, trusted policy and package context. If part of the previous
-  range has landed, the remaining range gets a fresh package.
+  checks the recorded patch start, trusted policy, automatic context and artifact inventory.
+  A partial integration, context gap or incomplete restore gets a fresh package.
 
 ### Adoption
 

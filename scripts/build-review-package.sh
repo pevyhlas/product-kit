@@ -131,21 +131,19 @@ fi
 # leaves the integration branch. Any other commit on the branch would drop the commits between
 # SINCE and BASE from both patches while the package still looked complete. The same trusted ref
 # gives the fingerprints; without --since a missing one only leaves them empty.
-trusted_refs="$(spec_trusted_refs "$REPO_ROOT")"
-base_is_merge_base=false; merge_bases=""; FP_REF=""
+trusted_tips="$(spec_trusted_refs "$REPO_ROOT" --tips)"
+trusted_refs="$(printf '%s\n' "$trusted_tips" | cut -f1)"
+# shellcheck disable=SC2034 # review_plan_prepare rechecks the policy ref after native collection.
 POLICY_REF="$(printf '%s\n' "$trusted_refs" | sed -n 1p)"
-POLICY_AT=""
-[ -z "$POLICY_REF" ] || POLICY_AT="$(git -C "$REPO_ROOT" rev-parse --verify --quiet "$POLICY_REF^{commit}" || true)"
-while IFS= read -r trusted; do
+base_is_merge_base=false; merge_bases=""; FP_REF=""; FP_BASE_AT=""
+POLICY_AT="$(printf '%s\n' "$trusted_tips" | sed -n 1p | cut -f2)"
+while IFS=$'\t' read -r trusted tip; do
     [ -n "$trusted" ] || continue
-    git -C "$REPO_ROOT" rev-parse --verify --quiet "$trusted^{commit}" >/dev/null 2>&1 || continue
-    git -C "$REPO_ROOT" merge-base --is-ancestor "$BASE_SHA" "$trusted" || continue
-    mb="$(git -C "$REPO_ROOT" merge-base "$trusted" "$HEAD_SHA" 2>/dev/null || true)"
+    git -C "$REPO_ROOT" merge-base --is-ancestor "$BASE_SHA" "$tip" || continue
+    mb="$(git -C "$REPO_ROOT" merge-base "$tip" "$HEAD_SHA" 2>/dev/null || true)"
     [ -z "$mb" ] || merge_bases="$merge_bases ${trusted#refs/remotes/}=${mb}"
-    if [ "$mb" = "$BASE_SHA" ]; then base_is_merge_base=true; FP_REF="$trusted"; break; fi
-done <<<"$trusted_refs"
-FP_BASE_AT=""
-[ -z "$FP_REF" ] || FP_BASE_AT="$(git -C "$REPO_ROOT" rev-parse "$FP_REF^{commit}")"
+    if [ "$mb" = "$BASE_SHA" ]; then base_is_merge_base=true; FP_REF="$trusted"; FP_BASE_AT="$tip"; break; fi
+done <<<"$trusted_tips"
 if [ -n "$SINCE" ]; then
     if [ -z "$trusted_refs" ]; then
         echo "ERROR: --since needs a trusted integration branch to check BASE against: set origin/HEAD (git remote set-head origin --auto) and fetch it, or build the full package without --since" >&2
@@ -274,6 +272,26 @@ if [ -n "$SINCE$PR_URL$REVIEW_PLAN" ] || [ "${#CONTEXT[@]}" -ne 0 ] || [ "${#EVI
     ! git -C "$REPO_ROOT" diff --quiet --ignore-submodules=none "$HEAD_SHA" --; then
     reuse_context=custom
 fi
+# A completion binds the manifest itself. Check every listed byte again on reuse,
+# including navigation, context and dispatch, without trusting paths from the cache.
+verify_inventory() { # directory patch-start head
+    local dir="$1" start="$2" head="$3" file bytes oid source header
+    [ -f "$dir/manifest.tsv" ] && [ ! -L "$dir/manifest.tsv" ] || return 1
+    {
+        IFS= read -r header && [ "$header" = $'file\tbytes\tblob_oid\tsource' ] || return 1
+        while IFS=$'\t' read -r file bytes oid source; do
+            safe_path "${dir#"$REPO_ROOT"/}/$file" && [ -f "$dir/$file" ] &&
+                [ "$bytes" = "$(wc -c < "$dir/$file" | tr -d ' ')" ] &&
+                [ "$oid" = "$(git -C "$REPO_ROOT" hash-object --no-filters "$dir/$file")" ] || {
+                    echo "ERROR: final artifact integrity failed for $file ($source)" >&2; return 1;
+                }
+            case "$file" in commits.txt|diffstat.txt|diff.patch) [ "$source" = "$start..$head" ] || return 1 ;; esac
+        done
+    } < "$dir/manifest.tsv"
+    awk -F '\t' 'NR>1 { if (NF!=4 || seen[$1]++) bad=1 }
+        END { split("commits.txt diffstat.txt diff.patch index.md context-gaps.txt context-manifest.tsv bounds-inputs.tsv dispatch.json", core, " ")
+              for (i in core) if (!seen[core[i]]) bad=1; exit bad }' "$dir/manifest.tsv"
+}
 ROUND=1; COMPLETED=0; COMPLETED_HEAD=""; COMPLETED_BASE=""; COMPLETED_TIP=""; COMPLETED_POLICY=""; COMPLETED_CONTEXT=""
 for d in "$REVIEW_DIR"/round-*/; do
     [[ -d "$d" ]] || continue
@@ -291,13 +309,15 @@ for d in "$REVIEW_DIR"/round-*/; do
         # Older interrupted writers can leave empty/unterminated files. A failed complete
         # read or malformed record is incomplete evidence, never a fatal errexit or binding.
         if review_file_without_nul "$d/completed.tsv" &&
-            awk -F '\t' 'NR!=1 || NF!=8 { bad=1 } END { exit (bad || NR!=1) }' "$d/completed.tsv" &&
-            IFS=$'\t' read -r version bound_id bound_head bound_base bound_tip bound_policy bound_comparison bound_context < "$d/completed.tsv" &&
-            [ "$version" = package3 ] && [ "$bound_id" = "$CHANGE_ID" ] && [ "$bound_comparison" = known ] &&
+            awk -F '\t' 'NR!=1 || NF!=10 { bad=1 } END { exit (bad || NR!=1) }' "$d/completed.tsv" &&
+            IFS=$'\t' read -r version bound_id bound_head bound_base bound_tip bound_policy bound_comparison bound_context bound_start bound_inventory < "$d/completed.tsv" &&
+            [ "$version" = package4 ] && [ "$bound_id" = "$CHANGE_ID" ] && [ "$bound_comparison" = known ] &&
+            [[ "$bound_start" =~ ^[0-9a-f]{40}$ && "$bound_inventory" =~ ^[0-9a-f]{40}$ ]] &&
             [[ "$bound_head" =~ ^[0-9a-f]{40}$ && "$bound_tip" =~ ^[0-9a-f]{40}$ && "$bound_policy" =~ ^[0-9a-f]{40}$ ]] &&
             [[ "$bound_base" == refs/remotes/* && ( "$bound_context" = full || "$bound_context" = custom ) ]]; then
             COMPLETED="$n"; COMPLETED_HEAD="$bound_head"; COMPLETED_BASE="$bound_base"
             COMPLETED_TIP="$bound_tip"; COMPLETED_POLICY="$bound_policy"; COMPLETED_CONTEXT="$bound_context"
+            COMPLETED_START="$bound_start"; COMPLETED_INVENTORY="$bound_inventory"; COMPLETED_DIR="${d%/}"
         fi
     fi
 done
@@ -310,7 +330,11 @@ if [ -n "$COMPLETED_HEAD" ] && [ -n "$FP_BASE_AT" ]; then
         # A different head must have a live record: a closed head can recover context
         # from different history even when both trees are identical.
         if [ "$FP_REF" = "$COMPLETED_BASE" ] && [ "$POLICY_AT" = "$COMPLETED_POLICY" ] &&
-            [ "$BASE_SHA" = "$REVIEW_MB" ] && [ "$reuse_context" = full ] && [ "$COMPLETED_CONTEXT" = full ] &&
+            [ "$BASE_SHA" = "$COMPLETED_START" ] && [ "$BASE_SHA" = "$REVIEW_MB" ] &&
+            [ "$reuse_context" = full ] && [ "$COMPLETED_CONTEXT" = full ] &&
+            [ -f "$COMPLETED_DIR/manifest.tsv" ] && [ ! -L "$COMPLETED_DIR/manifest.tsv" ] &&
+            [ "$COMPLETED_INVENTORY" = "$(git -C "$REPO_ROOT" hash-object --no-filters "$COMPLETED_DIR/manifest.tsv")" ] &&
+            verify_inventory "$COMPLETED_DIR" "$COMPLETED_START" "$COMPLETED_HEAD" 2>/dev/null &&
             { [ "$HEAD_SHA" = "$COMPLETED_HEAD" ] ||
                 { prior_tree="$(git -C "$REPO_ROOT" rev-parse --verify "$COMPLETED_HEAD^{tree}")" &&
                     current_tree="$(git -C "$REPO_ROOT" rev-parse --verify "$HEAD_SHA^{tree}")" && [ "$prior_tree" = "$current_tree" ] &&
@@ -479,24 +503,12 @@ Full diff remains available; use the focused delta and affected obligations for 
 EOF
 inventory index.md "package navigation and limitations"
 # Validate final artifacts, not just hashes recorded before later assembly steps.
-inventory_seen=()
-while IFS=$'\t' read -r file bytes oid source; do
-    [ "$file" != file ] || continue
-    for prior in ${inventory_seen[@]+"${inventory_seen[@]}"}; do
-        [ "$prior" != "$file" ] || { echo "ERROR: duplicate artifact $file; incomplete round retained" >&2; exit 1; }
-    done
-    inventory_seen+=("$file")
-    if [ ! -f "$PACKAGE_DIR/$file" ] || [ -L "$PACKAGE_DIR/$file" ] ||
-        [ "$bytes" != "$(wc -c < "$PACKAGE_DIR/$file" | tr -d ' ')" ] ||
-        [ "$oid" != "$(git -C "$REPO_ROOT" hash-object --no-filters "$PACKAGE_DIR/$file")" ]; then
-        echo "ERROR: final artifact integrity failed for $file ($source); incomplete round retained" >&2; exit 1
-    fi
-done < "$PACKAGE_DIR/manifest.tsv"
+verify_inventory "$PACKAGE_DIR" "$BASE_SHA" "$HEAD_SHA"
 # Completion is written LAST, never to an interrupted round. It is a comparison binding, not
 # approval: later calls recompute the prior head's content against its recorded base tip.
 comparison=unknown; [ -z "$FINGERPRINT" ] || comparison=known
-if grep -q '^working tree differs from bound HEAD;' "$PACKAGE_DIR/context-gaps.txt"; then reuse_context=custom; fi
-printf 'package3\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$CHANGE_ID" "$HEAD_SHA" "$FP_REF" "$FP_BASE_AT" "$POLICY_AT" "$comparison" "$reuse_context" > "$PACKAGE_DIR/completed.pending"
+manifest_oid="$(git -C "$REPO_ROOT" hash-object --no-filters "$PACKAGE_DIR/manifest.tsv")"
+printf 'package4\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$CHANGE_ID" "$HEAD_SHA" "$FP_REF" "$FP_BASE_AT" "$POLICY_AT" "$comparison" "$reuse_context" "$BASE_SHA" "$manifest_oid" > "$PACKAGE_DIR/completed.pending"
 mv "$PACKAGE_DIR/completed.pending" "$PACKAGE_DIR/completed.tsv"
 
 printf '{"ROUND":%d,"BASE_SHA":"%s","HEAD_SHA":"%s","PACKAGE_DIR":"%s","REPORT_PATH":"%s","INDEX_PATH":"%s","SINCE_SHA":"%s","FINGERPRINT":"%s","SINCE_FINGERPRINT":"%s"}\n' "$ROUND" "$BASE_SHA" "$HEAD_SHA" "$(json_escape "$PACKAGE_DIR")" "$(json_escape "$PACKAGE_DIR/report.md")" "$(json_escape "$PACKAGE_DIR/index.md")" "$SINCE" "$FINGERPRINT" "$SINCE_FINGERPRINT"

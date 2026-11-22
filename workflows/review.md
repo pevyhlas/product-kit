@@ -180,7 +180,9 @@ branch protection.
 
 A verdict holds while the reviewed content is unchanged: the change's own record and closing
 metadata, an edit later reverted, a rebase, a squash and a base merge that does not overlap keep
-it. Other shared-log edits, including compaction, stay in scope. A real fix or an
+it. Other shared-log edits, including compaction, stay in scope. The shared log is bound by
+exact content after removing the validated close line: the three-line overlap rule does not
+apply to it. A real fix or an
 overlapping base merge voids it. Overlapping means the base's own changes touch a line the change
 adds or removes, or one of the 3 unchanged context lines around it the reviewer saw (a clean
 merge more than 3 lines away keeps it), or base and change both touch a binary file, a symlink, a

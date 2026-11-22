@@ -457,7 +457,7 @@ else
             shown="$(printf '%s\n' "$t0_bad" | head -n 10 | tr '\n' ' ' | sed 's/ $//')"
             [ "$n_bad" -le 10 ] || shown="$shown and $((n_bad - 10)) more"
             if [ -z "$(t0_paths "$policy_at")" ]; then
-                problems+=("T0 is docs only, and the trusted base's .prdkit/memory/config.md lists no review-t0-paths, so T0 covers only the record and the log; this change also touches: $shown. Claim T1 or higher")
+                problems+=("T0 is docs only, and the trusted base's .prdkit/memory/config.md lists no review-t0-paths, so T0 covers only the record and its validated closing metadata; this change also touches: $shown. Claim T1 or higher")
             else
                 problems+=("T0 is docs only: these changed paths are not regular files under the trusted base's review-t0-paths (or are policy, another change record or the L0/L1 spec): $shown. Claim T1 or higher")
             fi

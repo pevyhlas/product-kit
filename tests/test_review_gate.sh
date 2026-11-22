@@ -216,6 +216,20 @@ online
 assert_eq 0 "$STATUS" 'a clean bridge close after the implementation merged needs no new receipt'
 assert_contains "$OUTPUT" '"record_only":true'
 git update-ref refs/remotes/origin/main "$BASE"
+sed 's/: closed$/: deferred/' specs/log.md > .git/revised-log
+cp .git/revised-log specs/log.md; git commit -qam 'revise the closing disposition'
+assert_not_contains "$(review_fingerprint "$PROJ" 001-reviewed "$BASE" HEAD)" "$FP" 'H2: a revised disposition is reviewed content'
+git checkout -q "$PR_HEAD"
+git rm -q specs/changes/001-reviewed.md
+printf -- '- 2026-01-03 001-reviewed: closed\rannotation\n' >> specs/log.md
+git commit -qam 'close with a multiline description'
+assert_not_contains "$(review_fingerprint "$PROJ" 001-reviewed "$BASE" HEAD)" "$FP" 'M1: embedded CR is not one-line closing metadata'
+git checkout -q "$PR_HEAD"
+git rm -q specs/changes/001-reviewed.md
+printf -- '- 2026-01-03 001-reviewed: closed\r\n' >> specs/log.md
+git commit -qam 'close with CRLF'
+assert_eq "$FP" "$(review_fingerprint "$PROJ" 001-reviewed "$BASE" HEAD)" 'a CRLF-terminated close is still one line'
+git checkout -q "$SHARED_CLOSE"
 printf -- '- 2026-01-03 001-reviewed: closed\n' > specs/log.md
 git commit -qam 'drop another change from the shared log'
 online
@@ -236,14 +250,24 @@ git update-ref refs/remotes/origin/main "$BASE"
 it 'old receipts keep their posted fingerprints but do not grandfather shared-log edits'
 OLD_FP="$(review_legacy_log_fingerprint "$PROJ" 001-reviewed "$BASE" "$BAD_HEAD")"
 NEW_FP="$(review_fingerprint "$PROJ" 001-reviewed "$BASE" "$BAD_HEAD")"
-assert_eq "$FP" "$OLD_FP" 'untouched shared-log behavior is fingerprint-compatible'
-assert_not_contains "$OLD_FP" "$NEW_FP" 'the old algorithm did not bind the log edit'
+assert_eq "$FP" "$(review_legacy_log_fingerprint "$PROJ" 001-reviewed "$BASE" "$PR_HEAD")" 'unchanged log is compatible at the reviewed head'
+assert_not_contains "$OLD_FP" "$NEW_FP" 'legacy and corrected provenance differ at the edited head'
 cp "$GH_STUB_DIR/reviews/7.json" "$GH_STUB_DIR/reviews-original.json"
+printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
+publish 7 ".head=\"$BAD_HEAD\"|.to=\"$OLD_FP\""
+git checkout "$SHARED_CLOSE" -- specs/log.md; git commit -qm 'restore earlier log state'
+fx_pr 7 "$(git rev-parse HEAD)"
+online
+assert_eq 1 "$STATUS" 'H1: legacy-only provenance supplies no positive coverage'
+git checkout -q "$BAD_HEAD"; fx_pr 7 "$BAD_HEAD"
 publish 7 ".id=\"00000000000000000000000000000003\"|.head=\"$BAD_HEAD\"|.to=\"$OLD_FP\"|.verdict=\"FAIL\""
 online
 assert_eq 1 "$STATUS" 'a pre-upgrade FAIL still blocks'
 assert_contains "$OUTPUT" '"invalid_receipts":0' 'old matching provenance is recognized'
 assert_contains "$OUTPUT" 'blocking verdict stands'
+publish 7 ".id=\"00000000000000000000000000000005\"|.head=\"$BAD_HEAD\"|.to=\"$OLD_FP\""
+online
+assert_contains "$OUTPUT" 'blocking verdict stands' 'H1: a legacy-only PASS does not clear a blocker'
 publish 7 ".id=\"00000000000000000000000000000004\"|.head=\"$BAD_HEAD\"|.to=\"$NEW_FP\""
 online
 assert_eq 0 "$STATUS" "a new full PASS reviews the log and clears the old blocker: $OUTPUT"

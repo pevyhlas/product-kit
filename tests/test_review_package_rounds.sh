@@ -12,6 +12,8 @@ P="$(mktemp -d)"; track_tmp "$P"; cd "$P"
 git init -q; git config user.name test; git config user.email test@example.invalid
 printf '.prdkit/cache/\n' > .gitignore
 mkdir -p src specs/changes
+package_context_fixture 001-equal
+printf '\n## Configuration\n- review-integration-branches: origin/integration\n' >> .prdkit/memory/config.md
 i=1; while [ "$i" -le 30 ]; do echo "line $i"; i=$((i+1)); done > src/app.txt
 printf '# Change\n\n**Tier**: T1\n\n## State\n\n**Step**: review\n' > specs/changes/001-equal.md
 git add -A; git commit -qm base; BASE="$(git rev-parse HEAD)"; MAIN="$(git symbolic-ref --short HEAD)"
@@ -127,6 +129,38 @@ assert_contains "$(cat "$pkg/diff.patch")" second-part.txt 'remaining part inclu
 assert_contains "$(cat "$pkg/index.md")" 'changed from completed round-1' 'old fingerprint uses its recorded tip'
 assert_eq "$before" "$(package_snapshot "$old_pkg")" 'prior artifacts not touched'
 
+it "An integration advance during merge-base lookup cannot relabel the assembled patch"
+# The default tip lacks the full range's start, so the configured ref is selected.
+default_ref="refs/remotes/origin/$MAIN"; integration=refs/remotes/origin/integration
+git update-ref "$default_ref" "$BASE"; git update-ref "$integration" "$TIP"
+shim="$(mktemp -d)"; track_tmp "$shim"
+cat > "$shim/git" <<'SH'
+#!/usr/bin/env bash
+if [ "${3:-}" = merge-base ] && { [ "${4:-}" = "$INTEGRATION" ] || [ "${4:-}" = "$START" ]; } &&
+    [ "$#" = 5 ] && [ ! -f "$MOVED" ]; then
+    "$REAL_GIT" "$@" || exit 1
+    "$REAL_GIT" update-ref "$INTEGRATION" "$ADVANCE" "$START" && : > "$MOVED"
+    exit $?
+fi
+exec "$REAL_GIT" "$@"
+SH
+chmod +x "$shim/git"
+run env REAL_GIT="$(command -v git)" INTEGRATION="$integration" START="$TIP" ADVANCE="$PARTIAL" \
+    MOVED="$shim/moved" PATH="$shim:$PATH" bash "$SCRIPT" 001-equal "$TIP"
+assert_eq 0 "$STATUS" "complete the original range: $OUTPUT"
+pkg="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
+assert_file "$shim/moved"
+assert_contains "$(cat "$pkg/diff.patch")" first-part.txt
+assert_eq "$TIP" "$(cut -f5 "$pkg/completed.tsv")" 'M2: completion uses the tip checked before the ref advanced' || :
+assert_eq "$TIP" "$(cut -f9 "$pkg/completed.tsv")" 'M2: completion records the actual start of diff.patch' || :
+run bash "$SCRIPT" 001-equal "$PARTIAL"
+assert_eq 0 "$STATUS" "M2: narrowed range needs a new package: $OUTPUT" || :
+if [ "$STATUS" = 0 ]; then
+    pkg="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
+    assert_not_contains "$(cat "$pkg/diff.patch")" first-part.txt
+fi
+git update-ref "$default_ref" "$PARTIAL"
+
 it "Updated trusted policy or explicit context prevents reuse at the same source"
 git checkout -q 001-equal
 run bash "$SCRIPT" 007-context "$TIP"
@@ -157,6 +191,46 @@ done
 exec "$REAL_GIT" "$@"
 EOF
 chmod +x "$BADGIT/git"
+it "Restored automatic context and incomplete artifacts need new rounds"
+for gap in canon historical; do
+    id="008-$gap"
+    cp specs/changes/001-equal.md "specs/changes/$id.md"
+    git add "specs/changes/$id.md"; git commit -qm 'add context record'
+    if [ "$gap" = historical ]; then
+        git rm -q "specs/changes/$id.md"; git commit -qm 'retire context record'
+        ln -s 001-equal.md "specs/changes/$id.md"
+        run bash "$SCRIPT" "$id" "$TIP"
+        rm "specs/changes/$id.md"
+    else
+        run env DENIED_BLOB="$(git rev-parse HEAD:specs/architecture.md)" PATH="$BADGIT:$PATH" bash "$SCRIPT" "$id" "$TIP"
+    fi
+    assert_eq 0 "$STATUS" "structural package with $gap gap: $OUTPUT"
+    pkg="$P/.prdkit/cache/evidence/$id/reviews/round-1"
+    case "$gap" in
+        canon) assert_contains "$(cat "$pkg/context-gaps.txt")" 'unreadable/non-text input specs/architecture.md' ;;
+        historical) assert_contains "$(cat "$pkg/context-gaps.txt")" 'bounds unavailable' ;;
+    esac
+    run bash "$SCRIPT" "$id" "$TIP"
+    assert_eq 0 "$STATUS" "M3: $gap context recovered without moving the head: $OUTPUT" || continue
+    pkg="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
+    assert_file "$pkg/bounds.txt"
+done
+for damage in missing-patch changed-section manifest; do
+    id="009-$damage"
+    cp specs/changes/001-equal.md "specs/changes/$id.md"
+    git add "specs/changes/$id.md"; git commit -qm 'prepare complete context'
+    pkg="$(bash "$SCRIPT" "$id" "$TIP" | jq -r .PACKAGE_DIR)"
+    case "$damage" in
+        missing-patch) rm "$pkg/diff.patch" ;;
+        changed-section) printf 'changed artifact\n' >> "$pkg/context-sections/1.txt" ;;
+        manifest) rm "$pkg/manifest.tsv" ;;
+    esac
+    run bash "$SCRIPT" "$id" "$TIP"
+    assert_eq 0 "$STATUS" "M3: $damage gets a fresh round: $OUTPUT" || continue
+    pkg="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
+    assert_file "$pkg/diff.patch"
+done
+
 OLD="$(git rev-parse HEAD)"
 OLD_BLOB="$(git rev-parse HEAD:src/app.txt)"
 printf 'selective current\n' >> src/app.txt; git commit -qam 'selective object fixture'

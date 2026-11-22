@@ -79,6 +79,7 @@ review_plan_prepare() {
         PLAN_VALID=true; PLAN_REASON="advisory lead judgment only; not a verdict"
     fi
     # Refs must still name the frozen tips after the one native collection.
+    [ -n "$PR_URL" ] || return 0
     if { [ -n "$FP_REF" ] && [ "$(git -C "$REPO_ROOT" rev-parse "$FP_REF^{commit}")" != "$FP_BASE_AT" ]; } ||
         { [ -n "$POLICY_REF" ] && [ "$(git -C "$REPO_ROOT" rev-parse "$POLICY_REF^{commit}")" != "$POLICY_AT" ]; }; then
         echo "ERROR: policy/integration binding changed during collection; no round allocated" >&2; exit 1

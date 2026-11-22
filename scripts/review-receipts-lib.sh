@@ -100,15 +100,16 @@ _receipt_matches_v3() { # root change base_at rev token -> 0 match, 1 mismatch, 
     local fp
     fp="$(review_fingerprint "$1" "$2" "$3" "$4")" || return 2
     [ "$fp" != "$5" ] || return 0
-    # Existing signatures omitted all shared-log edits. Keep the authenticated token
-    # as posted, not the new digest: it cannot cover a shared-log edit retroactively.
+    # Recognize old provenance for blocker history, never as a coverage edge.
     fp="$(review_legacy_log_fingerprint "$1" "$2" "$3" "$4")" || return 2
-    [ "$fp" = "$5" ]
+    [ "$fp" = "$5" ] || return 1
+    RC_LEGACY_ONLY=true
 }
 
 _receipts_consistency() { # root change from to head since base base_at -> RC_ERROR
     local root="$1" change="$2" from="$3" to="$4" head="$5" since="$6" base="$7" base_at="$8"
     RC_ERROR=""
+    RC_LEGACY_ONLY=false
     git check-ref-format "$base" >/dev/null 2>&1 || { RC_ERROR='invalid base ref'; return 1; }
     if ! spec_objects_local "$root"; then
         RC_ERROR='receipt provenance cannot be checked without fetching from the promisor remote on this Git version'; return 1
@@ -344,7 +345,7 @@ review_receipts_scope() { # change rigor registry work root; local checks also r
     local checked="$1" scope_rigor="$2" scope_registry="$3" work="$4" root="$5"
     local type seq origin review time receipt_id change reviewer from to rhead since base base_at verdict c h m l report carried reason row
     local n k j candidate clear block scope start_fp scoped
-    local rs=() origins=() changes=() reviewers=() froms=() tos=() blocks=() seqs=() links=()
+    local rs=() origins=() changes=() reviewers=() froms=() tos=() blocks=() seqs=() links=() legacy_only=()
     RC_PROBLEMS=(); RC_SCOPE_BLOCKERS=(); RC_REFERENCES=(); RC_CURRENT_REVIEWERS=(); RC_COVERAGE="$work/coverage"; RC_INVALID=0; RC_CARRIED=0; RC_RECEIPTS=0
     : > "$RC_COVERAGE" || { RC_ERROR='cannot write receipt coverage'; return 1; }
     scoped="$(mktemp "$work/scoped.XXXXXX")" || { RC_ERROR='cannot allocate scoped receipts'; return 1; }
@@ -370,6 +371,13 @@ review_receipts_scope() { # change rigor registry work root; local checks also r
         # Scope/identity fact only. Foreign-change rows on this PR still grant no coverage.
         [ "$origin" != "$RC_PR" ] || RC_CURRENT_REVIEWERS+=("$reviewer")
         block=false; if _receipts_blocking "$verdict" "$c" "$h" "$m" "$scope_rigor"; then block=true; fi
+        if $RC_LEGACY_ONLY; then
+            # No edge in either direction, including for carry and legacy clearance.
+            # A blocker with an unbound endpoint still stands until a fresh full PASS.
+            $block || continue
+            to=none
+        fi
+        legacy_only+=("$RC_LEGACY_ONLY")
         rs+=("$row"); origins+=("$origin"); changes+=("$change"); reviewers+=("$reviewer"); froms+=("$from"); tos+=("$to"); blocks+=("$block"); seqs+=("$seq")
         links+=("https://github.com/$RC_REPO/pull/$origin#pullrequestreview-$review")
     done < "$RC_FILE"
@@ -415,7 +423,7 @@ review_receipts_scope() { # change rigor registry work root; local checks also r
             fi
         fi
         [ "${origins[k]}" != "$RC_PR" ] || printf '%s\n' "${rs[k]}" >> "$scoped"
-        if [ "${origins[k]}" = "$RC_PR" ] && [ "${changes[k]}" = "$checked" ]; then printf '%s\n' "${rs[k]}" >> "$RC_COVERAGE"; fi
+        if ! ${legacy_only[k]} && [ "${origins[k]}" = "$RC_PR" ] && [ "${changes[k]}" = "$checked" ]; then printf '%s\n' "${rs[k]}" >> "$RC_COVERAGE"; fi
     done
     # X rows were collected separately; retain the immutable host sequence across both kinds.
     if ! LC_ALL=C sort -t $'\037' -k2,2n "$scoped" > "$work/scoped-sorted" || ! mv "$work/scoped-sorted" "$scoped"; then
