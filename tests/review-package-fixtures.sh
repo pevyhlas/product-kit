@@ -1,4 +1,15 @@
 #!/usr/bin/env bash
+# Minimum automatic context for fixtures asserting a full package can be reused.
+package_context_fixture() {
+    mkdir -p .prdkit/memory specs/product specs/changes
+    local p
+    for p in .prdkit/memory/{constitution,agents,config}.md specs/{product,architecture}.md; do
+        printf '# %s\n' "${p##*/}" > "$p"
+    done
+    printf '# Lifecycle\n\n**Now**: Demo · **Next**: MVP\n' > specs/product/lifecycle.md
+    printf '# Change\n\n**Tier**: T1\n' > "specs/changes/$1.md"
+}
+
 # Test evidence only: relative path -> inode/type/mode/size/hash, including empty directories.
 # Unlike an unordered hash multiset, this detects swaps, in-place corruption and mode changes.
 package_snapshot() {

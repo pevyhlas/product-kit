@@ -159,16 +159,32 @@ done < "$PKG/manifest.tsv"
 it "Gate diagnostics do not change any existing JSON field, coverage or exits"
 parity
 
+it "A pre-upgrade FAIL needs a full review, not a focused bridge"
+# Same source delta as F1, plus a log edit the former token did not bind.
+git checkout -q --detach "$F1"
+printf -- '- 2026-01-02 002-other: complete\n' >> specs/log.md
+git add specs/log.md; git commit -qm 'historical reviewed log'
+old_head="$(git rev-parse HEAD)"
+git checkout -q "$ID"
+jq --arg old "$old_head" '.[1].body |= (split("\n") | .[1] |= (fromjson | .head=$old | tojson) | join("\n"))' \
+    "$GH_STUB_DIR/original.json" > "$GH_STUB_DIR/reviews/7.json"
+package
+assert_eq '[]' "$(jq -c .prospective_carry "$PKG/dispatch.json")" 'unbound blocker cannot supply the focused bridge' || :
+assert_eq true "$(jq -r '.blockers.scope[]|select(.reviewer=="code")|.full_required' "$PKG/dispatch.json")" 'dispatch names the required full re-review'
+cp "$GH_STUB_DIR/original.json" "$GH_STUB_DIR/reviews/7.json"
+
 it "An actual clean native narrow receipt, not a forecast, establishes carry"
 post code PASS "$F2" "$F1"
 receipt_raw_run bash "$CHECK" --repo "$P" --json --diagnostics --pr https://github.com/owner/repo/pull/7 "$ID"
 assert_eq 0 "$STATUS" "real evaluator accepts synthetic narrow receipt: $OUTPUT"
 assert_eq true "$(printf '%s' "$OUTPUT" | jq '.diagnostics.latest[] | select(.reviewer=="security") | .end_covered')" 'actual security retention'
 parity
-# Native receipt change alone cannot allocate another package.
+# A full request cannot reuse a package assembled with an earlier native evaluation and plan.
 receipt_raw_run bash "$BUILD" "$ID" "$BASE"
-assert_eq 1 "$STATUS" 'receipt is not source change'
-assert_contains "$OUTPUT" 'no round needed' 'reuse existing package'
+assert_eq 0 "$STATUS" 'the same source can get a fresh package for different inputs'
+fresh="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
+assert_contains "$(cat "$fresh/index.md")" 'package context or bindings differ'
+assert_eq false "$([ -e "$fresh/gate.json" ] && echo true || echo false)" 'does not inherit the previous native evaluation'
 
 it "Full replacement PASS clears own FAIL but does not bridge another approval"
 cp "$GH_STUB_DIR/original.json" "$GH_STUB_DIR/reviews/7.json"
@@ -331,10 +347,13 @@ assert_not_contains "$(cat "$PKG"/context-sections/*.txt)" 'dirty worktree' 'com
 git rm -q "specs/changes/$ID.md"
 mkdir -p specs/log; printf -- '- 2026-01-03 %s: closed\n' "$ID" > "specs/log/$ID.md"
 git add specs/log; git commit -qm 'synthetic close'
-# Closing metadata is equal: compare refuses, even though the historical record is recoverable.
+# Closing metadata is equal, but a structural package must bind the historical record.
 receipt_raw_run bash "$BUILD" "$ID" "$BASE"
-assert_eq 1 "$STATUS" 'closing record metadata alone needs no new round'
-# New source at the closing head permits a structural package with historical record binding.
+assert_eq 0 "$STATUS" 'a closing head needs fresh context'
+PKG="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
+assert_contains "$(cat "$PKG/index.md")" 'package context or bindings differ'
+assert_contains "$(cat "$PKG/context-manifest.tsv")" "$(git rev-parse HEAD^)" 'historical child revision bound at close'
+# New source at the closing head keeps that historical record binding.
 advance closing-new-source
 receipt_raw_run bash "$BUILD" "$ID" "$BASE"
 assert_eq 0 "$STATUS" "closing package: $OUTPUT"
