@@ -8,14 +8,16 @@ and evidence. Optional execution detail is ignored working material.
 A change is a transaction on the spec and the code. Open one only for bounded work; discuss a
 vague request (and ask its consequential questions) first. Create it with
 `.prdkit/scripts/bash/new-change.sh --json --short-name <name> "<intent>"`: it numbers the change,
-copies `.prdkit/templates/change-template.md` and creates a worktree unless `--no-worktree` (a new
+renders `.prdkit/templates/change-template.md` and creates a worktree unless `--no-worktree` (a new
 branch in the current checkout; existing work carries over). It never hands out a number a
 `planned:` marker names; to open that planned change, pass its number and slug (`--number 12
 --short-name export` for `planned: 012-export`). The worktree starts from committed HEAD: it lists
 uncommitted `specs/` paths left behind (`UNCARRIED_SPECS`); record the owner direction and spec
 context the change needs in the worktree. Use `--no-branch` for project-authorized
 existing-branch delivery: it creates only the numbered record in the current checkout. Pass the
-change ID explicitly to later helpers when it differs from the branch.
+change ID explicitly to later helpers when it differs from the branch. Add `--programme` only
+when opening a programme parent or continuing follow-up queue; it keeps the template's commented
+outcome checkpoint scaffold instead of the one-line pointer.
 
 For a product/programme, use [planning.md](planning.md) to discover work across intent and design.
 For ready work, use [implementation.md](implementation.md). One implementation change normally

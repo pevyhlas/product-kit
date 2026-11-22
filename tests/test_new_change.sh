@@ -107,6 +107,76 @@ assert_eq "absent" "$([ -d "$WT/.worktrees" ] && echo present || echo absent)" "
 assert_file "$WT/specs/changes/060-from-worktree.md" "record created in the current worktree"
 cd "$PROJ" || exit 1
 
+it "ordinary changes get a one-line pointer, not the programme checkpoint"
+POINTER='<!-- Outcome checkpoint format: .prdkit/templates/change-template.md -->'
+assert_eq 1 "$(grep -cxF "$POINTER" "$REC")" "one pointer to the canonical scaffold"
+assert_not_contains "$(cat "$REC")" '### Outcome checkpoint' "no scaffold heading"
+assert_not_contains "$(cat "$REC")" '**Selection**:' "no trailing scaffold fields"
+assert_contains "$(cat "$REC")" '<!-- Verdicts live' "the next template comment is preserved"
+
+it "doctor and status leave a pointer-only record alone"
+run bash -c 'cd "$1" && bash .prdkit/scripts/bash/doctor.sh --json' _ "$WT"
+assert_eq 0 "$STATUS" "doctor passes in the record's worktree: $OUTPUT"
+# The default Bounds example can have a trace advisory; it is unrelated to the pointer.
+assert_eq '[]' "$(printf '%s\n' "$OUTPUT" | jq -c '[.advisories[] | select(test("checkpoint"; "i"))]')" "no checkpoint advisory"
+run bash .prdkit/scripts/bash/status.sh --json
+assert_eq 0 "$STATUS" "status succeeds"
+assert_eq '[]' "$(printf '%s\n' "$OUTPUT" | jq -c '.outcome_progress')" "no outcome row"
+
+it "retrying the same ordinary change leaves its linked-worktree record alone"
+cp "$REC" .git/ordinary-before
+run bash "$SCRIPT" --no-branch --number 1 --short-name user-auth "Different intent"
+assert_eq 1 "$STATUS" "the existing identity is refused"
+assert_contains "$OUTPUT" "never overwritten" "the refusal explains why"
+run cmp -s .git/ordinary-before "$REC"
+assert_eq 0 "$STATUS" "ordinary record is byte-for-byte unchanged"
+
+it "--programme emits the full commented scaffold with unknown history"
+PROGRAMME_REC=specs/changes/061-programme.md
+run bash "$SCRIPT" --json --programme --no-branch --number 61 --short-name programme "Coordinate related changes"
+assert_eq 0 "$STATUS" "programme opens: $OUTPUT"
+assert_file "$PROGRAMME_REC" "programme record exists"
+if [ -f "$PROGRAMME_REC" ]; then
+    assert_not_contains "$(cat "$PROGRAMME_REC")" "$POINTER" "the scaffold replaces the pointer"
+    SCAFFOLD="$(sed -n '/^<!-- A programme or continuing follow-up queue/,/^-->$/p' "$PROGRAMME_REC")"
+    assert_eq 8 "$(printf '%s\n' "$SCAFFOLD" | grep -c '^\*\*')" "all checkpoint fields are in the comment"
+    assert_contains "$SCAFFOLD" '### Outcome checkpoint' "scaffold heading"
+    assert_contains "$SCAFFOLD" '**Selection**:' "scaffold includes its last field"
+    assert_contains "$SCAFFOLD" '**Progress**: unknown' "no unevidenced advance is assumed"
+    assert_contains "$SCAFFOLD" '**No-progress changes**: unknown' "unknown history is not a zero count"
+    assert_contains "$(cat "$PROGRAMME_REC")" '<!-- Verdicts live' "the next template comment is preserved"
+fi
+
+it "retrying creation cannot rewrite a filled checkpoint"
+mkdir -p specs/changes
+cat > "$PROGRAMME_REC" <<'MD'
+# Change: Coordinate related changes
+
+## State
+
+### Outcome checkpoint
+**Outcome**: A verified path
+**Milestone**: An integrated interface
+**Critical path**: Review the interface contract
+**Allocation**: One contract lane
+**Progress**: unknown
+**No-progress changes**: unknown
+**Progress limit**: 4
+MD
+# Deliberately omit the final newline, so a render pass cannot masquerade as a no-op.
+printf '**Selection**: Verify the interface contract  ' >> "$PROGRAMME_REC"
+cp "$PROGRAMME_REC" .git/programme-before
+for mode in '' --programme; do
+    run bash "$SCRIPT" ${mode:+"$mode"} --no-branch --number 61 --short-name programme "Different intent"
+    assert_eq 1 "$STATUS" "retry ${mode:-without opt-in} refuses the existing record"
+    assert_contains "$OUTPUT" 'never overwritten' "refusal happens at the record"
+    run cmp -s .git/programme-before "$PROGRAMME_REC"
+    assert_eq 0 "$STATUS" "filled record is byte-for-byte unchanged"
+done
+run bash .prdkit/scripts/bash/status.sh --json
+assert_eq 0 "$STATUS" "status can read the resumed programme"
+assert_eq '["unknown",null]' "$(printf '%s\n' "$OUTPUT" | jq -c '.outcome_progress[] | select(.id == "061-programme") | [.count_signal, .no_progress_changes]')" "resume preserves unknown history"
+
 # --- Numbering across every claimed identity -----------------------------------------------
 PROJ2="$(make_inited_project)"; track_tmp "$PROJ2"
 PROJ2="$(cd "$PROJ2" && pwd -P)"

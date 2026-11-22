@@ -2,7 +2,7 @@
 # new-change.sh — Open a change: number it, create specs/changes/<id>.md from the change
 # template, and (by default) put its branch in an isolated worktree under .worktrees/.
 #
-# Usage: new-change.sh [--json] [--short-name <name>] [--number N] [--no-worktree|--no-branch] <intent>
+# Usage: new-change.sh [--json] [--short-name <name>] [--number N] [--programme] [--no-worktree|--no-branch] <intent>
 #
 # --no-worktree (or an already linked worktree) branches in place, carrying
 # existing local edits onto the new branch.
@@ -24,11 +24,12 @@ source "$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 # shellcheck source=/dev/null
 source "$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/spec-lib.sh"
 
-usage() { echo "Usage: $0 [--json] [--short-name <name>] [--number N] [--no-worktree|--no-branch] <intent>"; }
+usage() { echo "Usage: $0 [--json] [--short-name <name>] [--number N] [--programme] [--no-worktree|--no-branch] <intent>"; }
 
 JSON_MODE=false
 NO_WORKTREE=false
 NO_BRANCH=false
+PROGRAMME=false
 SHORT_NAME=""
 CHANGE_NUMBER=""
 ARGS=()
@@ -37,6 +38,7 @@ while [ "$#" -gt 0 ]; do
         --json) JSON_MODE=true ;;
         --no-worktree) NO_WORKTREE=true ;;
         --no-branch) NO_BRANCH=true ;;
+        --programme) PROGRAMME=true ;;
         --) shift; ARGS+=("$@"); break ;;
         --short-name|--number)
             if [ "$#" -lt 2 ] || [[ "$2" == --* ]]; then echo "Error: $1 requires a value" >&2; exit 1; fi
@@ -47,6 +49,7 @@ while [ "$#" -gt 0 ]; do
             echo "  --json              Output in JSON format"
             echo "  --short-name <name> Short name (2-4 words) for the change id and branch"
             echo "  --number N          Change number (overrides auto-detection)"
+            echo "  --programme         Keep the outcome checkpoint scaffold for a programme or continuing queue"
             echo "  --no-worktree       Create and switch to the branch in the current checkout"
             echo "                      instead of an isolated worktree; existing edits carry over"
             echo "  --no-branch         Create only the change record in the current checkout"
@@ -399,8 +402,14 @@ fi
 TODAY="${PRDKIT_TODAY:-$(date +%Y-%m-%d)}"
 write_record() {
     if [ -f "$TEMPLATE" ]; then
-        PK_INTENT="$INTENT" PK_TODAY="$TODAY" awk '
+        # Use the existing scaffold opener so retained project copies of the old template work too.
+        PK_INTENT="$INTENT" PK_TODAY="$TODAY" awk -v programme="$PROGRAMME" '
             NR == 1 && /^# Change:/ { print "# Change: " ENVIRON["PK_INTENT"]; next }
+            programme != "true" && /^<!-- A programme or continuing follow-up queue \(/ {
+                print "<!-- Outcome checkpoint format: .prdkit/templates/change-template.md -->"
+                checkpoint = 1
+            }
+            checkpoint { if (/-->/) checkpoint = 0; next }
             /^\*\*Opened\*\*: <date>/ { sub(/<date>/, ENVIRON["PK_TODAY"]) }
             { print }
         ' "$TEMPLATE" > "$CHANGE_FILE"
