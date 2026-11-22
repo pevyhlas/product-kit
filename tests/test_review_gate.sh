@@ -18,7 +18,7 @@ cat >> .prdkit/memory/config.md <<'EOF'
 - review-publisher-isolation: required
 - review-t0-paths: docs/
 EOF
-printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n' >> .prdkit/memory/agents.md
+printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n| second | reviewer |\n' >> .prdkit/memory/agents.md
 mkdir -p specs
 printf -- '- 2026-01-02 002-earlier: completed\n' > specs/log.md
 git add -A; git commit -qm baseline
@@ -218,12 +218,18 @@ assert_contains "$OUTPUT" '"record_only":true'
 git update-ref refs/remotes/origin/main "$BASE"
 sed 's/: closed$/: deferred/' specs/log.md > .git/revised-log
 cp .git/revised-log specs/log.md; git commit -qam 'revise the closing disposition'
-assert_not_contains "$(review_fingerprint "$PROJ" 001-reviewed "$BASE" HEAD)" "$FP" 'H2: a revised disposition is reviewed content'
+assert_changed_fingerprint() {
+    run review_fingerprint "$PROJ" 001-reviewed "$BASE" HEAD
+    assert_eq 0 "$STATUS" "$1: fingerprint computation succeeded"
+    if review_is_fp "$OUTPUT"; then _ok "$1: valid fingerprint"; else _no "$1: expected a fingerprint"; fi
+    assert_not_contains "$OUTPUT" "$FP" "$1"
+}
+assert_changed_fingerprint 'H2: a revised disposition is reviewed content'
 git checkout -q "$PR_HEAD"
 git rm -q specs/changes/001-reviewed.md
 printf -- '- 2026-01-03 001-reviewed: closed\rannotation\n' >> specs/log.md
 git commit -qam 'close with a multiline description'
-assert_not_contains "$(review_fingerprint "$PROJ" 001-reviewed "$BASE" HEAD)" "$FP" 'M1: embedded CR is not one-line closing metadata'
+assert_changed_fingerprint 'M1: embedded CR is not one-line closing metadata'
 git checkout -q "$PR_HEAD"
 git rm -q specs/changes/001-reviewed.md
 printf -- '- 2026-01-03 001-reviewed: closed\r\n' >> specs/log.md
@@ -272,6 +278,44 @@ publish 7 ".id=\"00000000000000000000000000000004\"|.head=\"$BAD_HEAD\"|.to=\"$N
 online
 assert_eq 0 "$STATUS" "a new full PASS reviews the log and clears the old blocker: $OUTPUT"
 mv "$GH_STUB_DIR/reviews-original.json" "$GH_STUB_DIR/reviews/7.json"
+
+it 'a fresh checkout without the superseded reviewed head cannot use its legacy token'
+fresh="$(mktemp -d)"; track_tmp "$fresh"; git -C "$fresh" init -q
+git -C "$fresh" fetch -q --no-tags "$PROJ" "$PR_HEAD"
+git -C "$fresh" checkout -q --detach FETCH_HEAD
+git -C "$fresh" update-ref refs/remotes/origin/main "$BASE"
+git -C "$fresh" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+run git -C "$fresh" cat-file -e "$BAD_HEAD^{commit}"
+if [ "$STATUS" != 0 ]; then _ok 'superseded object is absent'; else _no 'superseded object unexpectedly present'; fi
+cp "$GH_STUB_DIR/reviews/7.json" "$GH_STUB_DIR/saved-reviews.json"
+printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
+fx_pr 7 "$PR_HEAD"
+publish 7 ".head=\"$BAD_HEAD\"|.to=\"$OLD_FP\""
+online --repo "$fresh"
+assert_eq 1 "$STATUS" 'unverified receipt cannot cover the current head in a fresh checkout'
+publish 7 '.id="00000000000000000000000000000006"'
+online --repo "$fresh"
+assert_eq 0 "$STATUS" 'corrected full PASS restores coverage without the superseded object'
+
+it 'every reviewer needs usable latest provenance'
+git checkout -q "$PR_HEAD"
+for prior in absent present; do
+    printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
+    publish 7 '.reviewer="second"'
+    if [ "$prior" = present ]; then publish 7 '.id="00000000000000000000000000000006"'; fi
+    publish 7 ".id=\"00000000000000000000000000000007\"|.head=\"$BAD_HEAD\"|.to=\"$OLD_FP\""
+    online --diagnostics
+    assert_eq 1 "$STATUS" "another reviewer cannot cover a legacy-only latest PASS (earlier PASS $prior)"
+    assert_eq false "$(printf '%s' "$OUTPUT" | jq -r '.diagnostics.latest[]|select(.reviewer=="code")|.end_covered')" 'latest unusable review stays visible'
+    assert_contains "$OUTPUT" 'corrected full PASS'
+done
+publish 7 ".id=\"00000000000000000000000000000008\"|.since=\"$BAD_HEAD\"|.from=\"$NEW_FP\""
+online
+assert_eq 1 "$STATUS" 'a corrected narrow PASS cannot repair an unusable latest range'
+publish 7 '.id="00000000000000000000000000000009"'
+online
+assert_eq 0 "$STATUS" 'both reviewers now have usable latest verdicts'
+mv "$GH_STUB_DIR/saved-reviews.json" "$GH_STUB_DIR/reviews/7.json"
 
 it 'compaction is not closing metadata'
 git checkout -q "$SHARED_CLOSE"

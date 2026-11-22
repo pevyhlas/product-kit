@@ -15,7 +15,8 @@ change by change.
 - Review fingerprints bind shared-log edits, including compaction and changes to other
   entries. T0 automatically exempts only the record and its validated closing metadata.
   The shared-log line must match the one at record deletion; other edits follow normal
-  tier and allowlist rules. A legacy-only receipt match cannot cover them or clear a blocker.
+  tier and allowlist rules. A legacy-only or locally unverifiable receipt cannot grant
+  coverage or clear a blocker. Its reviewer still needs a corrected full PASS.
 - Concurrent cleanup runs publish evidence without replacing an existing copy. Matching
   bytes are accepted; a conflict leaves the losing worktree in place. Publishing new
   evidence requires hard-link support in the destination directory. Cleanup pins its

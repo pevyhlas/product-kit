@@ -270,12 +270,19 @@ for edit in '.schema="prdkit.review.v1"' '.reviewer="owner"'; do
     assert_eq '' "$(cat "$RC_COVERAGE")"
 done
 
-it 'tokens are checked against base_at, not the current base tip; missing heads stand as authenticated tokens'
+it 'tokens are checked against base_at, and missing provenance is not a coverage edge'
 reset_host; receipt 7 '.to="fp1:0000000000000000000000000000000000000000000000000000000000000000"'; fetch
 assert_eq 1 "$RC_INVALID"
 assert_contains "$(problems)" 'its to is not the content of its head'
-reset_host; receipt 7 '.head="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"'; fetch
-assert_eq 0 "$RC_INVALID" 'absent receipt head is allowed'
+for endpoint in head since base_at; do
+    reset_host; receipt 7 '.verdict="FAIL"'
+    edit=".$endpoint=\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""
+    [ "$endpoint" != since ] || edit="$edit|.from=.to"
+    receipt 7 "$edit"; fetch
+    assert_eq 0 "$RC_INVALID" 'absent objects do not erase authenticated history'
+    assert_contains "$(problems)" 'blocking verdict stands' "missing $endpoint cannot clear the blocker"
+    assert_eq unverified "$(awk -F '\037' 'END { print $NF }' "$RC_COVERAGE")" "missing $endpoint is not verified coverage"
+done
 reset_host; receipt 7 '.from=.to|.since=.head'; fetch
 assert_eq 0 "$RC_INVALID" 'available since recomputes to from'
 reset_host; receipt 7 '.from="fp1:0000000000000000000000000000000000000000000000000000000000000000"|.since=.head'; fetch

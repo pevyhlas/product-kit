@@ -186,7 +186,7 @@ if $receipt_ready; then
 fi
 diagnostic_capture owner
 legacy_receipts=""; LL_BLOCKERS=(); LL_EMPTY_VALID=(); LL_EMPTY_ALLOWED=()
-if $receipt_ready; then legacy_receipts="$RC_FILE"; fi
+if $receipt_ready; then legacy_receipts="$RC_VERIFIED"; fi
 if [ -n "$fp_base" ]; then
     review_legacy_resolve "$root" "$id" "$fp_base" "$head" "$rigor" "$registry" "$fp_cache/legacy" "$legacy_receipts" "$RC_PR" || true
     [ "${LL_NUL_UNAVAILABLE:-false}" != true ] || authority=unavailable
@@ -390,9 +390,9 @@ else
         record_only=true
     fi
     # All verdicts come from the validated host/snapshot list, in host order.
-    v_line=(); v_rev=(); v_round=(); v_from=(); v_to=(); v_verdict=(); v_c=(); v_h=(); v_m=(); v_l=(); v_link=()
+    v_line=(); v_rev=(); v_round=(); v_from=(); v_to=(); v_verdict=(); v_c=(); v_h=(); v_m=(); v_l=(); v_link=(); v_provenance=()
     if $receipt_ready; then
-        while IFS="$sep37" read -r kind seq origin review submitted receipt_id change reviewer from to receipt_head since receipt_base base_at verdict critical high medium low link carried; do
+        while IFS="$sep37" read -r kind seq origin review submitted receipt_id change reviewer from to receipt_head since receipt_base base_at verdict critical high medium low link carried provenance; do
             [ "$kind" = R ] || continue
             empty_clearance=false
             for valid in ${LL_EMPTY_VALID[@]+"${LL_EMPTY_VALID[@]}"}; do [ "$seq" != "$valid" ] || empty_clearance=true; done
@@ -402,6 +402,7 @@ else
             v_verdict+=("$verdict"); v_c+=("$critical"); v_h+=("$high"); v_m+=("$medium"); v_l+=("$low"); v_link+=("$link")
             v_receipt+=("https://github.com/$RC_REPO/pull/$origin#pullrequestreview-$review")
             v_receipt_head+=("$receipt_head")
+            v_provenance+=("$provenance")
             v_empty_clearance+=("$empty_clearance")
         done < "$RC_COVERAGE"
     fi
@@ -508,9 +509,9 @@ if $json; then
         for i in ${latest[@]+"${latest[@]}"}; do
             standing=false
             for k in ${coverage_standing[@]+"${coverage_standing[@]}"}; do [ "${v_rev[k]}" != "${v_rev[i]}" ] || standing=true; done
-            printf '%s{"reviewer":"%s","eligibility":"%s","receipt":"%s","from":"%s","to":"%s","clean":%s,"end_covered":%s,"standing":%s}' \
+            printf '%s{"reviewer":"%s","eligibility":"%s","receipt":"%s","from":"%s","to":"%s","clean":%s,"end_covered":%s,"standing":%s,"provenance":"%s"}' \
                 "$sep" "$(json_escape "${v_rev[i]}")" "$(review_eligibility "$registry" "${v_rev[i]}")" "$(json_escape "${v_receipt[i]}")" \
-                "${v_from[i]}" "${v_to[i]}" "${coverage_clean[i]:-false}" "${coverage_end[i]:-false}" "$standing"
+                "${v_from[i]}" "${v_to[i]}" "${coverage_clean[i]:-false}" "${coverage_end[i]:-false}" "$standing" "${v_provenance[i]}"
             sep=,
         done
         printf '],"standing":['; sep=""
@@ -518,10 +519,11 @@ if $json; then
             printf '%s{"reviewer":"%s","to":"%s","receipt":"%s"}' "$sep" "$(json_escape "${v_rev[i]}")" "${v_to[i]}" "$(json_escape "${v_receipt[i]}")"; sep=,
         done
         printf '],"scope_blockers":['; sep=""
-        for row in ${RC_SCOPE_BLOCKERS[@]+"${RC_SCOPE_BLOCKERS[@]}"}; do
+        for k in ${RC_SCOPE_BLOCKERS[@]+"${!RC_SCOPE_BLOCKERS[@]}"}; do
+            row="${RC_SCOPE_BLOCKERS[k]}"
             IFS="$sep37" read -r kind seq origin review submitted receipt_id change reviewer from to rest <<< "$row"
-            printf '%s{"reviewer":"%s","change":"%s","origin_pr":"%s","to":"%s","receipt":"%s"}' "$sep" \
-                "$(json_escape "$reviewer")" "$change" "$origin" "$to" "https://github.com/$RC_REPO/pull/$origin#pullrequestreview-$review"; sep=,
+            printf '%s{"reviewer":"%s","change":"%s","origin_pr":"%s","to":"%s","receipt":"%s","full_required":%s}' "$sep" \
+                "$(json_escape "$reviewer")" "$change" "$origin" "$to" "https://github.com/$RC_REPO/pull/$origin#pullrequestreview-$review" "${RC_FULL_REQUIRED[k]}"; sep=,
         done
         printf '],"references":%s,"current_reviewers":%s,"current_pr":"%s","problem_classes":%s}' \
             "$(json_array ${RC_REFERENCES[@]+"${RC_REFERENCES[@]}"})" \

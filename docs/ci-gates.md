@@ -211,9 +211,9 @@ text or `viewer` typename. Each submitted publisher review must contain exactly 
 block. Any edit marker, malformed block, wrong repo/PR, conflicting id or fingerprint mismatch
 blocks. Identical retries are no-ops in their first host position. Non-publisher copies are ignored
 and counted. Tokens are recomputed against the receipt's `base_at`, not today's advanced base,
-when its provenance commits are local; authenticated tokens survive an absent reviewed head.
-An older token that matches the former shared-log exclusion is accepted as posted, not mapped
-to the corrected fingerprint or granted coverage of the log edits it omitted.
+using local provenance objects. An absent endpoint or a match only under the former shared-log
+exclusion retains blocking history but grants no coverage or clearance. If this is a reviewer's
+latest receipt, a different reviewer's PASS cannot replace it: obtain a corrected full PASS.
 
 `--pr` reads every page, this PR's blockers for every change, and standing blockers from closed,
 unmerged PRs of the same head branch. Earlier deliveries never grant coverage. Merged PRs supply

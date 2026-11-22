@@ -159,6 +159,20 @@ done < "$PKG/manifest.tsv"
 it "Gate diagnostics do not change any existing JSON field, coverage or exits"
 parity
 
+it "A pre-upgrade FAIL needs a full review, not a focused bridge"
+# Same source delta as F1, plus a log edit the former token did not bind.
+git checkout -q --detach "$F1"
+printf -- '- 2026-01-02 002-other: complete\n' >> specs/log.md
+git add specs/log.md; git commit -qm 'historical reviewed log'
+old_head="$(git rev-parse HEAD)"
+git checkout -q "$ID"
+jq --arg old "$old_head" '.[1].body |= (split("\n") | .[1] |= (fromjson | .head=$old | tojson) | join("\n"))' \
+    "$GH_STUB_DIR/original.json" > "$GH_STUB_DIR/reviews/7.json"
+package
+assert_eq '[]' "$(jq -c .prospective_carry "$PKG/dispatch.json")" 'unbound blocker cannot supply the focused bridge' || :
+assert_eq true "$(jq -r '.blockers.scope[]|select(.reviewer=="code")|.full_required' "$PKG/dispatch.json")" 'dispatch names the required full re-review'
+cp "$GH_STUB_DIR/original.json" "$GH_STUB_DIR/reviews/7.json"
+
 it "An actual clean native narrow receipt, not a forecast, establishes carry"
 post code PASS "$F2" "$F1"
 receipt_raw_run bash "$CHECK" --repo "$P" --json --diagnostics --pr https://github.com/owner/repo/pull/7 "$ID"

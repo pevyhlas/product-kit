@@ -22,14 +22,14 @@ review_plan_prepare() {
             (.diagnostics as $d | $d.head==$head and $d.base_ref==$base and $d.base_at==$at and
              $d.policy_at==$policy and $d.receipt_ready and $d.host_content_bound and
              ($d.latest|type)=="array" and all($d.latest[];
-                 ([.reviewer,.eligibility,.receipt,.from,.to]|all(.[];string)) and
+                  ([.reviewer,.eligibility,.receipt,.from,.to,.provenance]|all(.[];string)) and
                  ([.clean,.end_covered,.standing]|all(.[];boolean))) and
              ($d.edges|type)=="array" and all($d.edges[]; (.from|string) and (.to|string)) and
              ($d.standing|type)=="array" and all($d.standing[];
                  [.reviewer,.to,.receipt]|all(.[];string)) and
              ($d.registry|type)=="array" and all($d.registry[]; [.reviewer,.eligibility]|all(.[];string)) and
              ($d.scope_blockers|type)=="array" and all($d.scope_blockers[];
-                 [.reviewer,.change,.origin_pr,.to,.receipt]|all(.[];string)) and
+                  ([.reviewer,.change,.origin_pr,.to,.receipt]|all(.[];string)) and (.full_required|boolean)) and
              ($d.references|type)=="array" and all($d.references[];string) and
              ($d.current_reviewers|type)=="array" and all($d.current_reviewers[];string) and
              ($d.problem_classes|type)=="array" and all($d.problem_classes[];string) and
@@ -159,6 +159,7 @@ review_plan_write() {
         def ref($r): $r=="new-change" or ($d.references|index($r)!=null);
         ([ $p.reviewers[] | select(.action=="review" and eligible(.id)) | .id ]) as $affected |
         ([ $d.standing[].reviewer, $d.scope_blockers[].reviewer,
+            ($d.latest[]|select(.provenance!="verified")|.reviewer),
             ($g.legacy_blockers[]|select(.cleared==false)|.reviewer) ] | unique) as $blockers |
         ([ $d.latest[] | . as $r | select(.eligibility=="reviewer" and .clean and .end_covered and
             (.standing|not) and ($blockers|index($r.reviewer)|not)) ]) as $retained |
@@ -182,6 +183,8 @@ review_plan_write() {
         # A delta reviewer must own EVERY entry and have only standing blockers anchored at X.
         ([ $affected[] | . as $id | select(
             all($p.fixes[]; .reviewers|index($id)!=null) and
+            all($d.scope_blockers[] | select(.reviewer==$id); (.full_required|not) and .to==$since) and
+            all($d.latest[] | select(.reviewer==$id); .provenance=="verified") and
             all($d.standing[] | select(.reviewer==$id); .to==$since)) ]) as $delta_reviewers |
         ([ $d.latest[] | . as $r | select($scope and $since!="" and
             .eligibility=="reviewer" and .clean and (.standing|not) and (.end_covered|not) and
