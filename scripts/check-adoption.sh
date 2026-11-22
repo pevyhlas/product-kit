@@ -26,6 +26,17 @@
 # manifest/tier-map lane below. --head REV implies it and reads committed consumer
 # objects only. Neither lane fetches, installs, edits policy or authorizes review.
 # Exit 0: all checks in the selected lane pass; 1: findings; 2: usage error.
+#
+# Invariants:
+# A default-lane pass reports installation integrity without claiming pinned-source proof.
+# Strict mode uses the committed source gitlink and reports a failed proof on findings;
+# --head selects committed installation bytes, never index or worktree substitutes.
+# Neither lane repairs an installation or grants review or release approval.
+#
+# Threat model:
+# Include ordinary install drift, missing source objects and interrupted or overlapping
+# kit runs. Worktree checks are not a point-in-time snapshot; use --head for a fixed
+# candidate. A hostile writer controlling the checker or its checkout is out of scope.
 set -euo pipefail
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"

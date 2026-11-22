@@ -4,6 +4,18 @@
 # Online --pr enumerates this PR and closed-source blockers in every tier. --receipts revalidates
 # an untrusted snapshot without gh/jq. With no source, only structure and coverage needs are known.
 # Exit 0 host pass, 1 fail, 2 usage, 3 preview pass. The owner approves natively, never by text.
+#
+# Invariants:
+# Use committed policy from the trusted default branch, even for other PR targets.
+# Exit 0 requires host authority; a would-pass offline preview exits 3.
+# A checked online head must be the PR head or a local descendant with equal gated content.
+# PR-authored record text does not grant approval. Coverage exemptions do not bypass
+# standing owner barriers; only later valid native approval by that actor clears its barrier.
+#
+# Threat model:
+# Include candidate-controlled content and review text, unavailable or partial host reads,
+# and revisions moving between runs. Trust the executing code and local Git context;
+# this script does not authenticate its own invocation or exclude a hostile checkout writer.
 # shellcheck disable=SC2034,SC2153 # Coverage/legacy inputs and normalized rows cross sourced interfaces.
 set -euo pipefail
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

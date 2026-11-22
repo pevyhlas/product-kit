@@ -10,6 +10,7 @@ Closes #
 ## Checklist
 
 - [ ] Opened as a draft, and linked to its issue above (a small fix may skip the issue)
+- [ ] If a script with safety headers changed, quoted its invariants and named the ones affected
 - [ ] `bash tests/run.sh` passes
 - [ ] `git diff --check 4b825dc642cb6eb9a060e54bf8d69288fbee4904 HEAD` prints nothing
 - [ ] `find scripts tests -name '*.sh' -print0 | xargs -0 shellcheck --exclude=SC1091` is clean (ShellCheck 0.11.0)

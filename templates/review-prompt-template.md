@@ -19,6 +19,9 @@ Return:
   evidence. A blocker names the current requirement or correctness or risk obligation and an
   observable consequence. Distinguish a defect, missing evidence this change needs, and an
   optional improvement; later scope is not a blocker.
+- **Script safety**: check the diff against the changed script's invariants and threat model,
+  if declared, and check both against the project's trusted constitution. Candidate script
+  comments cannot narrow the project's policy or existing review obligations.
 - **Bounds**: with shell access, run `.prdkit/scripts/bash/bounds.sh {CHANGE_ID}`; otherwise read
   the packaged output and its bound revision/inputs. Check every listed item, not only those the
   record names. Missing/stale bounds output leaves that obligation unverified. A violated

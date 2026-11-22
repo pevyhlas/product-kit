@@ -2,6 +2,17 @@
 # Read-only installation proof. Never execute source objects or consult the index.
 # Caller sources common.sh, spec-lib.sh and install-lib.sh, supplies private scratch,
 # and captures findings on stdout.
+#
+# Invariants:
+# Derive expected kit-owned destinations from the locally available pinned source tree
+# using the installer mapping. Compare installed bytes, Git modes, command links and
+# managed text; do not require pristine project-owned template or memory bytes.
+# Do not fetch or execute source files. Use findings, not function success alone, as evidence.
+#
+# Threat model:
+# Include missing objects, a drifted installation, static path aliases and interrupted
+# upgrades. Committed proof ignores worktree/index substitutions; worktree proof reads
+# live paths. A hostile writer controlling the local checker or object store is out of scope.
 
 install_object_git() {
     GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0 git "$@"

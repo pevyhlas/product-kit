@@ -11,6 +11,12 @@ change by change.
 - Cleanup and close tests now run against seeded combinations of local Git states and
   check that commits and working files survive. The generator is test-only.
 
+### Documentation
+
+- Document safety invariants and threat models in the worktree, close, publication, adoption,
+  review and upgrade scripts. Contributor and review checklists now ask for those contracts
+  to be checked when the scripts change. Script behavior is unchanged.
+
 ## [2.0.3] — 2026-11-22 — review bindings and concurrent evidence preservation
 
 ### Fixed
