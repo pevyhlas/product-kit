@@ -93,12 +93,14 @@ run_test() {
     rm -f "$scratch/timed-out"
     launching=true
     (
+        exec 3>&-
         cd "$root"
         unset GITHUB_STEP_SUMMARY
         exec bash "$path"
-    ) 3>&- </dev/null >"$log" 2>&1 &
+    ) </dev/null >"$log" 2>&1 &
     suite_pid=$!
     (
+        exec 3>&-
         sleep "$limit"
         if kill -0 "$suite_pid" 2>/dev/null; then
             : > "$scratch/timed-out"
@@ -106,7 +108,7 @@ run_test() {
             sleep "$grace"
             kill -KILL -- "-$suite_pid" 2>/dev/null || :
         fi
-    ) 3>&- </dev/null >/dev/null 2>&1 &
+    ) </dev/null >/dev/null 2>&1 &
     timer_pid=$!
     launching=false
     if [ "$interrupted" -ne 0 ]; then exit "$interrupted"; fi
