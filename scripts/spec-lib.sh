@@ -1119,13 +1119,14 @@ spec_default_branch() { # root
 # then each ref named by `review-integration-branches` in the committed config at that target,
 # never the worktree's own. One full ref per line; blank when origin/HEAD does not resolve to a
 # commit, in which case nothing is trusted.
-spec_trusted_refs() { # root
-    local root="$1" default sha policy configured candidate
+spec_trusted_refs() { # root [--tips: include a frozen commit after each ref]
+    local root="$1" default sha policy configured candidate tip seen
     default="$(git -C "$root" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
     case "$default" in refs/remotes/*) ;; *) return 0 ;; esac
     sha="$(git -C "$root" rev-parse --verify --quiet "$default^{commit}" || true)"
     [ -n "$sha" ] || return 0
-    printf '%s\n' "$default"
+    if [ "${2:-}" = --tips ]; then printf '%s\t%s\n' "$default" "$sha"; else printf '%s\n' "$default"; fi
+    seen="$default"
     policy="$(git -C "$root" show "$sha:.prdkit/memory/config.md" 2>/dev/null || true)"
     configured="$(printf '%s\n' "$policy" | awk "$SPEC_SKIP_AWK"'
         { if (spec_skip($0)) next }
@@ -1139,7 +1140,12 @@ spec_trusted_refs() { # root
         [ -n "$candidate" ] || continue
         case "$candidate" in refs/remotes/*) ;; *) candidate="refs/remotes/$candidate" ;; esac
         git check-ref-format "$candidate" >/dev/null 2>&1 || continue
-        printf '%s\n' "$candidate"
+        if [ "${2:-}" = --tips ]; then
+            case $'\n'"$seen"$'\n' in *$'\n'"$candidate"$'\n'*) continue ;; esac
+            seen="$seen"$'\n'"$candidate"
+            tip="$(git -C "$root" rev-parse --verify --quiet "$candidate^{commit}")" || continue
+            printf '%s\t%s\n' "$candidate" "$tip"
+        else printf '%s\n' "$candidate"; fi
     done < <(printf '%s\n' "$configured" | tr ' \t\r' '\n')
 }
 

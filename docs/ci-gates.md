@@ -130,7 +130,8 @@ merges (`--head <sha>`, then `gh pr merge --match-head-commit <sha>`). It passes
   range link. A blocking end that names no content here stands unless a later clean full
   re-review follows. Returning to earlier content or rewriting history never clears it;
 - the reviews cover the change: each range end is `start` (no change) or `fp1:<sha256>` (the
-  change's delta from where it leaves `--base`, outside its own record and log). A blocking
+  change's delta from where it leaves `--base`, outside its own record and closing metadata).
+  Shared-log edits are included except for one validated new line closing the selected change. A blocking
   receipt may end at `none`, which gives no content coverage. Every non-blocking PASS range,
   superseded rounds included, links its two
   contents, and so does a blocking range resolved through the reviewer's own later lines. Each
@@ -170,9 +171,10 @@ remote branch) fails. At the policy snapshot it reads:
   isolation rejects the PR author as publisher; shared mode reports its independence limitation.
 - **`review-t0-paths`** from `.prdkit/memory/config.md`: literal paths, a trailing `/` naming a
   directory (for example `- review-t0-paths: docs/, README.md`). A T0 change passes only when
-  every path it changes since its start, outside its record and `specs/log.md`, is a regular
+  every path it changes since its start, outside its record and closing metadata, is a regular
   non-executable file under one of them, and none is under `.prdkit/`, `.product-kit`, another
-  change record or the L0/L1 spec. Unset, T0 covers only the record and the log.
+  change record or the L0/L1 spec. Unset, T0 covers only the record and its validated closing
+  metadata. Other shared-log edits follow the normal tier and allowlist rules.
 
 The tier is the record's one `**Tier**:` field, whose whole value (up to the next `·`) is exactly
 one of T0–T3 (`T1/T3`, `T1-T3`, `T1, T3` or a second field, even in a comment, fails). It may
@@ -181,9 +183,9 @@ rise, never fall. Its floor is the highest tier the record names on the default 
 change edits L0 (`specs/product.md` or `specs/product/`, as `protocol.md` tiers it). A record on
 the default branch, on `--base` or at the change's start whose tier field is not exactly one tier
 fails the check. A record-only commit that lowers T3 to T1 after review fails and the owner's
-verdict is still required. The record and `specs/log.md` stay exempt from coverage only as
-regular, non-executable files (or absent) where the change starts and at the head (never a
-directory, link or submodule), and a submodule's `ignore` setting never hides a gitlink change.
+verdict is still required. Exempt record or log content must be in regular, non-executable
+files (or absent) where the change starts and at the head, never a directory, link or submodule.
+A submodule's `ignore` setting never hides a gitlink change.
 To land a policy change, merge it first in its own pull request, checked under the policy it
 replaces.
 
@@ -211,7 +213,9 @@ text or `viewer` typename. Each submitted publisher review must contain exactly 
 block. Any edit marker, malformed block, wrong repo/PR, conflicting id or fingerprint mismatch
 blocks. Identical retries are no-ops in their first host position. Non-publisher copies are ignored
 and counted. Tokens are recomputed against the receipt's `base_at`, not today's advanced base,
-when its provenance commits are local; authenticated tokens survive an absent reviewed head.
+using local provenance objects. An absent endpoint or a match only under the former shared-log
+exclusion retains blocking history but grants no coverage or clearance. If this is a reviewer's
+latest receipt, a different reviewer's PASS cannot replace it: obtain a corrected full PASS.
 
 `--pr` reads every page, this PR's blockers for every change, and standing blockers from closed,
 unmerged PRs of the same head branch. Earlier deliveries never grant coverage. Merged PRs supply
