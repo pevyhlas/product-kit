@@ -20,6 +20,7 @@ CLEANUP = (
     "absorbed stale unrelated", "embedded force", "linked force",
     "absorbed ignored", "locked force", "dirty untracked intent staged force",
     "intent", "spool-link force", "detached", "untracked", "detached closed",
+    "reflog-only",
 )
 CLOSE = ("", "inside", "escaping", "nested", "staged", "dirty untracked")
 ID = "701-generated"
@@ -145,6 +146,7 @@ class Checkout:
     target: Path
     args: list
     head: bytes
+    reflog_tip: bytes | None
     module_tip: str | None
     files: dict
 
@@ -175,6 +177,15 @@ def build_cleanup(root, scripts, features, token):
         tip = module(work, src, linked, features)
     git(work, "commit", "--allow-empty", "-qm", token)
     head = git(work, "rev-parse", "HEAD").strip()
+    reflog_tip = None
+    if "reflog-only" in features:
+        git(work, "checkout", "-q", "--detach")
+        git(work, "commit", "-qm", f"private reflog {token}", "--allow-empty")
+        reflog_tip = git(work, "rev-parse", "HEAD").strip()
+        git(work, "checkout", "-q", head.decode() if "detached" in features else ID)
+        require(git(work, "rev-parse", "HEAD@{1}").strip() == reflog_tip and
+                reflog_tip not in git(repo, "rev-list", "--all").splitlines(),
+                "fixture commit must be reachable only from the private HEAD reflog")
     admin = Path(git(work, "rev-parse", "--absolute-git-dir").decode().strip())
     saved = contents(work, tracked, features, token)
     if "locked" in features:
@@ -203,7 +214,7 @@ def build_cleanup(root, scripts, features, token):
             args = ["--closed"]
     elif "stale" in features:
         args = ["--prune"]
-    return Checkout(repo, work, admin, target, args, head, tip, saved)
+    return Checkout(repo, work, admin, target, args, head, reflog_tip, tip, saved)
 
 
 def cleanup(root, scripts, features, token):
@@ -258,9 +269,19 @@ def cleanup(root, scripts, features, token):
                      (slots[0] / "admin" if slots else admin) / "modules" / SUB)
             require(store.is_dir(), f"only store for unpushed module commit {tip} disappeared")
             git(repo, f"--git-dir={store}", "--work-tree=.", "cat-file", "-e", tip + "^{commit}")
-    git(repo, "reflog", "expire", "--expire=now", "--all")
+    # After a refusal (or an unrelated retirement), don't destroy the live
+    # private reflog in the test itself. A retired checkout gets full expiry.
+    keep_live_log = state.reflog_tip and admin.is_dir()
+    expiry = ["--single-worktree"] if keep_live_log else []
+    git(repo, "reflog", "expire", "--expire=now", "--all", *expiry)
     git(repo, "gc", "--prune=now", "-q")
     git(repo, "cat-file", "-e", state.head.decode() + "^{commit}")
+    if state.reflog_tip:
+        git(repo, "cat-file", "-e", state.reflog_tip.decode() + "^{commit}")
+        retained_admin = slots[0] / "admin" if slots else admin
+        log = git(repo, f"--git-dir={retained_admin}", "--work-tree=.",
+                  "reflog", "show", "--format=%H", "HEAD")
+        require(state.reflog_tip in log.splitlines(), "lost private HEAD reflog entry")
     if staged:
         archived = slots[0] / "admin" if slots else admin
         require((archived / "index").read_bytes() == index, "lost or replaced staged index")
