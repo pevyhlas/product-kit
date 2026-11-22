@@ -34,12 +34,31 @@ not a substitute for the required workflow.
    trusted 2.0.x verifier and publisher from a separately pinned source against
    current consumer policy. Verify the actual versions both jobs execute. If your
    integration cannot keep both working independently, stay on 2.0.x.
-4. On a clean upgrade branch pin the released 3.0 kit; run
-   `bash .product-kit/scripts/init.sh --upgrade --dry-run`, then the same command
-   without `--dry-run`. Inspect and commit the pin, installed files and manifest.
-   Land the installation through the existing protected route. Old receipt files
-   may stay on disk: 3.0 ignores them and reports their retirement once. Keep them
-   during the rollback window. No host review is modified by installation.
+4. Use **two commits on the same upgrade branch and PR**. Start from a clean
+   consumer checkout with the trusted default branch fetched. Set `KIT_REV` to
+   the selected released 3.0 tag. First commit **only the gitlink**:
+
+   ```bash
+   git -C .product-kit fetch --tags
+   git -C .product-kit checkout --detach "${KIT_REV:?set the released kit tag}"
+   git add -- .product-kit
+   git commit -m "Pin Product-Kit $KIT_REV"
+   ```
+
+   Check `git status --porcelain` is empty. A staged or unstaged pin is still a
+   dirty checkout. From the clean pin commit, run the preflight, then apply:
+
+   ```bash
+   bash .product-kit/scripts/init.sh --upgrade --dry-run &&
+     bash .product-kit/scripts/init.sh --upgrade
+   git status --short
+   ```
+
+   Stop on any error. Inspect the install diff and manifest, then stage the
+   reviewed changes (including newly installed and retired files) and commit them
+   as the **second commit**. Land both commits together through the old protected
+   route. Keep old receipt data during the rollback window; 3.0 ignores it.
+   No host review is modified by installation.
 
 ## Prove enforcement on one pilot PR
 
