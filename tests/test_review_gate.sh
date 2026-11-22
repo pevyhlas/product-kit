@@ -16,7 +16,9 @@ cat >> .prdkit/memory/config.md <<'EOF'
 - review-publisher-isolation: shared
 - review-t0-paths: docs/
 EOF
-printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n' >> .prdkit/memory/agents.md
+printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n| second | reviewer |\n' >> .prdkit/memory/agents.md
+mkdir -p specs
+printf -- '- 2026-01-02 002-earlier: completed\n' > specs/log.md
 git add -A; git commit -qm baseline
 BASE="$(git rev-parse HEAD)"
 git update-ref refs/remotes/origin/main HEAD

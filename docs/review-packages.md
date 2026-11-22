@@ -31,7 +31,8 @@ use the disjoint `context-sections/` namespace. Repeated exact spans share an ar
 retaining each obligation's provenance. Final artifact bytes/hashes are checked before completion.
 Spec enumeration uses literal NUL-delimited Git paths; rejected entries remain named gaps.
 
-A completed package for the same head and trusted base/policy can be reused. A different
+A clean full package can be reused only for the same head, range, trusted base and policy
+after checking its artifact inventory. Extra context, evidence or a focused delta needs a fresh package. A different
 head can be packaged even if only the record changed. Interrupted rounds retain their number
 and evidence. A completion binding is written last by same-directory rename.
 

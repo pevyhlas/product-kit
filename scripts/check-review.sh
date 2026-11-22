@@ -102,7 +102,7 @@ highest_tier() { grep -x 'T[0-3]' | sort | tail -n 1; } # tiers on stdin -> the 
 tier_floor_of() { # rev -> the highest tier the record names there, if any
     { git -C "$root" show "$1:$path" 2>/dev/null || true; } | floor_tiers | highest_tier || true
 }
-# T0 is docs only: every changed path outside the record and the log must be a regular,
+# T0 is docs only: every changed path outside the record and closing metadata must be a regular,
 # non-executable file under a path the trusted config lists in review-t0-paths (literal paths;
 # a trailing / names a directory), and never the kit's policy, another change record or the L0/L1
 # spec. Prints the paths that do not qualify; fails when the diff cannot be read.
@@ -123,15 +123,67 @@ metadata_mode_problems() { # rev -> the record or log path when it is there but 
         case "$entry" in ""|"100644 blob "*) ;; *) printf '%s\n' "$file" ;; esac
     done
 }
+_review_blob_text() { # root blob file
+    local size kept
+    GIT_NO_REPLACE_OBJECTS=1 git -C "$1" cat-file blob "$2" > "$3" 2>/dev/null || return 2
+    size="$(set -o pipefail; wc -c < "$3" | tr -d ' ')" || return 2
+    kept="$(set -o pipefail; tr -d '\000' < "$3" | wc -c | tr -d ' ')" || return 2
+    [ -n "$size" ] && [ -n "$kept" ] || return 2
+    [ "$size" = "$kept" ]
+}
+
+# A legacy shared-log close is metadata only if the selected record was deleted in this
+# range, there is no per-change entry, and exactly one well-formed line was added for it.
+# Return the blob ID of the log without that line, or fail to keep the original log delta.
+_review_shared_log_without_close() { # root id start rev old-mode old-id new-id oldtext newtext deletion-text
+    local root="$1" id="$2" start="$3" rev="$4" oldmode="$5" last entry lines deletion_lines
+    local record="specs/changes/$id.md" own="specs/log/$id.md"
+    is_change_id "$id" && spec_objects_local "$root" || return 1
+    [ "$(git -C "$root" ls-tree "$rev" -- "$record" "$own" || echo unreadable)" = "" ] &&
+        [ "$(git -C "$root" ls-tree "$start" -- "$own" || echo unreadable)" = "" ] || return 1
+    last="$(git -C "$root" log -1 --format=%H "$start..$rev" -- "$record")" && [ -n "$last" ] || return 1
+    entry="$(git -C "$root" ls-tree "$last^" -- "$record")" || return 1
+    case "$entry" in "100644 blob "*) ;; *) return 1 ;; esac
+    entry="$(git -C "$root" ls-tree "$last" -- specs/log.md)" || return 1
+    case "$entry" in "100644 blob "*) ;; *) return 1 ;; esac
+    _review_blob_text "$root" "$last:specs/log.md" "${10}" || return 1
+    deletion_lines="$(wc -l < "${10}")" || return 1
+
+    if [ "$oldmode" = 000000 ]; then : > "$8" || return 1
+    else _review_blob_text "$root" "$6" "$8" || return 1; fi
+    _review_blob_text "$root" "$7" "$9" || return 1
+    lines="$(wc -l < "$9")" || return 1
+    # Preserve every other byte, including a missing final newline on a retained line.
+    ( set -o pipefail
+      LC_ALL=C awk -v id="$id" -v lines="$lines" -v deletion_lines="$deletion_lines" '
+        BEGIN { key = "^- [0-9-]+ " id ":" }
+        FILENAME == ARGV[1] { if ($0 ~ key) old++; next }
+        FILENAME == ARGV[2] {
+            if ($0 ~ key) { at_close++; original=$0; terminated=(FNR <= deletion_lines) }
+            next
+        }
+        $0 ~ key {
+            n++
+            if ($0 != original || terminated != (FNR <= lines)) next
+            text=$0
+            if (FNR <= lines) sub(/\r$/, "", text)
+            if (text !~ /\r/ && text ~ ("^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] " id ": .*[^[:space:]]")) valid++
+            next
+        }
+        { printf "%s%s", $0, (FNR <= lines ? "\n" : "") }
+        END { exit (old || at_close != 1 || n != 1 || valid != 1) }
+      ' "$8" "${10}" "$9" | git -C "$root" hash-object --no-filters --stdin )
+}
+
 t0_violations() { # from to
     local allowed raw meta file old new entry ok
     allowed="$(t0_paths "$policy_at")"
     raw="$(LC_ALL=C GIT_NO_REPLACE_OBJECTS=1 git -C "$root" -c core.quotepath=true diff --raw --no-abbrev \
         --no-renames --no-ext-diff --no-textconv --no-color --no-relative --ignore-submodules=none "$1" "$2" -- . \
-        ":(top,literal,exclude)$path" ":(top,literal,exclude)specs/log.md" \
-        ":(top,literal,exclude)specs/log/$id.md")" || return 1
+        ":(top,literal,exclude)$path" ":(top,literal,exclude)specs/log/$id.md")" || return 1
     while IFS="$(printf '\t')" read -r meta file; do
         [ -n "$meta" ] || continue
+        if [ "$file" = specs/log.md ] && [ -z "$shared_log_delta" ]; then continue; fi
         old="${meta%% *}"; old="${old#:}"; new="${meta#* }"; new="${new%% *}"
         ok=false
         case "$old:$new" in 000000:100644|100644:100644|100644:000000) ok=true ;; esac
@@ -154,7 +206,7 @@ t0_violations() { # from to
 }
 path="specs/changes/$id.md"
 spec_l01=(specs/product.md specs/product specs/architecture.md specs/architecture specs/SPEC.md specs/decisions)
-changed_since() { # sha [pathspec...] -> paths changed from sha to head, outside the record and the log
+changed_since() { # sha [pathspec...] -> paths changed from sha to head; check the shared log separately
     local sha="$1"; shift
     [ "$#" -gt 0 ] || set -- . ":(exclude)$path" ":(exclude)specs/log.md" ":(exclude)specs/log/$id.md"
     git -C "$root" diff --name-only --no-renames --ignore-submodules=none "$sha" "$head" -- "$@" | tr '\n' ' ' | sed 's/ $//'
@@ -260,7 +312,23 @@ else
             problems+=("$(printf '%s' "$odd" | tr '\n' ' ' | sed 's/ $//') is not a regular, non-executable file at $where, so changing it cannot be exempt from review; fix it on the base first")
         fi
     done
-    if $base_trusted && [ -n "$start" ] && [ "$start" != "$head" ] && [ -z "$(changed_since "$start")" ]; then
+    shared_log_delta=""
+    if [ -n "$start" ]; then
+        if ! shared_log_delta="$(git -C "$root" diff --raw --no-abbrev --no-renames "$start" "$head" -- specs/log.md)"; then
+            shared_log_delta=unreadable
+            problems+=("The shared log's diff from ${start:0:12} to $head cannot be checked")
+        elif [ -n "$shared_log_delta" ]; then
+            read -r old new oid nid _ <<< "${shared_log_delta#:}"
+            case "$old:$new" in 000000:100644|100644:100644)
+                if normalized="$(_review_shared_log_without_close "$root" "$id" "$start" "$head" "$old" "$oid" "$nid" "$work/old" "$work/new" "$work/deletion")"; then
+                    if [ "$old" = 000000 ]; then oid="$(git -C "$root" hash-object --stdin < /dev/null)"; fi
+                    [ "$normalized" != "$oid" ] || shared_log_delta=""
+                fi ;;
+            esac
+        fi
+    fi
+    if $base_trusted && [ -n "$start" ] && [ "$start" != "$head" ] &&
+        [ -z "$shared_log_delta" ] && [ -z "$(changed_since "$start")" ]; then
         record_only=true
     fi
     if [ "$tier" = T0 ] && ! $record_only && [ -n "$policy_at" ] && [ -n "$start" ]; then
@@ -272,7 +340,7 @@ else
             shown="$(printf '%s\n' "$t0_bad" | head -n 10 | tr '\n' ' ' | sed 's/ $//')"
             [ "$n_bad" -le 10 ] || shown="$shown and $((n_bad - 10)) more"
             if [ -z "$(t0_paths "$policy_at")" ]; then
-                problems+=("T0 is docs only, and the trusted base's .prdkit/memory/config.md lists no review-t0-paths, so T0 covers only the record and the log; this change also touches: $shown. Claim T1 or higher")
+                problems+=("T0 is docs only, and the trusted base's .prdkit/memory/config.md lists no review-t0-paths, so T0 covers only the record and its validated closing metadata; this change also touches: $shown. Claim T1 or higher")
             else
                 problems+=("T0 is docs only: these changed paths are not regular files under the trusted base's review-t0-paths (or are policy, another change record or the L0/L1 spec): $shown. Claim T1 or higher")
             fi
