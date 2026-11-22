@@ -84,15 +84,30 @@ macOS stay portable to its `/bin/bash` 3.2 and BSD userland. Run relevant real-a
 locally for behavioral changes, recording driver/version and limitations. Mock-driver success
 only establishes evaluation plumbing. See [test docs](tests/README.md).
 
-**CI and the merge rule.** `CI` ([`ci.yml`](.github/workflows/ci.yml)) runs these three
-commands on a GitHub-hosted Ubuntu 24.04 runner for every pull request and every push to main.
-It also runs adoption-gate and doctor coverage with checksum-pinned legacy mawk (1.3.4 20200120);
-newer mawk releases support intervals and would not exercise that compatibility boundary.
-`CI (macOS)` ([`ci-macos.yml`](.github/workflows/ci-macos.yml)) runs the portable suites with
-macOS's native Bash 3.2 and BSD userland, for every pull request and push to main and on demand.
-Both must pass before a merge. Only `CI` decides releases: `CI (macOS)` neither triggers nor
-gates one. Pull-request runs get a read-only token and no secrets, and a run from an outside
-contributor waits for the maintainer's approval.
+**CI and the merge rule.** `CI` ([`ci.yml`](.github/workflows/ci.yml)) runs for every pull
+request and push to main. Two GitHub-hosted Ubuntu 24.04 jobs split the complete shell suite.
+A parallel checks job runs ShellCheck, the whitespace and jq checks, and reruns adoption gate,
+doctor, lifecycle and spec navigation with checksum-pinned legacy mawk (1.3.4 20200120), which
+lacks regex intervals.
+`CI (macOS)` ([`ci-macos.yml`](.github/workflows/ci-macos.yml)) runs the
+[native allowlist](tests/native-suites.txt) in four macOS jobs with Bash 3.2 and BSD userland,
+for every pull request and push to main and on demand. Shards use
+[median suite timings](tests/suite-weights.txt) for balancing, always include untimed suites
+from their input list, and log elapsed seconds after each suite. Locally, `bash tests/run.sh`
+still runs everything; `bash tests/run.sh --shard 1/2 --list` previews a shard (add `--native`
+for the macOS list). When macOS runner slots are busy, shards start in waves, so total
+workflow time can exceed the longest shard's run time.
+
+Pushing a new commit to a pull request cancels older runs of each CI workflow for that
+pull request. Other pull requests, pushes to main and manually dispatched runs are not
+cancelled by this policy. Required checks must pass for the current PR revision; an older
+revision's check cannot satisfy them.
+
+The required checks, `test` and `portable helpers (macOS)`, pass only when their expected
+shards (and the Linux checks job) all succeed. Both must pass before a merge. Only `CI`
+decides releases: `CI (macOS)` neither triggers nor gates one. Pull-request runs get a
+read-only token and no secrets, and a run from an outside contributor waits for the
+maintainer's approval.
 
 ## License
 
