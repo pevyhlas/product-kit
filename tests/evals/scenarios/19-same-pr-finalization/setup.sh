@@ -13,7 +13,6 @@ cat >> .prdkit/memory/config.md <<'EOF'
 - review-host: github
 - review-publishers: bot:1001
 - review-owner: user:1003
-- review-publisher-isolation: required
 EOF
 git add -A && git commit -qm 'fixture: integration base lists README.md as docs only'
 default="$(git symbolic-ref --short HEAD)"

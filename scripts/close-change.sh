@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # close-change.sh — Close a reviewed change in its own PR with one commit: refuse unless
 # check-review.sh passes at HEAD, then write the change's log entry and delete its record.
-# Run it once the required receipts are published and before the final push, so required checks
+# Run it once the current head is approved and before the final push, so required checks
 # run once on the closed head. It commits in the current checkout only; it never pushes, merges
 # or removes a worktree (cleanup-change.sh does that after merge, or --closed for every closed change).
 # The closing commit uses the checkout's ambient Git identity. To use an agent identity, set
@@ -11,7 +11,7 @@
 #   <log text> follows "- <date> <id>: " on the entry: "<intent> — <IDs> — <disposition> — <PR>",
 #   at most 300 characters. The entry is its own file, specs/log/<id>.md, so two branches that
 #   each close a change never conflict; compaction folds entries into specs/log.md (compact.md).
-#   Exit 0 closed and check-review.sh passes at the new head, 1 refused or failing, 2 usage.
+#   Exit 0 closed locally; the new head needs its own approval, 1 refused or failing, 2 usage.
 set -euo pipefail
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
@@ -73,7 +73,7 @@ fi
 check() { bash "$SCRIPT_DIR/check-review.sh" --pr "$pr" --repo "$root" --head HEAD ${base_args[@]+"${base_args[@]}"} "$id" 2>&1; }
 if ! out="$(check)"; then
     printf '%s\n' "$out" >&2
-    refuse "check-review.sh does not pass at HEAD; publish the remaining verdicts first"
+    refuse "check-review.sh does not pass at HEAD; obtain an eligible GitHub approval first"
 fi
 
 check_paths
@@ -124,10 +124,5 @@ git -C "$root" rm -q -- "$path"
 git -C "$root" commit -q -m "${message:-$id: close (log entry, record deleted)}" ||
     refuse "the commit failed; the record deletion and the log entry are staged"
 
-head="$(git -C "$root" rev-parse --short HEAD)"
-if out="$(check)"; then
-    printf 'Closed %s in %s.\n%s\n' "$id" "$head" "$out"
-else
-    printf '%s\n' "$out" >&2
-    refuse "closed $id in $head, but check-review.sh fails there"
-fi
+head="$(git -C "$root" rev-parse HEAD)"
+printf 'Closed %s in %s. Push this commit, obtain its exact-head approval, and rerun check-review.sh before merging.\n' "$id" "$head"

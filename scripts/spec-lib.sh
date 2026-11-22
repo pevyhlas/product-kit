@@ -1072,7 +1072,7 @@ spec_objects_local() { # root
 }
 
 # Records committed at <rev> with no child or outcome checkpoint keeping them open.
-# Verdicts are host receipts, not record text: T0 and not-yet-reviewed records are listed too.
+# Verdicts are GitHub reviews, not record text: T0 and not-yet-reviewed records are listed too.
 # Committed objects only; prints change ids.
 spec_unclosed_changes() { # root rev
     local root="$1" rev="$2" path

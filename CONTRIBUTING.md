@@ -64,7 +64,7 @@ find scripts tests -name '*.sh' -print0 | xargs -0 shellcheck --exclude=SC1091
 ```
 
 The suite needs Bash, Git, standard utilities, and jq 1.6+ for the tests. Online review gating
-and publication require gh and jq; local gate previews remain jq-free. CI lints with ShellCheck
+requires gh and jq; local gate previews remain jq-free. CI lints with ShellCheck
 0.11.0, so use that version locally. Helpers that run on
 macOS stay portable to its `/bin/bash` 3.2 and BSD userland. Run relevant real-agent scenarios
 locally for behavioral changes, recording driver/version and limitations. Mock-driver success

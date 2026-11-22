@@ -18,14 +18,14 @@ for kind in legacy empty unterminated malformed multiline nul; do
     ROOT="$P/.prdkit/cache/evidence/$ID/reviews"
     mkdir -p "$ROOT/round-3"
     printf 'interrupted evidence\n' > "$ROOT/round-3/report.txt"
-    binding="package2"$'\t'"$ID"$'\t'"$HEAD_SHA"$'\t'"$REF"$'\t'"$BASE"$'\t'"$BASE"$'\tknown'
+    binding="package3"$'\t'"$ID"$'\t'"$HEAD_SHA"$'\t'"$REF"$'\t'"$BASE"$'\t'"$BASE"$'\tknown'
     case "$kind" in
-        legacy) printf '%s\n' "${binding/package2/package1}" > "$ROOT/round-3/completed.tsv" ;;
+        legacy) printf '%s\n' "${binding/package3/package1}" > "$ROOT/round-3/completed.tsv" ;;
         empty) : > "$ROOT/round-3/completed.tsv" ;;
         unterminated) printf '%s' "$binding" > "$ROOT/round-3/completed.tsv" ;;
         malformed) printf '%s\textra\n' "$binding" > "$ROOT/round-3/completed.tsv" ;;
         multiline) printf '%s\nextra\n' "$binding" > "$ROOT/round-3/completed.tsv" ;;
-        nul) printf 'package2\t%s\t%s\000%s\t%s\t%s\t%s\tknown\n' "$ID" "${HEAD_SHA:0:20}" "${HEAD_SHA:20}" "$REF" "$BASE" "$BASE" > "$ROOT/round-3/completed.tsv" ;;
+        nul) printf 'package3\t%s\t%s\000%s\t%s\t%s\t%s\tknown\n' "$ID" "${HEAD_SHA:0:20}" "${HEAD_SHA:20}" "$REF" "$BASE" "$BASE" > "$ROOT/round-3/completed.tsv" ;;
     esac
     before="$(package_snapshot "$ROOT/round-3")"
     run bash "$BUILD" "$ID" "$BASE"
@@ -34,7 +34,7 @@ for kind in legacy empty unterminated malformed multiline nul; do
     [ "$STATUS" = 0 ] || continue
     pkg="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
     assert_eq 4 "$(printf '%s' "$OUTPUT" | jq .ROUND)" 'incomplete numbering retained'
-    assert_contains "$(cat "$pkg/index.md")" 'Fingerprint comparison: unknown' 'unusable binding was not equal/changed evidence'
+    assert_contains "$(cat "$pkg/index.md")" 'Review commit:' 'unusable binding was not equal/changed evidence'
     assert_file "$pkg/completed.tsv" 'new usable binding published last'
     assert_eq absent "$([ -e "$pkg/completed.pending" ] && echo present || echo absent)" 'no partial publication after success'
     mkdir "$ROOT/round-8"; cp "$ROOT/round-3/completed.tsv" "$ROOT/round-8/completed.tsv"

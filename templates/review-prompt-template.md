@@ -28,18 +28,9 @@ Return:
   terms (never a required input). A copy the diff adds or edits is medium; a contradiction it creates (an old copy
   of a changed fact) is high; untouched older duplication is low, with a pointer.
 - Anything not verifiable from the package; never guess a pass.
-- Identify the eligible registered reviewer context `{REVIEWER_ID}`. The coordinator preserves
-  your report verbatim; the trusted publisher runs `publish-review.sh --from-report <file>` to
-  bind the verdict and counts to reviewed content; the publisher posts it; never paste it yourself:
-
-```text
-<!-- prdkit-review
-{"schema":"prdkit.review.v3","id":"<32 hex>","repo":"<owner>/<name>","pr":1,"change":"{CHANGE_ID}","reviewer":"{REVIEWER_ID}","from":"start","to":"fp1:<64 hex>","head":"{HEAD_SHA}","since":"","base":"refs/remotes/origin/<branch>","base_at":"<40 hex>","verdict":"{PASS_OR_FAIL}","critical":0,"high":0,"medium":0,"low":0,"report":"<url>"}
--->
-```
-
-The receipt is metadata, not evidence of independence.
-
+- Submit a normal GitHub review under your own configured account for {HEAD_SHA}. Use
+  `APPROVED` only for a pass. If unable to submit, return the report and state that the host
+  approval is outstanding. Report text alone never approves a PR.
 - Check the upstream intent/design references, dependency outcomes and required PR gates. Reject
   requirements invented from implementation convenience, demoted failing checks, or unknown runtime
   observations presented as PASS. Non-gating observations do not require a cleanup PR. Verify the
@@ -47,12 +38,8 @@ The receipt is metadata, not evidence of independence.
 
 On re-review, use {SINCE_SHA_OR_INITIAL} and the finding-to-fix/affected-obligation map. Mark earlier
 findings addressed or not, inspect the behavior the fix affects and cross-boundary consequences,
-and keep unchanged approvals. dispatch.json separates authenticated retained coverage from
-prospective carry: a forecast requires an actual clean native narrow receipt and a fresh online
-gate evaluation. The optional map is lead judgment, not verdict authority or proof that a concern
-is unaffected. Never infer a finding closed from it. A missing map or unavailable host leaves
-dispatch pending, not an empty required panel. The full diff remains available for context; do not re-ingest every
-prior transcript. State which concern/range the verdict covers. For a design judgment between concepts you did not produce, report
+and verify the exact commit being approved. The full diff remains available for context.
+For a design judgment between concepts you did not produce, report
 compliance per concept, real tradeoffs and a recommendation; difference alone is not a defect.
 
 End the report with exactly these last two lines, substituting your verdict and non-negative counts:

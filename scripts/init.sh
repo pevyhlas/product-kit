@@ -18,13 +18,11 @@
 #                   error; default: the manifest's recorded set, else claude,agents plus
 #                   auto-detected harnesses). On an existing install the list must keep
 #                   every recorded harness: dropping one is refused (see docs/harnesses.md)
+#   --dry-run       With --upgrade, check the planned installation without writing
 #   --upgrade       Refresh kit-owned files (commands + scripts, always), auto-update
 #                   unmodified templates/memory, add new files. Consumer edits to
 #                   templates/memory are preserved and listed; edits to kit-owned
 #                   commands/scripts are refused on 2.0 upgrades (older sources overwrite).
-#   --migrate-reviews  With --upgrade to 2.0: accept fresh native reviews, report 1.x blockers
-#   --dry-run       With --upgrade --migrate-reviews: preflight and report only; install nothing
-#   --json          With --dry-run: machine-readable transition report
 #   --with NAME     Also install an optional subsystem (agent-tiers: render-agents.sh and the
 #                   neutral agent-definition template). The manifest records the choice and
 #                   later runs keep it; a project that uses agent tiers (.prdkit/agents/*.md
@@ -53,9 +51,6 @@ source "$SCRIPT_DIR/install-lib.sh"
 source "$SCRIPT_DIR/spec-lib.sh"
 source "$SCRIPT_DIR/common.sh"
 source "$SCRIPT_DIR/review-policy-lib.sh"
-source "$SCRIPT_DIR/review-fingerprint-lib.sh"
-source "$SCRIPT_DIR/review-receipts-lib.sh"
-source "$SCRIPT_DIR/review-legacy-lib.sh"
 source "$SCRIPT_DIR/review-upgrade-lib.sh"
 
 PK_VERSION="unknown"
@@ -71,7 +66,7 @@ TARGET=""
 HARNESS_RAW=""
 WITH_RAW=""
 WITHOUT_RAW=""
-MIGRATE_REVIEWS=false; DRY_RUN=false; JSON=false
+DRY_RUN=false
 IGNORE_ENTRIES=".prdkit/ledger/ .prdkit/cache/ .prdkit/retrospective/ .worktrees/ .prdkit/.install-lock .prdkit/.install-state"
 
 while [ $# -gt 0 ]; do
@@ -79,9 +74,7 @@ while [ $# -gt 0 ]; do
         --copy) MODE_COPY=true; MODE_EXPLICIT=true ;;
         --symlink) MODE_COPY=false; MODE_EXPLICIT=true ;;
         --upgrade) UPGRADE=true ;;
-        --migrate-reviews) MIGRATE_REVIEWS=true ;;
         --dry-run) DRY_RUN=true ;;
-        --json) JSON=true ;;
         --check) CHECK=true ;;
         --force) FORCE=true ;;
         --harness)
@@ -109,13 +102,10 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-if { $MIGRATE_REVIEWS && { ! $UPGRADE || ! upgrade_source_2; }; } ||
-    { $DRY_RUN && ! $MIGRATE_REVIEWS; } || { $JSON && ! $DRY_RUN; } ||
-    { $CHECK && { $MIGRATE_REVIEWS || $DRY_RUN; }; }; then
-    echo 'Usage: init.sh --upgrade --migrate-reviews [--dry-run [--json]] (requires kit 2.0 or newer)' >&2
-    exit 2
-fi
 
+if $DRY_RUN && { ! $UPGRADE || $CHECK || ! upgrade_source_2; }; then
+    echo '--dry-run requires --upgrade on a current kit' >&2; exit 2
+fi
 # --- Resolve target project root ---
 if [ -z "$TARGET" ]; then
     if git -C "$PWD" rev-parse --show-toplevel >/dev/null 2>&1; then
@@ -545,7 +535,7 @@ if upgrade_source_2 && { $UPGRADE || $CHECK; }; then
     spec_objects_local "$TARGET" || { echo 'Cannot read trusted policy without fetching missing objects; nothing was written.' >&2; exit 1; }
     export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
     upgrade_policy_context
-    upgrade_rigor_diagnosis || { if $MIGRATE_REVIEWS; then exit 1; fi; }
+    upgrade_rigor_diagnosis || { if $DRY_RUN; then exit 1; fi; }
 fi
 if $CHECK; then
     incomplete=false
@@ -560,10 +550,6 @@ if $CHECK; then
     fi
     echo "Product-Kit check — kit version $PK_VERSION, installed $(head -n 1 "$MANIFEST")"
     echo
-    installed_version="$(install_manifest_value "$MANIFEST" version 2>/dev/null)" || installed_version=''
-    if upgrade_source_2 || upgrade_version_2 "$installed_version"; then
-        review_legacy_record_findings "$TARGET" || true
-    fi
 
     OUTDATED=()
     MODIFIED=()
@@ -739,9 +725,7 @@ if upgrade_source_2 && $UPGRADE; then
     upgrade_destinations_safe || exit 1
     upgrade_preflight || exit 1
     upgrade_no_overwrite || exit 1
-    if ! $MIGRATE_REVIEWS; then upgrade_plain_guard || exit 1; fi
-    if $MIGRATE_REVIEWS; then upgrade_transition_report || exit 1; fi
-    if $DRY_RUN; then exit 0; fi
+    if $DRY_RUN; then echo "Upgrade preflight passed; nothing was written."; exit 0; fi
 fi
 
 # Serialize writes, with a retained phase marker rather than pretending the whole install is
@@ -771,9 +755,9 @@ if [ "$INITIAL_MANIFEST" != "$current_manifest" ]; then
     echo 'Error: manifest changed while preparing the install; retry to resolve current ownership/harness settings.' >&2
     exit 1
 fi
-prior_version=''
+old_gate=false
 if $UPGRADE && upgrade_source_2; then
-    prior_version="$(install_manifest_value "$MANIFEST" version 2>/dev/null)" || prior_version=''
+    if grep -qE "^[[:xdigit:]]+  \.prdkit/scripts/bash/review-receipts-lib\.sh$" "$MANIFEST"; then old_gate=true; fi
 fi
 record_progress() {
     INSTALL_PHASE="$1"; INSTALL_PATH="$2"
@@ -1167,12 +1151,7 @@ if $UPGRADE; then
     echo
     echo "Upgrade complete (commands re-linked, scripts refreshed, unmodified templates/memory updated, modified templates/memory preserved)."
     echo "Run 'bash .product-kit/scripts/init.sh --check' anytime to see install drift."
-    case "$prior_version" in
-        1.*)
-            echo "If the upgrade PR uses the native review gate, create its numbered change record after installation."
-            echo "See .product-kit/docs/migrating-to-2.0.md for the review and closing steps."
-            ;;
-    esac
+    if $old_gate; then echo "Existing review receipts are ignored; you may delete them. See docs/migrating-to-3.0.md."; fi
     echo "Run /prdkit-status for the current state."
     exit 0
 fi
@@ -1189,5 +1168,5 @@ Next steps:
 
 To upgrade later, choose a release tag and commit the .product-kit pin in this project first.
 Run 'bash .product-kit/scripts/init.sh --check' (drift is expected on a new pin), then follow
-the selected release's upgrade instructions. For 1.5 to 2.0, see docs/migrating-to-2.0.md in the kit.
+the selected release's upgrade instructions in docs/migrating-to-3.0.md.
 EOF

@@ -1,5 +1,8 @@
 # Migrating to 2.0
 
+These instructions apply only to the 2.x kit. For a current upgrade, follow
+[Migrating to 3.0](migrating-to-3.0.md).
+
 2.0 reads verdicts from authenticated pull-request reviews, not `**Review**:` lines in a
 record. **No 1.x PASS is converted into a receipt.** Open PRs need fresh reviews; historical
 FAILs remain enforceable. The transition flag acknowledges this change, not a data conversion.

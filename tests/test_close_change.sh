@@ -10,7 +10,9 @@ PROJ="$(cd "$PROJ" && pwd -P)"
 B="$PROJ/.prdkit/scripts/bash"
 cd "$PROJ" || exit 1
 printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n' >> .prdkit/memory/agents.md
-receipt_policy "$PROJ"
+review_policy "$PROJ"
+use_gh_stub
+pr=https://github.com/owner/repo/pull/7
 git add -A >/dev/null; git commit -qm installed >/dev/null
 DEFAULT="$(git symbolic-ref --short HEAD)"
 git update-ref "refs/remotes/origin/$DEFAULT" HEAD
@@ -37,37 +39,37 @@ branch_with_code() { # id
 }
 
 it "help documents the ambient Git identity and the agent overrides"
-receipt_raw_run bash "$B/close-change.sh" --help
+run bash "$B/close-change.sh" --pr "$pr" --help
 assert_eq 0 "$STATUS" "help succeeds without PR arguments"
 assert_contains "$OUTPUT" "The closing commit uses the checkout's ambient Git identity."
 assert_contains "$OUTPUT" "GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL"
 
 it "one command closes a reviewed change: log entry, record deleted, one commit, gate passes"
 branch_with_code 001-greet
-START="$(git merge-base HEAD "$DEFAULT")"; REVIEWED="$(git rev-parse HEAD)"
-run bash "$B/close-change.sh" 001-greet "warmer greeting — R-01 — #1"
+START="$(git merge-base HEAD "$DEFAULT")"; REVIEWED="$(git rev-parse HEAD)"; review_head
+run bash "$B/close-change.sh" --pr "$pr" 001-greet "warmer greeting — R-01 — #1"
 assert_eq 1 "$STATUS" "refuses before a passing Review line is recorded"
-assert_contains "$OUTPUT" "publish the remaining verdicts first" "says what is missing"
+assert_contains "$OUTPUT" "obtain an eligible GitHub approval first" "says what is missing"
 assert_eq "$REVIEWED" "$(git rev-parse HEAD)" "nothing committed on refusal"
 assert_eq '' "$(git status --porcelain)" "nothing staged or written on refusal"
 pass_line code "$START" "$REVIEWED" >> specs/changes/001-greet.md
-run bash "$B/close-change.sh" 001-greet "warmer greeting — R-01 — #1"
+run bash "$B/close-change.sh" --pr "$pr" 001-greet "warmer greeting — R-01 — #1"
 assert_eq 1 "$STATUS" "refuses an uncommitted Review line"
 assert_contains "$OUTPUT" "commit the record edits first" "the check reads committed state"
 git commit -qam "001-greet: review PASS" >/dev/null
-VERDICT="$(git rev-parse HEAD)"
-run bash "$B/check-review.sh" 001-greet
+VERDICT="$(git rev-parse HEAD)"; approve_head
+run bash "$B/check-review.sh" --pr "$pr" 001-greet
 assert_eq 0 "$STATUS" "the gate passes with the record still present"
 assert_contains "$OUTPUT" "Note: specs/changes/001-greet.md is still at this head" "the gate notes the open record"
-run bash "$B/check-review.sh" --json 001-greet
+run bash "$B/check-review.sh" --pr "$pr" --json 001-greet
 assert_contains "$OUTPUT" '"record_open":true' "JSON names the open record"
 echo stray > src/stray.txt; git add src/stray.txt
-run bash "$B/close-change.sh" 001-greet "warmer greeting — R-01 — #1"
+run bash "$B/close-change.sh" --pr "$pr" 001-greet "warmer greeting — R-01 — #1"
 assert_eq 1 "$STATUS" "refuses with other staged changes"
 git rm -q --cached src/stray.txt; rm -f src/stray.txt
 outside="$(mktemp -d)"; track_tmp "$outside"
 ln -s "$outside" specs/log
-run bash "$B/close-change.sh" 001-greet "reviewed"
+run bash "$B/close-change.sh" --pr "$pr" 001-greet "reviewed"
 assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'symlinked close path: specs/log'
 assert_eq '' "$(ls -A "$outside")" 'log destination untouched'
 assert_eq "$VERDICT" "$(git rev-parse HEAD)"
@@ -103,7 +105,7 @@ echo 'ln: hard links not supported' >&2
 exit 1
 SH
 chmod +x "$outside/no-links/ln"
-run env PATH="$outside/no-links:$PATH" bash "$B/close-change.sh" 001-greet "warmer greeting — R-01 — #1"
+run env PATH="$outside/no-links:$PATH" bash "$B/close-change.sh" --pr "$pr" 001-greet "warmer greeting — R-01 — #1"
 assert_eq 1 "$STATUS" 'close refuses without hard links'
 assert_contains "$OUTPUT" 'ln: hard links not supported' 'preserves the filesystem diagnostic'
 assert_contains "$OUTPUT" 'could not create the hard link for specs/log/001-greet.md; nothing was deleted or committed'
@@ -116,10 +118,10 @@ run test ! -e specs/log; assert_eq 0 "$STATUS" 'no log directory or staging file
 CDPATH="$outside" PATH="$outside/bin:$PATH" run env \
     GIT_AUTHOR_NAME='Close Author' GIT_AUTHOR_EMAIL=close-author@example.com \
     GIT_COMMITTER_NAME='Close Committer' GIT_COMMITTER_EMAIL=close-committer@example.com \
-    bash "$B/close-change.sh" 001-greet "warmer greeting — R-01 — #1"
+    bash "$B/close-change.sh" --pr "$pr" 001-greet "warmer greeting — R-01 — #1"
 assert_contains "$OUTPUT" 'anchored mkdir'
 assert_eq 0 "$STATUS" "closes: $OUTPUT"
-assert_contains "$OUTPUT" "PASS 001-greet" "reports the gate at the closed head"
+assert_contains "$OUTPUT" "obtain its exact-head approval" "requests the final review"
 assert_not_contains "$OUTPUT" "Note:" "no open-record note once closed"
 assert_eq "$VERDICT" "$(git rev-parse HEAD~1)" "one commit on top of the verdict commit"
 assert_eq 'Close Author' "$(git log -1 --format=%an HEAD)" "closing commit author name"
@@ -129,37 +131,37 @@ assert_eq 'close-committer@example.com' "$(git log -1 --format=%ce HEAD)" "closi
 assert_eq "$(printf 'specs/changes/001-greet.md\nspecs/log/001-greet.md')" "$(git diff --name-only HEAD~1 HEAD)" "the commit holds only the record and its log entry"
 assert_eq '- 2026-11-09 001-greet: warmer greeting — R-01 — #1' "$(cat specs/log/001-greet.md)" "the log entry"
 assert_eq '' "$(git ls-files specs/log.md)" "no specs/log.md is created"
-run bash "$B/close-change.sh" 001-greet "again — #1"
+run bash "$B/close-change.sh" --pr "$pr" 001-greet "again — #1"
 assert_eq 1 "$STATUS" "a closed change cannot close twice"
 printf -- '- 2026-11-09 099-other: not reviewed\n' > specs/log/099-other.md
 git add specs/log; git commit -qm "another entry after review" >/dev/null
-run bash "$B/check-review.sh" 001-greet
+run bash "$B/check-review.sh" --pr "$pr" 001-greet
 assert_eq 1 "$STATUS" "only the change's own entry is exempt from review coverage: $OUTPUT"
 git reset -q --hard HEAD~1
 git rm -q specs/log/001-greet.md; mkdir -p specs/log/001-greet.md
 printf 'echo unreviewed\n' > specs/log/001-greet.md/unreviewed.sh
 printf 'x\n' > "specs/log/001-greet.md/- 2026-11-09 001-greet: a name, not a line"
 git add -A specs/log; git commit -qm "a directory where the entry goes" >/dev/null
-run bash "$B/check-review.sh" 001-greet
+run bash "$B/check-review.sh" --pr "$pr" 001-greet
 assert_eq 1 "$STATUS" "a directory at the entry's path cannot carry unreviewed files past the gate: $OUTPUT"
 assert_contains "$OUTPUT" "specs/log/001-greet.md at $(git rev-parse HEAD) is not a regular file" "names the path"
 assert_contains "$OUTPUT" "has no '- <date> 001-greet: <what changed>' entry" "a file name is not a log line"
 git reset -q --hard HEAD~1
 rm specs/log/001-greet.md; ln -s ../../src/001-greet.txt specs/log/001-greet.md
 git add -A specs/log; git commit -qm "a symlink where the entry goes" >/dev/null
-run bash "$B/check-review.sh" 001-greet
+run bash "$B/check-review.sh" --pr "$pr" 001-greet
 assert_eq 1 "$STATUS" "a symlink is no entry"
 assert_contains "$OUTPUT" "is not a regular file" "says why"
 git reset -q --hard HEAD~1
 printf -- '- 2026-11-09 001-greet: warmer greeting — R-01 — #1\nand a second line\n' > specs/log/001-greet.md
 git commit -qam "a second line in the entry" >/dev/null
-run bash "$B/check-review.sh" 001-greet
+run bash "$B/check-review.sh" --pr "$pr" 001-greet
 assert_eq 1 "$STATUS" "the entry is one line"
 assert_contains "$OUTPUT" "specs/log/001-greet.md at $(git rev-parse HEAD) must hold one line" "says why"
 git reset -q --hard HEAD~1
 printf -- '- 2026-11-09 001-greet: warmer greeting — R-01 — #1\n\n\n' > specs/log/001-greet.md
 git commit -qam "trailing blank lines in the entry" >/dev/null
-run bash "$B/check-review.sh" 001-greet
+run bash "$B/check-review.sh" --pr "$pr" 001-greet
 assert_eq 1 "$STATUS" "trailing blank lines are lines too"
 assert_contains "$OUTPUT" "must hold one line" "says why"
 git reset -q --hard HEAD~1
@@ -168,22 +170,25 @@ FAKE="$(mktemp -d)"; track_tmp "$FAKE"
 # shellcheck disable=SC2016  # the stub's own $1 and $@, expanded when it runs
 printf '#!/bin/sh\nif [ "$1" = version ]; then echo "git version 2.39.3"; exit 0; fi\nexec "%s" "$@"\n' "$(command -v git)" > "$FAKE/git"
 chmod +x "$FAKE/git"; git config remote.origin.promisor true
-run env PATH="$FAKE:$PATH" bash "$B/check-review.sh" 001-greet
+run env PATH="$FAKE:$PATH" bash "$B/check-review.sh" --pr "$pr" 001-greet
 git config --unset remote.origin.promisor
 assert_eq 1 "$STATUS" "an older Git in a partial clone fails closed"
 assert_contains "$OUTPUT" "cannot be read without fetching from the promisor remote" "says why"
-run bash "$B/check-review.sh" 001-greet
-assert_eq 0 "$STATUS" "the closed head passes again: $OUTPUT"
+run bash "$B/check-review.sh" --pr "$pr" 001-greet
+assert_eq 1 "$STATUS" "pre-close approval cannot certify the closed head"
+approve_head
+run bash "$B/check-review.sh" --pr "$pr" 001-greet
+assert_eq 0 "$STATUS" "fresh approval passes: $OUTPUT"
 # The same Git with the record still open: an entry it cannot read is never exempt unread.
 git checkout -q -b 001-unread HEAD~1
 mkdir -p specs/log; printf 'not a log entry\necho unreviewed\n' > specs/log/001-greet.md
 git add specs/log; git commit -qm "an entry beside the open record" >/dev/null
 git config remote.origin.promisor true
-run env PATH="$FAKE:$PATH" bash "$B/check-review.sh" 001-greet
+run env PATH="$FAKE:$PATH" bash "$B/check-review.sh" --pr "$pr" 001-greet
 git config --unset remote.origin.promisor
 assert_eq 1 "$STATUS" "an entry that cannot be checked fails closed"
 assert_contains "$OUTPUT" "specs/log/001-greet.md at $(git rev-parse HEAD) cannot be checked without fetching" "says why"
-run bash "$B/check-review.sh" 001-greet
+run bash "$B/check-review.sh" --pr "$pr" 001-greet
 assert_eq 1 "$STATUS" "with every object at hand it fails on the content"
 assert_contains "$OUTPUT" "must hold one line" "says why"
 git checkout -q 001-greet; git branch -q -D 001-unread
@@ -195,8 +200,8 @@ git add specs/log.md; git commit -qm log >/dev/null
 git update-ref "refs/remotes/origin/$DEFAULT" HEAD
 branch_with_code 002-greet
 pass_line code "$(git merge-base HEAD "$DEFAULT")" "$(git rev-parse HEAD)" >> specs/changes/002-greet.md
-git commit -qam "002-greet: review PASS" >/dev/null
-run bash "$B/close-change.sh" --date 2026-11-03 -m "002-greet: close" 002-greet "warmer — R-01 — #3"
+git commit -qam "002-greet: review PASS" >/dev/null; approve_head
+run bash "$B/close-change.sh" --pr "$pr" --date 2026-11-03 -m "002-greet: close" 002-greet "warmer — R-01 — #3"
 assert_eq 0 "$STATUS" "closes"
 assert_eq '' "$(git diff HEAD~1 HEAD -- specs/log.md)" "specs/log.md is untouched"
 assert_eq '- 2026-11-03 002-greet: warmer — R-01 — #3' "$(cat specs/log/002-greet.md)" "the entry"
@@ -209,17 +214,17 @@ git add specs/log.md; git commit -qm 'oldest-first log' >/dev/null
 git update-ref "refs/remotes/origin/$DEFAULT" HEAD
 branch_with_code 014-order
 pass_line code "$(git merge-base HEAD "$DEFAULT")" "$(git rev-parse HEAD)" >> specs/changes/014-order.md
-git commit -qam "014-order: review PASS" >/dev/null
+git commit -qam "014-order: review PASS" >/dev/null; approve_head
 ORDERED="$(git rev-parse HEAD)"
 TEXT="ordered — R-01 — #9 — "; i=22; while [ "$i" -lt 300 ]; do TEXT="${TEXT}é"; i=$((i + 1)); done
 assert_eq 300 "$(printf '%s' "$TEXT" | LC_ALL=C tr -d '\200-\277' | wc -c | tr -d ' ')" "300 characters, many of them two bytes"
-run bash "$B/close-change.sh" --date 2026-11-03 014-order "${TEXT}x"
+run bash "$B/close-change.sh" --pr "$pr" --date 2026-11-03 014-order "${TEXT}x"
 assert_eq 1 "$STATUS" "301 characters are refused"
 assert_contains "$OUTPUT" "the log text is 301 characters, over 300" "says the length and the cap"
 assert_contains "$OUTPUT" "carried findings and follow-ups go to the parent's row or the spec" "says where the rest goes"
 assert_eq "$ORDERED" "$(git rev-parse HEAD)" "nothing committed"
 assert_eq '' "$(git status --porcelain)" "nothing written"
-run bash "$B/close-change.sh" --date 2026-11-03 014-order "$TEXT"
+run bash "$B/close-change.sh" --pr "$pr" --date 2026-11-03 014-order "$TEXT"
 assert_eq 0 "$STATUS" "300 characters close, counted as characters, not bytes: $OUTPUT"
 assert_eq "- 2026-11-03 014-order: $TEXT" "$(cat specs/log/014-order.md)" "the entry"
 assert_eq '- 2026-11-01 000-a: earlier — #1' "$(sed -n 3p specs/log.md)" "specs/log.md keeps its entries"
@@ -231,13 +236,13 @@ git add specs/log.md; git commit -qm 'crlf log' >/dev/null
 git update-ref "refs/remotes/origin/$DEFAULT" HEAD
 branch_with_code 013-guard
 pass_line code "$(git merge-base HEAD "$DEFAULT")" "$(git rev-parse HEAD)" >> specs/changes/013-guard.md
-git commit -qam "013-guard: review PASS" >/dev/null
+git commit -qam "013-guard: review PASS" >/dev/null; approve_head
 GUARDED="$(git rev-parse HEAD)"
 chmod a-w specs
 if ( : > specs/.probe ) 2>/dev/null; then
     rm -f specs/.probe; chmod u+w specs; _ok "skipped: directory permissions are not enforced for this user"
 else
-    run bash "$B/close-change.sh" 013-guard "guarded — R-01 — #6"
+    run bash "$B/close-change.sh" --pr "$pr" 013-guard "guarded — R-01 — #6"
     chmod u+w specs
     assert_eq 1 "$STATUS" "a log that cannot be written is refused"
     assert_contains "$OUTPUT" "could not write specs/log/013-guard.md; nothing was deleted or committed" "says nothing changed"
@@ -260,7 +265,7 @@ exec "$REAL_LN" "$@"
 SH
 chmod +x "$outside/collision/ln"
 mkdir "$outside/moved"
-run env PATH="$outside/collision:$PATH" COLLISION=move MOVE_TO="$outside/moved" bash "$B/close-change.sh" 013-guard "guarded — R-01 — #6"
+run env PATH="$outside/collision:$PATH" COLLISION=move MOVE_TO="$outside/moved" bash "$B/close-change.sh" --pr "$pr" 013-guard "guarded — R-01 — #6"
 assert_eq 1 "$STATUS" 'publication refuses a moved stage'
 assert_eq 'stage' "$(ls -A "$outside/moved")" 'no entry published in the new parent'
 assert_eq '' "$(ls -A "$outside/moved/stage")" 'staged bytes cleaned from the original private directory'
@@ -271,7 +276,7 @@ run git diff --quiet HEAD -- specs/changes/013-guard.md; assert_eq 0 "$STATUS" '
 
 it "publication preserves another writer's entry, including a FIFO"
 for kind in file fifo; do
-    run env PATH="$outside/collision:$PATH" COLLISION="$kind" bash "$B/close-change.sh" 013-guard "guarded — R-01 — #6"
+    run env PATH="$outside/collision:$PATH" COLLISION="$kind" bash "$B/close-change.sh" --pr "$pr" 013-guard "guarded — R-01 — #6"
     assert_eq 1 "$STATUS" "refuses a concurrent $kind"
     assert_contains "$OUTPUT" 'the log already has an entry for 013-guard'
     assert_not_contains "$OUTPUT" 'Closing requires hard-link support'
@@ -297,7 +302,7 @@ cat() (
     command cat "$@"
 )
 SH
-run env BASH_ENV="$outside/limit-write" bash "$B/close-change.sh" --date 2026-11-01 013-guard "guarded — R-01 — #6"
+run env BASH_ENV="$outside/limit-write" bash "$B/close-change.sh" --pr "$pr" --date 2026-11-01 013-guard "guarded — R-01 — #6"
 assert_eq 1 "$STATUS" 'the limited write refuses close'
 assert_contains "$OUTPUT" 'limited entry write failed'
 assert_contains "$OUTPUT" 'could not write specs/log/013-guard.md'
@@ -307,7 +312,7 @@ run git diff --quiet HEAD -- specs/changes/013-guard.md; assert_eq 0 "$STATUS" '
 assert_eq '099-other.md' "$(ls -A specs/log)" 'no failed entry or staging file blocks retry'
 assert_eq "$other_blob" "$(git hash-object specs/log/099-other.md)" 'unrelated entry unchanged'
 
-run bash "$B/close-change.sh" --date 2026-11-01 013-guard "guarded — R-01 — #6"
+run bash "$B/close-change.sh" --pr "$pr" --date 2026-11-01 013-guard "guarded — R-01 — #6"
 assert_eq 0 "$STATUS" "closes: $OUTPUT"
 assert_eq "$GUARDED" "$(git rev-parse HEAD~1)" 'retry creates one close commit'
 assert_eq '- 2026-11-01 013-guard: guarded — R-01 — #6' "$(git show HEAD:specs/log/013-guard.md)" 'retry commits the expected entry'
@@ -317,13 +322,13 @@ assert_eq '' "$(git diff HEAD~1 HEAD -- specs/log.md)" "the CRLF log is untouche
 assert_eq 0 "$(grep -cv "$(printf '\r')\$" specs/log.md)" "every line still ends in CRLF"
 git checkout -q -b 013-again HEAD~1
 mkdir -p specs/log; printf -- '- 2026-11-01 013-guard: elsewhere\n' > specs/log/013-guard.md
-run bash "$B/close-change.sh" 013-guard "again — R-01 — #6"
+run bash "$B/close-change.sh" --pr "$pr" 013-guard "again — R-01 — #6"
 assert_eq 1 "$STATUS" "an entry file already there is refused"
 assert_contains "$OUTPUT" "the log already has an entry for 013-guard" "names the change"
 rm -rf specs/log; git checkout -q 013-guard; git branch -q -D 013-again
 git checkout -q -b 013-logged HEAD~1
 printf -- '- 2026-11-01 013-guard: by hand\r\n' >> specs/log.md; git commit -qam 'hand-written line' >/dev/null
-run bash "$B/close-change.sh" 013-guard "again — R-01 — #6"
+run bash "$B/close-change.sh" --pr "$pr" 013-guard "again — R-01 — #6"
 assert_eq 1 "$STATUS" "a line already in specs/log.md is refused"
 assert_contains "$OUTPUT" "the log already has an entry for 013-guard" "names the change"
 git checkout -q 013-guard; git branch -q -D 013-logged
@@ -334,8 +339,8 @@ BASE_LOG="$(git rev-parse "$DEFAULT:specs/log.md")"
 closed_branch() { # id
     branch_with_code "$1"
     pass_line code "$(git merge-base HEAD "$DEFAULT")" "$(git rev-parse HEAD)" >> "specs/changes/$1.md"
-    git commit -qam "$1: review PASS" >/dev/null
-    run bash "$B/close-change.sh" --date 2026-11-04 "$1" "$1 — R-01 — #$2"
+    git commit -qam "$1: review PASS" >/dev/null; approve_head
+    run bash "$B/close-change.sh" --pr "$pr" --date 2026-11-04 "$1" "$1 — R-01 — #$2"
     assert_eq 0 "$STATUS" "$1 closes on its own branch: $OUTPUT"
 }
 closed_branch 015-left 10
@@ -361,7 +366,8 @@ git update-ref "refs/remotes/origin/$DEFAULT" HEAD
 git checkout -q 016-right
 run git merge --no-edit "$DEFAULT"
 assert_eq 0 "$STATUS" "the second branch takes the base without a conflict: $OUTPUT"
-run bash "$B/check-review.sh" 016-right
+approve_head
+run bash "$B/check-review.sh" --pr "$pr" 016-right
 assert_eq 0 "$STATUS" "and its gate still passes: $OUTPUT"
 git checkout -q "$DEFAULT"; run git merge --squash 016-right
 assert_eq 0 "$STATUS" "then lands cleanly: $OUTPUT"
@@ -381,17 +387,6 @@ git checkout -q -b merge-lines 017-a
 run git merge --no-edit 018-b
 assert_eq 1 "$STATUS" "two lines on top of specs/log.md conflict"
 git merge --abort; git checkout -q "$DEFAULT"; git branch -q -D merge-both squash-both merge-lines 017-a 018-b
-
-it "a T3 owner verdict on the reviewed head still passes after the record-only close"
-branch_with_code 003-owner
-sed -i.bak 's/Tier\*\*: T1/Tier**: T3/' specs/changes/003-owner.md; rm -f specs/changes/003-owner.md.bak
-git commit -qam "003-owner: T3" >/dev/null
-START="$(git merge-base HEAD "$DEFAULT")"; REVIEWED="$(git rev-parse HEAD)"
-pass_line code "$START" "$REVIEWED" >> specs/changes/003-owner.md
-printf '**Review**: round 1 · %s..%s · owner · PASS · https://example.invalid/pr/3#approval\n' "$START" "$REVIEWED" >> specs/changes/003-owner.md
-git commit -qam "003-owner: verdicts" >/dev/null
-run bash "$B/close-change.sh" 003-owner "owner-shaped — R-01 — #4"
-assert_eq 0 "$STATUS" "owner approval of the reviewed head survives the closing commit: $OUTPUT"
 
 it "status and doctor flag merged-open records including T0 and unreviewed ones; parents stay quiet"
 branch_with_code 004-left; pass_line code "$(git merge-base HEAD "$DEFAULT")" "$(git rev-parse HEAD)" >> specs/changes/004-left.md
@@ -417,10 +412,10 @@ assert_contains "$OUTPUT" "advisory: Merged without closing: 004-left, 007-child
 assert_not_contains "$OUTPUT" "005-programme" "a programme with a checkpoint is quiet"
 assert_not_contains "$OUTPUT" "006-parent" "a parent named by a child is quiet"
 git checkout -q -b 009-next
-run bash "$B/close-change.sh" 004-left "left open — R-01 — #5"
+run bash "$B/close-change.sh" --pr "$pr" 004-left "left open — R-01 — #5"
 assert_eq 1 "$STATUS" "the helper refuses a record already merged"
 assert_contains "$OUTPUT" "closes inside the next relevant PR" "and names the remedy"
-run bash "$B/close-change.sh" 010-tzero "unreviewed — #7"
+run bash "$B/close-change.sh" --pr "$pr" 010-tzero "unreviewed — #7"
 assert_eq 1 "$STATUS" "a merged T0 record is refused too, before check-review could pass it"
 assert_contains "$OUTPUT" "is already on origin/$DEFAULT" "the default-branch refusal comes first"
 

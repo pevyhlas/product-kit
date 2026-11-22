@@ -41,9 +41,7 @@ Handoffs preserve cumulative accounting; temporary repairs explain their contrib
 Review is proportional to the tier in the protocol and runs per
 [review.md](../workflows/review.md), which also covers merge and closing; the reviewer is a fresh
 context that did not implement the change and receives the full diff, never only a summary.
-`build-review-package.sh` captures committed work into `.prdkit/cache/evidence/`, and
-`publish-review.sh` posts each content-bound verdict as a COMMENT review through a trusted
-publisher account. Record text never authenticates a verdict; T3 uses native owner approval.
+`build-review-package.sh` captures committed work into `.prdkit/cache/evidence/`, and reviewers submit normal GitHub approvals for the commit they inspected.
 
 ## Delivery and closing
 
@@ -53,7 +51,7 @@ lifts it. `check-delivery.sh --json` observes whether a checkpoint is remotely a
 matching SHA proves availability, not acceptance. Closing removes built `planned` markers,
 keeps lasting decisions in L1/L2 and preserves useful context and evidence on the PR; after the
 final PASS, `close-change.sh --pr <url>` checks the host, writes one line, at most 300 characters, to `specs/log/<id>.md` and deletes the
-record before merge. Required PR checks still gate; non-gating runtime observations stay unverified and later
+record. Push and obtain approval on this new exact head before merge. Required PR checks still gate; non-gating runtime observations stay unverified and later
 findings use linked fixes, not cleanup PRs.
 `cleanup-change.sh <id>` removes the worktree after merge, and `cleanup-change.sh --closed` every
 closed change's worktree at once (branches are kept). See [feature delivery](feature-delivery.md).
@@ -65,4 +63,4 @@ Git only; `bounds.sh <change>` lists the constraints, non-goals and qualities in
 scope. Label semantic judgments and keep them apart from what a helper observed. No helper
 evaluates product usefulness.
 
-`check-review.sh` sources `review-coverage-lib.sh` for its internal coverage engine.
+[`check-review.sh`](ci-gates.md) verifies the eligible GitHub approval on the PR’s exact head.

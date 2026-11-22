@@ -210,12 +210,10 @@ bash .prdkit/scripts/bash/check-adoption.sh    # pinned kit version and install 
 bash .prdkit/scripts/bash/doctor.sh --strict   # spec integrity, reading budgets, agent context size
 ```
 
-`check-review.sh --pr <url>` verifies publisher-authored review receipts and blockers for the exact
-head being merged. T3 also needs the owner's native approval, confirmed against the activity log.
-Native owner changes requests and dismissals block even PRs exempt from review coverage.
-It checks evidence; it does not review. The online check needs `gh`, `jq`, configured GitHub
-publisher and owner identities, and complete host reads even for T0. Offline snapshots are
-previews (a would-pass exits 3), never merge authority. See [CI gates](docs/ci-gates.md).
+`check-review.sh --pr <url>` requires a GitHub approval on the exact PR head, from a configured
+publisher or owner other than the PR author. The online gate requires `gh` and `jq` at every
+tier. Local structure is only a preview. See [CI gates](docs/ci-gates.md).
+The tier governs the review work in addition to this host check:
 
 | Tier | When                                           | Independent reviewers        |
 | ---- | ---------------------------------------------- | ---------------------------- |
@@ -231,9 +229,8 @@ previews (a would-pass exits 3), never merge authority. See [CI gates](docs/ci-g
 
 <br>
 
-**Upgrading from 1.5?** Start with [Migrating to 2.0](docs/migrating-to-2.0.md). Merge trusted
-review policy first. If active 1.x Review lines remain, plain `--upgrade` refuses and points to
-`--upgrade --migrate-reviews`; no old PASS becomes approval.
+**Adopting 3.0?** Follow [Migrating to 3.0](docs/migrating-to-3.0.md) to configure GitHub
+review identities and update CI before switching the gate.
 
 On a clean upgrade branch in the consumer repo:
 
@@ -245,8 +242,7 @@ bash .product-kit/scripts/init.sh --check     # read-only; expected drift can ex
 ```
 
 Replace `vX.Y.Z` with the selected tag. Inspect the drift, then run
-`bash .product-kit/scripts/init.sh --upgrade`, or add `--migrate-reviews` as described in the
-2.0 guide. Upgrade from a clean, committed checkout with the trusted default branch fetched.
+`bash .product-kit/scripts/init.sh --upgrade`. Upgrade from a clean, committed checkout with the trusted default branch fetched.
 Kit-owned commands and scripts are refreshed if unmodified; customized managed files that would be
 overwritten block the upgrade. Project-owned edits are kept and the installer never touches
 `specs/`. For a gated 2.0 upgrade PR, add its numbered review record **after** installation.

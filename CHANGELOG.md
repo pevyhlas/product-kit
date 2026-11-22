@@ -8,6 +8,14 @@ change by change.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking: the review gate uses native GitHub approvals on the exact PR head.**
+  A configured publisher or owner other than the PR author must approve each new SHA.
+  Receipt publication, snapshots, carry-forward and reconciliation are removed (#138).
+  **Adoption:** update reviewer and CI invocations, remove `review-publisher-isolation`,
+  and obtain fresh approvals for open PRs. See [Migrating to 3.0](docs/migrating-to-3.0.md).
+
 ## [2.0.2] — 2026-11-21 — safer worktree cleanup and complete review patches
 
 ### Fixed

@@ -33,23 +33,10 @@ identities first; these placeholders are not usable policy):
 - review-host: github
 - review-publishers: bot:<numeric account id>
 - review-owner: user:<numeric owner id>
-- review-publisher-isolation: required
 ```
 
 `review-publishers` may list comma-separated `bot:` and `user:` numeric ids; `review-owner`
 lists personal `user:` ids. Use `gh api users/<login> --jq .id` or
 `gh api 'users/<slug>[bot]' --jq .id`. Do not list the shared `github-actions[bot]` identity:
-a branch can add workflows using it. `required` is the kit's isolation choice and rejects a
-publisher that also authored the PR; it proves account separation, not machine separation.
-Use a dedicated reviewer-only App credential, a human publisher, or explicitly choose `shared`.
-Shared mode warns that authenticated content/order/counts do not prove reviewer independence.
-
-For publication, run `publish-review.sh` from the trusted default branch or a pinned kit install,
-never a PR checkout; `--repo` names a fetch-only clone, whose code is never executed:
-
-```text
-bash /trusted-install/.prdkit/scripts/bash/publish-review.sh <change-id> --repo <fetch-only-clone> ...
-```
-
-A publisher CI job must never run PR-controlled code with the publisher key (for example a
-`pull_request` job with secrets).
+a branch can add workflows using it. Remove the retired `review-publisher-isolation` key.
+The PR author is always ineligible. Reviewers submit normal reviews under their own accounts.

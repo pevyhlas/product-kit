@@ -80,7 +80,7 @@ A manifest entry outside the installed layout is ignored with a warning, never d
 
 The manifest records selected harnesses and pristine hashes. It supports drift detection and
 safe ordinary upgrades, not automatic conversion of a 0.x spec ([migrating to 1.0](migrating-to-1.0.md)).
-See [migrating to 2.0](migrating-to-2.0.md) for preflight and retry rules.
+For the current upgrade procedure, see [migrating to 3.0](migrating-to-3.0.md).
 Commands the kit no longer ships (retired, disabled or unsupported entry points) are
 reported by `--check` as RETIRED and removed by `--upgrade` when the previous manifest
 recorded them or they are symlinks into the kit's `commands/`; retired workflows and helpers

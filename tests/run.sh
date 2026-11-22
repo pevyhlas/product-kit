@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Product-Kit test runner. Discovers and runs every tests/test_*.sh file in its
 # own process, aggregates results. Bash + coreutils + git; tests use jq.
-# Includes test_review_upgrade.sh through the same discovery as the receipt/legacy suites.
 #
 # Usage: bash tests/run.sh [-v]
 

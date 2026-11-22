@@ -1,34 +1,19 @@
 #!/usr/bin/env bash
-# check-review.sh — Host receipts are the independent verdict authority. Trusted policy, tier,
-# fingerprints and structure still come from committed Git state. The coverage engine is unchanged.
-# Online --pr enumerates this PR and closed-source blockers in every tier. --receipts revalidates
-# an untrusted snapshot without gh/jq. With no source, only structure and coverage needs are known.
-# Exit 0 host pass, 1 fail, 2 usage, 3 preview pass. The owner approves natively, never by text.
-# shellcheck disable=SC2034,SC2153 # Coverage/legacy inputs and normalized rows cross sourced interfaces.
+# Only an online, complete review collection can pass. Policy is read from origin/HEAD.
 set -euo pipefail
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 source "$SCRIPT_DIR/spec-lib.sh"
 source "$SCRIPT_DIR/review-policy-lib.sh"
-source "$SCRIPT_DIR/review-fingerprint-lib.sh"
-# shellcheck source=scripts/review-coverage-lib.sh
-source "$SCRIPT_DIR/review-coverage-lib.sh"
-# shellcheck source=scripts/review-receipts-lib.sh
-source "$SCRIPT_DIR/review-receipts-lib.sh"
-# shellcheck source=scripts/review-owner-lib.sh
-source "$SCRIPT_DIR/review-owner-lib.sh"
-# shellcheck source=scripts/review-legacy-lib.sh
-source "$SCRIPT_DIR/review-legacy-lib.sh"
+source "$SCRIPT_DIR/github-reviews-lib.sh"
 json=false; diagnostics=false; head_ref=HEAD; base_ref=""; repo=.; id=""
-pr_url=""; receipts_file=""; save_receipts=""
-usage='Usage: check-review.sh [--json [--diagnostics]] [--head <rev>] [--base <rev>] [--repo <dir>] [--pr <url> [--save-receipts <file>] | --receipts <file>] [<change-id>]'
+pr_url=""; online=false
+usage='Usage: check-review.sh [--json [--diagnostics]] [--head <rev>] [--base <rev>] [--repo <dir>] [--pr <url>] [<change-id>]'
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --json) json=true ;;
         --diagnostics) diagnostics=true ;;
-        --pr) shift; [ "$#" -gt 0 ] || { echo "$usage" >&2; exit 2; }; pr_url="$1" ;;
-        --receipts) shift; [ "$#" -gt 0 ] || { echo "$usage" >&2; exit 2; }; receipts_file="$1" ;;
-        --save-receipts) shift; [ "$#" -gt 0 ] || { echo "$usage" >&2; exit 2; }; save_receipts="$1" ;;
+        --pr) shift; [ "$#" -gt 0 ] || { echo "$usage" >&2; exit 2; }; pr_url="$1"; online=true ;;
         --head) shift; [ "$#" -gt 0 ] || { echo "$usage" >&2; exit 2; }; head_ref="$1" ;;
         --base) shift; [ "$#" -gt 0 ] || { echo "$usage" >&2; exit 2; }; base_ref="$1" ;;
         --repo) shift; [ "$#" -gt 0 ] || { echo "$usage" >&2; exit 2; }; repo="$1" ;;
@@ -38,13 +23,12 @@ while [ "$#" -gt 0 ]; do
     esac
     shift
 done
-if { [ -n "$pr_url" ] && [ -n "$receipts_file" ]; } || { [ -n "$save_receipts" ] && [ -z "$pr_url" ]; }; then echo "$usage" >&2; exit 2; fi
 root="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null)" || { echo "Not inside a Git checkout: $repo" >&2; exit 2; }
 [ -n "$id" ] || id="$(git -C "$root" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
 is_change_id "$id" || { echo "Expected a change id such as 004-export-csv (got: ${id:-none}); pass it explicitly" >&2; exit 2; }
 head="$(git -C "$root" rev-parse --verify --quiet "$head_ref^{commit}")" || { echo "Not a commit here: $head_ref" >&2; exit 2; }
 # Policy comes from the trusted default branch, never from the change or the caller. The policy
-# snapshot is origin/HEAD's current tip: Rigor, the reviewer registry and the T0 paths are read
+# snapshot is origin/HEAD's current tip: Rigor, eligible GitHub accounts and the T0 paths are read
 # there, whatever --base says, so neither a branch nor the choice of base changes the rules, and a
 # revoked privilege is not kept by an old merge base. --base only says where the change starts: it
 # must be origin/HEAD's target or one of the review-integration-branches its committed config
@@ -67,46 +51,16 @@ policy_at=""
 [ -z "$trusted_default" ] || policy_at="$(git -C "$root" rev-parse --verify --quiet "$trusted_default^{commit}" || true)"
 $base_trusted || import_base=""
 
-problems=(); rows=(); tier=""; rigor=""; record_at=""; record_only=false; start=""; notes=()
-d_classes=(); d_cursor=0
-diagnostic_capture() {
-    $diagnostics || return 0
-    while [ "$d_cursor" -lt "${#problems[@]}" ]; do
-        d_classes+=("$1"); d_cursor=$((d_cursor+1))
-    done
-}
-sep37="$(printf '\037')"; head_fp=""; fp_ready=false
-v_line=(); v_rev=(); v_round=(); v_from=(); v_to=(); v_verdict=(); v_c=(); v_h=(); v_m=(); v_l=(); v_link=()
-v_receipt=(); v_receipt_head=(); v_empty_clearance=()
-authority=none; pr_head=""; head_is_pr_head=false; publisher_isolation=""
-host_content_bound=false
-[ -z "$receipts_file" ] || authority=snapshot
-RC_PR=""; RC_PR_HEAD=""; RC_FETCHED=""; RC_IGNORED=0; RC_INVALID=0; RC_CARRIED=0; RC_RECEIPTS=0
-receipt_ready=false
-RC_SCOPE_BLOCKERS=(); RC_REFERENCES=(); RC_CURRENT_REVIEWERS=(); coverage_standing=(); coverage_clean=(); coverage_end=(); coverage_eligible=()
-e_from=(); e_to=(); latest=()
-# Fingerprints are computed against the trusted base: --base, or, only to word the problems of a
-# refused --base, the trusted default branch.
-fp_base=""
-if $base_trusted; then fp_base="$base_canonical"
-elif [ -n "$policy_at" ]; then fp_base="$trusted_default"; fi
-shallow_hint=""
-[ "$(git -C "$root" rev-parse --is-shallow-repository 2>/dev/null)" != true ] || shallow_hint=" (a shallow clone needs the branch history: fetch-depth 0)"
-fp_cache="$(mktemp -d)" || { echo "check-review.sh: no temporary directory for content fingerprints" >&2; exit 2; }
-trap 'rm -rf "$fp_cache"' EXIT
+problems=(); tier=""; record_at=""; record_only=false; start=""
+authority=none; pr_head=""; approvals='[]'; head_is_pr_head=false
+work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 if [ -z "$policy_at" ]; then
-    problems+=("No trusted integration base: origin/HEAD does not resolve here, so there is no policy to check against; establish it (git remote set-head origin --auto) with its history fetched$shallow_hint")
+    problems+=("No trusted integration base: origin/HEAD does not resolve here, so there is no policy to check against; establish it (git remote set-head origin --auto) with its history fetched")
 elif [ -z "$base_ref" ]; then
     problems+=("No base to find the change's start; pass --base <a trusted integration branch>")
 elif ! $base_trusted; then
     problems+=("--base $base_ref is not a trusted integration branch (origin/HEAD's target, or one named by review-integration-branches in its committed config); pass the branch this change merges into")
 fi
-# Registration must precede use: a change cannot qualify its own maker or invented identity.
-registry_at="$policy_at"; registry=""
-if [ -n "$registry_at" ]; then
-    registry="$( { git -C "$root" show "$registry_at:.prdkit/memory/agents.md" 2>/dev/null || true; } | review_registry)"
-fi
-[ -n "$registry_at" ] || problems+=("No trusted integration-baseline registry: establish origin/HEAD and fetch its shared history before checking reviewer eligibility")
 # Rigor: exactly one Rigor line, an empty one included, whose value is light or full followed by
 # nothing or a space; anything else (none, two, light/full, light1) is unknown, which fails.
 rigor=unknown
@@ -115,84 +69,14 @@ if [ -n "$policy_at" ]; then
     [ "$rigor" != unknown ] ||
         problems+=("The trusted base's constitution must name exactly one Rigor, light or full (- **Rigor**: light); fix .prdkit/memory/constitution.md on the integration branch")
 fi
-# Enumerate blockers even when structural checks fail, at T0, and for record-only changes.
-diagnostic_capture structure
-if [ -z "$pr_url" ] && [ -z "$receipts_file" ] && [ -n "$policy_at" ]; then
-    if review_receipts_policy "$root" "$policy_at"; then publisher_isolation="$RC_ISOLATION"
+if $online; then authority=unavailable; fi
+if ! github_review_policy "$root" "$policy_at"; then problems+=("$RC_ERROR")
+elif $online; then
+    if github_review_fetch "$pr_url" "$work" "$head" "${base_canonical#refs/remotes/origin/}"; then
+        authority=host; head_is_pr_head=true
+        [ "$approvals" != '[]' ] || problems+=("No eligible APPROVED review on the exact PR head $head")
     else problems+=("$RC_ERROR"); fi
 fi
-if [ -n "$pr_url" ] || [ -n "$receipts_file" ]; then
-    RC_RIGOR="$rigor"
-    if ! review_receipts_policy "$root" "$policy_at"; then
-        problems+=("$RC_ERROR"); [ -z "$pr_url" ] || authority=unavailable
-    else
-        publisher_isolation="$RC_ISOLATION"
-        if [ -n "$pr_url" ]; then
-            authority=unavailable
-            if review_receipts_fetch "$pr_url" "$root" "$fp_cache/receipts-work" && review_owner_capture "$fp_cache/receipts-work"; then
-                authority=host; receipt_ready=true
-            else problems+=("${RC_ERROR:-could not read receipts and owner activity completely}"); fi
-        else
-            authority=snapshot
-            if review_receipts_read "$receipts_file" "$fp_cache/receipts-work"; then receipt_ready=true
-            else problems+=("${RC_ERROR:-malformed receipt snapshot}"); fi
-        fi
-        if $receipt_ready; then
-            [ "$authority" != host ] || host_content_bound=true
-            pr_head="$RC_PR_HEAD"
-            if [ "$authority" = host ] && { ! spec_objects_local "$root" ||
-                ! GIT_NO_LAZY_FETCH=1 git -C "$root" merge-base --is-ancestor "$pr_head" "$head" 2>/dev/null; }; then
-                problems+=("PR head $pr_head is not a local ancestor of --head $head; fetch the PR head and check it or a metadata-only descendant")
-                authority=unavailable; receipt_ready=false
-            fi
-        fi
-        if $receipt_ready; then
-            [ "$pr_head" != "$head" ] || head_is_pr_head=true
-            if [ "$RC_BASE" != "${base_canonical#refs/remotes/origin/}" ]; then
-                host_content_bound=false
-                problems+=("the PR merges into $RC_BASE, not --base ${base_canonical#refs/remotes/origin/}")
-            fi
-            if ! $head_is_pr_head; then
-                if ! checked_fp="$(review_fingerprint "$root" "$id" "$fp_base" "$head")" ||
-                    ! pr_fp="$(review_fingerprint "$root" "$id" "$fp_base" "$pr_head")" || [ "$checked_fp" != "$pr_fp" ]; then
-                    problems+=("PR head does not match the content of --head; use --head <PR head>")
-                    host_content_bound=false
-                fi
-            fi
-            if review_receipts_scope "$id" "$rigor" "$registry" "$fp_cache/receipts-work" "$root"; then
-                problems+=(${RC_PROBLEMS[@]+"${RC_PROBLEMS[@]}"})
-                notes+=(${RC_NOTES[@]+"${RC_NOTES[@]}"})
-                if [ -n "$save_receipts" ] && ! review_receipts_write "$save_receipts"; then problems+=("$RC_ERROR"); fi
-            else
-                problems+=("${RC_ERROR:-could not resolve receipt scope}")
-                [ "$authority" != host ] || authority=unavailable
-                receipt_ready=false
-            fi
-        fi
-    fi
-fi
-diagnostic_capture host
-if [ "$publisher_isolation" = shared ] && [ "$authority" != host ]; then
-    notes+=("Publisher isolation is shared: authentication does not establish the reviewer's independence.")
-fi
-# Legacy history is local evidence in every mode and tier, even when the checked
-# record is absent or the host is unavailable. It never joins the coverage arrays.
-OWNER_VALID=false; OWNER_REVIEW=""; OWNER_STATE=""; OWNER_COMMIT=""; OWNER_HEAD_AT_SUBMISSION=""; OWNER_ERROR='the owner has no decisive native review on this PR'
-OWNER_ACTOR=""; OWNER_APPROVED_COMMIT=""; OWNER_BARRIERS=(); OWNER_PROBLEMS=()
-if $receipt_ready; then
-    owner_native_approval_valid "$root" "$id" "$fp_base" "$head" || true
-    if ! $OWNER_AVAILABLE; then problems+=("$OWNER_ERROR"); authority=unavailable; fi
-    problems+=(${OWNER_PROBLEMS[@]+"${OWNER_PROBLEMS[@]}"})
-fi
-diagnostic_capture owner
-legacy_receipts=""; LL_BLOCKERS=(); LL_EMPTY_VALID=(); LL_EMPTY_ALLOWED=()
-if $receipt_ready; then legacy_receipts="$RC_FILE"; fi
-if [ -n "$fp_base" ]; then
-    review_legacy_resolve "$root" "$id" "$fp_base" "$head" "$rigor" "$registry" "$fp_cache/legacy" "$legacy_receipts" "$RC_PR" || true
-    [ "${LL_NUL_UNAVAILABLE:-false}" != true ] || authority=unavailable
-    problems+=(${LL_PROBLEMS[@]+"${LL_PROBLEMS[@]}"})
-fi
-diagnostic_capture legacy
 # Every **Tier** field in a record on stdin, one per line: T0-T3, or ? when its whole value (up to
 # the next · or the end of the line, in optional backticks) is not exactly one tier: T1/T3, T1-T3,
 # T1x, "T1, T3" and "T1 T3" are not tiers.
@@ -268,7 +152,6 @@ t0_violations() { # from to
         $ok || printf '%s\n' "$file"
     done <<< "$raw"
 }
-eligible() { [ "$(review_eligibility "$registry" "$1")" = reviewer ]; }
 path="specs/changes/$id.md"
 spec_l01=(specs/product.md specs/product specs/architecture.md specs/architecture specs/SPEC.md specs/decisions)
 changed_since() { # sha [pathspec...] -> paths changed from sha to head, outside the record and the log
@@ -277,15 +160,13 @@ changed_since() { # sha [pathspec...] -> paths changed from sha to head, outside
     git -C "$root" diff --name-only --no-renames --ignore-submodules=none "$sha" "$head" -- "$@" | tr '\n' ' ' | sed 's/ $//'
 }
 
-if [ "${LL_NUL_UNAVAILABLE:-false}" = true ]; then : # Do not decode a record the scan cannot read.
-elif git -C "$root" cat-file -e "$head:$path" 2>/dev/null; then
+if git -C "$root" cat-file -e "$head:$path" 2>/dev/null; then
     record_at="$head"
 elif last="$(git -C "$root" log -1 --format=%H "$head" -- "$path" 2>/dev/null)" && [ -n "$last" ] &&
     git -C "$root" cat-file -e "$last^:$path" 2>/dev/null; then
     record_at="$last^"
 fi
-if [ "${LL_NUL_UNAVAILABLE:-false}" = true ]; then :
-elif [ -z "$record_at" ]; then
+if [ -z "$record_at" ]; then
     hint=" (a shallow clone needs the branch history)"
     ! git -C "$root" cat-file -e "$head:specs/features/$id" 2>/dev/null ||
         hint=" (a 0.x feature the owner keeps open becomes a change record at the cutover or restructure; see .prdkit/workflows/compact.md)"
@@ -298,8 +179,7 @@ else
     elif ! grep -q "^- [0-9-]* $id:" <<< "$log"; then
         problems+=("$id is closed (its record is deleted) but the log at $head has no '- <date> $id: <what changed>' entry (specs/log/$id.md, as close-change.sh writes it, or a line in specs/log.md)")
     fi
-    # The log paths leave review coverage, so each must be a plain file at the head: a pathspec
-    # also excludes whatever lies under a directory of that name. The entry is its own one line.
+    # Each log path must be a plain file. The per-change entry is exactly one line.
     while read -r log_mode log_type log_sha log_path; do
         case "$log_mode $log_type" in
             "100644 blob"|"100755 blob")
@@ -318,21 +198,15 @@ else
             *) problems+=("$log_path at $head is not a regular file; the log and the change's entry are plain files") ;;
         esac
     done < <(GIT_NO_LAZY_FETCH=1 git -C "$root" ls-tree "$head" -- specs/log.md "specs/log/$id.md" 2>/dev/null)
-    record="$(git -C "$root" show "$record_at:$path")"
+    record="$(git -C "$root" show "$record_at:$path" | review_text_stream)" || { echo "Unreadable change record: $path" >&2; exit 1; }
     # The tier is the record's single **Tier** field; a second one, even in a comment, is refused.
     claims="$(printf '%s\n' "$record" | record_tiers)"
     case "$claims" in
         T[0-3]) tier="$claims" ;;
         *$'\n'*) problems+=("The record names more than one review tier ($(printf '%s' "$claims" | tr '\n' ' ')); keep exactly one **Tier** field") ;;
+        *) problems+=("The record names no review tier (**Tier**: T0–T3)") ;;
     esac
-    # The branch's own constitution never sets its Rigor; say so when it differs.
-    head_rigor="$(read_rigor "$head")"
-    if [ -n "$policy_at" ] && [ "$head_rigor" != "$rigor" ]; then
-        notes+=("Note: this head's constitution says Rigor $head_rigor; the check uses the trusted base's ($rigor) until that change merges.")
-    fi
-    # The change starts where it leaves the base. Carrying only the record and the log from there
-    # skips coverage, but only from a trusted start: a base inside the change's own history would
-    # hide its code.
+    # The merge base bounds the effective tier and docs-only path checks.
     [ -z "$base_ref" ] || start="$(git -C "$root" merge-base "$base_ref" "$head" 2>/dev/null)" || start=""
     # A branch may raise its tier, never lower it. The floor is the highest tier the record names
     # on the trusted default branch, on the base, where the change left the base, or at any commit
@@ -366,7 +240,7 @@ else
         problems+=("The record claims $tier, but its floor is $floor, from $floor_at: a branch may raise its tier, never lower it; claim **Tier**: $floor")
         tier="$floor"
     fi
-    # The record and the log are exempt from coverage only as regular, non-executable files, where
+    # The record and the log are valid only as regular, non-executable files, where
     # the change starts and at its head: a directory there would exempt everything inside it, and
     # converting or deleting an unsafe entry would hide that transition.
     metadata_ends=("$head"); [ -z "$start" ] || [ "$start" = "$head" ] || metadata_ends=("$start" "$head")
@@ -382,63 +256,6 @@ else
     done
     if $base_trusted && [ -n "$start" ] && [ "$start" != "$head" ] && [ -z "$(changed_since "$start")" ]; then
         record_only=true
-    fi
-    # All verdicts come from the validated host/snapshot list, in host order.
-    v_line=(); v_rev=(); v_round=(); v_from=(); v_to=(); v_verdict=(); v_c=(); v_h=(); v_m=(); v_l=(); v_link=()
-    if $receipt_ready; then
-        while IFS="$sep37" read -r kind seq origin review submitted receipt_id change reviewer from to receipt_head since receipt_base base_at verdict critical high medium low link carried; do
-            [ "$kind" = R ] || continue
-            empty_clearance=false
-            for valid in ${LL_EMPTY_VALID[@]+"${LL_EMPTY_VALID[@]}"}; do [ "$seq" != "$valid" ] || empty_clearance=true; done
-            ordinal=1
-            for prior in ${v_rev[@]+"${v_rev[@]}"}; do [ "$prior" != "$reviewer" ] || ordinal=$((ordinal+1)); done
-            v_line+=("$seq"); v_rev+=("$reviewer"); v_round+=("round $ordinal"); v_from+=("$from"); v_to+=("$to")
-            v_verdict+=("$verdict"); v_c+=("$critical"); v_h+=("$high"); v_m+=("$medium"); v_l+=("$low"); v_link+=("$link")
-            v_receipt+=("https://github.com/$RC_REPO/pull/$origin#pullrequestreview-$review")
-            v_receipt_head+=("$receipt_head")
-            v_empty_clearance+=("$empty_clearance")
-        done < "$RC_COVERAGE"
-    fi
-    # Each reviewer's latest line, in order of first appearance.
-    order=(); latest=()
-    for i in ${v_rev[@]+"${!v_rev[@]}"}; do
-        found=""
-        for k in ${order[@]+"${!order[@]}"}; do [ "${order[k]}" != "${v_rev[i]}" ] || found="$k"; done
-        if [ -z "$found" ]; then order+=("${v_rev[i]}"); latest+=("$i"); else latest[found]="$i"; fi
-    done
-    for i in ${latest[@]+"${latest[@]}"}; do
-        rows+=("${v_rev[i]}$sep37${v_round[i]}$sep37${v_from[i]}$sep37${v_to[i]}$sep37${v_verdict[i]}$sep37${v_c[i]}$sep37${v_h[i]}$sep37${v_m[i]}$sep37${v_l[i]}$sep37${v_receipt[i]}")
-    done
-    case "$claims" in *$'\n'*) ;; *) [ -n "$tier" ] || problems+=("The record names no review tier (**Tier**: T0–T3)") ;; esac
-    for i in ${v_rev[@]+"${!v_rev[@]}"}; do
-        [ "${v_rev[i]}" != owner ] || continue
-        if [ -z "$registry_at" ]; then
-            problems+=("${v_receipt[i]}: No trusted integration-baseline registry: establish origin/HEAD and fetch its shared history before checking reviewer eligibility")
-        fi
-        eligibility="$(review_eligibility "$registry" "${v_rev[i]}")"
-        [ "$eligibility" = reviewer ] || problems+=("${v_receipt[i]}: reviewer '${v_rev[i]}' is $eligibility in the integration-baseline registry; register an eligible identity in agents.md before using it")
-    done
-
-    coverage_record_only="$record_only"
-    diagnostic_capture structure
-    [ "$tier" != T0 ] || record_only=true
-    review_coverage_evaluate
-    diagnostic_capture coverage
-    owner="$OWNER_VALID"
-    record_only="$coverage_record_only"
-    if [ "$tier" = T3 ] && ! $record_only && ! $owner && [ "${#OWNER_PROBLEMS[@]}" -eq 0 ]; then problems+=("$OWNER_ERROR"); fi
-    diagnostic_capture owner
-    # Keep actionable path diagnostics when the publisher's provenance commit is still local.
-    # These are diagnostics only; authenticated tokens, never the commits, decide coverage.
-    if $fp_ready; then
-        for i in ${latest[@]+"${latest[@]}"}; do
-            if [ "${v_rev[i]}" = owner ] || [ -z "${v_receipt_head[i]}" ] || ! review_is_fp "${v_to[i]}"; then continue; fi
-            if ! covered "${v_to[i]}" && content_of "${v_receipt_head[i]}" full; then
-                # shellcheck disable=SC2154 # Stream paths are outputs of the coverage library.
-                affected="$(review_stream_paths "$content_stream" "$head_stream" | tr '\n' ' ' | sed 's/ $//')"
-                [ -z "$affected" ] || problems+=("${v_rev[i]}: reviewed content differs at: $affected")
-            fi
-        done
     fi
     if [ "$tier" = T0 ] && ! $record_only && [ -n "$policy_at" ]; then
         # The tier is checked, not taken as the record's claim.
@@ -457,12 +274,10 @@ else
             fi
         fi
     fi
-    diagnostic_capture structure
-    review_coverage_require_start
-    diagnostic_capture coverage
+    if [ -z "$start" ] || [ "$start" = "$head" ]; then
+        problems+=("No change range from $base_ref to $head")
+    fi
 fi
-diagnostic_capture structure
-
 result=pass; [ "${#problems[@]}" -eq 0 ] || result=fail
 # Advisory: a reviewed PR-scoped record still at this head would merge open (review.md, Closing).
 record_open=false
@@ -471,72 +286,22 @@ if [ "$result" = pass ] && [ "$record_at" = "$head" ]; then
 fi
 if $json; then
     json_result="$result"; [ "$authority" = host ] || json_result=preview
-    printf '{"result":"%s","change":"%s","head":"%s","fingerprint":"%s","base":"%s","base_trusted":%s,"policy_at":"%s","record_only":%s,"record_open":%s,"tier":"%s","rigor":"%s","record_at":"%s","reviews":[' \
-        "$json_result" "$id" "$head" "$head_fp" "$(json_escape "$base_ref")" "$base_trusted" "$policy_at" "$record_only" "$record_open" "$tier" "$rigor" "$(json_escape "$record_at")"
-    sep=""
-    for row in ${rows[@]+"${rows[@]}"}; do
-        IFS="$(printf '\037')" read -r reviewer round from to verdict critical high medium low receipt_url <<< "$row"
-        printf '%s{"reviewer":"%s","round":"%s","range":"%s","verdict":"%s","critical":"%s","high":"%s","medium":"%s","low":"%s","receipt":"%s"}' "$sep" \
-            "$(json_escape "$reviewer")" "$(json_escape "$round")" "$(json_escape "$from..$to")" "$(json_escape "$verdict")" \
-            "$(json_escape "$critical")" "$(json_escape "$high")" "$(json_escape "$medium")" "$(json_escape "$low")" "$(json_escape "$receipt_url")"
-        sep=,
-    done
-    printf '],"registry_at":"%s","authority":"%s","pr":"%s","pr_head":"%s","head_is_pr_head":%s,"publisher_isolation":"%s","legacy_blockers":%s,"receipts":%s,"ignored_receipts":%s,"invalid_receipts":%s,"carried_blockers":%s,"owner":%s,"problems":%s' \
-        "$registry_at" "$authority" "$(json_escape "${pr_url:-${RC_PR:+https://github.com/$RC_REPO/pull/$RC_PR}}")" "$pr_head" "$head_is_pr_head" "$publisher_isolation" \
-        "$(review_legacy_json)" "$RC_RECEIPTS" "$RC_IGNORED" "$RC_INVALID" "$RC_CARRIED" "$(review_owner_json)" "$(json_array ${problems[@]+"${problems[@]}"})"
+    printf '{"result":"%s","change":"%s","head":"%s","base":"%s","base_trusted":%s,"policy_at":"%s","record_only":%s,"record_open":%s,"tier":"%s","rigor":"%s","record_at":"%s","reviews":%s,' \
+        "$json_result" "$id" "$head" "$(json_escape "$base_ref")" "$base_trusted" "$policy_at" "$record_only" "$record_open" "$tier" "$rigor" "$(json_escape "$record_at")" "$approvals"
+    printf '"authority":"%s","pr":"%s","pr_head":"%s","head_is_pr_head":%s,"problems":%s' \
+        "$authority" "$(json_escape "$pr_url")" "$pr_head" "$head_is_pr_head" "$(json_array ${problems[@]+"${problems[@]}"})"
     if $diagnostics; then
-        printf ',"diagnostics":{"base_ref":"%s","base_at":"%s","policy_at":"%s","head":"%s","host_content_bound":%s,"fetched":"%s","receipt_ready":%s,"start_covered":' \
-            "$(json_escape "$base_canonical")" "$import_base" "$policy_at" "$head" "$host_content_bound" "$RC_FETCHED" "$receipt_ready"
-        if $fp_ready; then covered "$REVIEW_FP_EMPTY" && printf true || printf false; else printf null; fi
-        printf ',"registry":['; sep=""
-        while IFS="$sep37" read -r identity role line; do
-            [ -n "$identity" ] || continue
-            printf '%s{"reviewer":"%s","eligibility":"%s"}' "$sep" "$(json_escape "$identity")" "$(review_eligibility "$registry" "$identity")"; sep=,
-        done <<< "$registry"
-        printf '],"edges":['
-        sep=""
-        for k in ${e_from[@]+"${!e_from[@]}"}; do
-            printf '%s{"from":"%s","to":"%s"}' "$sep" "${e_from[k]}" "${e_to[k]}"; sep=,
-        done
-        printf '],"latest":['; sep=""
-        for i in ${latest[@]+"${latest[@]}"}; do
-            standing=false
-            for k in ${coverage_standing[@]+"${coverage_standing[@]}"}; do [ "${v_rev[k]}" != "${v_rev[i]}" ] || standing=true; done
-            printf '%s{"reviewer":"%s","eligibility":"%s","receipt":"%s","from":"%s","to":"%s","clean":%s,"end_covered":%s,"standing":%s}' \
-                "$sep" "$(json_escape "${v_rev[i]}")" "$(review_eligibility "$registry" "${v_rev[i]}")" "$(json_escape "${v_receipt[i]}")" \
-                "${v_from[i]}" "${v_to[i]}" "${coverage_clean[i]:-false}" "${coverage_end[i]:-false}" "$standing"
-            sep=,
-        done
-        printf '],"standing":['; sep=""
-        for i in ${coverage_standing[@]+"${coverage_standing[@]}"}; do
-            printf '%s{"reviewer":"%s","to":"%s","receipt":"%s"}' "$sep" "$(json_escape "${v_rev[i]}")" "${v_to[i]}" "$(json_escape "${v_receipt[i]}")"; sep=,
-        done
-        printf '],"scope_blockers":['; sep=""
-        for row in ${RC_SCOPE_BLOCKERS[@]+"${RC_SCOPE_BLOCKERS[@]}"}; do
-            IFS="$sep37" read -r kind seq origin review submitted receipt_id change reviewer from to rest <<< "$row"
-            printf '%s{"reviewer":"%s","change":"%s","origin_pr":"%s","to":"%s","receipt":"%s"}' "$sep" \
-                "$(json_escape "$reviewer")" "$change" "$origin" "$to" "https://github.com/$RC_REPO/pull/$origin#pullrequestreview-$review"; sep=,
-        done
-        printf '],"references":%s,"current_reviewers":%s,"current_pr":"%s","problem_classes":%s}' \
-            "$(json_array ${RC_REFERENCES[@]+"${RC_REFERENCES[@]}"})" \
-            "$(json_array ${RC_CURRENT_REVIEWERS[@]+"${RC_CURRENT_REVIEWERS[@]}"})" "$RC_PR" "$(json_array ${d_classes[@]+"${d_classes[@]}"})"
+        printf ',"diagnostics":{"base_ref":"%s","base_at":"%s","policy_at":"%s","head":"%s"}' \
+            "$(json_escape "$base_canonical")" "$import_base" "$policy_at" "$head"
     fi
     printf '}\n'
 elif [ "$result" = pass ]; then
-    if $record_only; then
-        printf 'PASS %s at %s: since %s it carries only the record and the log; %s recorded verdict(s), none blocking; no covering receipt needed on this PR.\n' "$id" "$head" "$base_ref" "${#rows[@]}"
-    elif [ "${#rows[@]}" -eq 0 ]; then
-        printf 'PASS %s at %s: tier T0 needs no independent review (every changed path is docs only under the trusted review-t0-paths).\n' "$id" "$head"
-    else
-        printf 'PASS %s at %s: %s, Rigor %s; %s recorded verdict(s) cover this head.\n' "$id" "$head" "$tier" "$rigor" "${#rows[@]}"
-    fi
-    for note in ${notes[@]+"${notes[@]}"}; do printf '%s\n' "$note"; done
-    ! $record_open || printf 'Note: %s is still at this head; if this PR completes the change, close it before merge: .prdkit/scripts/bash/close-change.sh --pr <url> %s "<log line>" (review.md, Closing).\n' "$path" "$id"
+    if $online; then printf 'PASS %s: eligible GitHub approval on %s.\n' "$id" "$head"
+    else printf 'PREVIEW %s: local structure checked; use --pr for approval.\n' "$id"; fi
+    ! $record_open || printf 'Note: %s is still at this head.\n' "$path"
 else
     printf 'FAIL %s at %s:\n' "$id" "$head"
-    for problem in "${problems[@]}"; do printf '  %s\n' "$problem"; done
-    for note in ${notes[@]+"${notes[@]}"}; do printf '%s\n' "$note"; done
+    printf '  %s\n' "${problems[@]}"
 fi
-if ! $json && [ "$authority" != host ]; then printf 'PREVIEW: authority=%s fetched=%s; only an online check can certify that no blocker stands.\n' "$authority" "${RC_FETCHED:-none}"; fi
 [ "$result" = pass ] || exit 1
 [ "$authority" = host ] || exit 3

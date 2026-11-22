@@ -94,24 +94,4 @@ assert_contains "$OUTPUT" "Kept 1 edited template or memory file(s) the kit no l
 assert_contains "$(cat "$PROJ/.prdkit/memory/task-ledger.md")" "./scripts/adapter.sh" "edited policy kept intact"
 assert_file "$PROJ/.prdkit/memory/house-rules.md" "a project memory file is never retired"
 
-it "the explicit 2.0 review transition also performs existing ledger retirement"
-PROJ="$(make_1x_project)"; track_tmp "$PROJ"
-use_gh_stub
-printf '2.0.0\n' > "$PROJ/.product-kit/VERSION"
-printf -- '- **Rigor**: full\n' > "$PROJ/.prdkit/memory/constitution.md"
-cat > "$PROJ/.prdkit/memory/config.md" <<'EOF'
-## Configuration
-- review-host: github
-- review-publishers: bot:1001
-- review-owner: user:1003
-- review-publisher-isolation: required
-EOF
-git -C "$PROJ" add -A && git -C "$PROJ" commit -qm 'trusted transition policy'
-git -C "$PROJ" update-ref refs/remotes/origin/main HEAD
-git -C "$PROJ" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
-run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --migrate-reviews
-assert_eq 0 "$STATUS" "$OUTPUT"
-assert_contains "$OUTPUT" 'Removed 6 retired kit file(s)' 'existing retirement path runs with migration'
-assert_contains "$(cat "$PROJ/.prdkit/.manifest")" 'version: 2.0.0' 'explicit release fixture installed'
-assert_not_contains "$(cat "$GH_STUB_DIR/requests")" POST 'retirement never posts'
 finish

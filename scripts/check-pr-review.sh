@@ -286,7 +286,7 @@ branch() {
 }
 
 # REST resources are singular, not lists: there is no pagination to silently truncate here.
-# The native adapter owns complete receipt, activity and closed-source pagination.
+# The native adapter owns complete review pagination.
 read_bindings() {
     local prefix="$1" default_encoded target_encoded
     api "repos/$repository" "$root/$prefix.repo"
@@ -399,8 +399,7 @@ bounded 120 "$root/fsck.out" "$root/fsck.err" git -C "$objects" fsck --full --no
 
 extract() {
     local file entry mode kind blob path
-    for file in check-review.sh common.sh spec-lib.sh spec-navigation-lib.sh review-policy-lib.sh review-fingerprint-lib.sh \
-        review-coverage-lib.sh review-receipts-lib.sh review-owner-lib.sh review-legacy-lib.sh; do
+    for file in check-review.sh common.sh spec-lib.sh spec-navigation-lib.sh review-policy-lib.sh github-reviews-lib.sh; do
         path=".prdkit/scripts/bash/$file"
         entry="$(git -C "$objects" ls-tree "$policy" -- "$path")" || return 1
         read -r mode kind blob path <<< "$entry"
@@ -486,8 +485,7 @@ if [ "$native_exit" -eq 0 ]; then
         .pr == $pr and .head == $h and .pr_head == $h and .head_is_pr_head == true and
         .base == $ref and .base_trusted == true and .policy_at == $p and
         .diagnostics.head == $h and .diagnostics.base_ref == $ref and .diagnostics.base_at == $t and
-        .diagnostics.policy_at == $p and .diagnostics.receipt_ready == true and
-        .diagnostics.host_content_bound == true
+        .diagnostics.policy_at == $p and (.reviews | type == "array" and length > 0)
     ' "$root/native.json" >/dev/null || refuse native inconsistent-result
 else
     jq -e --argjson rc "$native_exit" '
