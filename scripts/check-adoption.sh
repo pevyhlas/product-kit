@@ -140,7 +140,7 @@ else
     if [ -f "$root/$SOURCE/VERSION" ]; then
         note
         if verify_lf_file "$root/$SOURCE/VERSION" &&
-            [ "$(wc -l < "$root/$SOURCE/VERSION")" -eq 1 ] &&
+            version_lines="$(wc -l < "$root/$SOURCE/VERSION")" && [ "$version_lines" -eq 1 ] &&
             IFS= read -r kit_version < "$root/$SOURCE/VERSION"; then
             [ "$manifest_version" = "$kit_version" ] ||
                 fail "Manifest version $manifest_version does not match kit source $kit_version (re-run init.sh --upgrade)"

@@ -7,7 +7,9 @@ mkdir "$_SCRATCH_CWD/bin"
 REAL_GIT="$(command -v git)" || exit 1
 REAL_FIND="$(command -v find)" || exit 1
 REAL_CAT="$(command -v cat)" || exit 1
-export REAL_GIT REAL_FIND REAL_CAT
+REAL_WC="$(command -v wc)" || exit 1
+REAL_AWK="$(command -v awk)" || exit 1
+export REAL_GIT REAL_FIND REAL_CAT REAL_WC REAL_AWK
 cat > "$_SCRATCH_CWD/bin/git" <<'SH'
 #!/usr/bin/env bash
 case "$VERIFY_FAULT:$*" in
@@ -67,6 +69,28 @@ case "$VERIFY_FAULT:${1:-}" in
     config-short-worktree:*/.prdkit/memory/config.md) sed -n '1p' "$1"; exit 0 ;;
 esac
 exec "$REAL_CAT" "$@"
+SH
+cat > "$_SCRATCH_CWD/bin/wc" <<'SH'
+#!/usr/bin/env bash
+if [ "$VERIFY_FAULT" = line-count ] && [ "$*" = -l ]; then
+    # Match only the two-line fixture; other counts must use the real input.
+    spool="$(mktemp)" || exit 1
+    trap 'rm -f "$spool"' EXIT
+    cat > "$spool" || exit 1
+    if cmp -s "$spool" "$COUNT_TARGET"; then
+        : > "$COUNT_HIT"
+        printf '1\n'; exit 5
+    fi
+    "$REAL_WC" -l < "$spool"; exit $?
+fi
+exec "$REAL_WC" "$@"
+SH
+cat > "$_SCRATCH_CWD/bin/awk" <<'SH'
+#!/usr/bin/env bash
+if [ "$VERIFY_FAULT" = version-reader ] && [ "${2:-}" = 'prefix=version: ' ]; then
+    "$REAL_AWK" "$@"; exit 5
+fi
+exec "$REAL_AWK" "$@"
 SH
 chmod +x "$_SCRATCH_CWD"/bin/*
 fault() { run env VERIFY_FAULT="$1" PATH="$_SCRATCH_CWD/bin:$PATH" "${@:2}"; }
@@ -148,6 +172,26 @@ printf '1.5.0' > "$KIT/VERSION"
 run bash "$CHECKER" --json; failed 'manifest lane VERSION without LF'
 printf '1.5.0\n' > "$KIT/VERSION"
 
+it 'adoption refuses a plausible count from a failed VERSION line counter'
+COUNT_TARGET="$KIT/VERSION"; COUNT_HIT="$_SCRATCH_CWD/count-hit"
+export COUNT_TARGET COUNT_HIT
+printf 'stale second line\n' >> "$COUNT_TARGET"
+fault line-count bash "$CHECKER" --json
+failed 'failed VERSION line count'
+assert_file "$COUNT_HIT"
+assert_contains "$OUTPUT" 'Invalid kit source VERSION'
+rm -f "$COUNT_HIT"
+printf '1.5.0\n' > "$KIT/VERSION"
+
+it 'pinned-source proof refuses a manifest version emitted by a failed reader'
+for lane in worktree committed; do
+    args=(--require-source)
+    [ "$lane" != committed ] || args=(--head HEAD)
+    fault version-reader bash "$CHECKER" --json "${args[@]}"
+    failed "$lane: failed manifest version reader"
+    assert_contains "$OUTPUT" 'Manifest must record exactly one readable version'
+done
+
 it 'both pinned-source lanes reject a required workflow missing after a pin change'
 printf '# New Workflow\n' > "$KIT/workflows/zzz.md"
 git -C "$KIT" add workflows/zzz.md && git -C "$KIT" commit -qm 'new required workflow' || exit 1
@@ -227,6 +271,13 @@ cp "$_SCRATCH_CWD/clean-config" "$config"
 mkdir -p specs/log
 printf -- '- 2026-11-22 001-example:\n' > specs/log/001-example.md
 run bash "$B/status.sh" --json; failed 'status malformed log entry'
+it 'status refuses a plausible count from a failed log-entry line counter'
+COUNT_TARGET="$VERIFY_PROJECT/specs/log/001-example.md"
+printf '%s\n' '- 2026-11-22 001-example: done' 'stale second line' > "$COUNT_TARGET"
+fault line-count bash "$B/status.sh" --json
+failed 'failed log-entry line count'
+assert_file "$COUNT_HIT"
+assert_contains "$OUTPUT" 'Malformed log entry'
 rm specs/log/001-example.md
 
 it 'read-spec detects a failed or short snapshot producer'

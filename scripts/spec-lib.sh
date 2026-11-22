@@ -241,8 +241,9 @@ spec_log_files() { # root [legacy-claims] -> the entry files' lines only
 }
 
 spec_log_entry_valid() { # file change-id
+    local lines
     is_change_id "$2" && verify_lf_file "$1" &&
-        [ "$(wc -l < "$1")" -eq 1 ] &&
+        lines="$(wc -l < "$1")" && [ "$lines" -eq 1 ] &&
         grep "^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] $2: [[:space:]]*[^[:space:]]" "$1" >/dev/null
 }
 # The same at a commit, for a gate that reads a ref and never the checkout. Only regular files

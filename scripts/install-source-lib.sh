@@ -123,7 +123,7 @@ install_resolve_path() { # root revision-or-empty path scratch
 
 install_source_verify() { # consumer-root consumer-revision-or-empty scratch
     local root="$1" head="$2" work="$3" source pin restriction manifest_hash repo entry
-    local version harnesses selection options mode src dest oid smode expected actual line hash path n parent count checked
+    local version manifest_version harnesses selection options mode src dest oid smode expected actual line hash path n parent count checked
     # Public result fields are consumed by check-adoption.sh, not this library.
     # shellcheck disable=SC2034
     INSTALL_SOURCE_REVISION=''
@@ -190,7 +190,9 @@ install_source_verify() { # consumer-root consumer-revision-or-empty scratch
         { echo 'Source proof unavailable: missing source VERSION object'; return; }
     verify_lf_file "$work/version" || { echo 'Invalid pinned source VERSION'; return; }
     version="$(tr -d '[:space:]' < "$work/version")" || return 1
-    [ -n "$version" ] && [ "$(install_manifest_value "$work/manifest" version || true)" = "$version" ] ||
+    manifest_version="$(install_manifest_value "$work/manifest" version)" ||
+        { echo 'Manifest must record exactly one readable version'; return; }
+    [ -n "$version" ] && [ "$manifest_version" = "$version" ] ||
         echo "Manifest version does not match pinned source $version"
     harnesses="$(install_manifest_value "$work/manifest" harnesses)" ||
         { echo 'Manifest must record exactly one harness selection'; return; }
