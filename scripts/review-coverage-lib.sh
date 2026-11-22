@@ -101,6 +101,7 @@ review_coverage_evaluate() {
     if [ -n "$fp_base" ]; then
         for i in ${v_rev[@]+"${!v_rev[@]}"}; do
             [ "${v_rev[i]}" != owner ] || continue
+            [ "${v_provenance[i]}" = verified ] || continue
             case "${v_verdict[i]}" in PASS|FAIL) ;; *) continue ;; esac
             block=false
             [ "${v_verdict[i]}" = PASS ] && [ "${v_c[i]}" = 0 ] && [ "${v_h[i]}" = 0 ] && { [ "$rigor" = light ] || [ "${v_m[i]}" = 0 ]; } || block=true
@@ -163,6 +164,10 @@ review_coverage_evaluate() {
         reviewer="${v_rev[i]}"; from="${v_from[i]}"; to="${v_to[i]}"; verdict="${v_verdict[i]}"
         label="$reviewer (${v_round[i]})"
         coverage_clean[i]=false; coverage_end[i]=false; coverage_eligible[i]=false
+        if [ "${v_provenance[i]}" != verified ]; then
+            $record_only || problems+=("$label: latest receipt provenance is ${v_provenance[i]}; publish a corrected full PASS")
+            continue
+        fi
         for k in ${l_idx[@]+"${!l_idx[@]}"}; do
             if [ "${l_idx[k]}" = "$i" ] && ! ${l_block[k]}; then coverage_clean[i]=true; fi
         done
