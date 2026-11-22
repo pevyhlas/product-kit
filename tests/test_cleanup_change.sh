@@ -108,6 +108,90 @@ run bash "$CLEAN" --force 115-unmerged
 assert_eq 1 "$STATUS"
 assert_file "$path/.git"; assert_file "$PROJ/.git/worktrees/115-unmerged/index"
 
+it "an unborn worktree is refused before moving its staged file or registration"
+path="$PROJ/.worktrees/120-unborn"
+git worktree add -q --detach "$path"
+git -C "$path" checkout -q --orphan unborn-120
+echo staged > "$path/new"; git -C "$path" add new
+run bash "$CLEAN" --force 120-unborn
+assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'no committed HEAD'
+assert_file "$path/new"; assert_file "$PROJ/.git/worktrees/120-unborn/index"
+
+it "retains the prior staged version recorded only in stash conflict undo"
+path="$PROJ/.worktrees/121-undo"
+git worktree add -q --detach "$path"
+echo base > "$path/file"; git -C "$path" add file; git -C "$path" commit -qm base
+echo stashed > "$path/file"; git -C "$path" stash push -q
+echo 'only staged before conflict' > "$path/file"; git -C "$path" add file
+prior="$(git -C "$path" rev-parse :file)"
+run git -C "$path" stash apply
+assert_eq 1 "$STATUS" "stash conflicts with the prior staged content"
+echo resolved > "$path/file"; git -C "$path" add file
+assert_contains "$(git -C "$path" ls-files --resolve-undo)" "$prior"
+# Exercise the verifier alone: omit this class from *both* publications in a
+# disposable copy. Presence in the object database must not count as retention.
+mutant="${CLEAN%/*}/omit-undo.sh"
+# shellcheck disable=SC2016 # Match literal source in the disposable copy.
+sed '/cat "\$slot\/undo" >> "\$slot\/oids"/d' "$CLEAN" > "$mutant"
+run bash "$mutant" --force 121-undo
+assert_eq 1 "$STATUS" "missing undo reachability refuses retirement"
+failed_slot="$(slot_for "$PROJ" 121-undo)"
+assert_contains "$OUTPUT" "$failed_slot"
+assert_contains "$(cat "$failed_slot/missing")" "$prior"
+holding="$PROJ/.git/worktrees/${failed_slot##*/}.retiring"
+assert_file "$holding/locked" "failed verification stays registered and protected"
+# Operator recovery, as documented. Both original names must be free.
+original="$PROJ/.git/worktrees/121-undo"
+if [ -d "$holding" ] && [ ! -e "$original" ] && [ ! -e "$path" ]; then
+    mv "$holding" "$original" && mv "$failed_slot/checkout" "$path" && git worktree unlock "$path"
+fi
+run bash "$CLEAN" --force 121-undo
+assert_eq 0 "$STATUS" "conflict undo retained: $OUTPUT"
+git reflog expire --expire=now --all && git gc --prune=now -q
+run git cat-file blob "$prior"
+assert_eq 0 "$STATUS"; assert_eq 'only staged before conflict' "$OUTPUT"
+
+it "ordinary GC after interruption at each cutover keeps aged HEAD and index contents"
+cut="$(mktemp -d)"; track_tmp "$cut"
+git -C "$cut" init -q
+git -C "$cut" config user.name test; git -C "$cut" config user.email test@example.invalid
+git -C "$cut" commit --allow-empty -qm initial
+mkdir -p "$cut/.prdkit/scripts" "$cut/shim"
+cp -R "${CLEAN%/*}" "$cut/.prdkit/scripts/bash"
+cat > "$cut/shim/mv" <<'SH'
+#!/bin/sh
+case "$1:$2" in
+    *"/checkout") boundary=checkout ;;
+    *".retiring") boundary=holding ;;
+    *"/admin") boundary=archive ;;
+    *) exec "$REAL_MV" "$@" ;;
+esac
+interrupt() { echo "$1" > "$MARK"; kill -TERM "$PPID"; exit 1; }
+[ "$POINT" != "before-$boundary" ] || interrupt "$POINT"
+"$REAL_MV" "$@" || exit 1
+[ "$POINT" != "after-$boundary" ] || interrupt "$POINT"
+SH
+chmod +x "$cut/shim/mv"
+for point in after-checkout before-holding after-holding before-archive after-archive; do
+    id="124-$point"; path="$cut/.worktrees/$id"
+    git -C "$cut" worktree add -q --detach "$path"
+    git -C "$path" commit -q --allow-empty -m "$point"
+    tip="$(git -C "$path" rev-parse HEAD)"
+    echo "$point staged" > "$path/file"; git -C "$path" add file
+    staged="$(git -C "$path" rev-parse :file)"; echo different > "$path/file"
+    control="$(echo "unreferenced $point" | git -C "$cut" hash-object -w --stdin)"
+    for oid in "$tip" "$staged" "$control"; do
+        touch -t 200001010000 "$cut/.git/objects/${oid:0:2}/${oid:2}"
+    done
+    run env REAL_MV="$(command -v mv)" POINT="$point" MARK="$cut/mark" PATH="$cut/shim:$PATH" \
+        bash "$cut/.prdkit/scripts/bash/cleanup-change.sh" --force "$id"
+    assert_eq 1 "$STATUS"; assert_eq "$point" "$(cat "$cut/mark")" "retirement interrupted at $point"
+    run git -C "$cut" gc -q; assert_eq 0 "$STATUS" "default GC ran"
+    run git -C "$cut" cat-file -e "$control"; assert_eq 1 "$STATUS" "unrooted old control collected"
+    assert_eq "$tip" "$(git -C "$cut" rev-parse --verify "$tip^{commit}")"
+    assert_eq "$point staged" "$(git -C "$cut" cat-file blob "$staged")"
+done
+
 it "removing an already-deleted worktree by id just prunes it"
 git -C "$PROJ" worktree add -qb 013-gone "$PROJ/.worktrees/013-gone" >/dev/null 2>&1
 rm -rf "$PROJ/.worktrees/013-gone"
@@ -151,12 +235,19 @@ it "the same recovery command uses the source ref backend and ignores transport 
 table="$(make_inited_project)"; track_tmp "$table"
 if git -C "$table" refs migrate --ref-format=reftable >/dev/null 2>&1; then
     git -C "$table" config uploadpack.hideRefs refs/heads
+    unrelated="$(echo unrelated | git -C "$table" hash-object -w --stdin)"
+    git -C "$table" update-ref --create-reflog refs/testing/common "$unrelated"
     for mode in named detached; do
         path="$table/.worktrees/106-table-$mode"
         flags=(-b "106-table-$mode"); [ "$mode" = named ] || flags=(--detach)
         git -C "$table" worktree add -q "${flags[@]}" "$path"
         git -C "$path" commit -q --allow-empty -m local
         expected="$(git -C "$path" rev-parse HEAD)"
+        for value in first second; do
+            endpoint="$(echo "$mode $value" | git -C "$path" hash-object -w --stdin)"
+            git -C "$path" update-ref --create-reflog refs/worktree/logged "$endpoint"
+            if [ "$value" = first ]; then oldest_blob="$endpoint"; fi
+        done
         run bash "$table/.prdkit/scripts/bash/cleanup-change.sh" "106-table-$mode"
         assert_eq 0 "$STATUS" "retired $mode reftable: $OUTPUT"
         slot="$(slot_for "$table" "106-table-$mode")"
@@ -164,6 +255,11 @@ if git -C "$table" refs migrate --ref-format=reftable >/dev/null 2>&1; then
         run git -C "$table" log "refs/prdkit-retired/${slot##*/}/HEAD"
         assert_eq 0 "$STATUS" "documented inspection on reftable"
         assert_contains "$OUTPUT" "$expected"
+        run git -C "$table" rev-list --objects --no-object-names --glob="refs/prdkit-retired/${slot##*/}/*"
+        assert_eq 0 "$STATUS"; assert_not_contains "$OUTPUT" "$unrelated"
+        assert_contains "$OUTPUT" "$oldest_blob"; assert_contains "$OUTPUT" "$endpoint"
+        assert_eq "$mode first" "$(git -C "$table" cat-file blob "$oldest_blob")"
+        assert_eq "$mode second" "$(git -C "$table" cat-file blob "$endpoint")"
     done
 fi
 
@@ -666,29 +762,30 @@ run bash "$CLEAN2" 087-sub-stash
 assert_eq 0 "$STATUS" "stash history moved intact"
 module_retained 087-sub-stash "$old87" 'stash@{1}^{commit}'
 
-it "a failed retention transaction leaves the registration locked and live files recoverable"
+it "a rejecting reference transaction leaves only its own registration locked"
 failbin="$(mktemp -d)"; track_tmp "$failbin"
-cat > "$failbin/git" <<'SH'
+cat > "$failbin/reference-transaction" <<'SH'
 #!/bin/sh
-case " $* " in *" update-ref --stdin "*) exit 1 ;; esac
-exec "$GIT" "$@"
+test "$1" != prepared || ! grep -F ' refs/prdkit-retired/' >/dev/null
 SH
-chmod +x "$failbin/git"
+chmod +x "$failbin/reference-transaction"
 work="$PROJ/.worktrees/111-interrupted"
 git -C "$PROJ" worktree add -qb 111-interrupted "$work"
 admin="$(git -C "$work" rev-parse --absolute-git-dir)"
 echo 'only copy' > "$work/untracked"
-run env PATH="$failbin:$PATH" GIT="$REAL_GIT" bash "$CLEAN" --force 111-interrupted
+git -C "$PROJ" config core.hooksPath "$failbin"
+run bash "$CLEAN" --force 111-interrupted
+git -C "$PROJ" config --unset core.hooksPath
 assert_eq 1 "$STATUS" "partial retirement reported"
 slot="$(slot_for "$PROJ" 111-interrupted)"
 assert_contains "$OUTPUT" "$slot" "names actual recovery location"
 assert_file "$admin/locked" "Git prune cannot collect the missing checkout's registration"
 assert_file "$admin/index" "original index preserved"
 assert_eq 'only copy' "$(cat "$slot/checkout/untracked")" "untracked content is recoverable"
-if [ -L "$admin" ]; then
-    rm "$admin" && mv "$slot/admin" "$admin" && mv "$slot/checkout" "$work"
-    git worktree unlock "$work"
-fi
+assert_file "$admin/HEAD" "failure leaves a real locked registration"
+git -C "$PROJ" worktree add -q --detach "$PROJ/.worktrees/123-after-refusal"
+run bash "$CLEAN" 123-after-refusal
+assert_eq 0 "$STATUS" "another worktree retires after the hook is removed"
 
 it "a missing archived module HEAD cannot yield a successful retirement"
 sub_worktree 119-unreadable
@@ -697,11 +794,12 @@ printf '%040d\n' 1 > "$module_admin/HEAD"
 run bash "$CLEAN2" --force 119-unreadable
 assert_eq 1 "$STATUS" "missing module object reported as a failure"
 slot="$(slot_for "$PROJ2" 119-unreadable)"
-assert_contains "$OUTPUT" "$slot"; assert_file "$slot/admin/modules/vendor/sub/HEAD"
-admin="${module_admin%/modules/*}"
-if [ -L "$admin" ]; then
-    rm "$admin" && mv "$slot/admin" "$admin" && mv "$slot/checkout" "$PROJ2/.worktrees/119-unreadable"
-fi
+assert_contains "$OUTPUT" "$slot"
+holding="$PROJ2/.git/worktrees/${slot##*/}.retiring"
+assert_file "$holding/modules/vendor/sub/HEAD"; assert_file "$holding/locked"
+git -C "$PROJ2" worktree add -q --detach "$PROJ2/.worktrees/122-unrelated"
+run bash "$CLEAN2" 122-unrelated
+assert_eq 0 "$STATUS" "locked recovery registration does not block unrelated cleanup"
 
 it "two overlapping runs: the second is refused while the first holds the mutex, and the first removes"
 SHIM6="$(mktemp -d)"; track_tmp "$SHIM6"

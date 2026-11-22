@@ -368,9 +368,10 @@ awk -v dir="$FIX" '
         # Keep the real watchdog alive until its deadline signal was sent.
         print "        for n in {1..30}; do [ ! -f \"" dir "/deadline-sent\" ] || break; sleep 0.1; done"
         print "        for n in {1..50}; do [ ! -f \"" dir "/repeat-sent\" ] || break; sleep 0.1; done"
-        print "        if [ -f \"" dir "/repeat-sent\" ]; then printf ack > \"" dir "/repeat-observed\"; fi"
+        print "        for n in {1..50}; do [ \"$signal_count\" -lt 4 ] || break; sleep 0.1; done"
+        print "        printf \"%s\\n\" \"$signal_count\" > \"" dir "/repeat-observed\""
     }
-    /^    finishing=true/ { print; print "    printf ready > \"" dir "/teardown-ready\""; next }
+    /^    trap .*overall-timeout.* USR1$/ { print; print "    printf ready > \"" dir "/teardown-ready\""; next }
     /^    child=\$!/ { print; print "    if [ \"$phase\" = native ]; then printf '\''%s\\n'\'' \"$child\" > \"" dir "/group\"; fi"; next }
     { print }
 ' "$FIX/launcher" > "$FIX/injected"
@@ -412,7 +413,8 @@ wait "$GUARD" 2>/dev/null || true
 nd_publish "$nd_dir" "$FIX/stdout" || :
 assert_eq 1 "$STATUS"
 assert_file "$FIX/deadline-sent" 'independent deadline signal delivered during teardown'
-assert_file "$FIX/repeat-observed" 'launcher observed successful repeat sends before releasing teardown'
+assert_file "$FIX/repeat-sent" 'driver sent repeat TERM and HUP'
+assert_eq 4 "$(cat "$FIX/repeat-observed")" 'launcher handled initial TERM, watchdog USR1 and both repeat signals before releasing teardown'
 assert_eq 1 "$(jq -s length "$FIX/stdout")" 'one complete refusal after repeated catchable signals'
 assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
 assert_eq interrupted "$(jq -r .error.code "$FIX/stdout")"

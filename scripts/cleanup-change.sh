@@ -287,6 +287,7 @@ idle_index() ( # check read-only before moving anything, including on --force
             -name '*.lock' ! -type d -print)" && [ -z "$busy" ] || return 1
     done
     [ -f "$admin/commondir" ] && [ ! -L "$admin/commondir" ] && [ ! -L "$admin/index" ] &&
+        git --git-dir="$admin" rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null &&
         conflicts="$(GIT_INDEX_FILE="$admin/index" git --git-dir="$admin" --work-tree="$ROOT" -c core.fsmonitor=false ls-files --unmerged)" && [ -z "$conflicts" ]
 )
 
@@ -295,42 +296,78 @@ check_objects() { # Git exits zero for a missing batch item; check its response 
         LC_ALL=C awk '!/^(commit|tree|blob|tag)$/ {bad=1} END {exit bad}'
 }
 
-# The rename is the cutover. Read the retired admin, not the former pathname
-# or a snapshot taken before the move. One create-only transaction publishes
-# GC roots in the actual common repository, independent of upload-pack rules.
+# Read only the linked worktree's ref table. In the normal Git view even
+# --single-worktree --reflog includes the common branch reflogs. This read-only
+# view uses Git's parser, with no shared refs or logs and no copied object DB.
+table_log_objects() (
+    local admin="$1" view="$2/table-view"; shift 2
+    mkdir "$view" "$view/refs" || return 1
+    trap 'rm -f "$view/HEAD" "$view/config" "$view/reftable"; rmdir "$view/refs" "$view"' EXIT
+    cp "$admin/HEAD" "$view/HEAD" &&
+        git config --file "$view/config" core.repositoryformatversion 1 &&
+        git config --file "$view/config" extensions.refStorage reftable &&
+        git config --file "$view/config" extensions.objectFormat "$(archived rev-parse --show-object-format)" &&
+        ln -s "$admin/reftable" "$view/reftable" &&
+        GIT_OBJECT_DIRECTORY="$common_dir/objects" git --git-dir="$view" rev-list \
+            --single-worktree --reflog --objects --no-object-names "$@"
+)
+
+private_logs() (
+    local admin="$1" slot="$2" head="$3" log; shift 3
+    if [ -d "$admin/reftable" ]; then table_log_objects "$admin" "$slot" "$@"; return; fi
+    [ -d "$admin/logs" ] || return 0
+    find "$admin/logs" -type f -print0 > "$slot/log-list" || return 1
+    while IFS= read -r -d '' log; do
+        awk -v n="${#head}" '
+            length($1)!=n || length($2)!=n || $1$2 ~ /[^0-9a-f]/ {exit 1}
+            {if ($1 !~ /^0+$/) print $1; if ($2 !~ /^0+$/) print $2}' "$log" || return 1
+    done < "$slot/log-list"
+)
+
 retain_refs() (
     set -o pipefail
-    local slot="$1" admin="$1/admin" ns="refs/prdkit-retired/${1##*/}" head tree index oid log repo
-    export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
+    local slot="$1" admin="$2" phase="$3" ns="refs/prdkit-retired/${1##*/}" head tree index oid log repo
+    [ "$phase" != before ] || ns="$ns/before"
+    export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 LC_ALL=C
     archived() { git --git-dir="$admin" --work-tree="$ROOT" "$@"; }
     head="$(archived rev-parse --verify 'HEAD^{commit}')" || return 1
-    tree="$(GIT_INDEX_FILE="$admin/index" archived write-tree)" || return 1
+    # write-tree may refresh the cache tree. Leave the archived index pristine.
+    if [ -f "$admin/index" ]; then cp "$admin/index" "$slot/index-copy" || return 1; fi
+    tree="$(GIT_INDEX_FILE="$slot/index-copy" archived write-tree)" || return 1
+    rm -f "$slot/index-copy" || return 1
     index="$(archived -c user.name=Product-Kit -c user.email=retirement@localhost commit-tree "$tree" -p "$head" -m 'Retained worktree index')" || return 1
     archived for-each-ref --format='%(objectname)' refs/bisect refs/rewritten refs/worktree > "$slot/oids" || return 1
     if [ -f "$admin/ORIG_HEAD" ]; then archived rev-parse --verify ORIG_HEAD >> "$slot/oids" || return 1; fi
-    if [ -d "$admin/logs" ]; then
-        find "$admin/logs" -type f -print0 > "$slot/log-list" || return 1
-        while IFS= read -r -d '' log; do
-            LC_ALL=C awk -v n="${#head}" '
-                length($1)!=n || length($2)!=n || $1$2 ~ /[^0-9a-f]/ {exit 1}
-                {if ($1 !~ /^0+$/) print $1; if ($2 !~ /^0+$/) print $2}' "$log" >> "$slot/oids" || return 1
-        done < "$slot/log-list"
-    fi
-    if [ -d "$admin/reftable" ]; then
-        # Git enumerates both reflog endpoints, including common reflog roots.
-        archived rev-list --single-worktree --reflog --no-walk >> "$slot/oids" || return 1
-    fi
+    # Include non-commit endpoints too. Do not turn every descendant of a
+    # logged commit into a separate ref; Git walks its tree during verification.
+    private_logs "$admin" "$slot" "$head" --no-walk --filter=tree:0 >> "$slot/oids" || return 1
+    # Git before 2.37.2 omitted resolve-undo blobs from --indexed-objects.
+    # ls-files quotes unusual filenames, leaving the mode and OID fields intact.
+    archived ls-files --resolve-undo | awk '$1!="160000" {print $2}' > "$slot/undo" || return 1
+    cat "$slot/undo" >> "$slot/oids" || return 1
     LC_ALL=C sort -u "$slot/oids" > "$slot/unique" || return 1
     {
         printf 'create %s/HEAD %s\ncreate %s/index %s\n' "$ns" "$head" "$ns" "$index"
         while IFS= read -r oid; do printf 'create %s/objects/%s %s\n' "$ns" "$oid" "$oid"; done < "$slot/unique"
     } | git -C "$ROOT" update-ref --stdin || return 1
+    [ "$phase" != before ] || return 0
     # Inspect through the published refs. A gitlink refers to a different
     # repository; verify populated module stores against their own HEAD below.
     printf '%s\n' "$ns/HEAD^{commit}" "$ns/index^{tree}" > "$slot/check" || return 1
     while IFS= read -r oid; do printf '%s/objects/%s\n' "$ns" "$oid"; done < "$slot/unique" >> "$slot/check" || return 1
     git -C "$ROOT" ls-tree -r "$ns/index" | awk '$1!="160000" {print $3}' >> "$slot/check" || return 1
     check_objects "$common_dir" < "$slot/check" || return 1
+    # Independently compare what Git would keep for the retired worktree with
+    # the closure of *only* this slot's published refs, not mere DB presence.
+    private_logs "$admin" "$slot" "$head" > "$slot/roots" || return 1
+    if [ -f "$admin/ORIG_HEAD" ]; then archived rev-parse --verify ORIG_HEAD >> "$slot/roots" || return 1; fi
+    archived rev-list --stdin --single-worktree --objects --no-object-names --indexed-objects \
+        --glob=refs/worktree --glob=refs/rewritten --glob=refs/bisect HEAD < "$slot/roots" > "$slot/expected" || return 1
+    sort -u "$slot/expected" "$slot/undo" > "$slot/required" || return 1
+    git -C "$ROOT" for-each-ref --format='%(objectname)' "$ns/" |
+        git -C "$ROOT" rev-list --stdin --objects --no-object-names | sort -u > "$slot/reachable" || return 1
+    comm -23 "$slot/required" "$slot/reachable" > "$slot/missing" || return 1
+    if [ -s "$slot/missing" ]; then echo "unretained objects listed at $slot/missing" >&2; return 1; fi
     if [ -d "$admin/modules" ]; then
         find "$admin/modules" -name HEAD -type f -print0 > "$slot/log-list" || return 1
         while IFS= read -r -d '' log; do
@@ -338,10 +375,10 @@ retain_refs() (
             printf 'HEAD^{commit}\n' | check_objects "$repo" || return 1
         done < "$slot/log-list"
     fi
-    rm -f "$slot/oids" "$slot/unique" "$slot/log-list" "$slot/check"
+    rm -f "$slot"/{oids,unique,log-list,check,undo,expected,required,reachable,missing,roots}
 )
 retire() (
-    local path="$1" mode="$2" admin root="$common_dir/prdkit-retired" slot state=0 lock config_rc=0
+    local path="$1" mode="$2" admin root="$common_dir/prdkit-retired" slot holding state=0 lock config_rc=0
     admin="$(registration "$path")" || { echo "ambiguous worktree registration: $path"; return 1; }
     lock="$admin/prdkit-cleanup.lock"
     if [ "$mode" != preflight ]; then
@@ -367,7 +404,7 @@ retire() (
     git -C "$ROOT" config --get-regexp '^(extensions\.partialclone|remote\..*\.(promisor|partialclonefilter))$' >/dev/null || config_rc=$?
     [ "$config_rc" = 1 ] || { echo "cannot verify complete local object storage"; return 1; }
     case "$root/" in "$path"/*) return 1 ;; esac
-    idle_index "$admin" || { echo "registration is busy, unreadable or has an unmerged index"; return 1; }
+    idle_index "$admin" || { echo "registration is busy, unreadable, has no committed HEAD or has an unmerged index"; return 1; }
     if ! git check-ref-format "refs/prdkit-retired/${admin##*/}.slot/HEAD" || [ -L "$root" ]; then
         echo "unsupported quarantine location"; return 1
     fi
@@ -390,20 +427,19 @@ retire() (
     if ! printf '%s\n' "$common_dir" > "$slot/common-path" || ! mv "$slot/common-path" "$admin/commondir"; then
         echo "could not bind registration $admin to the common store; inspect $slot"; return 1
     fi
-    # Renaming the entire admin unregisters it in one step. No later removal
-    # touches its former name, even if a concurrent writer recreates it.
-    mv "$admin" "$slot/admin" || { echo "registration move failed: $slot"; return 1; }
-    lock="$slot/admin/prdkit-cleanup.lock"
-    if ! retain_refs "$slot"; then
-        # Keep GC roots registered even if publishing refs fails (e.g. a ref
-        # transaction hook rejects the write). Never replace a recreated admin.
-        if [ ! -e "$admin" ] && [ ! -L "$admin" ] && ln -s "$slot/admin" "$admin"; then
-            echo "could not publish retention refs; locked registration retained for recovery at $slot"
-        else
-            echo "retired $path at $slot; retention refs incomplete; do not prune Git objects or purge the slot"
-        fi
-        return 1
+    # Publish before cutover. Move first to a locked, Git-visible sibling so
+    # even a writer finishing at that rename is still rooted if interrupted.
+    holding="$common_dir/worktrees/${slot##*/}.retiring"
+    if [ -e "$holding" ] || [ -L "$holding" ] || ! retain_refs "$slot" "$admin" before; then
+        echo "initial retention failed; locked registration $admin; inspect $slot"; return 1
     fi
+    mv "$admin" "$holding" || { echo "registration move failed: $slot"; return 1; }
+    lock="$holding/prdkit-cleanup.lock"
+    if ! retain_refs "$slot" "$holding" after; then
+        echo "retention verification failed; locked registration $holding; inspect $slot"; return 1
+    fi
+    mv "$holding" "$slot/admin" || { echo "final move failed; locked registration $holding; inspect $slot"; return 1; }
+    lock="$slot/admin/prdkit-cleanup.lock"
     printf '%s\n' "$slot"
 )
 prune_stale() {
@@ -417,7 +453,6 @@ prune_stale() {
     done
     for path in "$@"; do
         if ! slot="$(retire "$path" stale)"; then
-            if [[ "$slot" = "retired $path at "* ]]; then retired+=("$path"); fi
             msg="Could not finish stale registration $path: $slot.${slots:+ Previously retired:$slots}"
             if $JSON_MODE; then emit_json refused prune "$msg" ${retired[@]+"${retired[@]}"}; else echo "[prdkit] $msg" >&2; fi
             return 1

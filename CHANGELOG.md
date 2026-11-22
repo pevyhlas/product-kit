@@ -40,7 +40,9 @@ change by change.
   active checkout. Busy registrations and unmerged indexes are refused. Batch pruning checks
   all candidates first and reports progress if a later retirement fails. New changes leave
   stale registrations alone. Cleanup checks recovery objects before reporting success and
-  refuses linked evidence paths in either checkout. Explicit pruning targets only stale
+  refuses linked evidence paths in either checkout. Retirement keeps objects reachable across
+  interruption, including conflict-undo blobs and private reftable reflog entries, without
+  retaining unrelated branch history. Unborn checkouts stay in place. Explicit pruning targets only stale
   registrations; removing one change leaves unrelated registrations alone.
 - Cleanup refuses unsupported layouts, including embedded submodule stores, dependent
   linked checkouts and cross-filesystem moves. Plain paths still work on older Git;
