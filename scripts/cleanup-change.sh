@@ -366,7 +366,13 @@ retain_refs() (
     sort -u "$slot/expected" "$slot/undo" > "$slot/required" || return 1
     git -C "$ROOT" for-each-ref --format='%(objectname)' "$ns/" |
         git -C "$ROOT" rev-list --stdin --objects --no-object-names | sort -u > "$slot/reachable" || return 1
-    comm -23 "$slot/required" "$slot/reachable" > "$slot/missing" || return 1
+    # Merge the two sorted inventories without loading a repository's history
+    # into memory. Prefix comparisons so even all-digit OIDs compare as text.
+    awk 'BEGIN {kept=ARGV[1]; ARGV[1]=""}
+        {while (!ended && ("x" oid) < ("x" $0)) {
+            rc=(getline oid < kept); if (rc<0) exit 1; if (!rc) ended=1
+        }
+        if (("x" oid) != ("x" $0)) print}' "$slot/reachable" "$slot/required" > "$slot/missing" || return 1
     if [ -s "$slot/missing" ]; then echo "unretained objects listed at $slot/missing" >&2; return 1; fi
     if [ -d "$admin/modules" ]; then
         find "$admin/modules" -name HEAD -type f -print0 > "$slot/log-list" || return 1
