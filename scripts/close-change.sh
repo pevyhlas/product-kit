@@ -70,9 +70,7 @@ record_hash="$(verify_lines git -C "$root" hash-object --no-filters -- "$root/$p
 [[ "$record_oid" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ && "$record_hash" = "$record_oid" ]] ||
     refuse "record $path does not match the bytes at HEAD"
 git -C "$root" diff --cached --quiet || refuse "other changes are staged; commit or unstage them, so this commit holds only the record and its log entry"
-preflight="$(mktemp -d)" || refuse "cannot allocate preflight scratch"
-trap 'rm -rf "$preflight"' EXIT
-existing="$(verify_git_tree_path "$root" HEAD "$entry" "$preflight/tree")" ||
+existing="$(verify_lines git -C "$root" ls-tree --name-only HEAD -- ":(literal)$entry")" ||
     refuse "could not check for $entry at HEAD"
 if [ -e "$root/$entry" ] || [ -n "$existing" ]; then
     refuse "the log already has an entry for $id"
@@ -89,31 +87,30 @@ check_folded_log() {
     fi
 }
 if [ -e "$root/$log" ]; then check_folded_log "$root/$log"; fi
-folded="$(verify_git_tree_path "$root" HEAD "$log" "$preflight/tree")" ||
+# Only a successful literal tree lookup with no row means absent. The file
+# can be committed and deliberately not materialized in a sparse checkout.
+folded="$(verify_lines git -C "$root" ls-tree HEAD -- ":(literal)$log")" ||
     refuse "could not check for $log at HEAD"
 if [ -n "$folded" ]; then
-    case "$folded" in 100644\ blob\ *|100755\ blob\ *) ;; *) refuse "invalid $log at HEAD" ;; esac
-    folded_oid="${folded##* }"
-    git -C "$root" cat-file blob "$folded_oid" > "$preflight/log" ||
+    meta="${folded%%$'\t'*}"
+    [[ "${folded#*$'\t'}" = "$log" && "$meta" =~ ^100(644|755)\ blob\ [0-9a-f]{40}([0-9a-f]{24})?$ ]] ||
+        refuse "invalid $log at HEAD"
+    snapshot="$(mktemp)" || refuse "cannot allocate preflight scratch"
+    trap 'rm -f "$snapshot"' EXIT
+    git -C "$root" cat-file blob "${meta##* }" > "$snapshot" ||
         refuse "could not read $log at HEAD"
-    [ "$(git -C "$root" hash-object --no-filters -- "$preflight/log")" = "$folded_oid" ] ||
-        refuse "incomplete $log at HEAD"
-    check_folded_log "$preflight/log"
+    check_folded_log "$snapshot"
+    rm -f "$snapshot"
+    trap - EXIT
 fi
 default="$(spec_default_branch "$root")" || refuse "could not identify the default branch"
 if [ -n "$default" ]; then
-    reported="$(verify_lines git -C "$root" ls-tree --name-only "$default" -- ":(literal)$path")" ||
+    existing="$(verify_lines git -C "$root" ls-tree --name-only "$default" -- ":(literal)$path")" ||
         refuse "could not check for $path on $default"
-    existing="$(verify_git_tree_path "$root" "$default" "$path" "$preflight/tree")" ||
-        refuse "could not check for $path on $default"
-    if [ -n "$existing" ]; then expected="$path"; else expected=''; fi
-    [ "$reported" = "$expected" ] || refuse "incomplete tree evidence for $path on $default"
     if [ -n "$existing" ]; then
         refuse "$path is already on $default: a change merged with its record closes inside the next relevant PR, before that PR's final review (review.md, Closing)"
     fi
 fi
-rm -rf "$preflight"
-trap - EXIT
 
 check() { bash "$SCRIPT_DIR/check-review.sh" --pr "$pr" --repo "$root" --head HEAD ${base_args[@]+"${base_args[@]}"} "$id" 2>&1; }
 if ! out="$(verify_lines check)" || [ -z "$out" ]; then

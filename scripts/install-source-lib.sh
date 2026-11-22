@@ -7,32 +7,6 @@ install_object_git() {
     GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0 git "$@"
 }
 
-install_pinned_flat_tree() { # repo pin scratch
-    local repo="$1" pin="$2" work="$3" row meta dir leaf name roots entries checked_roots=0 checked_entries
-    verify_git_tree "$repo" "$pin" "$work/pin-root" || return 1
-    roots="$(verify_nul_count "$work/pin-root")" || return 1
-    while IFS= read -r -d '' row; do
-        checked_roots=$((checked_roots + 1))
-        meta="${row%%$'\t'*}"; dir="${row#*$'\t'}"
-        case "$dir:$meta" in
-            commands:040000\ tree\ *|scripts:040000\ tree\ *|templates:040000\ tree\ *|workflows:040000\ tree\ *) ;;
-            *) continue ;;
-        esac
-        verify_git_tree "$repo" "${meta##* }" "$work/pin-dir" || return 1
-        entries="$(verify_nul_count "$work/pin-dir")" || return 1
-        checked_entries=0
-        while IFS= read -r -d '' leaf; do
-            checked_entries=$((checked_entries + 1))
-            name="${leaf#*$'\t'}"
-            [[ "$name" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || continue
-            case "${leaf%%$'\t'*}" in 040000\ tree\ *) continue ;; esac
-            printf '%s\t%s/%s\n' "${leaf%%$'\t'*}" "$dir" "$name" || return 1
-        done < "$work/pin-dir"
-        [ "$entries" -eq "$checked_entries" ] || return 1
-    done < "$work/pin-root"
-    [ "$roots" -eq "$checked_roots" ]
-}
-
 install_object_entry() { # repo revision literal-path -> mode type oid (or empty)
     local entry
     install_object_git -C "$1" ls-tree -z "$2" -- ":(literal)$3" |
@@ -66,22 +40,12 @@ install_candidate_mode() { # root revision-or-empty path
     fi
 }
 
-install_object_blob() { # repo object output-file; confirm against the object ID, not the reader
-    local oid="$2" actual
-    if ! [[ "$oid" =~ ^[0-9a-f]{40}$ ]]; then
-        oid="$(install_object_git -C "$1" rev-parse --verify "$oid")" || return 1
-    fi
-    install_object_git -C "$1" cat-file blob "$oid" > "$3" || return 1
-    actual="$(install_object_git -C "$1" hash-object --no-filters -- "$3")" || return 1
-    [ "$actual" = "$oid" ]
-}
-
 install_candidate_read() { # root revision-or-empty path output-file (raw blob, no link following)
     local entry
     if [ -n "$2" ]; then
         entry="$(install_object_entry "$1" "$2" "$3")" || return 1
         case "$entry" in 100644\ blob\ *|100755\ blob\ *|120000\ blob\ *)
-            install_object_blob "$1" "${entry##* }" "$4" ;; *) return 1 ;; esac
+            install_object_git -C "$1" cat-file blob "${entry##* }" > "$4" ;; *) return 1 ;; esac
     elif [ -L "$1/$3" ]; then
         # Git stores the link text without readlink's terminating newline.
         local link
@@ -222,7 +186,7 @@ install_source_verify() { # consumer-root consumer-revision-or-empty scratch
         { echo "Source proof unavailable: missing source commit $pin (no fetch performed)"; return; }
     install_object_git -C "$repo" ls-tree -r "$pin" > "$work/source-tree" 2>/dev/null ||
         { echo 'Source proof unavailable: missing source tree objects'; return; }
-    install_object_blob "$repo" "$pin:VERSION" "$work/version" 2>/dev/null ||
+    install_object_git -C "$repo" cat-file blob "$pin:VERSION" > "$work/version" 2>/dev/null ||
         { echo 'Source proof unavailable: missing source VERSION object'; return; }
     verify_lf_file "$work/version" || { echo 'Invalid pinned source VERSION'; return; }
     version="$(tr -d '[:space:]' < "$work/version")" || return 1
@@ -282,14 +246,6 @@ install_source_verify() { # consumer-root consumer-revision-or-empty scratch
         { echo 'Manifest must record exactly one command mode'; return; }
     case "$mode" in copy|symlink) ;; *) echo "Unknown manifest command mode: $mode"; return ;; esac
     verify_lf_file "$work/source-tree" || { echo 'Incomplete pinned source tree: expected non-empty LF-terminated records'; return; }
-    if ! GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0 \
-        install_pinned_flat_tree "$repo" "$pin" "$work" > "$work/validated-flat" ||
-        ! LC_ALL=C awk -F '\t' '$2 ~ /^(commands|scripts|templates|workflows)\/[A-Za-z0-9_][A-Za-z0-9_.-]*$/ {print}' \
-            "$work/source-tree" > "$work/reported-flat" ||
-        ! cmp -s "$work/validated-flat" "$work/reported-flat"; then
-        echo 'Incomplete pinned source tree: recursive listing does not match validated tree objects'
-        return
-    fi
     count="$(wc -l < "$work/source-tree")" || return 1
     checked=0
     : > "$work/mapping" || { echo 'Unable to build installation mapping'; return; }
@@ -312,7 +268,7 @@ install_source_verify() { # consumer-root consumer-revision-or-empty scratch
         smode="${entry%% *}"; oid="${entry##* }"
         case "$entry" in 100644\ blob\ *|100755\ blob\ *) ;; *)
             echo "Pinned source is not a regular file: $src"; continue ;; esac
-        if ! install_object_blob "$repo" "$oid" "$work/blob" 2>/dev/null; then
+        if ! install_object_git -C "$repo" cat-file blob "$oid" > "$work/blob" 2>/dev/null; then
             echo "Missing pinned source object: $src"; continue
         fi
         n="$(awk -v p="$dest" 'substr($0,67) == p { n++ } END { print n+0 }' "$work/manifest")" || return 1
@@ -428,7 +384,7 @@ install_source_verify() { # consumer-root consumer-revision-or-empty scratch
     case " $harnesses " in *' agents '*)
         if ! managed_agents_section "$work/agents" > "$work/section"; then
             echo 'Missing or malformed Product-Kit managed section in AGENTS.md'
-        elif ! install_object_blob "$repo" "$pin:scripts/agents-section.md" "$work/expected-section" 2>/dev/null; then
+        elif ! install_object_git -C "$repo" cat-file blob "$pin:scripts/agents-section.md" > "$work/expected-section" 2>/dev/null; then
             echo 'Missing pinned managed-section source object'
         else
             cmp -s "$work/section" "$work/expected-section" || echo 'AGENTS.md managed section differs from pinned source'

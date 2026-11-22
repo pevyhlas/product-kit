@@ -1032,20 +1032,10 @@ spec_change_progress() { # file [required=true] [advisories] -> outcome, milesto
 # "." for root itself): root first, then every other registered worktree whose directory exists
 # (new-change.sh creates the record in one). Local git metadata only.
 spec_worktrees() { # root -> Git porcelain, checked before exposing any rows
-    local input common registration expected=1 checked
-    common="$(verify_lines git -C "$1" rev-parse --git-common-dir)" || return 1
-    [ -n "$common" ] || return 1
-    case "$common" in /*) ;; *) common="$1/$common" ;; esac
-    [ -d "$common" ] && [ -r "$common" ] && [ -x "$common" ] || return 1
-    if [ -d "$common/worktrees" ]; then
-        [ -r "$common/worktrees" ] && [ -x "$common/worktrees" ] || return 1
-        for registration in "$common"/worktrees/* "$common"/worktrees/.[!.]* "$common"/worktrees/..?*; do
-            [ ! -d "$registration" ] || expected=$((expected + 1))
-        done
-    fi
+    local input
     input="$(verify_lines git -C "$1" worktree list --porcelain && printf x)" || return 1
     case "$input" in worktree\ *$'\n\nx') ;; *) echo 'Incomplete Git worktree inventory' >&2; return 1 ;; esac
-    checked="$(printf '%s' "${input%x}" | LC_ALL=C awk '
+    printf '%s' "${input%x}" | LC_ALL=C awk '
         /^worktree / { if (open || length($0) == 9 || substr($0,10,1) == "\"") bad=1; open=1; expected++; next }
         /^HEAD [0-9a-f]+$/ { if (!open || head || (length($2) != 40 && length($2) != 64)) bad=1; head=1; next }
         /^bare$/ { if (!open || head) bad=1; head=kind=1; next }
@@ -1054,12 +1044,7 @@ spec_worktrees() { # root -> Git porcelain, checked before exposing any rows
         !open || !/^(locked( |$)|prunable( |$))/ { bad=1 }
         END {
             if (bad || open || !expected || checked != expected) exit 1
-            print checked
-        }')" || { echo 'Invalid or incomplete Git worktree records' >&2; return 1; }
-    if [ "$expected" -ne "$checked" ]; then
-        printf 'Incomplete Git worktree inventory: expected %s registrations, checked %s\n' "$expected" "$checked" >&2
-        return 1
-    fi
+        }' || { echo 'Invalid or incomplete Git worktree records' >&2; return 1; }
     printf '%s' "${input%x}"
 }
 

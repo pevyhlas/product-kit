@@ -134,13 +134,16 @@ git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; git -C "$PROJ2" branch -q -D 021-aft
 rm -rf "$PROJ2/specs/changes" "$PROJ2/specs/log"
 
 it "legacy CRLF logs still reserve closed change IDs for allocation"
-printf -- '- 2026-10-01 030-old-change: did a thing\r\n' > "$PROJ2/specs/log.md"
-run bash "$SCRIPT2" --json --no-worktree --short-name "old-change" "desc"
+legacy="$(make_inited_project)" || exit 1
+track_tmp "$legacy"
+mkdir -p "$legacy/specs"
+printf -- '- 2026-10-01 001-repeat: already closed\r\n' > "$legacy/specs/log.md"
+git -C "$legacy" -c core.autocrlf=false add -A && git -C "$legacy" commit -qm installed || exit 1
+run bash -c 'cd "$1" && bash .prdkit/scripts/bash/new-change.sh --json Repeat' _ "$legacy"
 assert_eq 0 "$STATUS" "legacy log claims remain readable"
-assert_contains "$OUTPUT" '"CHANGE_ID":"031-old-change"' "the closed 030 is reserved"
-git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; git -C "$PROJ2" branch -qD 031-old-change
-rm -rf "$PROJ2/specs/changes"
-printf '%s\n' '- 2026-10-01 012-old-change: did a thing — R-01 — https://example.invalid/pr/1' > "$PROJ2/specs/log.md"
+assert_contains "$OUTPUT" '"CHANGE_ID":"002-repeat"' "the committed log alone reserves 001-repeat"
+assert_file "$legacy/.worktrees/002-repeat/specs/changes/002-repeat.md"
+[ ! -e "$legacy/.worktrees/001-repeat" ] || _no 'no worktree reuses the closed ID'
 
 it "a log condensed into specs/archive.md keeps its numbers reserved"
 # shellcheck disable=SC2016 # backticks are Markdown code spans, not command substitution
