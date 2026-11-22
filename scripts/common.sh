@@ -101,6 +101,61 @@ verify_nul_count() (
     LC_ALL=C tr -cd '\000' < "$1" | wc -c | tr -d '[:space:]'
 )
 
+# Read an immediate tree listing and re-hash its binary representation. A
+# complete-record prefix cannot authenticate against the named tree object.
+# The caller supplies a private output path and controls the Git environment.
+verify_git_tree() ( # repo tree-ish output-file
+    set -o pipefail
+    local root="$1" at="$2" listing="$3" oid actual
+    oid="$(verify_lines git -C "$root" rev-parse --verify "$at^{tree}")" || return 1
+    [[ "$oid" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] || return 1
+    git -C "$root" ls-tree -z "$oid" > "$listing" || return 1
+    actual="$(verify_git_tree_bytes "$listing" "${#oid}" | git -C "$root" hash-object -t tree --stdin)" || return 1
+    [ "$actual" = "$oid" ] || { printf 'Incomplete Git tree inventory for %s\n' "$at" >&2; return 1; }
+)
+
+verify_git_tree_bytes() { # ls-tree -z listing, hex OID length
+    local row meta name mode oid i oct bytes expected checked=0
+    expected="$(verify_nul_count "$1")" || return 1
+    while IFS= read -r -d '' row; do
+        meta="${row%%$'\t'*}"; name="${row#*$'\t'}"
+        [[ "$meta" =~ ^(040000\ tree|100644\ blob|100755\ blob|120000\ blob|160000\ commit)\ ([0-9a-f]+)$ ]] ||
+            return 1
+        mode="${meta%% *}"; oid="${BASH_REMATCH[2]}"
+        [ "${#oid}" -eq "$2" ] && [ "$name" != "$row" ] && [ -n "$name" ] || return 1
+        bytes=''
+        for ((i=0; i<${#oid}; i+=2)); do
+            printf -v oct '%03o' "0x${oid:i:2}" || return 1
+            bytes="$bytes\\0$oct"
+        done
+        printf '%s %s\000%b' "${mode#0}" "$name" "$bytes" || return 1
+        checked=$((checked + 1))
+    done < "$1"
+    [ "$checked" -eq "$expected" ]
+}
+
+# Locate a literal path using validated immediate trees, including when Git
+# does not materialize that path in a sparse worktree. Empty means proven absent.
+verify_git_tree_path() { # repo tree-ish literal-path scratch-file
+    local at="$2" path="$3" row name segment found expected checked
+    while :; do
+        verify_git_tree "$1" "$at" "$4" || return 1
+        segment="${path%%/*}"; found=''
+        expected="$(verify_nul_count "$4")" || return 1
+        checked=0
+        while IFS= read -r -d '' row; do
+            checked=$((checked + 1))
+            name="${row#*$'\t'}"
+            if [ "$name" = "$segment" ]; then found="${row%%$'\t'*}"; fi
+        done < "$4"
+        [ "$checked" -eq "$expected" ] || return 1
+        [ -n "$found" ] || return 0
+        if [ "$segment" = "$path" ]; then printf '%s\n' "$found"; return; fi
+        case "$found" in 040000\ tree\ *) ;; *) return 1 ;; esac
+        path="${path#*/}"; at="${found##* }"
+    done
+}
+
 # Escape a UTF-8 value for embedding inside a double-quoted JSON string. Bash
 # strings cannot contain NUL; every other U+0001–U+001F control must be escaped.
 json_escape() {

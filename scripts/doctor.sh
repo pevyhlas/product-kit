@@ -703,10 +703,8 @@ fi
 for entry_file in "$root"/specs/log/* "$root"/specs/log/.[!.]* "$root"/specs/log/..?*; do
     [ -e "$entry_file" ] || [ -L "$entry_file" ] || continue
     entry_id="${entry_file##*/}"; entry_id="${entry_id%.md}"
-    if [ "${entry_file##*/}" = "$entry_id.md" ] && is_change_id "$entry_id" && [ -f "$entry_file" ] && [ ! -L "$entry_file" ] &&
-        verify_lf_file "$entry_file" &&
-        [ "$(awk 'END { print NR }' "$entry_file")" = 1 ] &&
-        grep -q "^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] $entry_id: ." "$entry_file"; then continue; fi
+    if [ "${entry_file##*/}" = "$entry_id.md" ] && [ -f "$entry_file" ] && [ ! -L "$entry_file" ] &&
+        spec_log_entry_valid "$entry_file" "$entry_id"; then continue; fi
     findings+=("Malformed log entry specs/log/${entry_file##*/}: a plain file <id>.md holding one line, '- <date> <id>: <what changed>', for the change its name gives (close-change.sh writes it)")
 done
 if $in_git; then

@@ -98,7 +98,7 @@ fi
 # at a commit after the merge base, the branch's version of every file it changed, the branch is
 # possibly squash-merged. Later commits may have changed those files again.
 squashed() { # branch -> yes|no
-    local mb files=() file rc=0 commit expected history
+    local mb files=() file rc=0 commit expected history stats_checked=0 numstat pair
     $objects_local || { echo no; return 0; }
     mb="$(git -C "$root" merge-base "$base" "$1" 2>/dev/null)" || { echo no; return 0; }
     # A diff that cannot read its objects (a tree-filtered clone) is not evidence of a squash.
@@ -114,6 +114,21 @@ squashed() { # branch -> yes|no
         echo "Incomplete squash path inventory for $1: expected $expected paths from diff, checked ${#files[@]} (quiet diff status $rc)" >&2
         return 1
     fi
+    # A correctly terminated prefix can still omit changed paths. Numstat's
+    # independent inventory must identify the same paths, with renames disabled.
+    git -C "$root" diff --no-renames --numstat -z "$mb" "$1" > "$work/numstat" || return 1
+    numstat="$(verify_nul_count "$work/numstat")" || return 1
+    if [ "$numstat" -ne "$expected" ]; then
+        printf 'Incomplete squash path inventory: expected %s paths, checked %s\n' "$numstat" "$expected" >&2
+        return 1
+    fi
+    while IFS= read -r -d '' pair; do
+        [[ "$pair" = *$'\t'*$'\t'* ]] || return 1
+        file="${pair#*$'\t'}"; file="${file#*$'\t'}"
+        [ "${files[stats_checked]:-}" = ":(literal)$file" ] || return 1
+        stats_checked=$((stats_checked + 1))
+    done < "$work/numstat"
+    [ "$stats_checked" -eq "$numstat" ] || return 1
     if [ "$expected" -eq 0 ] || git -C "$root" diff --quiet "$base" "$1" -- "${files[@]}" 2>/dev/null; then echo yes; return 0; fi
     # The squash commit is usually among the first after the merge base to touch those files.
     history="$(verify_lines git -C "$root" log --reverse --format=%H "$mb..$base" -- "${files[@]}" | awk 'NR <= 20')" || return 1

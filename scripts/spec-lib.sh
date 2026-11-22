@@ -218,20 +218,32 @@ spec_archive_log_through() { # root
 # specs/log.md (compact.md). Callers match the dated lines they need; awk ends every line.
 spec_log_entries() { # root
     if [ -f "$1/specs/log.md" ]; then
-        verify_lf_file "$1/specs/log.md" || { echo 'Invalid text in specs/log.md' >&2; return 1; }
+        if [ "${2:-}" != legacy-claims ]; then
+            verify_lf_file "$1/specs/log.md" || { echo 'Invalid text in specs/log.md' >&2; return 1; }
+        fi
         awk 1 "$1/specs/log.md" || return 1
     fi
-    spec_log_files "$1"
+    spec_log_files "$@"
 }
-spec_log_files() { # root -> the entry files' lines only; a symlink is never an entry
-    local file
+spec_log_files() { # root [legacy-claims] -> the entry files' lines only
+    local file id
     for file in "$1"/specs/log/[0-9]*.md; do
         [ -f "$file" ] && [ ! -L "$file" ] || continue
-        if ! verify_lf_file "$file" || ! awk 1 "$file"; then
-            printf 'Invalid log entry text: %s\n' "$file" >&2; return 1
+        if [ "${2:-}" != legacy-claims ]; then
+            id="${file##*/}"; id="${id%.md}"
+            if ! spec_log_entry_valid "$file" "$id"; then
+                printf 'Malformed log entry: %s\n' "$file" >&2; return 1
+            fi
         fi
+        awk 1 "$file" || return 1
     done
     return 0
+}
+
+spec_log_entry_valid() { # file change-id
+    is_change_id "$2" && verify_lf_file "$1" &&
+        [ "$(wc -l < "$1")" -eq 1 ] &&
+        grep "^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] $2: [[:space:]]*[^[:space:]]" "$1" >/dev/null
 }
 # The same at a commit, for a gate that reads a ref and never the checkout. Only regular files
 # count (a blob of mode 100644 or 100755): a tree, symlink or submodule at specs/log.md or
@@ -1020,10 +1032,20 @@ spec_change_progress() { # file [required=true] [advisories] -> outcome, milesto
 # "." for root itself): root first, then every other registered worktree whose directory exists
 # (new-change.sh creates the record in one). Local git metadata only.
 spec_worktrees() { # root -> Git porcelain, checked before exposing any rows
-    local input
+    local input common registration expected=1 checked
+    common="$(verify_lines git -C "$1" rev-parse --git-common-dir)" || return 1
+    [ -n "$common" ] || return 1
+    case "$common" in /*) ;; *) common="$1/$common" ;; esac
+    [ -d "$common" ] && [ -r "$common" ] && [ -x "$common" ] || return 1
+    if [ -d "$common/worktrees" ]; then
+        [ -r "$common/worktrees" ] && [ -x "$common/worktrees" ] || return 1
+        for registration in "$common"/worktrees/* "$common"/worktrees/.[!.]* "$common"/worktrees/..?*; do
+            [ ! -d "$registration" ] || expected=$((expected + 1))
+        done
+    fi
     input="$(verify_lines git -C "$1" worktree list --porcelain && printf x)" || return 1
     case "$input" in worktree\ *$'\n\nx') ;; *) echo 'Incomplete Git worktree inventory' >&2; return 1 ;; esac
-    printf '%s' "${input%x}" | LC_ALL=C awk '
+    checked="$(printf '%s' "${input%x}" | LC_ALL=C awk '
         /^worktree / { if (open || length($0) == 9 || substr($0,10,1) == "\"") bad=1; open=1; expected++; next }
         /^HEAD [0-9a-f]+$/ { if (!open || head || (length($2) != 40 && length($2) != 64)) bad=1; head=1; next }
         /^bare$/ { if (!open || head) bad=1; head=kind=1; next }
@@ -1032,7 +1054,12 @@ spec_worktrees() { # root -> Git porcelain, checked before exposing any rows
         !open || !/^(locked( |$)|prunable( |$))/ { bad=1 }
         END {
             if (bad || open || !expected || checked != expected) exit 1
-        }' || { echo 'Invalid or incomplete Git worktree records' >&2; return 1; }
+            print checked
+        }')" || { echo 'Invalid or incomplete Git worktree records' >&2; return 1; }
+    if [ "$expected" -ne "$checked" ]; then
+        printf 'Incomplete Git worktree inventory: expected %s registrations, checked %s\n' "$expected" "$checked" >&2
+        return 1
+    fi
     printf '%s' "${input%x}"
 }
 

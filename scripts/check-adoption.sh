@@ -139,9 +139,14 @@ else
     [ -n "$manifest_version" ] || fail "Manifest records no version line"
     if [ -f "$root/$SOURCE/VERSION" ]; then
         note
-        kit_version="$(tr -d '[:space:]' < "$root/$SOURCE/VERSION")"
-        [ "$manifest_version" = "$kit_version" ] ||
-            fail "Manifest version $manifest_version does not match kit source $kit_version (re-run init.sh --upgrade)"
+        if verify_lf_file "$root/$SOURCE/VERSION" &&
+            [ "$(wc -l < "$root/$SOURCE/VERSION")" -eq 1 ] &&
+            IFS= read -r kit_version < "$root/$SOURCE/VERSION"; then
+            [ "$manifest_version" = "$kit_version" ] ||
+                fail "Manifest version $manifest_version does not match kit source $kit_version (re-run init.sh --upgrade)"
+        else
+            fail 'Invalid kit source VERSION: expected one LF-terminated version line'
+        fi
     fi
     if [ -n "$MANIFEST_SHA" ]; then
         note

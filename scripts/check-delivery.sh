@@ -27,6 +27,27 @@ changes="$(verify_lines git --no-optional-locks -C "$root" status --porcelain=v1
 remote_head=""; transport=BLOCKED; reasons=()
 [ -n "$branch" ] || reasons+=("Detached HEAD has no handover branch")
 [ -z "$changes" ] || reasons+=("Uncommitted paths remain; checkpoint intended work and identify unrelated owners")
+if [ -z "$changes" ]; then
+    # The status stream alone cannot distinguish a clean state from an empty short read.
+    for scope in cached worktree; do
+        args=()
+        if [ "$scope" = cached ]; then args=(--cached HEAD); fi
+        if git --no-optional-locks -C "$root" diff --quiet --ignore-submodules=none ${args[@]+"${args[@]}"} --; then
+            :
+        elif [ "$?" -eq 1 ]; then
+            reasons+=("Status omitted changes in the $scope; checkpoint intended work")
+        else
+            reasons+=("Could not independently check the $scope for changes")
+        fi
+    done
+    untracked="$(mktemp)"
+    trap 'rm -f "$untracked"' EXIT
+    if ! git --no-optional-locks -C "$root" ls-files --others --exclude-standard -z > "$untracked"; then
+        reasons+=("Could not independently check untracked paths")
+    elif [ -s "$untracked" ]; then
+        reasons+=("Status omitted untracked paths; checkpoint intended work")
+    fi
+fi
 if $local_only; then
     transport=LOCAL_ONLY
 else

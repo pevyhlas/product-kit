@@ -44,11 +44,14 @@ is_change_id "$id" && [ -n "$text" ] && [ -n "$pr" ] || { echo "$usage" >&2; exi
 spec_is_date "$day" || { echo "--date takes YYYY-MM-DD (got: $day)" >&2; exit 2; }
 refuse() { echo "close-change.sh: $*" >&2; exit 1; }
 case "$text" in *$'\n'*|*$'\r'*) refuse "the log text is one line" ;; esac
+[[ "$text" =~ [^[:space:]] ]] || refuse "the log text must contain a description"
 # Characters, not bytes: UTF-8 continuation bytes do not count, whatever the locale.
 max=300; length="$(printf '%s' "$text" | LC_ALL=C tr -d '\200-\277' | wc -c | tr -d ' ')"
 [ "$length" -le "$max" ] || refuse "the log text is $length characters, over $max: keep \"<intent> — <IDs> — <disposition> — <PR>\"; carried findings and follow-ups go to the parent's row or the spec, and evidence stays in the PR"
 
 root="$(git rev-parse --show-toplevel 2>/dev/null)" || refuse "not inside a Git checkout"
+spec_objects_local "$root" || refuse "local Git cannot guarantee reads without fetching missing objects"
+export GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1
 path="specs/changes/$id.md"; log="specs/log.md"; entry="specs/log/$id.md"
 check_paths() {
     local component
@@ -67,30 +70,50 @@ record_hash="$(verify_lines git -C "$root" hash-object --no-filters -- "$root/$p
 [[ "$record_oid" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ && "$record_hash" = "$record_oid" ]] ||
     refuse "record $path does not match the bytes at HEAD"
 git -C "$root" diff --cached --quiet || refuse "other changes are staged; commit or unstage them, so this commit holds only the record and its log entry"
-existing="$(verify_lines git -C "$root" ls-tree --name-only HEAD -- ":(literal)$entry")" ||
+preflight="$(mktemp -d)" || refuse "cannot allocate preflight scratch"
+trap 'rm -rf "$preflight"' EXIT
+existing="$(verify_git_tree_path "$root" HEAD "$entry" "$preflight/tree")" ||
     refuse "could not check for $entry at HEAD"
 if [ -e "$root/$entry" ] || [ -n "$existing" ]; then
     refuse "the log already has an entry for $id"
 fi
-if [ -e "$root/$log" ]; then
-    if [ ! -f "$root/$log" ] || ! verify_lf_file "$root/$log"; then
+check_folded_log() {
+    if [ ! -f "$1" ] || ! verify_lf_file "$1"; then
         refuse "invalid $log: expected non-empty LF-terminated text"
     fi
     # Do not use grep -q: finding a match early can mask a later read failure.
-    if grep "^- [0-9-]* $id:" "$root/$log" >/dev/null; then
+    if grep "^- [0-9-]* $id:" "$1" >/dev/null; then
         refuse "the log already has an entry for $id"
     elif [ "$?" -ne 1 ]; then
         refuse "could not check $log for an existing entry"
     fi
+}
+if [ -e "$root/$log" ]; then check_folded_log "$root/$log"; fi
+folded="$(verify_git_tree_path "$root" HEAD "$log" "$preflight/tree")" ||
+    refuse "could not check for $log at HEAD"
+if [ -n "$folded" ]; then
+    case "$folded" in 100644\ blob\ *|100755\ blob\ *) ;; *) refuse "invalid $log at HEAD" ;; esac
+    folded_oid="${folded##* }"
+    git -C "$root" cat-file blob "$folded_oid" > "$preflight/log" ||
+        refuse "could not read $log at HEAD"
+    [ "$(git -C "$root" hash-object --no-filters -- "$preflight/log")" = "$folded_oid" ] ||
+        refuse "incomplete $log at HEAD"
+    check_folded_log "$preflight/log"
 fi
 default="$(spec_default_branch "$root")" || refuse "could not identify the default branch"
 if [ -n "$default" ]; then
-    existing="$(verify_lines git -C "$root" ls-tree --name-only "$default" -- ":(literal)$path")" ||
+    reported="$(verify_lines git -C "$root" ls-tree --name-only "$default" -- ":(literal)$path")" ||
         refuse "could not check for $path on $default"
+    existing="$(verify_git_tree_path "$root" "$default" "$path" "$preflight/tree")" ||
+        refuse "could not check for $path on $default"
+    if [ -n "$existing" ]; then expected="$path"; else expected=''; fi
+    [ "$reported" = "$expected" ] || refuse "incomplete tree evidence for $path on $default"
     if [ -n "$existing" ]; then
         refuse "$path is already on $default: a change merged with its record closes inside the next relevant PR, before that PR's final review (review.md, Closing)"
     fi
 fi
+rm -rf "$preflight"
+trap - EXIT
 
 check() { bash "$SCRIPT_DIR/check-review.sh" --pr "$pr" --repo "$root" --head HEAD ${base_args[@]+"${base_args[@]}"} "$id" 2>&1; }
 if ! out="$(verify_lines check)" || [ -z "$out" ]; then

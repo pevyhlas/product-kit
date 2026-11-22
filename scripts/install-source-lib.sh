@@ -7,6 +7,32 @@ install_object_git() {
     GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0 git "$@"
 }
 
+install_pinned_flat_tree() { # repo pin scratch
+    local repo="$1" pin="$2" work="$3" row meta dir leaf name roots entries checked_roots=0 checked_entries
+    verify_git_tree "$repo" "$pin" "$work/pin-root" || return 1
+    roots="$(verify_nul_count "$work/pin-root")" || return 1
+    while IFS= read -r -d '' row; do
+        checked_roots=$((checked_roots + 1))
+        meta="${row%%$'\t'*}"; dir="${row#*$'\t'}"
+        case "$dir:$meta" in
+            commands:040000\ tree\ *|scripts:040000\ tree\ *|templates:040000\ tree\ *|workflows:040000\ tree\ *) ;;
+            *) continue ;;
+        esac
+        verify_git_tree "$repo" "${meta##* }" "$work/pin-dir" || return 1
+        entries="$(verify_nul_count "$work/pin-dir")" || return 1
+        checked_entries=0
+        while IFS= read -r -d '' leaf; do
+            checked_entries=$((checked_entries + 1))
+            name="${leaf#*$'\t'}"
+            [[ "$name" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || continue
+            case "${leaf%%$'\t'*}" in 040000\ tree\ *) continue ;; esac
+            printf '%s\t%s/%s\n' "${leaf%%$'\t'*}" "$dir" "$name" || return 1
+        done < "$work/pin-dir"
+        [ "$entries" -eq "$checked_entries" ] || return 1
+    done < "$work/pin-root"
+    [ "$roots" -eq "$checked_roots" ]
+}
+
 install_object_entry() { # repo revision literal-path -> mode type oid (or empty)
     local entry
     install_object_git -C "$1" ls-tree -z "$2" -- ":(literal)$3" |
@@ -256,6 +282,14 @@ install_source_verify() { # consumer-root consumer-revision-or-empty scratch
         { echo 'Manifest must record exactly one command mode'; return; }
     case "$mode" in copy|symlink) ;; *) echo "Unknown manifest command mode: $mode"; return ;; esac
     verify_lf_file "$work/source-tree" || { echo 'Incomplete pinned source tree: expected non-empty LF-terminated records'; return; }
+    if ! GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0 \
+        install_pinned_flat_tree "$repo" "$pin" "$work" > "$work/validated-flat" ||
+        ! LC_ALL=C awk -F '\t' '$2 ~ /^(commands|scripts|templates|workflows)\/[A-Za-z0-9_][A-Za-z0-9_.-]*$/ {print}' \
+            "$work/source-tree" > "$work/reported-flat" ||
+        ! cmp -s "$work/validated-flat" "$work/reported-flat"; then
+        echo 'Incomplete pinned source tree: recursive listing does not match validated tree objects'
+        return
+    fi
     count="$(wc -l < "$work/source-tree")" || return 1
     checked=0
     : > "$work/mapping" || { echo 'Unable to build installation mapping'; return; }

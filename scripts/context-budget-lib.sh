@@ -14,9 +14,11 @@ CONTEXT_AGENT_FILES="CLAUDE.md AGENTS.md GEMINI.md QWEN.md CODEBUDDY.md QODER.md
 # Section-scoped lookup: only the ## Configuration section is configuration, so
 # documented examples elsewhere in the file never shadow the real values.
 prdkit_config_value() { # root key
-    local config="$1/.prdkit/memory/config.md" key="$2"
+    local config="$1/.prdkit/memory/config.md" key="$2" expected
     [ -f "$config" ] || return 0
-    awk -v key="$key" '
+    verify_lf_file "$config" || { printf 'Invalid configuration text: %s (expected non-empty LF-terminated text)\n' "$config" >&2; return 1; }
+    expected="$(wc -l < "$config")" || return 1
+    awk -v key="$key" -v expected="$expected" '
         /^##[[:space:]]*Configuration/ { section=1; next }
         /^##[[:space:]]/ { section=0; next }
         section && !found {
@@ -24,7 +26,8 @@ prdkit_config_value() { # root key
             if (index($0,key ":") == 1) {
                 sub(/^[^:]*:[[:space:]]*/, ""); sub(/[[:space:]]*$/, ""); print; found=1
             }
-        }' "$config"
+        }
+        END { if (NR != expected) exit 1 }' "$config"
 }
 
 context_file_bytes() { wc -c < "$1" | tr -d '[:space:]'; }
