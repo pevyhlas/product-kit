@@ -8,21 +8,20 @@ change by change.
 
 ## [Unreleased]
 
+## [2.0.2] — 2026-11-21 — safer worktree cleanup and complete review patches
+
+### Fixed
+
 - **Doctor reports reading-budget excess and overdue compaction.** Text and `--json`
   add the total reading lines over budget (`budget_excess_reading_lines`), independently
   of advisory count. Doctor shares status's compaction accounting, including pending
   log entry files, and advises at ten closes. CI guidance distinguishes the default-branch
   ref and objects needed for "Merged without closing" from the full history recommended for
   "Closed without a log entry."
-
 - A recorded HOLD still applies after its `until=` date or condition. Status and doctor flag a
   past date as a reminder for the owner to confirm or lift the hold. Text output and JSON keep
   their formats; a past-date HOLD now reads `DUE` (`state: "due"` in JSON) instead of `EXPIRED`
   (`"expired"`) and remains eligible as the longest pole. WAIVER expiry is unchanged.
-
-- Document the Git identity used by `close-change.sh` and how to set an agent's author and
-  committer identity for the closing commit.
-
 - **Pinned-source installation proof (#103).** `check-adoption.sh --require-source`
   compares installed kit-owned bytes, Git executable modes, command links and managed
   sections with local source objects at the consumer's committed gitlink. `--head <commit>`
@@ -31,13 +30,40 @@ change by change.
   remain project-owned. Explicit adoption pin/hash restrictions still bind. Strict failures
   never fetch or install; source-less integrity checks report `source_verification:"not-requested"`.
   This is installation proof, not review exemption, source provenance or release approval.
-
-### Fixed
-
 - A failed close no longer leaves an empty log entry behind. Retry the same close
   after the write error clears; the change record and index remain intact. Publishing
   requires hard links in `specs/log/`. If the filesystem does not support them,
   move the checkout to one that does and retry.
+- Cleanup moves the entire worktree registration and any live checkout into a reported
+  `prdkit-retired/` slot. It roots the retired HEAD, reflog objects and staged tree under
+  `refs/prdkit-retired/<slot>/` in the main repository; no mirror is needed. Never retire an
+  active checkout. Busy registrations and unmerged indexes are refused. Batch pruning checks
+  all candidates first and reports progress if a later retirement fails. New changes leave
+  stale registrations alone. Cleanup checks recovery objects before reporting success and
+  refuses linked evidence paths in either checkout. Retirement keeps objects reachable across
+  interruption, including conflict-undo blobs and private reftable reflog entries, without
+  retaining unrelated branch history. Forced cleanup preserves intent-to-add entries and
+  their unstaged file contents. Unborn checkouts stay in place. Explicit pruning targets only stale
+  registrations; removing one change leaves unrelated registrations alone.
+- Cleanup refuses unsupported layouts, including embedded submodule stores, dependent
+  linked checkouts and cross-filesystem moves. Plain paths still work on older Git;
+  relative registration pointers resolve from their administrative directory.
+- Cleanup no longer merges legacy ledger spools. If one remains, cleanup stops so you can
+  archive and remove it without losing events.
+- Review packages show changed submodule pins even when configured as ignored. Full and
+  focused patch paths are checked against the Git trees before the round can complete.
+
+### Documentation
+
+- Document the Git identity used by `close-change.sh` and how to set an agent's author and
+  committer identity for the closing commit.
+
+### Adoption
+
+From 2.0.1, pin `v2.0.2` and run `bash .product-kit/scripts/init.sh --upgrade`.
+There is no record, receipt or configuration migration. Old review packages remain on disk
+but do not prevent a new round. Regenerate and independently re-review packages that may
+have omitted a submodule pin; an existing verdict does not establish review of an unseen patch.
 
 ## [2.0.1] — 2026-11-20 — review recovery and change lifecycle fixes
 
