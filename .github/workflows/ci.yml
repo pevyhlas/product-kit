@@ -83,7 +83,8 @@ jobs:
     name: Fails before the fix
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    # The script budgets 40 minutes for comparisons; leave time for checkout and teardown.
+    timeout-minutes: 55
     steps:
       # The PR merge checkout with full history includes both exact event commits.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

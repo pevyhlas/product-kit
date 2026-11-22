@@ -14,10 +14,48 @@ fix_title='^fix(\([^)]+\))?!?:'
 mode=advisory
 if [[ $3 =~ $fix_title ]]; then mode=required; fi
 
+# Overrides can shorten the limits for local reproductions and fixtures.
+limit_seconds() {
+    if [[ ! $1 =~ ^[1-9][0-9]{0,3}$ ]] || [ "$1" -gt "$2" ]; then
+        printf '%s must be an integer from 1 to %s seconds.\n' "$3" "$2" >&2
+        return 2
+    fi
+    printf '%s\n' "$1"
+}
+suite_limit="$(limit_seconds "${PRDKIT_REPLAY_SUITE_SECONDS:-300}" 300 PRDKIT_REPLAY_SUITE_SECONDS)"
+budget="$(limit_seconds "${PRDKIT_REPLAY_BUDGET_SECONDS:-2400}" 2400 PRDKIT_REPLAY_BUDGET_SECONDS)"
+grace=2
+pair_seconds=$((2 * (suite_limit + grace + 1)))
+deadline=$((SECONDS + budget))
+
 scratch="$(mktemp -d)"
-trap 'rm -rf "$scratch"' EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+suite_pid='' timer_pid='' interrupted=0 launching=false
+stop_group() {
+    [ -n "$1" ] || return 0
+    kill -KILL -- "-$1" 2>/dev/null || :
+    wait "$1" 2>/dev/null || :
+}
+cleanup() {
+    trap '' INT TERM HUP
+    stop_group "$timer_pid"
+    stop_group "$suite_pid"
+    rm -rf "$scratch"
+}
+interrupt() {
+    interrupted="$1"
+    if [ "$launching" = false ]; then exit "$interrupted"; fi
+}
+trap cleanup EXIT
+# Defer processing until both background launch PIDs have been saved.
+trap 'interrupt 130' INT
+trap 'interrupt 143' TERM
+trap 'interrupt 129' HUP
+set -m # Bash 3.2+: give each async job its own process group, including its descendants.
+
+exec 3>&1
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then exec 3>> "$GITHUB_STEP_SUMMARY"; fi
+printf '### Fails before the fix (%s)\n\n' "$mode" >&3
+printf 'Base (merge base): %s · Head: %s\n\n' "\`$base\`" "\`$head\`" >&3
 
 # Match tests/run.sh's entry points. Renamed files are new at their destination; deleted
 # tests, helpers, and fixtures are not entry points. Keep pathname bytes intact.
@@ -45,57 +83,85 @@ diagnostic() {
 }
 
 run_test() {
-    local root="$1" path="$2"
+    local root="$1" path="$2" log="$3" limit="$4" status=0
+    : > "$log"
     if [ ! -f "$root/$path" ] || [ -L "$root/$path" ]; then
-        printf 'Cannot run %q: not a regular test file.\n' "$path" >&2
-        return 1
+        printf 'Cannot run %q: not a regular test file.\n' "$path" > "$log"
+        result='FAIL (exit 1)'
+        return 0
     fi
-    (cd "$root" && unset GITHUB_STEP_SUMMARY && bash "$path")
+    rm -f "$scratch/timed-out"
+    launching=true
+    (
+        cd "$root"
+        unset GITHUB_STEP_SUMMARY
+        exec bash "$path"
+    ) 3>&- </dev/null >"$log" 2>&1 &
+    suite_pid=$!
+    (
+        sleep "$limit"
+        if kill -0 "$suite_pid" 2>/dev/null; then
+            : > "$scratch/timed-out"
+            kill -TERM -- "-$suite_pid" 2>/dev/null || :
+            sleep "$grace"
+            kill -KILL -- "-$suite_pid" 2>/dev/null || :
+        fi
+    ) 3>&- </dev/null >/dev/null 2>&1 &
+    timer_pid=$!
+    launching=false
+    if [ "$interrupted" -ne 0 ]; then exit "$interrupted"; fi
+    wait "$suite_pid" 2>/dev/null || status=$?
+    stop_group "$timer_pid"; timer_pid=''
+    # Kill any descendants that outlived the suite leader, then retire the group.
+    stop_group "$suite_pid"; suite_pid=''
+    if [ -f "$scratch/timed-out" ]; then
+        result="FAIL (timed out after ${limit}s)"
+    elif [ "$status" -ne 0 ]; then
+        result="FAIL (exit $status)"
+    else
+        result=PASS
+    fi
 }
 
 count=0
 reproduced=0
-report="$scratch/summary"
-{
-    printf '### Fails before the fix (%s)\n\n' "$mode"
-    printf 'Base (merge base): %s · Head: %s\n\n' "\`$base\`" "\`$head\`"
-    if [ -s "$scratch/changed" ]; then
-        snapshot base "$base"
-        snapshot head "$head"
-        # Replace, rather than merge, tests/ so removed or renamed test fixtures cannot leak in.
-        if [ -e "$scratch/base/tests" ] || [ -L "$scratch/base/tests" ]; then
-            mv "$scratch/base/tests" "$scratch/base-tests"
-        fi
-        cp -RP "$scratch/head/tests" "$scratch/base/tests"
+skipped=0
+if [ -s "$scratch/changed" ]; then
+    snapshot base "$base"
+    snapshot head "$head"
+    # Replace, rather than merge, tests/ so removed or renamed test fixtures cannot leak in.
+    if [ -e "$scratch/base/tests" ] || [ -L "$scratch/base/tests" ]; then
+        mv "$scratch/base/tests" "$scratch/base-tests"
     fi
-
-    while IFS= read -r -d '' test_path; do
-        count=$((count + 1))
-        base_status=0 head_status=0
-        run_test "$scratch/base" "$test_path" </dev/null >"$scratch/base.log" 2>&1 || base_status=$?
-        run_test "$scratch/head" "$test_path" </dev/null >"$scratch/head.log" 2>&1 || head_status=$?
-        base_result=PASS head_result=PASS
-        if [ "$base_status" -ne 0 ]; then base_result="FAIL (exit $base_status)"; fi
-        if [ "$head_status" -ne 0 ]; then head_result="FAIL (exit $head_status)"; fi
-        printf -- '- <code>%s</code> — Base: %s; Head: %s.\n' \
-            "$(LC_ALL=C printf '%q' "$test_path" | escape_html)" "$base_result" "$head_result"
-        if [ "$base_status" -ne 0 ] && [ "$head_status" -eq 0 ]; then
-            reproduced=$((reproduced + 1))
-        fi
-        if [ "$base_status" -ne 0 ]; then diagnostic Base "$scratch/base.log"; fi
-        if [ "$head_status" -ne 0 ]; then diagnostic Head "$scratch/head.log"; fi
-    done < "$scratch/changed"
-
-    if [ "$count" -eq 0 ]; then printf 'No added or changed test suites.\n'; fi
-    printf '\n%d of %d changed test suite(s) fail on base and pass on head.\n' "$reproduced" "$count"
-    if [ "$mode" = required ] && [ "$reproduced" -eq 0 ]; then
-        printf '\nA fix PR must have at least one changed test suite fail on base and pass on head.\n'
-    fi
-} > "$report"
-
-if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-    cat "$report" >> "$GITHUB_STEP_SUMMARY"
-else
-    cat "$report"
+    cp -RP "$scratch/head/tests" "$scratch/base/tests"
 fi
-if [ "$mode" = required ] && [ "$reproduced" -eq 0 ]; then exit 1; fi
+
+while IFS= read -r -d '' test_path; do
+    count=$((count + 1))
+    label="$(LC_ALL=C printf '%q' "$test_path" | escape_html)"
+    # Admit a pair only with enough time for both full deadlines and cleanup.
+    # A reduced base timeout could falsely count an ordinary slow test as evidence.
+    if [ "$((deadline - SECONDS))" -lt "$pair_seconds" ]; then
+        skipped=$((skipped + 1))
+        printf -- '- <code>%s</code> — Not run on base or head (comparison budget exhausted).\n' "$label" >&3
+        continue
+    fi
+    run_test "$scratch/base" "$test_path" "$scratch/base.log" "$suite_limit"
+    base_result="$result"
+    run_test "$scratch/head" "$test_path" "$scratch/head.log" "$suite_limit"
+    head_result="$result"
+    printf -- '- <code>%s</code> — Base: %s; Head: %s.\n' "$label" "$base_result" "$head_result" >&3
+    if [ "$base_result" != PASS ] && [ "$head_result" = PASS ]; then
+        reproduced=$((reproduced + 1))
+    fi
+    if [ "$base_result" != PASS ]; then diagnostic Base "$scratch/base.log" >&3; fi
+    if [ "$head_result" != PASS ]; then diagnostic Head "$scratch/head.log" >&3; fi
+done < "$scratch/changed"
+
+if [ "$count" -eq 0 ]; then printf 'No added or changed test suites.\n' >&3; fi
+if [ "$skipped" -gt 0 ]; then printf '\n%d suite(s) not run; skipped suites are not evidence.\n' "$skipped" >&3; fi
+printf '\n%d of %d changed test suite(s) fail on base and pass on head.\n' "$reproduced" "$count" >&3
+if [ "$mode" = required ] && [ "$reproduced" -eq 0 ]; then
+    printf '\nA fix PR must have at least one changed test suite fail on base and pass on head.\n' >&3
+    exit 1
+fi

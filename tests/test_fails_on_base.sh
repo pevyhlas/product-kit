@@ -124,4 +124,91 @@ compare "$BASE_TIP" "$BASE" 'docs: no tests'
 assert_eq 0 "$STATUS"
 assert_contains "$OUTPUT" '0 of 0 changed test suite(s)'
 
+it "a stalled base times out, its children stop, and head and later suites still run"
+g checkout -q --detach "$BASE" || exit 1
+printf 'fixed\n' > "$FIXTURE/scripts/value"
+cat > "$FIXTURE/tests/test_10_stalled.sh" <<'TEST'
+if [ "$(cat scripts/value)" = old ]; then
+    trap '' TERM
+    sleep 12 &
+    printf '%s\n' "$!" > "$REPLAY_TEST_CHILD"
+    echo 'old behavior stalled'
+    wait
+fi
+TEST
+printf 'exit 0\n' > "$FIXTURE/tests/test_20_finished.sh"
+STALLED="$(commit 'stalled base regression')" || exit 1
+export REPLAY_TEST_CHILD="$_SCRATCH_CWD/stalled-child"
+child_stopped() {
+    local pid proc_state until
+    [ -s "$REPLAY_TEST_CHILD" ] || return 1
+    read -r pid < "$REPLAY_TEST_CHILD" || return 1
+    until=$((SECONDS + 3))
+    while :; do
+        proc_state="$(ps -o stat= -p "$pid" 2>/dev/null)" || return 0
+        if [[ $proc_state =~ ^[[:space:]]*Z ]]; then return 0; fi # already stopped; not yet reaped
+        if [ "$SECONDS" -ge "$until" ]; then return 1; fi
+        sleep 1
+    done
+}
+for title in 'feat: advisory stall' 'fix: handle stall'; do
+    PRDKIT_REPLAY_SUITE_SECONDS=2 compare "$BASE" "$STALLED" "$title"
+    assert_eq 0 "$STATUS" "base timeout is valid evidence when head passes: $title"
+    assert_contains "$OUTPUT" '<code>tests/test_10_stalled.sh</code> — Base: FAIL (timed out after 2s); Head: PASS.'
+    assert_contains "$OUTPUT" 'old behavior stalled'
+    assert_contains "$OUTPUT" '<code>tests/test_20_finished.sh</code> — Base: PASS; Head: PASS.'
+    assert_contains "$OUTPUT" '1 of 2 changed test suite(s)'
+    if child_stopped; then _ok 'TERM-ignoring descendant stopped'; else _no 'descendant is still running'; fi
+done
+
+it "the head has its own timeout and a normal exit 124 is not labeled a timeout"
+cat > "$FIXTURE/tests/test_40_head_timeout.sh" <<'TEST'
+if [ "$(cat scripts/value)" = fixed ]; then sleep 12; else exit 124; fi
+TEST
+HEAD_STALL="$(commit 'head also stalls')" || exit 1
+PRDKIT_REPLAY_SUITE_SECONDS=2 compare "$BASE" "$HEAD_STALL" 'ci: report head timeout'
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '<code>tests/test_40_head_timeout.sh</code> — Base: FAIL (exit 124); Head: FAIL (timed out after 2s).'
+assert_contains "$OUTPUT" '1 of 3 changed test suite(s)'
+
+it "the comparison budget marks unrun suites without treating them as evidence"
+PRDKIT_REPLAY_BUDGET_SECONDS=5 compare "$BASE" "$STALLED" 'fix: no time for evidence'
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" '<code>tests/test_10_stalled.sh</code> — Not run on base or head (comparison budget exhausted).'
+assert_contains "$OUTPUT" '2 suite(s) not run; skipped suites are not evidence.'
+assert_contains "$OUTPUT" '0 of 2 changed test suite(s)'
+
+it "a completed row is already in the summary when a later suite is still running"
+g checkout -q --detach "$STALLED" || exit 1
+printf 'exit 0 # updated in the cancellation fixture\n' > "$FIXTURE/tests/test_20_finished.sh"
+cat > "$FIXTURE/tests/test_30_later.sh" <<'TEST'
+trap '' TERM
+sleep 12 &
+printf '%s\n' "$!" > "$REPLAY_TEST_CHILD"
+: > "$REPLAY_TEST_STARTED"
+wait
+TEST
+CANCEL_HEAD="$(commit 'later suite stalls on cancellation')" || exit 1
+export REPLAY_TEST_STARTED="$_SCRATCH_CWD/started"
+: > "$SUMMARY"
+(
+    cd "$FIXTURE" || exit 1
+    export GITHUB_STEP_SUMMARY="$SUMMARY" PRDKIT_REPLAY_SUITE_SECONDS=10
+    exec bash "$CHECK" "$STALLED" "$CANCEL_HEAD" 'ci: cancellation fixture'
+) >"$_SCRATCH_CWD/cancel-log" 2>&1 &
+replay_pid=$!
+stop_wait_at=$((SECONDS + 8))
+while [ ! -f "$REPLAY_TEST_STARTED" ] && [ "$SECONDS" -lt "$stop_wait_at" ]; do sleep 1; done
+assert_file "$REPLAY_TEST_STARTED" "later base suite reached its stall"
+assert_contains "$(cat "$SUMMARY")" '<code>tests/test_20_finished.sh</code> — Base: PASS; Head: PASS.' \
+    "completed row is visible before cancellation"
+kill -TERM "$replay_pid" 2>/dev/null
+cancel_status=0
+wait "$replay_pid" || cancel_status=$?
+assert_eq 143 "$cancel_status" "comparator stopped on TERM"
+assert_contains "$(cat "$SUMMARY")" '<code>tests/test_20_finished.sh</code> — Base: PASS; Head: PASS.' \
+    "completed row survives the comparator's cleanup"
+assert_not_contains "$(cat "$SUMMARY")" 'tests/test_30_later.sh' "interrupted suite never reports a result"
+if child_stopped; then _ok 'cancellation stopped the later descendant'; else _no 'cancelled descendant is still running'; fi
+
 finish

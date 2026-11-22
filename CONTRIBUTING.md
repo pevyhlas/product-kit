@@ -85,7 +85,10 @@ It runs each added or changed `tests/test_*.sh` suite at the exact PR head and a
 merge base with the PR head's entire `tests/` directory. Everything outside `tests/`,
 including scripts, templates, workflows and commands, stays at the merge base for the
 base run. The job summary shows both results and includes failure output; a missing
-base dependency counts as a base failure. Titles such as `fix:`, `fix(scope):`, `fix!:`
+base dependency counts as a base failure. Each base and head run gets up to five minutes;
+a timed-out base run counts as a failure and the head still runs. Rows are written as suites
+finish. The comparison has a 40-minute budget; it labels suites it could not start in both
+snapshots as not run and does not count them as evidence. Titles such as `fix:`, `fix(scope):`, `fix!:`
 and `fix(scope)!:` need at least one suite that fails on base and passes on head.
 For other titles the comparison is advisory. The new job does not change branch protection
 or gate releases. To replay locally, use `bash scripts/maintainer/fails-on-base.sh <base-ref>
