@@ -136,6 +136,7 @@ bootstrap action or registration API):
 ```text
 host-registered immutable required workflow W
   pull_request: opened, reopened, synchronize, edited, ready_for_review, converted_to_draft
+  pull_request_review: submitted, dismissed
   every applicable PR, forks and drafts included; no path/numbered-branch skips
   fresh GitHub-hosted ubuntu-24.04 job; finite job timeout (at least 11 minutes)
   permissions: {} by default; this job: contents: read, pull-requests: read
@@ -143,6 +144,13 @@ host-registered immutable required workflow W
     W's validated regular-blob launcher:
     check-pr-review.sh --repository <fixed-owner/name> --event <private-host-event-path>
 ```
+
+The review events re-run the same check even when the head has not moved. They supply
+`pull_request.number`; the launcher reads the live review list, not the payload verdict.
+An edited review body or an issue comment does not grant approval. Serialize evaluations
+per PR across both event types so an older result cannot overwrite a newer one. Verify
+the protected branch consumes the new result even after dismissal; see the
+[one-PR cutover test](migrating-to-3.0.md#prove-enforcement-on-one-pilot-pr).
 
 **Before any shell starts**, W's trusted parent must construct an allowlisted environment with a
 fixed fresh-host tool PATH, C locale, private HOME/GH_CONFIG_DIR/XDG_CONFIG_HOME/TMPDIR and umask

@@ -140,8 +140,8 @@ done
 case "${repository#*/}" in .|..|*.git) refuse bootstrap usage 2 ;; esac
 [ -n "$event" ] && [ -f "$event" ] && [ ! -L "$event" ] || refuse bootstrap usage 2
 case "$event" in /*) ;; *) event="$PWD/$event" ;; esac
-[ "${GITHUB_EVENT_NAME:-}" = pull_request ] &&
-    [ "${GITHUB_REPOSITORY:-}" = "$repository" ] &&
+case "${GITHUB_EVENT_NAME:-}" in pull_request|pull_request_review) ;; *) refuse bootstrap context ;; esac
+[ "${GITHUB_REPOSITORY:-}" = "$repository" ] &&
     [[ "${GITHUB_REPOSITORY_ID:-}" =~ ^[1-9][0-9]*$ ]] || refuse bootstrap context
 [ -n "${GH_TOKEN:-}" ] || refuse bootstrap credential
 
@@ -333,11 +333,15 @@ read_bindings() {
 phase=binding
 bounded 120 "$root/event" "$root/event.err" cat -- "$event" || refuse binding event-read
 one_object "$root/event" || refuse binding event-json
-jq -e --arg repo "$repository" --arg rid "$GITHUB_REPOSITORY_ID" '
-    (.action == "opened" or .action == "reopened" or .action == "synchronize" or
-     .action == "edited" or .action == "ready_for_review" or .action == "converted_to_draft") and
-    (.number|type) == "number" and .number > 0 and (.number|floor) == .number and
-    .number == .pull_request.number and .repository.full_name == $repo and
+jq -e --arg repo "$repository" --arg rid "$GITHUB_REPOSITORY_ID" --arg event "$GITHUB_EVENT_NAME" '
+    (if $event == "pull_request" then
+        (.action | IN("opened","reopened","synchronize","edited","ready_for_review","converted_to_draft")) and
+        .number == .pull_request.number
+     else
+        (.action | IN("submitted","dismissed")) and
+        (has("number") == false or .number == .pull_request.number)
+     end) and
+    (.pull_request.number | type == "number" and . > 0 and floor == .) and .repository.full_name == $repo and
     (.repository.id|tostring) == $rid and .pull_request.base.repo.full_name == $repo and
     (.pull_request.base.repo.id|tostring) == $rid and
     (.pull_request.head.ref|type) == "string" and (.pull_request.base.ref|type) == "string" and
@@ -346,7 +350,7 @@ jq -e --arg repo "$repository" --arg rid "$GITHUB_REPOSITORY_ID" '
     (.pull_request.head.sha|test("^[0-9a-f]{40}$")) and
     (.pull_request.base.sha|test("^[0-9a-f]{40}$"))
 ' "$root/event" >/dev/null || refuse binding event
-pr="$(jq -r .number "$root/event")"
+pr="$(jq -r .pull_request.number "$root/event")"
 [[ "$pr" =~ ^[1-9][0-9]*$ ]] || refuse binding pr
 sha "$(jq -r .pull_request.base.sha "$root/event")" || refuse binding event-base
 read_bindings before

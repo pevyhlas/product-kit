@@ -121,6 +121,23 @@ assert_eq host "$(printf '%s' "$OUTPUT" | jq -r .native.authority)"
 assert_eq "$HEAD_SHA" "$(printf '%s' "$OUTPUT" | jq -r .native.diagnostics.head)"
 assert_eq "$BASE" "$(printf '%s' "$OUTPUT" | jq -r .native.diagnostics.policy_at)"
 
+it 'review events re-evaluate live approvals without a push or a top-level PR number'
+for action in submitted dismissed; do
+    jq --arg a "$action" 'del(.number) | .action=$a | .review={state:"approved"}' "$FIX/event" > "$FIX/review-event"
+    mv "$FIX/review-event" "$FIX/event"
+    if [ "$action" = dismissed ]; then
+        jq '.[0].state="DISMISSED"' "$GH_STUB_DIR/reviews/7.json" > "$FIX/reviews"
+        mv "$FIX/reviews" "$GH_STUB_DIR/reviews/7.json"
+    fi
+    launch GITHUB_EVENT_NAME=pull_request_review
+    if [ "$action" = submitted ]; then assert_eq 0 "$STATUS" 'live eligible approval passes'
+    else assert_eq 1 "$STATUS" 'dismissal on the same head fails'; fi
+    assert_eq complete "$(jq -r .launcher "$FIX/stdout")" 'real gate ran for the review event'
+    assert_eq "$HEAD_SHA" "$(jq -r .native.pr_head "$FIX/stdout")"
+done
+launch
+assert_eq refused "$(jq -r .launcher "$FIX/stdout")" 'review action cannot masquerade as a PR action'
+
 it 'forks and drafts use the base repository numeric PR ref, never candidate clone URLs'
 bindings "$HEAD_SHA"
 jq '.head.repo.id=77|.head.repo.clone_url="https://untrusted.invalid/source"|.draft=true' \

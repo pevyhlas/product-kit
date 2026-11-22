@@ -20,7 +20,7 @@ github_review_policy() {
             if (count["review-host"]!=1 || values["review-host"]!="github" ||
                 count["review-publishers"]!=1 || values["review-publishers"]!~/^(bot|user):[1-9][0-9]*([[:space:]]*,[[:space:]]*(bot|user):[1-9][0-9]*)*$/ ||
                 count["review-owner"]!=1 || values["review-owner"]!~/^user:[1-9][0-9]*([[:space:]]*,[[:space:]]*user:[1-9][0-9]*)*$/) exit 1
-            if (count["review-publisher-isolation"]) print "Warning: review-publisher-isolation is retired; remove it. The PR author never counts." > "/dev/stderr"
+            if (count["review-publisher-isolation"]) print "Warning: review-publisher-isolation is retired; remove it after the 2.0 check is no longer required. The PR author never counts." > "/dev/stderr"
             print values["review-publishers"] "," values["review-owner"]
         }')" || return 1
     REVIEW_IDS="$(printf '%s' "$fields" | tr -d ' \t\r' | sed 's/bot://g;s/user://g')"
