@@ -18,6 +18,10 @@ change by change.
 - Cleanup and close tests now run against seeded combinations of local Git states and
   check that commits and working files survive. The generator is test-only.
 
+### Fixed
+
+- Docs-only review passes report the path and blocker checks without claiming receipt coverage.
+
 ### Documentation
 
 - Document safety invariants and threat models in the worktree, close, publication, adoption,

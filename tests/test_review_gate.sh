@@ -356,6 +356,22 @@ run bash "$CHECK" --json --pr "$PR" 002-docs
 assert_eq 1 "$STATUS" 'T0 FAIL blocks online'
 assert_contains "$OUTPUT" 'blocking verdict stands'
 
+it 'T0 reports the path and blocker checks, not coverage, with only a legacy PASS'
+printf -- '- 2026-01-03 003-other: carried in an old docs revision\n' >> specs/log.md
+git commit -qam 'old docs revision with a shared log edit'
+DOCS_OLD_HEAD="$(git rev-parse HEAD)"
+DOCS_OLD_FP="$(review_legacy_log_fingerprint "$PROJ" 002-docs "$BASE" "$DOCS_OLD_HEAD")"
+git revert --no-edit "$DOCS_OLD_HEAD" >/dev/null
+use_gh_stub; fx_pr 7 "$(git rev-parse HEAD)"
+publish 7 ".change=\"002-docs\"|.head=\"$DOCS_OLD_HEAD\"|.to=\"$DOCS_OLD_FP\""
+run bash "$CHECK" --json --diagnostics --pr "$PR" 002-docs
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq true "$(jq -r '.diagnostics | .edges == [] and (.latest[0] | .provenance == "legacy-only" and .end_covered == false)' <<< "$OUTPUT")" 'the legacy PASS supplies no coverage'
+run bash "$CHECK" --pr "$PR" 002-docs
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_contains "$OUTPUT" 'tier T0 needs no independent review' 'reports the docs-only exemption'
+assert_contains "$OUTPUT" '1 recorded verdict(s), none blocking. Review coverage was not required.' 'does not claim the legacy PASS covers the head'
+
 it "a renamed carrier cannot drop another identity's FAIL, and foreign PASS never covers"
 git checkout -qb 003-original "$BASE"
 mkdir -p specs/changes
