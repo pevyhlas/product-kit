@@ -46,7 +46,7 @@ assert_contains "$protocol" '| T0 | docs only, no behavior change | none |' "T0"
 assert_contains "$protocol" '| T3 | L0 edit or L1 one-way door | design review plus the owner |' "T3"
 assert_contains "$review" 'Never dispatch a round with no source change' "no empty re-review"
 for suite in review_fingerprint review_receipts review_gate review_legacy_scan review_legacy_gate review_owner publish_review; do
-    assert_contains "$(cat "$PK_ROOT/.github/workflows/ci-macos.yml")" "/bin/bash tests/test_$suite.sh" "$suite runs under native macOS Bash"
+    assert_eq 1 "$(grep -cxF "test_$suite.sh" "$TESTS_DIR/native-suites.txt" || true)" "$suite is in the native macOS allowlist"
 done
 assert_contains "$review" 'did not implement' "independent reviewer"
 assert_contains "$review" 'untracked file contents' "uncommitted review includes new files"

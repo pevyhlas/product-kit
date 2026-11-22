@@ -16,6 +16,14 @@ change by change.
 - Cleanup and close tests now run against seeded combinations of local Git states and
   check that commits and working files survive. The generator is test-only.
 
+### Changed
+
+- **Faster contributor CI.** Two Ubuntu shards run the complete shell suite alongside a
+  separate checks job, and four macOS shards keep the existing native coverage. The runner
+  balances suites by measured duration and logs per-suite seconds. Required check names and
+  release gating are unchanged; all expected jobs must succeed. New PR commits cancel
+  superseded runs for that PR without cancelling main or manual runs.
+
 ### Documentation
 
 - Document safety invariants and threat models in the worktree, close, publication, adoption,

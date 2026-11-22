@@ -458,14 +458,19 @@ assert_eq "    workflows: [CI]" "$(grep -E '^ +workflows:' "$WF")" "release.yml 
 assert_eq 1 "$(grep -cxF 'CI_WORKFLOW=".github/workflows/ci.yml"' "$GHS" || true)" "verify_ci_run pins the ci.yml path"
 # Pull requests from forks bring their own workflow files, so a self-hosted runner would run their
 # code on the host. Every job names one GitHub-hosted image, and no file names a self-hosted label.
-hosted="$(for f in "$PK_ROOT"/.github/workflows/*.yml; do
-    awk -v f="${f##*/}" '/^[ \t]*runs-on:/ { sub(/^[ \t]*runs-on:[ \t]*/, ""); print f ": " $0 }' "$f"
-done | LC_ALL=C sort)"
-assert_eq "ci-macos.yml: macos-15
-ci.yml: ubuntu-24.04
-ci.yml: ubuntu-24.04
-release.yml: ubuntu-24.04
-release.yml: ubuntu-24.04" "$hosted" "every job on a named GitHub-hosted image"
+for f in "$PK_ROOT"/.github/workflows/*.yml; do
+    assert_eq "" "$(awk '
+        /^jobs:/ { jobs = 1; next }
+        jobs && /^  [A-Za-z0-9_-]+:/ {
+            if (job && !runner) print job ": missing runner"
+            job = $1; runner = 0
+        }
+        jobs && /^    runs-on:/ {
+            runner = 1
+            if ($0 !~ /^    runs-on: (ubuntu-24.04|macos-15)$/) print job " " $0
+        }
+        END { if (job && !runner) print job ": missing runner" }' "$f")" "${f##*/}: every job on a named GitHub-hosted image"
+done
 assert_eq "" "$(grep -rniE 'self-hosted|runs-on:[ \t]*\[' "$PK_ROOT/.github" || true)" "no self-hosted runner label in .github"
 # ci.yml is what releases key on: a missing push trigger would stop releases silently, and a
 # condition or continue-on-error could let a red suite conclude success. Pull requests run both
@@ -490,16 +495,24 @@ for f in "$CIWF" "$MACWF"; do
     assert_eq "permissions:
   contents: read" "$(awk '/^permissions:/ { f = 1 } f && /^[^ #]/ && !/^permissions:/ { f = 0 } f' "$f")" "$n reads contents only"
     assert_eq 1 "$(grep -cE '^[[:space:]]*permissions:' "$f" || true)" "no job-level permissions in $n"
-    checkouts=1
-    if [ "$f" = "$CIWF" ]; then checkouts=2; fi
-    assert_eq "$checkouts" "$(grep -c 'uses: actions/checkout@' "$f" || true)" "$n checks out once per job"
-    assert_eq "$checkouts" "$(grep -cxE ' +persist-credentials: false' "$f" || true)" "and no checkout persists credentials"
+    # Check every checkout's own options, not just the total number of matches.
+    assert_eq "" "$(awk '
+        /^      - / || /^  [A-Za-z0-9_-]+:/ {
+            if (checkout && !disabled) print checkout
+            checkout = 0; disabled = 0
+        }
+        /uses: actions\/checkout@/ { checkout = NR }
+        /^          persist-credentials: false$/ { disabled = 1 }
+        END { if (checkout && !disabled) print checkout }' "$f")" "no checkout persists credentials in $n"
 done
-assert_eq 1 "$(grep -cxF '          /bin/bash tests/test_release.sh' "$MACWF" || true)" "the macOS check runs this suite"
-# Only the regression replay is PR-only; neither of the full suites can be skipped.
-assert_eq "fails-on-base:    if: github.event_name == 'pull_request'" \
+assert_eq 1 "$(grep -cxF 'test_release.sh' "$TESTS_DIR/native-suites.txt" || true)" "the macOS check runs this suite"
+assert_eq 1 "$(grep -cxF 'test_fails_on_base.sh' "$TESTS_DIR/native-suites.txt" || true)" "the replay suite runs on native macOS"
+# Only the regression replay is PR-only; both shard result aggregates always run.
+assert_eq 'test:    if: ${{ always() }}
+fails-on-base:    if: github.event_name == '\''pull_request'\''
+portable-helpers-macos:    if: ${{ always() }}' \
     "$(awk '/^  [a-z-]+:$/ { job = $1 } /^[ \t]*(- )?if:/ { print job $0 }' "$CIWF" "$MACWF")" \
-    "CI conditions only the fails-on-base job, on a pull request"
+    "CI runs the aggregates unconditionally and the replay only on PRs"
 # CI lints with the pinned ShellCheck, checked against its published digest, never with the
 # version the runner image ships.
 assert_eq 1 "$(grep -cxF '          v=v0.11.0' "$CIWF" || true)" "CI installs ShellCheck 0.11.0"
