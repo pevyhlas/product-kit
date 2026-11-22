@@ -4,6 +4,9 @@
 # trying to re-enter a worktree whose directory was deleted out of band. doctor
 # detects those stale registrations read-only.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+source "$TESTS_DIR/lib/states.sh"
+
+generated_states cleanup "$PK_ROOT/scripts"
 
 PROJ="$(make_inited_project)"; track_tmp "$PROJ"
 PROJ="$(cd "$PROJ" && pwd -P)"

@@ -8,6 +8,9 @@ change by change.
 
 ## [Unreleased]
 
+- Cleanup and close tests now run against seeded combinations of local Git states and
+  check that commits and working files survive. The generator is test-only.
+
 ## [2.0.2] — 2026-11-21 — safer worktree cleanup and complete review patches
 
 ### Fixed

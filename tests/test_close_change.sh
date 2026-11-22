@@ -4,6 +4,7 @@
 # record that reached the default branch without closing. Programme parents stay quiet.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 source "$TESTS_DIR/review-fixtures.sh"
+source "$TESTS_DIR/lib/states.sh"
 
 PROJ="$(make_inited_project)"; track_tmp "$PROJ"
 PROJ="$(cd "$PROJ" && pwd -P)"
@@ -56,6 +57,13 @@ assert_eq 1 "$STATUS" "refuses an uncommitted Review line"
 assert_contains "$OUTPUT" "commit the record edits first" "the check reads committed state"
 git commit -qam "001-greet: review PASS" >/dev/null
 VERDICT="$(git rev-parse HEAD)"
+it "generated close states preserve local history and unrelated work"
+if receipt_host "$PROJ" 001-greet "$VERDICT"; then
+    generated_states close "$PROJ"
+else
+    _no "could not prepare reviewed change for generated close states"
+fi
+it "one command closes a reviewed change"
 run bash "$B/check-review.sh" 001-greet
 assert_eq 0 "$STATUS" "the gate passes with the record still present"
 assert_contains "$OUTPUT" "Note: specs/changes/001-greet.md is still at this head" "the gate notes the open record"
