@@ -82,7 +82,7 @@ for platform in linux native; do
     done
 done
 
-# Read the checked-in workflow shape and execute the actual aggregate run blocks.
+# Read the checked-in workflow shape and execute its actual shard and aggregate run blocks.
 job_body() { # workflow job
     awk -v job="$2" '
         $0 == "  " job ":" { wanted = 1; next }
@@ -90,9 +90,35 @@ job_body() { # workflow job
         wanted { print }
     ' "$1"
 }
+step_run() { # optional step id; without one, extract the job's first run block
+    awk -v id="${1:-}" '
+        body && /^[[:space:]]*$/ { print ""; next }
+        body && /^          / { sub(/^          /, ""); print; next }
+        body { exit }
+        /^      - / { selected = (id == ""); next }
+        $0 == "        id: " id { selected = 1; next }
+        selected && /^        run: \|$/ { body = 1 }
+    '
+}
+shard_step() ( # run the rendered step with GitHub Actions' default bash -e
+    cd "$shard_workspace" || exit 1
+    env -i PATH="$PATH" RUNNER_TEMP="$shard_workspace/runner temp" \
+        RUNNER_TRACE="$shard_workspace/calls" RUNNER_EXIT="$1" bash -e step.sh
+)
 aggregate() {
     run env -i PATH="$PATH" "$@" bash --noprofile --norc -eo pipefail -c "$gate_script"
 }
+
+shard_workspace="$fixture/workspace"
+mkdir -p "$shard_workspace/tests" "$shard_workspace/runner temp" || exit 1
+cat > "$shard_workspace/tests/run.sh" <<'RECORDER'
+{
+    printf 'invocation'
+    printf ' %q' "$@"
+    printf '\n'
+} >> "$RUNNER_TRACE" || exit 1
+exit "$RUNNER_EXIT"
+RECORDER
 
 it "supersede runs per workflow and PR without cancelling main pushes or manual runs"
 for workflow in "$PK_ROOT"/.github/workflows/ci{,-macos}.yml; do
@@ -106,7 +132,8 @@ for workflow in "$PK_ROOT"/.github/workflows/ci{,-macos}.yml; do
         "${workflow##*/}: PR heads share a workflow-specific group; other runs have distinct IDs and are never cancelled"
 done
 
-it "the workflows require each matrix leg individually, preserve check names, and fail closed"
+it "the workflows execute each matrix leg once, preserve check names, and fail closed"
+shard_expression='${{ matrix.shard }}'
 for platform in linux native; do
     if [ "$platform" = linux ]; then
         workflow="$PK_ROOT/.github/workflows/ci.yml"
@@ -132,6 +159,8 @@ for platform in linux native; do
     assert_contains "$matrix_body" "$suite_command" "$platform calls the correct runner and shard"
     assert_contains "$matrix_body" '        id: suite' "$platform identifies the suite step"
     assert_contains "$matrix_body" 'export HOME="$scratch/home" TMPDIR="$scratch/tmp"' "$platform sets isolated shard fixture paths"
+    shard_script="$(printf '%s\n' "$matrix_body" | step_run suite)"
+    [ -n "$shard_script" ] || _no "$platform suite step must have a run block"
     assert_contains "$gate_body" 'MATRIX_RESULT: ${{ needs.'"$matrix"'.result }}' "$platform checks the matrix outcome"
     keys=(MATRIX_RESULT)
     if [ "$platform" = linux ]; then
@@ -146,17 +175,35 @@ for platform in linux native; do
         assert_contains "$checks_body" 'git diff --check 4b825dc642cb6eb9a060e54bf8d69288fbee4904 HEAD' "Linux checks cumulative whitespace"
         assert_contains "$gate_body" 'CHECKS_RESULT: ${{ needs.checks.result }}' "Linux aggregate checks the compatibility and lint outcome"
         keys+=(CHECKS_RESULT)
+    else
+        assert_contains "$matrix_body" "PRDKIT_EXTRA_STATES: \${{ github.event_name == 'workflow_dispatch' && '12' || '0' }}" \
+            "native manual runs still exercise extra generated states"
     fi
     for ((leg = 1; leg <= count; leg++)); do
         assert_contains "$matrix_body" "shard-$leg: \${{ matrix.shard == $leg && steps.suite.outcome == 'success' && 'success' || '' }}" \
             "$platform leg $leg publishes its own success marker only"
         assert_contains "$gate_body" "SHARD_$leg: \${{ needs.$matrix.outputs.shard-$leg }}" "$platform aggregate reads the marker from leg $leg"
         keys+=("SHARD_$leg")
+
+        printf '%s\n' "${shard_script//"$shard_expression"/$leg}" > "$shard_workspace/step.sh"
+        expected="invocation --shard $leg/$count"
+        if [ "$platform" = native ]; then expected="invocation --native --shard $leg/$count"; fi
+        for runner_exit in 0 17; do
+            : > "$shard_workspace/calls"
+            run shard_step "$runner_exit"
+            assert_eq "$expected" "$(cat "$shard_workspace/calls")" \
+                "$platform $leg/$count invokes its runner exactly once with execution args (runner exit $runner_exit)"
+            if [ "$runner_exit" -eq 0 ]; then
+                assert_eq 0 "$STATUS" "$platform $leg/$count step passes with a successful runner"
+            elif [ "$STATUS" -eq 0 ]; then
+                _no "$platform $leg/$count step must fail when the runner fails"
+            else
+                _ok "$platform $leg/$count step fails with the runner"
+            fi
+        done
     done
 
-    gate_script="$(printf '%s\n' "$gate_body" | awk '/^        run: \|$/ { body = 1; next }
-        body && /^          / { sub(/^          /, ""); print; next }
-        body { exit }')"
+    gate_script="$(printf '%s\n' "$gate_body" | step_run)"
     [ -n "$gate_script" ] || _no "$platform aggregate must have a run block"
     passing=()
     for key in "${keys[@]}"; do passing+=("$key=success"); done
