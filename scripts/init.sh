@@ -42,10 +42,11 @@
 # files from consumer edits.
 #
 # Invariants:
-# --upgrade targets kit-owned files and managed sections, not spec content.
+# --upgrade has no direct install destination under specs/. Preflight for a 2.x
+# source refuses destinations resolving into specs/changes/ and customized
+# overwrite/delete destinations. A supported root-file alias (such as a symlinked
+# AGENTS.md) can still direct edits to its target elsewhere under specs/.
 # Keep customized conffiles by default; never write through their symlinks.
-# Preflight for a 2.x source refuses customized overwrite/delete destinations and
-# destinations resolving into the change-record namespace.
 # Review migration dry-run reports without installing or publishing reviews.
 #
 # Threat model:
@@ -1147,7 +1148,7 @@ INSTALL_DONE=true
 echo "✓ Manifest written to .prdkit/.manifest"
 
 # A 0.x spec layout keeps working as plain files, but 1.0 workflows need one current canon.
-# The installer never edits specs/; the cutover is agent work with the owner (compact.md).
+# The installer does not perform the spec cutover; that is agent work with the owner (compact.md).
 LAYOUT="$(spec_layout "$TARGET")"
 case "$LAYOUT" in
     0.x|both)

@@ -20,7 +20,8 @@
 # data before reporting success. Without --force, a live checkout must pass the dirty check.
 # --prune targets only stale registrations; --closed requires the kit's worktree layout
 # and a missing record plus a log entry on a trusted integration ref.
-# Evidence copies refuse a detected differing destination or a linked evidence path.
+# The evidence copy does not follow source symlinks. It refuses linked roots and
+# linked or differing destinations it encounters when copying regular files.
 #
 # Threat model:
 # Include overlapping cleanups and interruption: retirement locks the registration and
