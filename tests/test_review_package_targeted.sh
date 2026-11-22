@@ -333,10 +333,13 @@ assert_not_contains "$(cat "$PKG"/context-sections/*.txt)" 'dirty worktree' 'com
 git rm -q "specs/changes/$ID.md"
 mkdir -p specs/log; printf -- '- 2026-01-03 %s: closed\n' "$ID" > "specs/log/$ID.md"
 git add specs/log; git commit -qm 'synthetic close'
-# Closing metadata is equal: compare refuses, even though the historical record is recoverable.
+# Closing metadata is equal, but a structural package must bind the historical record.
 receipt_raw_run bash "$BUILD" "$ID" "$BASE"
-assert_eq 1 "$STATUS" 'closing record metadata alone needs no new round'
-# New source at the closing head permits a structural package with historical record binding.
+assert_eq 0 "$STATUS" 'a closing head needs fresh context'
+PKG="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
+assert_contains "$(cat "$PKG/index.md")" 'package context or bindings differ'
+assert_contains "$(cat "$PKG/context-manifest.tsv")" "$(git rev-parse HEAD^)" 'historical child revision bound at close'
+# New source at the closing head keeps that historical record binding.
 advance closing-new-source
 receipt_raw_run bash "$BUILD" "$ID" "$BASE"
 assert_eq 0 "$STATUS" "closing package: $OUTPUT"
