@@ -21,14 +21,18 @@ github_review_policy() {
         function fail(reason) { print reason; exit 1 }
         { if (spec_skip($0)) next }
         /^## / { active=($0=="## Configuration"); next }
-        active && /^- review-lenses([[:space:]]|$)/ { malformed=1 }
         active && /^- review-(host|publishers|owner|publisher-isolation|lenses):/ {
             key=$0; sub(/:.*/, "", key); sub(/^- /,"",key)
             sub(/^[^:]*:[[:space:]]*/,""); sub(/[[:space:]]+$/,"")
-            values[key]=$0; count[key]++
+            values[key]=$0; count[key]++; next
+        }
+        # A noncanonical assignment must not silently disable lenses or the union check.
+        active && tolower($0) ~ /^[[:space:]]*[-*+][[:space:]]*review-(lenses|publishers)[[:space:]]*[:=]/ {
+            malformed=tolower($0); sub(/^[[:space:]]*[-*+][[:space:]]*/, "", malformed)
+            sub(/[[:space:]]*[:=].*/, "", malformed)
         }
         END {
-            if (malformed) fail("Invalid review-lenses key: expected - review-lenses: <mapping>")
+            if (malformed) fail("Invalid " malformed " key: expected - " malformed ": <value>")
             pub=values["review-publishers"]; lenses=values["review-lenses"]
             if (count["review-host"]!=1 || values["review-host"]!="github" ||
                 count["review-owner"]!=1 || values["review-owner"]!~/^user:[1-9][0-9]*([[:space:]]*,[[:space:]]*user:[1-9][0-9]*)*$/) {

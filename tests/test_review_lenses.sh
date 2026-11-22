@@ -73,6 +73,29 @@ review APPROVED 1003; gate; assert_eq 0 "$STATUS" "$OUTPUT"
 review CHANGES_REQUESTED 1001; gate
 assert_eq 1 "$STATUS"; assert_eq '1001' "$(jq -r '.blocking[].reviewer' <<< "$OUTPUT")"
 
+it 'formatting cannot turn a T3 lenses policy into a legacy approval'
+tier T3; review APPROVED 1001; review APPROVED 1003
+publishers='- review-publishers: bot:1001,user:1004,user:1006'
+mapping="${separate#*: }"
+for key in '-  review-lenses:' '- REVIEW-LENSES:' $'-\treview-lenses:' \
+    '- review-lenses   :' '- review-lenses =' '-review-lenses:'; do
+    policy "$publishers" "$key $mapping"; gate
+    assert_eq 1 "$STATUS" "reject '$key'"; assert_contains "$OUTPUT" 'Invalid review-lenses key'
+done
+policy "$publishers" "$separate   "; gate
+assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'approval for the design area'
+
+it 'only assignments affect policy; prose leaves a valid legacy gate alone'
+policy "$publishers" '- review-lenses are optional.'; gate
+assert_eq 0 "$STATUS" "$OUTPUT"; assert_not_contains "$OUTPUT" '"areas":'
+
+it 'a noncanonical publisher assignment cannot silently evade the union check'
+review APPROVED 1004
+for key in '-  review-publishers:' '- REVIEW-PUBLISHERS:' $'-\treview-publishers:' '- review-publishers ='; do
+    policy "$separate" "$key bot:1001"; gate
+    assert_eq 1 "$STATUS" "reject '$key'"; assert_contains "$OUTPUT" 'Invalid review-publishers key'
+done
+
 it 'invalid, conflicting or unregistered mappings fail before host approval'
 for invalid in '' 'code=bot:0' 'code=bot:1|' 'code=bot:1,' 'code=1' 'code=bot:1,code=user:2' \
     'code=bot:1,design=user:1' 'unknown=user:1004' 'implementation=user:1004'; do
