@@ -508,9 +508,9 @@ done
 assert_eq 1 "$(grep -cxF 'test_release.sh' "$TESTS_DIR/native-suites.txt" || true)" "the macOS check runs this suite"
 assert_eq 1 "$(grep -cxF 'test_fails_on_base.sh' "$TESTS_DIR/native-suites.txt" || true)" "the replay suite runs on native macOS"
 # Only the regression replay is PR-only; both shard result aggregates always run.
-assert_eq 'test:    if: ${{ always() }}
-fails-on-base:    if: github.event_name == '\''pull_request'\''
-portable-helpers-macos:    if: ${{ always() }}' \
+assert_eq "test:    if: \${{ always() }}
+fails-on-base:    if: github.event_name == 'pull_request'
+portable-helpers-macos:    if: \${{ always() }}" \
     "$(awk '/^  [a-z-]+:$/ { job = $1 } /^[ \t]*(- )?if:/ { print job $0 }' "$CIWF" "$MACWF")" \
     "CI runs the aggregates unconditionally and the replay only on PRs"
 # CI lints with the pinned ShellCheck, checked against its published digest, never with the
