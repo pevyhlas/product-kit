@@ -3,6 +3,19 @@
 # A restatement reads the publisher's Git-directory log, never checkout files or the edited body:
 #   publish-review.sh --pr URL --restates REVIEW_ID --receipt-id ID [--restates-pr ORIGIN_PR]
 # Offline --dry-run needs jq to encode/validate JSON, but never invokes gh or writes the log.
+#
+# Invariants:
+# Publish a verdict bound to committed content and the destination PR, using an eligible
+# reviewer and a configured publisher. Do not edit change records.
+# Retain the payload before creating a host review and bind its ID before submitting it.
+# Report success only after reading back the exact unedited, submitted review from the host.
+# Dry-run neither contacts the host nor writes the publisher log.
+#
+# Threat model:
+# Include failed or interrupted host calls, overlapping attempts and edited host reviews.
+# Recovery relies on a saved attempt and a unique matching unedited host review, not on
+# exactly-once delivery. Run trusted code; the publisher credential and log must not be
+# accessible to an untrusted writer.
 set -euo pipefail
 # shellcheck disable=SC2016 # Literal jq variables.
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

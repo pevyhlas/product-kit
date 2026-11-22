@@ -4,6 +4,9 @@
 # trying to re-enter a worktree whose directory was deleted out of band. doctor
 # detects those stale registrations read-only.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+source "$TESTS_DIR/lib/states.sh"
+
+generated_states cleanup "$PK_ROOT/scripts"
 
 PROJ="$(make_inited_project)"; track_tmp "$PROJ"
 PROJ="$(cd "$PROJ" && pwd -P)"
@@ -742,7 +745,10 @@ git -C "$linked" "${GITID[@]}" commit -q --allow-empty -m 'linked checkout work'
 linked_tip="$(git -C "$linked" rev-parse HEAD)"
 run bash "$CLEAN2" --force 102-linked
 assert_eq 1 "$STATUS" "dependent checkout refused"
-assert_contains "$OUTPUT" 'administers linked worktrees'
+# find may encounter the dependent HEAD's commondir before the module's own
+# HEAD; both preflight paths refuse the layout, but only one prints a detail.
+assert_contains "$OUTPUT" 'unsupported submodule layout'
+assert_contains "$(git -C "$PROJ2" worktree list --porcelain)" "worktree $PROJ2/.worktrees/102-linked"
 assert_eq "$linked_tip" "$(git -C "$linked" rev-parse 'HEAD^{commit}')" "linked checkout and commit survive"
 
 it "a local-only gitlink commit survives in the retired module"
