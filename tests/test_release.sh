@@ -463,6 +463,7 @@ hosted="$(for f in "$PK_ROOT"/.github/workflows/*.yml; do
 done | LC_ALL=C sort)"
 assert_eq "ci-macos.yml: macos-15
 ci.yml: ubuntu-24.04
+ci.yml: ubuntu-24.04
 release.yml: ubuntu-24.04
 release.yml: ubuntu-24.04" "$hosted" "every job on a named GitHub-hosted image"
 assert_eq "" "$(grep -rniE 'self-hosted|runs-on:[ \t]*\[' "$PK_ROOT/.github" || true)" "no self-hosted runner label in .github"
@@ -472,6 +473,8 @@ assert_eq "" "$(grep -rniE 'self-hosted|runs-on:[ \t]*\[' "$PK_ROOT/.github" || 
 on_block() { awk '/^on:/ { f = 1 } f && /^[^ #]/ && !/^on:/ { f = 0 } f' "$1"; }
 assert_eq "on:
   pull_request:
+    # Re-evaluate the policy when the PR title changes, even at the same head.
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]" "$(on_block "$CIWF")" "CI runs for every pull request and for pushes to main"
 assert_eq "on:
@@ -487,11 +490,16 @@ for f in "$CIWF" "$MACWF"; do
     assert_eq "permissions:
   contents: read" "$(awk '/^permissions:/ { f = 1 } f && /^[^ #]/ && !/^permissions:/ { f = 0 } f' "$f")" "$n reads contents only"
     assert_eq 1 "$(grep -cE '^[[:space:]]*permissions:' "$f" || true)" "no job-level permissions in $n"
-    assert_eq 1 "$(grep -c 'uses: actions/checkout@' "$f" || true)" "one checkout in $n"
-    assert_eq 1 "$(grep -cxE ' +persist-credentials: false' "$f" || true)" "and it persists no credentials"
+    checkouts=1
+    if [ "$f" = "$CIWF" ]; then checkouts=2; fi
+    assert_eq "$checkouts" "$(grep -c 'uses: actions/checkout@' "$f" || true)" "$n checks out once per job"
+    assert_eq "$checkouts" "$(grep -cxE ' +persist-credentials: false' "$f" || true)" "and no checkout persists credentials"
 done
 assert_eq 1 "$(grep -cxF '          /bin/bash tests/test_release.sh' "$MACWF" || true)" "the macOS check runs this suite"
-assert_eq "" "$(grep -nE '^[[:space:]]*(- )?if:' "$CIWF" "$MACWF" || true)" "no job or step in CI or the macOS check is conditional"
+# Only the regression replay is PR-only; neither of the full suites can be skipped.
+assert_eq "fails-on-base:    if: github.event_name == 'pull_request'" \
+    "$(awk '/^  [a-z-]+:$/ { job = $1 } /^[ \t]*(- )?if:/ { print job $0 }' "$CIWF" "$MACWF")" \
+    "CI conditions only the fails-on-base job, on a pull request"
 # CI lints with the pinned ShellCheck, checked against its published digest, never with the
 # version the runner image ships.
 assert_eq 1 "$(grep -cxF '          v=v0.11.0' "$CIWF" || true)" "CI installs ShellCheck 0.11.0"

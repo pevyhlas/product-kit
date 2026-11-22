@@ -76,3 +76,4 @@ jobs:
           /bin/bash tests/test_review_package_completion.sh
           /bin/bash tests/test_delivery_checkpoint.sh
           /bin/bash tests/test_release.sh
+          /bin/bash tests/test_fails_on_base.sh

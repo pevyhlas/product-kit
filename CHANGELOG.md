@@ -8,6 +8,11 @@ change by change.
 
 ## [Unreleased]
 
+### Added
+
+- Pull request CI shows which changed test suites fail before the fix and pass on the PR head.
+  Conventional `fix` titles require at least one such suite; other titles are advisory.
+
 ## [2.0.2] — 2026-11-21 — safer worktree cleanup and complete review patches
 
 ### Fixed

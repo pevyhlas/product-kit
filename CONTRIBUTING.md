@@ -35,7 +35,7 @@ points small, operational contracts explicit, and examples generic.
 - `workflows/`: agent protocol, spec and change contracts, and operational behavior.
 - `templates/`: project-owned spec, change and policy scaffolds installed into consumers.
 - `scripts/`: deterministic helpers and the installer mapping. `scripts/maintainer/` holds
-  kit-only tooling (releases) that the installer never ships to consumers.
+  kit-only tooling that the installer never ships to consumers.
 
 The kit's own development records are kept privately and are not part of this repository.
 
@@ -79,6 +79,17 @@ macOS's native Bash 3.2 and BSD userland, for every pull request and push to mai
 Both must pass before a merge. Only `CI` decides releases: `CI (macOS)` neither triggers nor
 gates one. Pull-request runs get a read-only token and no secrets, and a run from an outside
 contributor waits for the maintainer's approval.
+
+The Linux-only **Fails before the fix** job runs on pull requests, including title edits.
+It runs each added or changed `tests/test_*.sh` suite at the exact PR head and at the
+merge base with the PR head's entire `tests/` directory. Everything outside `tests/`,
+including scripts, templates, workflows and commands, stays at the merge base for the
+base run. The job summary shows both results and includes failure output; a missing
+base dependency counts as a base failure. Titles such as `fix:`, `fix(scope):`, `fix!:`
+and `fix(scope)!:` need at least one suite that fails on base and passes on head.
+For other titles the comparison is advisory. The new job does not change branch protection
+or gate releases. To replay locally, use `bash scripts/maintainer/fails-on-base.sh <base-ref>
+<head-ref> '<PR title>'` in a clone with both commits and their history.
 
 ## License
 
