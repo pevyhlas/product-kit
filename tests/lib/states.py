@@ -22,7 +22,7 @@ CLEANUP = (
     "intent", "spool-link force", "detached", "untracked", "detached closed",
     "reflog-only",
 )
-CLOSE = ("", "inside", "escaping", "nested", "staged", "dirty untracked")
+CLOSE = ("", "inside", "escaping", "nested", "staged", "dirty untracked", "staged detached")
 ID = "701-generated"
 SUB = "vendor/sub"
 KIT = Path(".prdkit/scripts/bash")
@@ -304,6 +304,8 @@ def build_close(root, template, features, token):
     repo = root / "repo"
     shutil.copytree(template, repo, symlinks=True)
     change = git(repo, "branch", "--show-current").decode().strip()
+    if "detached" in features:
+        git(repo, "checkout", "-q", "--detach")
     # Keep an unrelated change beside the open record so Git retains the directory.
     (repo / "specs/changes/702-other.md").write_text("# other\n")
     outside = root / "elsewhere"
@@ -325,6 +327,8 @@ def close(root, template, features, token):
     record, entry = f"specs/changes/{change}.md", f"specs/log/{change}.md"
     before, guard = tree(repo, (".git",)), tree(outside)
     head = git(repo, "rev-parse", "HEAD")
+    # Full branch ref when attached, literal HEAD when detached.
+    attachment = git(repo, "rev-parse", "--symbolic-full-name", "HEAD")
     # Git may refresh stat-cache timestamps in the copied checkout. Compare
     # actual index entries and staged content rather than that cache.
     def index():
@@ -336,6 +340,8 @@ def close(root, template, features, token):
     same(guard, tree(outside), "adjacent directory")
     if rc:
         require(git(repo, "rev-parse", "HEAD") == head, "refusal moved HEAD")
+        require(git(repo, "rev-parse", "--symbolic-full-name", "HEAD") == attachment,
+                "refusal changed HEAD attachment")
         require(index() == staged, "refusal changed index")
         same(before, tree(repo, (".git",)), "refused checkout")
     else:
