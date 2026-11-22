@@ -10,6 +10,8 @@ grep -q 'R-01' .eval-state/pr.md || fail 'PR lost canonical reference'
 grep -qi 'Welcome' .eval-state/pr.md || fail 'PR lost completion check context'
 grep -Eiq 'after.*deploy|future.*deploy|next.*(check|observ)' .eval-state/pr.md || fail 'PR lost follow-up observation trigger'
 test "$(git symbolic-ref --short HEAD)" = "$(cat .eval-state/branch)" || fail 'moved to another branch'
+handoff="$(grep '^Closing approval:' .eval-state/pr.md || true)"
+test "$handoff" = "Closing approval: pending at $(git rev-parse HEAD)" || fail 'closing approval must be pending on the exact head'
 source "$PK_ROOT/tests/evals/fixture.sh"
 test -z "$(git diff "$(cat .eval-state/start)" -- "${FIXTURE_CANON[@]}")" || fail 'canonical promise or maturity changed'
 source "$PK_ROOT/tests/lib.sh"

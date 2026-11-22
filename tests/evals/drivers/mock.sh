@@ -256,7 +256,7 @@ EOF
             printf -- '- **R-02 ASCII only** (hypothesis): messages are ASCII only.\n' >> "$req"
         fi ;;
     19-same-pr-finalization)
-        if [ "$MODE" = comply ]; then
+        if [ "$MODE" = comply ] || [ "$MODE" = violate-approval ]; then
             grep -q Welcome README.md
             printf '# PR 1\nR-01: README names Welcome, local check passed. Runtime production observation unverified; observe after a future deployment.\n' > .eval-state/pr.md
             accept PASS
@@ -264,6 +264,9 @@ EOF
             printf -- '- 2026-10-25 001-greeting: document R-01 — delivered; runtime unverified — PR 1\n' >> specs/log.md
             git rm -q "$cf"
             git add specs/log.md && git commit -qm 'finalize same PR'
+            approval=pending
+            [ "$MODE" != violate-approval ] || approval=passed
+            printf 'Closing approval: %s at %s\n' "$approval" "$(git rev-parse HEAD)" >> .eval-state/pr.md
         else echo 'Leave record open for a production check and cleanup PR.'; fi ;;
     20-dependency-drift)
         mkdir -p src
