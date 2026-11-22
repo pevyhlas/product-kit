@@ -271,10 +271,14 @@ def cleanup(root, scripts, features, token):
             git(repo, f"--git-dir={store}", "--work-tree=.", "cat-file", "-e", tip + "^{commit}")
     # After a refusal (or an unrelated retirement), don't destroy the live
     # private reflog in the test itself. A retired checkout gets full expiry.
-    keep_live_log = state.reflog_tip and admin.is_dir()
-    expiry = ["--single-worktree"] if keep_live_log else []
-    git(repo, "reflog", "expire", "--expire=now", "--all", *expiry)
-    git(repo, "gc", "--prune=now", "-q")
+    if state.reflog_tip and admin.is_dir():
+        # The generator uses a fixed, old commit date; even default GC expires
+        # a live log's unreachable entries when they are over 30 days old.
+        git(repo, "-c", "gc.reflogExpire=never", "-c", "gc.reflogExpireUnreachable=never",
+            "gc", "--prune=now", "-q")
+    else:
+        git(repo, "reflog", "expire", "--expire=now", "--all")
+        git(repo, "gc", "--prune=now", "-q")
     git(repo, "cat-file", "-e", state.head.decode() + "^{commit}")
     if state.reflog_tip:
         git(repo, "cat-file", "-e", state.reflog_tip.decode() + "^{commit}")
