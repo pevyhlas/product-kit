@@ -17,6 +17,8 @@ change by change.
   Receipt publication, snapshots, carry-forward and reconciliation are removed (#138).
   **Adoption:** keep the 2.0 publisher and `review-publisher-isolation` until the new
   required check enforces approvals on the protected branch. See [Migrating to 3.0](docs/migrating-to-3.0.md).
+- Cleanup and close tests now run against seeded combinations of local Git states and
+  check that commits and working files survive. The generator is test-only.
 
 ## [2.0.3] — 2026-11-22 — review bindings and concurrent evidence preservation
 
