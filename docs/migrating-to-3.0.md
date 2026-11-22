@@ -3,6 +3,11 @@
 Stay on the pinned 2.0.x kit, its required check and its receipt publisher until you
 can complete the cutover below. Installing files does not change branch protection.
 
+Only the review evidence changes. Keep the **2.x tier minimums**: no approval
+for T0; at least one independent `review-publishers` approval for T1–T3; and
+also a `review-owner` approval for T3. An ID in both lists is an owner only.
+The PR author counts for neither role. Even T0 requires a successful live gate.
+
 **Before installing:** identify the protected branch's actual rule. This guide
 uses a source-bound **required workflow**, not a required status-check name. Confirm
 in a sandbox that the merge owner can rerun the exact required workflow, including
@@ -62,7 +67,7 @@ not a substitute for the required workflow.
 
 ## Prove enforcement on one pilot PR
 
-Use a disposable PR targeting the actual protected branch, with a valid change record
+Use a disposable T1 PR targeting the actual protected branch, with a valid change record
 and otherwise passing checks. Do not merge it. In the active ruleset **add** the trusted
 3.0 required workflow for that target while 2.0 remains required. Verify the source
 identity and no-bypass policy (not just a display name). Check the merge requirements
@@ -73,7 +78,7 @@ posts a `COMMENTED` review, which supersedes that account’s earlier approval o
 | Action | Evidence to record for `H` |
 | --- | --- |
 | Open the PR without an eligible approval. | The new required check runs and fails for missing approval; branch protection lists it as blocking. |
-| Have an eligible non-author submit a normal `APPROVED` review of `H` (`commit_id: H` when using the API). The reviewer or owner reruns all jobs of the required run. | Record the new attempt of the **same run**, the live approval and host pass on `H`. Confirm protection accepts that attempt. |
+| Have an independent non-author publisher submit `APPROVED` on `H` (`commit_id: H` when using the API). The reviewer or owner reruns all jobs of the required run. | Record the new attempt of the **same run**, the live approval and host pass on `H`. Confirm protection accepts that attempt. |
 | Dismiss that approval, leaving no qualifying approval. The dismisser or owner reruns **the previously green run** without a push. | Record the incremented attempt, its failure on `H`, and the protected PR blocking again. The earlier green result must no longer satisfy the rule. |
 
 Save the PR, review, run ID and attempt numbers, and ruleset evidence. Opening,
@@ -91,7 +96,7 @@ Only then remove the 2.0 requirement, retire or repurpose the old publisher, rem
 `--review-plan` steps. Keep `review-publishers` and `review-owner`. For each account,
 only its latest submitted review on the exact PR head counts. A pending review
 does not count; a later submitted comment, dismissal or changes request on that
-head supersedes its approval. Commit authorship is irrelevant. Obtain approval for
+head supersedes its approval. Commit authorship is irrelevant. Obtain the tier’s required approvals for
 each open PR’s current SHA, including any new SHA created by `close-change.sh`.
 
 ## Roll back to 2.0.x

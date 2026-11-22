@@ -11,7 +11,7 @@ cat >> .prdkit/memory/config.md <<'EOF'
 
 ## Configuration
 - review-host: github
-- review-publishers: bot:1001, user:1002
+- review-publishers: bot:1001, user:1002, user:1003
 - review-owner: user:1003
 - review-publisher-isolation: shared
 - review-t0-paths: docs/
@@ -34,6 +34,9 @@ use_gh_stub
 fx_pr 7 "$HEAD_SHA"
 online() { run bash "$CHECK" --json --pr "$PR" 001-reviewed; }
 
+publisher_review() { # state commit [override object]
+    fx_review 7 'Independent review.' "$(jq -cn --arg state "$1" --arg head "$2" --argjson extra "${3:-null}" '{state:$state,commit:{oid:$head}} * ($extra // {})')"
+}
 it 'only native approvals from an allowed non-author account count'
 fx_review 7 'Verdict: PASS'
 online; assert_eq 1 "$STATUS" 'review body is not approval'
@@ -49,13 +52,13 @@ assert_contains "$OUTPUT" '"reviewer":1001'
 it 'only the latest submitted review by that account on the exact head decides'
 for state in CHANGES_REQUESTED DISMISSED COMMENTED; do
     printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
-    fx_owner_review 7 APPROVED "$HEAD_SHA"; online; assert_eq 0 "$STATUS" 'owner can approve'
-    fx_owner_review 7 "$state" "$BASE"; online; assert_eq 0 "$STATUS" 'other commits never revoke'
-    fx_owner_review 7 "$state" "$HEAD_SHA" '{"submittedAt":"2026-02-01T00:00:00Z"}'
-    fx_owner_review 7 APPROVED "$HEAD_SHA" # earlier submission time, despite appearing last
+    publisher_review APPROVED "$HEAD_SHA"; online; assert_eq 0 "$STATUS" 'publisher qualifies at T1'
+    publisher_review "$state" "$BASE"; online; assert_eq 0 "$STATUS" 'other commits never revoke'
+    publisher_review "$state" "$HEAD_SHA" '{"submittedAt":"2026-02-01T00:00:00Z"}'
+    publisher_review APPROVED "$HEAD_SHA" # earlier submission time, despite appearing last
     online; assert_eq 1 "$STATUS" "$state overrides earlier approval"
 done
-fx_review 7 review '{"state":"APPROVED"}'; online; assert_eq 0 "$STATUS" 'independent approved publisher still counts'
+publisher_review APPROVED "$HEAD_SHA" '{"submittedAt":"2026-02-02T00:00:00Z"}'; online; assert_eq 0 "$STATUS" 'independent approved publisher still counts'
 fx_review 7 draft '{"state":"PENDING","submittedAt":null}'; online; assert_eq 0 "$STATUS" 'draft is not submitted'
 
 it 'pushing even a metadata-only commit requires fresh approval'
@@ -66,11 +69,11 @@ fx_pr 7 "$HEAD_SHA"
 
 it 'every page must be complete and advance even after an eligible approval'
 printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
-fx_owner_review 7 APPROVED "$HEAD_SHA"
-fx_owner_review 7 CHANGES_REQUESTED "$HEAD_SHA" '{"submittedAt":"2026-02-01T00:00:00Z"}'
+publisher_review APPROVED "$HEAD_SHA"
+publisher_review CHANGES_REQUESTED "$HEAD_SHA" '{"submittedAt":"2026-02-01T00:00:00Z"}'
 GH_STUB_PAGE_SIZE=1 online; assert_eq 1 "$STATUS" 'second page revokes'
 assert_contains "$(cat "$GH_STUB_DIR/requests")" 'after=cursor-1'
-fx_owner_review 7 APPROVED "$HEAD_SHA" '{"submittedAt":"2026-02-02T00:00:00Z"}'
+publisher_review APPROVED "$HEAD_SHA" '{"submittedAt":"2026-02-02T00:00:00Z"}'
 GH_STUB_PAGE_SIZE=1 online; assert_eq 0 "$STATUS" 'last page restores approval'
 GH_STUB_FAIL=graphql:PrdkitReviews online; assert_eq 1 "$STATUS" 'API failure'; assert_contains "$OUTPUT" '"authority":"unavailable"'
 query='query PrdkitReviews { fixture }'
@@ -86,11 +89,11 @@ for edit in '.' '.data.repository.pullRequest.reviews.pageInfo.hasNextPage=false
 done
 rm "$route"
 it 'change-local configuration cannot grant the PR reviewer permission'
-git show "$BASE:.prdkit/memory/config.md" | sed 's/bot:1001, user:1002/bot:1009/' |
+git show "$BASE:.prdkit/memory/config.md" | sed 's/bot:1001, user:1002, user:1003/bot:1009/' |
     trusted_edit refs/remotes/origin/main .prdkit/memory/config.md
 printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"; fx_review 7 'Reviewed.' '{"state":"APPROVED"}'
 online; assert_eq 1 "$STATUS" 'publisher removed at the trusted tip'
-assert_contains "$OUTPUT" 'No eligible APPROVED review'
+assert_contains "$OUTPUT" 'requires an independent review-publishers'
 git update-ref refs/remotes/origin/main "$BASE"
 
 TOOLS="$(mktemp -d)"; track_tmp "$TOOLS"
@@ -121,10 +124,47 @@ feature_tip="$(git commit-tree "$HEAD_SHA^{tree}" -p "$HEAD_SHA" -p "$other" -m 
 git update-ref refs/remotes/origin/main "$target_tip"
 git checkout -q --detach "$feature_tip"
 assert_eq 2 "$(git merge-base --all origin/main HEAD | wc -l | tr -d ' ')" 'fixture has two best ancestors'
-fx_pr 7 "$feature_tip"; fx_owner_review 7 APPROVED "$feature_tip"
+fx_pr 7 "$feature_tip"; publisher_review APPROVED "$feature_tip"
 online; assert_eq 1 "$STATUS" 'approval does not resolve an ambiguous review range'
 assert_contains "$OUTPUT" 'multiple merge bases'
 run bash "$CHECK" --json 001-reviewed
 assert_eq 1 "$STATUS" 'ambiguous structure cannot pass preview either'
 assert_contains "$OUTPUT" 'multiple merge bases'
+it 'each effective tier enforces its own minimum; an overlapping account is owner only'
+git update-ref refs/remotes/origin/main "$BASE"
+for level in T0 T1 T2 T3; do
+    git checkout -q --detach "$BASE"
+    mkdir -p specs/changes docs
+    printf '# Change\n**Tier**: %s\n## State\n' "$level" > specs/changes/001-reviewed.md
+    echo doc > docs/page.md
+    git add -A; git commit -qm "$level"
+    h="$(git rev-parse HEAD)"; fx_pr 7 "$h"
+    printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
+    online
+    if [ "$level" = T0 ]; then
+        assert_eq 0 "$STATUS" 'T0 needs no positive approval'
+        assert_contains "$OUTPUT" '"reviews":[]'
+        GH_STUB_FAIL=graphql:PrdkitReviews online; assert_eq 1 "$STATUS" 'T0 still requires a complete host read'
+        echo 'unrelated rewrite' > specs/log.md; git commit -qam 'shared log is not automatically exempt'
+        fx_pr 7 "$(git rev-parse HEAD)"; online; assert_eq 1 "$STATUS" 'T0 must qualify structurally'
+        assert_contains "$OUTPUT" 'T0 is docs only'
+        continue
+    fi
+    assert_eq 1 "$STATUS" "$level without approval fails"
+    fx_owner_review 7 APPROVED "$h"; online
+    assert_eq 1 "$STATUS" "$level owner-only approval is not independent"
+    assert_contains "$OUTPUT" 'requires an independent review-publishers'
+    printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
+    publisher_review APPROVED "$h"; online
+    if [ "$level" != T3 ]; then assert_eq 0 "$STATUS" "$level independent approval suffices"; continue; fi
+    assert_eq 1 "$STATUS" 'publisher alone cannot approve T3'
+    assert_contains "$OUTPUT" 'also requires a review-owner'
+    fx_owner_review 7 APPROVED "$BASE"; online; assert_eq 1 "$STATUS" 'older owner approval cannot qualify'
+    fx_owner_review 7 APPROVED "$h"; online; assert_eq 0 "$STATUS" 'distinct publisher and owner approve T3'
+    fx_pr 7 "$h" '{"author":{"databaseId":1003}}'; online; assert_eq 1 "$STATUS" 'PR author cannot approve as owner'
+    fx_pr 7 "$h"
+    fx_owner_review 7 DISMISSED "$h"; online; assert_eq 1 "$STATUS" 'dismissal removes the owner approval'
+    fx_owner_review 7 APPROVED "$h"; publisher_review CHANGES_REQUESTED "$h"
+    online; assert_eq 1 "$STATUS" 'owner cannot compensate for publisher revocation'
+done
 finish

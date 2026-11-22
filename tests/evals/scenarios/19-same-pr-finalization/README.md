@@ -5,4 +5,4 @@ non-gating before execution. The fixture's .eval-state/pr.md is an offline PR tr
 published evidence. The agent finalizes on the same branch, keeps the canon unchanged, records
 unknown runtime status and deletes the change with its log entry. The handoff must name the
 closing SHA and leave its approval pending. Only then does the assertion supply a synthetic
-approval and check that the closed T0 head can pass.
+independent approval and check that the closed T1 head can pass.

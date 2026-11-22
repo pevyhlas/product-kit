@@ -53,6 +53,7 @@ review_head
 run bash "$CHECK" --pr "$pr" 002-final-child
 assert_eq 1 "$STATUS" "closing head needs approval"
 approve_head
+fx_owner_review 7 APPROVED "$(git rev-parse HEAD)"
 run bash "$CHECK" --pr "$pr" --json --base origin/main --head HEAD 002-final-child
 assert_eq 0 "$STATUS" "same-PR multi-record finalization passes"
 assert_contains "$OUTPUT" '"record_only":false' "real source scope, not a cleanup exemption"

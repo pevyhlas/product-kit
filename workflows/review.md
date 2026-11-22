@@ -45,12 +45,13 @@ closing commit the reviewer can inspect the closing delta and approve the new SH
 
 ## Merge
 
-The gate reads every page of the PR’s GitHub reviews. For each account listed in
-`review-publishers` or `review-owner`, only its latest submitted review on the exact PR head
-counts. At least one must be `APPROVED`. A later comment, dismissal or request for changes on
-that head replaces the same account’s approval; a pending review does not. The PR author
-never counts, even if listed. Commit authorship is irrelevant. Every new SHA needs approval,
-including a rebase, an empty commit and a record-only closing commit.
+Apply the same tier minimums as 2.x to the exact PR head. T0 needs no positive review;
+the live gate must still pass. At T1–T3 obtain an `APPROVED` review from at least one
+independent `review-publishers` account. At T3 also obtain `APPROVED` from a `review-owner`.
+An account in both lists counts only as owner, and the PR author counts for neither role.
+These are minimums; cover every applicable concern in the review. Only the latest submitted
+review by that account on the current SHA counts. A comment, dismissal or changes request
+supersedes its approval; a pending review does not. Commit authorship is irrelevant.
 
 Run `.prdkit/scripts/bash/check-review.sh --pr <url> --head <sha> <change-id>` and the
 required checks. With merge authority, merge only the checked SHA (`--match-head-commit`).
@@ -89,7 +90,7 @@ helper invocation:
 GIT_AUTHOR_NAME='Agent' GIT_AUTHOR_EMAIL=agent@example.com GIT_COMMITTER_NAME='Agent' GIT_COMMITTER_EMAIL=agent@example.com bash .prdkit/scripts/bash/close-change.sh --pr https://github.com/owner/repo/pull/1 001-example 'Update behavior — R-01 — complete — #1'
 ```
 
-Push the closing commit. Obtain an eligible approval on that SHA and rerun the gate.
+Push the closing commit. Obtain the approvals required for its tier on that SHA and rerun the gate.
 The PR, not the record,
 carries any handoff to whoever merges. Do not change scope,
 acceptance or policy after review without reviewing the affected changes. Later defects use
@@ -122,6 +123,6 @@ disappearance during transfer. The carrier takes the combined scope's highest ap
 all required reviewer concerns, including owner approval where required. Post the other record's
 useful context/evidence on this PR, add its log disposition and delete it **before** the carrier's
 final review. That review covers the combined diff and integrated outcomes, including these
-deletions. Push the carrier’s closing commit for its own approval. Run
+deletions. Push the carrier’s closing commit for its tier’s required approvals. Run
 `check-review.sh --pr <url>` for the carrier at the exact final head; do not start mutually dependent
 post-review updates to two records. An inherited approval is not fresh coverage for changed work.

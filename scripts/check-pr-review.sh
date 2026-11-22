@@ -489,7 +489,12 @@ if [ "$native_exit" -eq 0 ]; then
         .pr == $pr and .head == $h and .pr_head == $h and .head_is_pr_head == true and
         .base == $ref and .base_trusted == true and .policy_at == $p and
         .diagnostics.head == $h and .diagnostics.base_ref == $ref and .diagnostics.base_at == $t and
-        .diagnostics.policy_at == $p and (.reviews | type == "array" and length > 0)
+        .diagnostics.policy_at == $p and (.reviews | type == "array") and
+        all(.reviews[]; (.reviewer|type=="number" and .>0 and floor==.) and (.role|IN("publisher","owner"))) and
+        ([.reviews[].reviewer] | length == (unique|length)) and
+        (.tier == "T0" or
+         ((.tier | IN("T1","T2","T3")) and any(.reviews[]; .role=="publisher") and
+          (.tier != "T3" or any(.reviews[]; .role=="owner"))))
     ' "$root/native.json" >/dev/null || refuse native inconsistent-result
 else
     jq -e --argjson rc "$native_exit" '

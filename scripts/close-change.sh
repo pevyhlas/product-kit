@@ -11,7 +11,7 @@
 #   <log text> follows "- <date> <id>: " on the entry: "<intent> — <IDs> — <disposition> — <PR>",
 #   at most 300 characters. The entry is its own file, specs/log/<id>.md, so two branches that
 #   each close a change never conflict; compaction folds entries into specs/log.md (compact.md).
-#   Exit 0 closed locally; the new head needs its own approval, 1 refused or failing, 2 usage.
+#   Exit 0 closed locally; rerun the tier's gate on the new head, 1 refused or failing, 2 usage.
 set -euo pipefail
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
@@ -73,7 +73,7 @@ fi
 check() { bash "$SCRIPT_DIR/check-review.sh" --pr "$pr" --repo "$root" --head HEAD ${base_args[@]+"${base_args[@]}"} "$id" 2>&1; }
 if ! out="$(check)"; then
     printf '%s\n' "$out" >&2
-    refuse "check-review.sh does not pass at HEAD; obtain an eligible GitHub approval first"
+    refuse "check-review.sh does not pass at HEAD; resolve its problems and meet the tier's approval minimum first"
 fi
 
 check_paths
@@ -125,4 +125,4 @@ git -C "$root" commit -q -m "${message:-$id: close (log entry, record deleted)}"
     refuse "the commit failed; the record deletion and the log entry are staged"
 
 head="$(git -C "$root" rev-parse HEAD)"
-printf 'Closed %s in %s. Push this commit, obtain its exact-head approval, and rerun check-review.sh before merging.\n' "$id" "$head"
+printf 'Closed %s in %s. Push this commit, obtain the approvals required for its tier, and rerun check-review.sh before merging.\n' "$id" "$head"

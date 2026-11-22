@@ -11,7 +11,9 @@ change by change.
 ### Changed
 
 - **Breaking: the review gate uses native GitHub approvals on the exact PR head.**
-  A configured publisher or owner other than the PR author must approve each new SHA.
+  The 2.x tier minimums are unchanged: T0 needs no approval, T1–T3 need an independent
+  publisher, and T3 also needs an owner. An ID listed in both roles counts only as
+  owner. The PR author never counts. Required approvals bind each new SHA.
   Receipt publication, snapshots, carry-forward and reconciliation are removed (#138).
   **Adoption:** keep the 2.0 publisher and `review-publisher-isolation` until the new
   required check enforces approvals on the protected branch. See [Migrating to 3.0](docs/migrating-to-3.0.md).

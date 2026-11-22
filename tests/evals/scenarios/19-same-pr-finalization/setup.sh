@@ -25,7 +25,7 @@ printf '# PR 1\n\nDocumentation of existing R-01, no behavior change.\n' > .eval
 printf 'T001 Document existing greeting\n' > .prdkit/cache/implementation/001-greeting.md
 cat > "$CHANGE_FILE" <<'EOF'
 # Change: document greeting
-**Opened**: 2026-10-25 · **Parts**: P1 · **Tier**: T0 · **Parent**: none
+**Opened**: 2026-10-25 · **Parts**: P1 · **Tier**: T1 · **Parent**: none
 ## Intent
 Document existing R-01 in README. Spec impact: none — no product behavior changes.
 ## Tasks

@@ -63,4 +63,4 @@ Git only; `bounds.sh <change>` lists the constraints, non-goals and qualities in
 scope. Label semantic judgments and keep them apart from what a helper observed. No helper
 evaluates product usefulness.
 
-[`check-review.sh`](ci-gates.md) verifies the eligible GitHub approval on the PR’s exact head.
+[`check-review.sh`](ci-gates.md) verifies the tier’s required GitHub approvals on the PR’s exact head.

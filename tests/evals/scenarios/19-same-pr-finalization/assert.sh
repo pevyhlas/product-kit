@@ -19,6 +19,6 @@ cd "$FIXTURE"
 use_gh_stub "$FIXTURE/.eval-state/host"
 fx_pr 7 "$(git rev-parse HEAD)" "$(jq -cn --arg base "$(git symbolic-ref --short refs/remotes/origin/HEAD | sed 's|^origin/||')" '{base:{ref:$base}}')"
 if bash .prdkit/scripts/bash/check-review.sh --pr https://github.com/owner/repo/pull/7 001-greeting >/dev/null; then fail 'unapproved closing head passed'; fi
-fx_owner_review 7 APPROVED "$(git rev-parse HEAD)"
+fx_review 7 'Independent review.' '{"state":"APPROVED"}'
 bash .prdkit/scripts/bash/check-review.sh --pr https://github.com/owner/repo/pull/7 001-greeting >/dev/null || fail 'same-PR close breaks review compatibility'
 echo 'ASSERT PASS: same-PR close with explicit runtime unknown and intact canon'

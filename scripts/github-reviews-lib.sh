@@ -21,9 +21,10 @@ github_review_policy() {
                 count["review-publishers"]!=1 || values["review-publishers"]!~/^(bot|user):[1-9][0-9]*([[:space:]]*,[[:space:]]*(bot|user):[1-9][0-9]*)*$/ ||
                 count["review-owner"]!=1 || values["review-owner"]!~/^user:[1-9][0-9]*([[:space:]]*,[[:space:]]*user:[1-9][0-9]*)*$/) exit 1
             if (count["review-publisher-isolation"]) print "Warning: review-publisher-isolation is retired; remove it after the 2.0 check is no longer required. The PR author never counts." > "/dev/stderr"
-            print values["review-publishers"] "," values["review-owner"]
+            print values["review-publishers"] "|" values["review-owner"]
         }')" || return 1
-    REVIEW_IDS="$(printf '%s' "$fields" | tr -d ' \t\r' | sed 's/bot://g;s/user://g')"
+    fields="$(printf '%s' "$fields" | tr -d ' \t\r' | sed 's/bot://g;s/user://g')"
+    REVIEW_PUBLISHERS="${fields%|*}"; REVIEW_OWNERS="${fields#*|}"
     RC_ERROR=""
 }
 
@@ -88,11 +89,12 @@ github_review_fetch() { # URL private-work expected-head expected-base
     RC_ERROR='The PR head or target differs from the checked head and trusted base'
     [ "$pr_head" = "$expected" ] && [ "$(jq -r .baseRefName "$work/validated")" = "$base" ] || return 1
     # Latest submission per eligible numeric account, in host order for equal timestamps.
-    approvals="$(jq -sc --arg ids "$REVIEW_IDS" --arg head "$expected" '
-        .[0].author.databaseId as $maker | ($ids|split(",")) as $allowed |
+    approvals="$(jq -sc --arg publishers "$REVIEW_PUBLISHERS" --arg owners "$REVIEW_OWNERS" --arg head "$expected" '
+        .[0].author.databaseId as $maker | ($publishers|split(",")) as $pub | ($owners|split(",")) as $own |
         [.[].reviews.nodes[] | select(.state!="PENDING" and .commit.oid==$head and .author.databaseId!=$maker) |
-         select((.author.databaseId|tostring) as $id | $allowed|index($id)!=null)] |
+         (.author.databaseId|tostring) as $id |
+         .role = (if $own|index($id)!=null then "owner" elif $pub|index($id)!=null then "publisher" else empty end)] |
         sort_by(.submittedAt) | group_by(.author.databaseId) | map(last | select(.state=="APPROVED") |
-        {reviewer:.author.databaseId,review:(.fullDatabaseId|tostring)})' "$work/pages")" || return 1
+        {reviewer:.author.databaseId,review:(.fullDatabaseId|tostring),role})' "$work/pages")" || return 1
     RC_ERROR=""
 }

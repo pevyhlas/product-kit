@@ -102,18 +102,26 @@ This proof alone does not make the upgrade review-free or complete the release p
 bash .prdkit/scripts/bash/check-review.sh --pr <url> [--head <rev>] [--base <trusted-ref>] [--json] <change-id>
 ```
 
-The gate reads every page of the PR’s GitHub reviews. For each account listed in
-`review-publishers` or `review-owner`, only its latest submitted review on the exact PR head
-counts. At least one must be `APPROVED`. A later comment, dismissal or request for changes on
-that head replaces the same account’s approval; a pending review does not. The PR author
-never counts, even if listed. Commit authorship is irrelevant. Every new SHA needs approval,
-including a rebase, an empty commit and a record-only closing commit.
+The **2.x tier minimums are unchanged**. The gate uses the effective record tier after
+checking trusted policy, the tier floor and T0 paths. It enforces these minimums on the exact PR head:
+
+| Tier | Qualifying `APPROVED` reviews |
+| --- | --- |
+| T0 | None required. The structural checks and complete live host read must still pass. |
+| T1, T2 | At least one independent `review-publishers` account. |
+| T3 | At least one independent `review-publishers` account **and** one `review-owner` account. |
+
+The PR author counts for neither role. An account listed in both keys counts **only as owner**;
+commit authorship is irrelevant. The gate reads every review page. Only the latest submitted
+review per account on that head counts: a later comment, dismissal or changes request replaces
+that account’s approval; a pending review does not. Required approvals must be renewed after
+any SHA change, including a rebase, empty commit or record-only closing commit.
 
 The checked head must match the open PR and its base must match the trusted target. Incomplete
 or inconsistent pages, missing `gh`/`jq`, or an API error fail the check. With `--json`, only
 `result: pass`, `authority: host` and exit 0 mean success. A structural preview without `--pr`
 needs no host tools; it exits 3 if it would otherwise pass, 1 on problems. `reviews` lists the
-qualifying account and review IDs. Project review tiers and required checks still apply.
+qualifying account and review IDs and their policy roles. Project review obligations and required checks still apply.
 
 Policy comes from the current `origin/HEAD`, never the candidate or its merge base. Configure
 `review-host: github`, numeric `review-publishers` and `review-owner` on the default branch.
@@ -256,7 +264,7 @@ any valid captured native object or null. Error classes/phases on stderr are san
 host/tool stderr stays private to the invocation, never printed as workflow commands.
 
 Only native exit 0, host pass, empty problems and matching change/PR/H/T/P/canonical target plus
-nonempty exact-head approvals can exit 0. Usage exits 2; all other refusals/failures exit 1.
+the exact-head approvals required for that tier can exit 0. Usage exits 2; all other refusals/failures exit 1.
 Missing/partial host data never falls back to offline success. Final CI certifies the actual remote H.
 
 It replaces the 0.x `check-signoff.sh`, but not one for one. The 0.x gate ran on every pull

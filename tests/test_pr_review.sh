@@ -84,7 +84,7 @@ bindings() { # head [branch] [target]
     fx_pr 7 "$h" "$(jq -cn --arg branch "$b" --arg target "$t" --arg tip "$tip" '
         {head:{ref:$branch,repo:{id:42}},base:{ref:$target,sha:$tip,repo:{id:42,full_name:"owner/repo"}}}')"
     printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
-    fx_owner_review 7 APPROVED "$h"
+    fx_review 7 'Independent review.' '{"state":"APPROVED"}'
     git update-ref refs/pull/7/head "$h"
     jq -n --slurpfile pr "$GH_STUB_DIR/pulls/7.json" \
         '{action:"synchronize",number:7,repository:{id:42,full_name:"owner/repo"},pull_request:$pr[0]}' > "$FIX/event"
@@ -114,14 +114,20 @@ bindings "$HEAD_SHA"
 
 it 'installed entrypoint and valid real integrated native T0 host control'
 assert_file .prdkit/scripts/bash/check-pr-review.sh
+printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
 launch
 assert_eq 0 "$STATUS" "$OUTPUT $(cat "$FIX/stderr")"
 assert_eq complete "$(printf '%s' "$OUTPUT" | jq -r .launcher)"
 assert_eq host "$(printf '%s' "$OUTPUT" | jq -r .native.authority)"
 assert_eq "$HEAD_SHA" "$(printf '%s' "$OUTPUT" | jq -r .native.diagnostics.head)"
 assert_eq "$BASE" "$(printf '%s' "$OUTPUT" | jq -r .native.diagnostics.policy_at)"
+assert_eq '[]' "$(jq -c .native.reviews "$FIX/stdout")" 'complete T0 check accepts an empty review list'
 
 it 'review events re-evaluate live approvals without a push or a top-level PR number'
+git checkout -q --detach "$HEAD_SHA"
+sed 's/T0/T1/' specs/changes/001-carrier.md > record.new; mv record.new specs/changes/001-carrier.md
+git commit -qam 'opt in to independent review'; reviewed_head="$(git rev-parse HEAD)"
+bindings "$reviewed_head"
 for action in submitted dismissed; do
     jq --arg a "$action" 'del(.number) | .action=$a | .review={state:"approved"}' "$FIX/event" > "$FIX/review-event"
     mv "$FIX/review-event" "$FIX/event"
@@ -133,10 +139,11 @@ for action in submitted dismissed; do
     if [ "$action" = submitted ]; then assert_eq 0 "$STATUS" 'live eligible approval passes'
     else assert_eq 1 "$STATUS" 'dismissal on the same head fails'; fi
     assert_eq complete "$(jq -r .launcher "$FIX/stdout")" 'real gate ran for the review event'
-    assert_eq "$HEAD_SHA" "$(jq -r .native.pr_head "$FIX/stdout")"
+    assert_eq "$reviewed_head" "$(jq -r .native.pr_head "$FIX/stdout")"
 done
 launch
 assert_eq refused "$(jq -r .launcher "$FIX/stdout")" 'review action cannot masquerade as a PR action'
+git checkout -q --detach "$HEAD_SHA"
 
 it 'forks and drafts use the base repository numeric PR ref, never candidate clone URLs'
 bindings "$HEAD_SHA"
@@ -315,7 +322,7 @@ assert_eq 0 "$STATUS" "$OUTPUT"
 assert_eq '[null,17,true]' "$(printf '%s' "$OUTPUT" | jq -c .native.extension.keep)"
 NATIVE="$(printf '%s' "$OUTPUT" | jq -c .native)"
 # Synthetic NEGATIVE output-contract tests, not replacements for the real-native positive control.
-for fault in multiple malformed nul binding preview wrong-type exit-result overflow timeout; do
+for fault in multiple malformed nul binding preview wrong-type missing-publisher missing-owner same-account exit-result overflow timeout; do
     git checkout -q --detach "$BASE"
     case "$fault" in
         multiple) printf '#!/bin/bash\nprintf '\''{}\\n{}\\n'\''\n' > "$FIX/gate" ;;
@@ -329,6 +336,9 @@ for fault in multiple malformed nul binding preview wrong-type exit-result overf
                 binding) filter='.head="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' ;;
                 preview) filter='.result="preview"|.authority="snapshot"'; rc=3 ;;
                 wrong-type) filter='.head_is_pr_head="true"' ;;
+                missing-publisher) filter='.tier="T1"|.reviews[0].role="owner"' ;;
+                missing-owner) filter='.tier="T3"|.reviews[0].role="publisher"' ;;
+                same-account) filter='.tier="T3"|.reviews=[(.reviews[0]+{role:"publisher"}),(.reviews[0]+{role:"owner"})]' ;;
                 exit-result) rc=1 ;;
             esac
             {

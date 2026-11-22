@@ -74,7 +74,6 @@ if ! github_review_policy "$root" "$policy_at"; then problems+=("$RC_ERROR")
 elif $online; then
     if github_review_fetch "$pr_url" "$work" "$head" "${base_canonical#refs/remotes/origin/}"; then
         authority=host; head_is_pr_head=true
-        [ "$approvals" != '[]' ] || problems+=("No eligible APPROVED review on the exact PR head $head")
     else problems+=("$RC_ERROR"); fi
 fi
 # Every **Tier** field in a record on stdin, one per line: T0-T3, or ? when its whole value (up to
@@ -350,6 +349,17 @@ else
         problems+=("No change range from $base_ref to $head")
     fi
 fi
+# Apply the minimum to the effective tier, after trusted floor and path validation.
+if [ "$authority" = host ]; then
+    case "$tier" in T1|T2|T3)
+        jq -e 'any(.[]; .role=="publisher")' <<< "$approvals" >/dev/null ||
+            problems+=("$tier requires an independent review-publishers APPROVED review on the exact PR head $head")
+        if [ "$tier" = T3 ]; then
+            jq -e 'any(.[]; .role=="owner")' <<< "$approvals" >/dev/null ||
+                problems+=("T3 also requires a review-owner APPROVED review on the exact PR head $head")
+        fi ;;
+    esac
+fi
 result=pass; [ "${#problems[@]}" -eq 0 ] || result=fail
 # Advisory: a reviewed PR-scoped record still at this head would merge open (review.md, Closing).
 record_open=false
@@ -368,7 +378,7 @@ if $json; then
     fi
     printf '}\n'
 elif [ "$result" = pass ]; then
-    if $online; then printf 'PASS %s: eligible GitHub approval on %s.\n' "$id" "$head"
+    if $online; then printf 'PASS %s: %s review minimum met on %s.\n' "$id" "$tier" "$head"
     else printf 'PREVIEW %s: local structure checked; use --pr for approval.\n' "$id"; fi
     ! $record_open || printf 'Note: %s is still at this head.\n' "$path"
 else
