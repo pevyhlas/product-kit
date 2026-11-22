@@ -16,6 +16,21 @@ equivalent. The CI step verifies the downloaded package checksum and the missing
 
 ## Coverage
 
+The cleanup and close suites use Python 3.11+ (`python3 -I`, standard library only)
+for generated Git states. Without it they print a `SKIP` and run the existing Bash
+cases. CI runs a fixed corpus and seed. For additional combinations, run e.g.
+`PRDKIT_EXTRA_STATES=20 bash tests/test_cleanup_change.sh`; use `test_close_change.sh`
+for close. Set `PRDKIT_STATE_SEED` to replay the seed in a failure (keep the same
+extra count). The on-demand `CI (macOS)` run adds 12 random cases per suite.
+`python3 -I tests/lib/states.py plan cleanup` prints the cases.
+To inspect a single layout, build it in a **new** directory:
+
+```bash
+python3 -I tests/lib/states.py build ./state-example cleanup ./scripts 701 9 dirty untracked intent force crlf
+```
+
+Neither the generator nor its Bash helper is installed in consumer projects.
+
 `test_review_legacy_scan.sh` constructs real commit graphs (including criss-cross fork points)
 and checks the three blocker sources, raw-blob parsing, record modes and diff-driver immunity.
 `test_review_legacy_gate.sh` combines those blockers with independent native receipt fixtures:

@@ -8,6 +8,9 @@ change by change.
 
 ## [Unreleased]
 
+- Cleanup and close tests now run against seeded combinations of local Git states and
+  check that commits and working files survive. The generator is test-only.
+
 ### Fixed
 
 - Adoption (including pinned-source proof), delivery, doctor, status, and change-close
