@@ -10,6 +10,30 @@
 #     macOS awk aborts on it in a UTF-8 locale (status, doctor and bounds did)
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# Require prose in each named block of the leading comment preamble, not just
+# a heading, or text after the first shell statement.
+it "risky scripts declare non-empty invariants and threat models"
+for script in cleanup-change close-change publish-review check-adoption install-source-lib \
+    check-review check-pr-review build-review-package new-change init; do
+    run awk '
+        NR == 1 { next }
+        /^[[:blank:]]*$/ || /^#[[:blank:]]*$/ { block = ""; next }
+        !/^#/ { exit }
+        /^# Invariants:[[:blank:]]*$/ { block = "invariants"; next }
+        /^# Threat model:[[:blank:]]*$/ { block = "threat model"; next }
+        /^# shellcheck([[:blank:]]|$)/ || /^# [^[:blank:]].*:[[:blank:]]*$/ {
+            block = ""; next
+        }
+        /^#[[:blank:]]*[^[:space:]#]/ && block != "" { described[block] = 1 }
+        END {
+            if (!described["invariants"]) print "missing or empty # Invariants: block"
+            if (!described["threat model"]) print "missing or empty # Threat model: block"
+            if (!described["invariants"] || !described["threat model"]) exit 1
+        }
+    ' "$PK_ROOT/scripts/$script.sh"
+    assert_eq 0 "$STATUS" "scripts/$script.sh has both safety blocks: $OUTPUT"
+done
+
 # ---------------------------------------------------------------------------
 it "json_escape escapes quotes and backslashes"
 # shellcheck source=/dev/null

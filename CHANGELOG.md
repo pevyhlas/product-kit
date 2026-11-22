@@ -8,6 +8,12 @@ change by change.
 
 ## [Unreleased]
 
+### Documentation
+
+- Document safety invariants and threat models in the worktree, close, publication, adoption,
+  review and upgrade scripts. Contributor and review checklists now ask for those contracts
+  to be checked when the scripts change. Script behavior is unchanged.
+
 ## [2.0.2] — 2026-11-21 — safer worktree cleanup and complete review patches
 
 ### Fixed

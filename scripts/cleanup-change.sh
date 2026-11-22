@@ -13,6 +13,19 @@
 # for every worktree whose change is closed on the trusted integration branch.
 #
 # Run it from the MAIN checkout, never from inside the worktree being removed.
+#
+# Invariants:
+# A retirement moves the checkout (if present) and its registration into a reported
+# quarantine slot. It must verify retained HEAD, reflog, index and submodule recovery
+# data before reporting success. Without --force, a live checkout must pass the dirty check.
+# --prune targets only stale registrations; --closed requires the kit's worktree layout
+# and a missing record plus a log entry on a trusted integration ref.
+# Evidence copies refuse a detected differing destination or a linked evidence path.
+#
+# Threat model:
+# Include overlapping cleanups and interruption: retirement locks the registration and
+# preserves recovery data through cutover. The shared evidence copy is not serialized
+# across registrations. No protection against a hostile writer in either checkout.
 
 set -e
 
