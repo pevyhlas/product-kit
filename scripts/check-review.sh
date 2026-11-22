@@ -207,7 +207,13 @@ else
         *) problems+=("The record names no review tier (**Tier**: T0–T3)") ;;
     esac
     # The merge base bounds the effective tier and docs-only path checks.
-    [ -z "$base_ref" ] || start="$(git -C "$root" merge-base "$base_ref" "$head" 2>/dev/null)" || start=""
+    if [ -n "$base_ref" ] && bases="$(git -C "$root" merge-base --all "$base_ref" "$head" 2>/dev/null)"; then
+        if [[ "$bases" == *$'\n'* ]]; then
+            problems+=("$base_ref and $head have multiple merge bases; merge the target into the branch to establish one change start")
+        elif [[ "$bases" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]]; then
+            start="$bases"
+        fi
+    fi
     # A branch may raise its tier, never lower it. The floor is the highest tier the record names
     # on the trusted default branch, on the base, where the change left the base, or at any commit
     # of the branch since; an L0 edit (specs/product.md, specs/product/) is T3 (protocol.md).
@@ -257,11 +263,9 @@ else
     if $base_trusted && [ -n "$start" ] && [ "$start" != "$head" ] && [ -z "$(changed_since "$start")" ]; then
         record_only=true
     fi
-    if [ "$tier" = T0 ] && ! $record_only && [ -n "$policy_at" ]; then
+    if [ "$tier" = T0 ] && ! $record_only && [ -n "$policy_at" ] && [ -n "$start" ]; then
         # The tier is checked, not taken as the record's claim.
-        if [ -z "$start" ]; then
-            problems+=("T0: $head shares no history with $base_ref, so the change cannot be shown to be docs only; fetch the branch history")
-        elif ! t0_bad="$(t0_violations "$start" "$head")"; then
+        if ! t0_bad="$(t0_violations "$start" "$head")"; then
             problems+=("T0: the change's diff from ${start:0:12} cannot be read, so it cannot be shown to be docs only")
         elif [ -n "$t0_bad" ]; then
             n_bad="$(printf '%s\n' "$t0_bad" | wc -l | tr -d ' ')"

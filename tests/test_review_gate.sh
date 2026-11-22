@@ -111,4 +111,18 @@ it 'offline structure is a preview and cannot approve'
 run bash "$CHECK" --json 001-reviewed
 assert_eq 3 "$STATUS" "$OUTPUT"
 assert_contains "$OUTPUT" '"result":"preview"'
+
+it 'the direct gate refuses two best merge bases even with an eligible approval'
+other="$(git commit-tree "$BASE^{tree}" -p "$BASE" -m 'independent target commit')"
+target_tip="$(git commit-tree "$HEAD_SHA^{tree}" -p "$other" -p "$HEAD_SHA" -m 'target merges feature')"
+feature_tip="$(git commit-tree "$HEAD_SHA^{tree}" -p "$HEAD_SHA" -p "$other" -m 'feature merges target')"
+git update-ref refs/remotes/origin/main "$target_tip"
+git checkout -q --detach "$feature_tip"
+assert_eq 2 "$(git merge-base --all origin/main HEAD | wc -l | tr -d ' ')" 'fixture has two best ancestors'
+fx_pr 7 "$feature_tip"; fx_owner_review 7 APPROVED "$feature_tip"
+online; assert_eq 1 "$STATUS" 'approval does not resolve an ambiguous review range'
+assert_contains "$OUTPUT" 'multiple merge bases'
+run bash "$CHECK" --json 001-reviewed
+assert_eq 1 "$STATUS" 'ambiguous structure cannot pass preview either'
+assert_contains "$OUTPUT" 'multiple merge bases'
 finish
