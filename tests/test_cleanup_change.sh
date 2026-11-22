@@ -745,7 +745,10 @@ git -C "$linked" "${GITID[@]}" commit -q --allow-empty -m 'linked checkout work'
 linked_tip="$(git -C "$linked" rev-parse HEAD)"
 run bash "$CLEAN2" --force 102-linked
 assert_eq 1 "$STATUS" "dependent checkout refused"
-assert_contains "$OUTPUT" 'administers linked worktrees'
+# find may encounter the dependent HEAD's commondir before the module's own
+# HEAD; both preflight paths refuse the layout, but only one prints a detail.
+assert_contains "$OUTPUT" 'unsupported submodule layout'
+assert_contains "$(git -C "$PROJ2" worktree list --porcelain)" "worktree $PROJ2/.worktrees/102-linked"
 assert_eq "$linked_tip" "$(git -C "$linked" rev-parse 'HEAD^{commit}')" "linked checkout and commit survive"
 
 it "a local-only gitlink commit survives in the retired module"
