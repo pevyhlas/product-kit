@@ -1,6 +1,6 @@
 name: CI (macOS)
 
-# Portability check: native Bash 3.2 and the BSD userland on a GitHub-hosted macOS runner, for
+# Portability check: native Bash 3.2 and the BSD userland on GitHub-hosted macOS runners, for
 # every pull request, every push to main and on demand. It never gates releases; release.yml
 # keys only on the CI workflow (ci.yml).
 
@@ -14,11 +14,19 @@ permissions:
   contents: read
 
 jobs:
-  portable-helpers-macos:
-    name: portable helpers (macOS)
+  native-shards:
+    name: native shell tests (${{ matrix.shard }}/4)
     runs-on: macos-15
-    # Native upgrade/receipt and review-package coverage exceeded the former 60m cap (#114).
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    outputs:
+      shard-1: ${{ matrix.shard == 1 && steps.suite.outcome == 'success' && 'success' || '' }}
+      shard-2: ${{ matrix.shard == 2 && steps.suite.outcome == 'success' && 'success' || '' }}
+      shard-3: ${{ matrix.shard == 3 && steps.suite.outcome == 'success' && 'success' || '' }}
+      shard-4: ${{ matrix.shard == 4 && steps.suite.outcome == 'success' && 'success' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -26,53 +34,31 @@ jobs:
       - name: Check JSON parser dependency
         run: jq --version
       - name: Check native Bash and BSD helper behavior
+        id: suite
         run: |
-          /bin/bash tests/test_init.sh
-          /bin/bash tests/test_upgrade_1_0.sh
-          /bin/bash tests/test_upgrade_2_0.sh
-          /bin/bash tests/test_optional_subsystems.sh
-          /bin/bash tests/test_upgrade_recovery.sh
-          /bin/bash tests/test_new_change.sh
-          /bin/bash tests/test_record_only_change.sh
-          /bin/bash tests/test_new_change_linked.sh
-          /bin/bash tests/test_cleanup_change.sh
-          /bin/bash tests/test_close_change.sh
-          /bin/bash tests/test_status.sh
-          /bin/bash tests/test_outcome_progress.sh
-          /bin/bash tests/test_doctor.sh
-          /bin/bash tests/test_inbox.sh
-          /bin/bash tests/test_accepted_change_benchmark.sh
-          /bin/bash tests/test_diagnostics_inventory.sh
-          /bin/bash tests/test_adoption_state.sh
-          /bin/bash tests/test_consumer_smoke.sh
-          /bin/bash tests/test_script_safety.sh
-          /bin/bash tests/test_bounds.sh
-          /bin/bash tests/test_lifecycle.sh
-          /bin/bash tests/test_spec_navigation.sh
-          /bin/bash tests/test_agent_tiers.sh
-          /bin/bash tests/test_context_budget.sh
-          /bin/bash tests/test_adoption_gate.sh
-          /bin/bash tests/test_pinned_source.sh
-          /bin/bash tests/test_install_source_inputs.sh
-          /bin/bash tests/test_local_objects.sh
-          /bin/bash tests/test_check_review.sh
-          /bin/bash tests/test_review_registry.sh
-          /bin/bash tests/test_review_base_merge.sh
-          /bin/bash tests/test_review_fingerprint.sh
-          /bin/bash tests/test_review_receipts.sh
-          /bin/bash tests/test_review_gate.sh
-          /bin/bash tests/test_pr_review.sh
-          /bin/bash tests/test_review_legacy_scan.sh
-          /bin/bash tests/test_review_legacy_gate.sh
-          /bin/bash tests/test_review_upgrade.sh
-          /bin/bash tests/test_review_owner.sh
-          /bin/bash tests/test_publish_review.sh
-          /bin/bash tests/test_review_package.sh
-          /bin/bash tests/test_review_package_rounds.sh
-          /bin/bash tests/test_review_package_targeted.sh
-          /bin/bash tests/test_review_package_inputs.sh
-          /bin/bash tests/test_review_package_lock.sh
-          /bin/bash tests/test_review_package_lock_safety.sh
-          /bin/bash tests/test_review_package_completion.sh
-          /bin/bash tests/test_delivery_checkpoint.sh
-          /bin/bash tests/test_release.sh
+          scratch="$(mktemp -d "$RUNNER_TEMP/pk-macos-${{ matrix.shard }}.XXXXXX")"
+          export HOME="$scratch/home" TMPDIR="$scratch/tmp"
+          mkdir "$HOME" "$TMPDIR"
+          /bin/bash tests/run.sh --native --shard "${{ matrix.shard }}/4"
+
+  portable-helpers-macos:
+    name: portable helpers (macOS)
+    needs: [native-shards]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Require all four native shards
+        env:
+          MATRIX_RESULT: ${{ needs.native-shards.result }}
+          SHARD_1: ${{ needs.native-shards.outputs.shard-1 }}
+          SHARD_2: ${{ needs.native-shards.outputs.shard-2 }}
+          SHARD_3: ${{ needs.native-shards.outputs.shard-3 }}
+          SHARD_4: ${{ needs.native-shards.outputs.shard-4 }}
+        run: |
+          for status in "$MATRIX_RESULT" "$SHARD_1" "$SHARD_2" "$SHARD_3" "$SHARD_4"; do
+            if [ "$status" != success ]; then
+              echo "Required native work did not succeed (matrix=$MATRIX_RESULT shards=$SHARD_1,$SHARD_2,$SHARD_3,$SHARD_4)" >&2
+              exit 1
+            fi
+          done

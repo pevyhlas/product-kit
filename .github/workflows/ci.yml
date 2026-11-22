@@ -14,10 +14,35 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: test
+  test-shards:
+    name: shell tests (${{ matrix.shard }}/2)
     runs-on: ubuntu-24.04
-    # Expanded suites can finish tests near 30m; reserve time for legacy awk and lint (#114).
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    # Each matrix leg publishes only its own nonempty output. Shared names would
+    # be last-writer-wins; require every expected leg as well as the matrix result.
+    outputs:
+      shard-1: ${{ matrix.shard == 1 && steps.suite.outcome == 'success' && 'success' || '' }}
+      shard-2: ${{ matrix.shard == 2 && steps.suite.outcome == 'success' && 'success' || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Run shell test shard
+        id: suite
+        run: |
+          scratch="$(mktemp -d "$RUNNER_TEMP/pk-linux-${{ matrix.shard }}.XXXXXX")"
+          export HOME="$scratch/home" TMPDIR="$scratch/tmp"
+          mkdir "$HOME" "$TMPDIR"
+          bash tests/run.sh --shard "${{ matrix.shard }}/2"
+
+  checks:
+    name: lint and compatibility
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -39,8 +64,6 @@ jobs:
           echo "$sum  $dir/sc.tar.xz" | sha256sum -c -
           tar -xJf "$dir/sc.tar.xz" -C "$dir"
           echo "$dir/shellcheck-$v" >> "$GITHUB_PATH"
-      - name: Run shell test suite
-        run: bash tests/run.sh
       - name: Check manifest validation with legacy mawk
         # Debian 12's mawk lacks interval expressions; newer mawk releases support them.
         # Extract the pinned binary locally, without replacing the runner's default awk.
@@ -76,3 +99,24 @@ jobs:
         # `git diff --check` compares worktree to index and is empty on a clean
         # checkout, so it could never fail.
         run: git diff --check 4b825dc642cb6eb9a060e54bf8d69288fbee4904 HEAD
+
+  test:
+    name: test
+    needs: [test-shards, checks]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Require both shards and the checks lane
+        env:
+          MATRIX_RESULT: ${{ needs.test-shards.result }}
+          CHECKS_RESULT: ${{ needs.checks.result }}
+          SHARD_1: ${{ needs.test-shards.outputs.shard-1 }}
+          SHARD_2: ${{ needs.test-shards.outputs.shard-2 }}
+        run: |
+          for status in "$MATRIX_RESULT" "$CHECKS_RESULT" "$SHARD_1" "$SHARD_2"; do
+            if [ "$status" != success ]; then
+              echo "Required CI work did not succeed (matrix=$MATRIX_RESULT checks=$CHECKS_RESULT shards=$SHARD_1,$SHARD_2)" >&2
+              exit 1
+            fi
+          done

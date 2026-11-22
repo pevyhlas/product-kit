@@ -8,6 +8,13 @@ change by change.
 
 ## [Unreleased]
 
+### Changed
+
+- **Faster contributor CI.** Two Ubuntu shards run the complete shell suite alongside a
+  separate checks job, and four macOS shards keep the existing native coverage. The runner
+  balances suites by measured duration and logs per-suite seconds. Required check names and
+  release gating are unchanged; all expected jobs must succeed.
+
 ## [2.0.2] — 2026-11-21 — safer worktree cleanup and complete review patches
 
 ### Fixed
