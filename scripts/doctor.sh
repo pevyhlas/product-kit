@@ -30,36 +30,58 @@ root="$(get_repo_root)"; findings=(); advisories=()
 today="$(spec_today)"; SEP="$SPEC_SEP"
 in_git=false
 git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 && in_git=true
+has_head=false
+if $in_git; then
+    if head_ref="$(git -C "$root" symbolic-ref --quiet HEAD)"; then
+        if git -C "$root" show-ref --verify --quiet "$head_ref"; then has_head=true
+        elif [ "$?" -ne 1 ]; then exit 1; fi
+    elif [ "$?" -eq 1 ]; then
+        git -C "$root" rev-parse --verify HEAD >/dev/null
+        has_head=true
+    else exit 1; fi
+fi
 
 # --- Installation ------------------------------------------------------------------------------
-while IFS= read -r finding; do
-    [ -z "$finding" ] || findings+=("$finding")
-done < <(install_findings "$root")
+if rows="$(verify_lines install_findings "$root")"; then
+    while IFS= read -r finding; do [ -z "$finding" ] || findings+=("$finding"); done <<< "$rows"
+else
+    findings+=("Installation inventory did not complete")
+fi
 installed_version="$(install_manifest_value "$root/.prdkit/.manifest" version 2>/dev/null)" || installed_version=''
 case "$installed_version" in
     2.*|3.*)
-        while IFS= read -r advisory; do
-            [ -z "$advisory" ] || advisories+=("$advisory")
-        done < <(review_legacy_record_findings "$root") ;;
+        if $has_head; then
+            if rows="$(verify_lines review_legacy_record_findings "$root")"; then
+                while IFS= read -r advisory; do
+                    [ -z "$advisory" ] || advisories+=("$advisory")
+                done <<< "$rows"
+            else
+                findings+=("Legacy 1.x scan unavailable: incomplete local evidence")
+            fi
+        fi ;;
 esac
 for file in "$root"/specs/changes/*.md; do
     [ -f "$file" ] || continue
+    rows="$(verify_lines spec_change_progress "$file" false advisories)"
     while IFS= read -r advisory; do
         [ -z "$advisory" ] || advisories+=("${file#"$root"/}: $advisory")
-    done < <(spec_change_progress "$file" false advisories)
+    done <<< "$rows"
 done
 for file in .prdkit/workflows/protocol.md .prdkit/workflows/change.md .prdkit/workflows/review.md .prdkit/memory/constitution.md .prdkit/templates/change-template.md; do
     [ -f "$root/$file" ] || findings+=("Missing installed file: $file")
 done
 
 # --- Layout --------------------------------------------------------------------------------------
-case "$(spec_layout "$root")" in
+layout="$(spec_layout "$root")"
+case "$layout" in
     0.x) advisories+=("0.x layout — run the cutover (.prdkit/workflows/compact.md) before 1.0 workflows apply") ;;
     both) advisories+=("Two canons: 1.0 spec files beside 0.x folders (specs/product-spec, specs/targets or specs/features); finish the cutover: condense them into the spec and specs/archive.md, turn a feature the owner keeps open into a change record, and git rm them (.prdkit/workflows/compact.md)") ;;
 esac
 # No raw archive on main: it surfaces in searches beside the current spec. Git keeps the files.
 if $in_git; then
-    archived="$({ git -C "$root" ls-files -- specs/archive/ 2>/dev/null || true; } | wc -l | tr -d ' ')"
+    rows="$(verify_lines git -C "$root" ls-files -- specs/archive/)"
+    archived=0
+    while IFS= read -r file; do [ -z "$file" ] || archived=$((archived + 1)); done <<< "$rows"
     [ "${archived:-0}" -eq 0 ] || advisories+=("Archive on main: specs/archive/ tracks $archived file(s); condense them into specs/archive.md and remove them from main with git rm; git keeps them (.prdkit/workflows/compact.md)")
 fi
 # specs/archive.md records the base commit and the last 0.x feature; new-change.sh reserves the
@@ -88,17 +110,28 @@ mixed="$(spec_mixed_forms "$root")"
 # A line counts once per 100 characters (spec_reading_lines), so a long row cannot dodge one.
 budget_excess_reading_lines=0
 budget_fix() { # limit remedy path...
-    local limit="$1" fix="$2" path reading lines size problem measured; shift 2
+    local limit="$1" fix="$2" path reading lines size problem measured diagnostics; shift 2
     for path in "$@"; do
         [ -f "$path" ] || continue
+        if ! verify_lf_file "$path" allow-empty; then
+            findings+=("Invalid spec text: ${path#"$root"/} (expected LF-terminated text)")
+        fi
         if ! measured="$(spec_reading_lines "$path")"; then
             findings+=("Budget reader failed: ${path#"$root"/}; reading budget is unverified")
             continue
         fi
         read -r reading lines <<< "$measured"
+        if ! [[ "$reading" =~ ^[0-9]+$ && "$lines" =~ ^[0-9]+$ ]]; then
+            findings+=("Budget reader failed: ${path#"$root"/}; missing line counts")
+            continue
+        fi
+        if ! diagnostics="$(verify_lines spec_navigation "$path" diagnostics)"; then
+            findings+=("Navigation diagnostics failed: ${path#"$root"/}")
+            continue
+        fi
         while IFS= read -r problem; do
             [ -z "$problem" ] || advisories+=("${path#"$root"/}: $problem")
-        done < <(spec_navigation "$path" diagnostics)
+        done <<< "$diagnostics"
         [ "$reading" -gt "$limit" ] || continue
         budget_excess_reading_lines=$((budget_excess_reading_lines + reading - limit))
         size="$lines lines that read"; [ "$lines" != 1 ] || size="1 line that reads"
@@ -145,42 +178,47 @@ else
 fi
 
 # --- IDs ---------------------------------------------------------------------------------------
-items="$(spec_items "$root")"
-while IFS= read -r problem; do [ -z "$problem" ] || findings+=("$problem"); done < <(
-    printf '%s\n' "$items" | awk -F "$SEP" 'NF { if ($1 in at) print "Duplicate ID " $1 ": defined at " at[$1] " and " $7; else at[$1] = $7 }')
+items="$(verify_lines spec_items "$root")"
+rows="$(printf '%s\n' "$items" | awk -F "$SEP" 'NF { if ($1 in at) print "Duplicate ID " $1 ": defined at " at[$1] " and " $7; else at[$1] = $7 }')"
+while IFS= read -r problem; do [ -z "$problem" ] || findings+=("$problem"); done <<< "$rows"
+parts="$(verify_lines spec_part_headings "$root")"
 while IFS="$SEP" read -r file part; do
     [ -n "$file" ] || continue
     if [ -z "$part" ]; then advisories+=("$file: no '# P<n> name' heading, so its behaviors and invariants cannot be checked against their part"); continue; fi
-    while IFS= read -r problem; do [ -z "$problem" ] || findings+=("$problem"); done < <(
-        printf '%s\n' "$items" | awk -F "$SEP" -v file="$file" -v part="$part" '
+    rows="$(printf '%s\n' "$items" | awk -F "$SEP" -v file="$file" -v part="$part" '
             index($7, file ":") == 1 && $1 ~ /^P[0-9]+\./ && substr($1, 1, index($1, ".") - 1) != part {
-                print $1 " is defined in " $7 ", the part file of " part }')
-done < <(spec_part_headings "$root")
-while IFS= read -r where; do [ -z "$where" ] || findings+=("Malformed ID at $where: IDs are J-, R-, Q-, C-, N-, D- or P<n>.B-/P<n>.I- with two or more digits"); done < <(
+                print $1 " is defined in " $7 ", the part file of " part }')"
+    while IFS= read -r problem; do [ -z "$problem" ] || findings+=("$problem"); done <<< "$rows"
+done <<< "$parts"
+listed="$(verify_lines spec_files "$root")"
+rows="$(
     while IFS= read -r file; do
+        [ -n "$file" ] || continue
         awk -v file="$file" "$SPEC_SKIP_AWK"'{ if (spec_skip($0)) next }
             /^[[:space:]]*[-*][[:space:]]+\*\*J-[0-9][[:space:]*]/ { next }
             /^[[:space:]]*[-*][[:space:]]+\*\*(P[0-9]+\.)?[JRQCDNBI]-/ && !/^[[:space:]]*[-*][[:space:]]+\*\*(P[0-9]+\.[BI]|[JRQCDN])-[0-9][0-9]+[[:space:]*]/ { print file ":" NR }
             /^#[[:space:]]+J-/ && !/^#[[:space:]]+J-[0-9][0-9]+[[:space:]]/ { print file ":" NR }
-            /^##?#?[[:space:]]+D-/ && !/^##?#?[[:space:]]+D-[0-9][0-9]+[[:space:]]/ { print file ":" NR }' "$root/$file"
-    done < <(spec_files "$root"))
+            /^##?#?[[:space:]]+D-/ && !/^##?#?[[:space:]]+D-[0-9][0-9]+[[:space:]]/ { print file ":" NR }' "$root/$file" || exit 1
+    done <<< "$listed")"
+while IFS= read -r where; do [ -z "$where" ] || findings+=("Malformed ID at $where: IDs are J-, R-, Q-, C-, N-, D- or P<n>.B-/P<n>.I- with two or more digits"); done <<< "$rows"
 # The 1.0 product template wrote journeys as one-digit `- **J-1 ...**` bullets; the Restructure
 # renumbers them.
 oldj=""
-while IFS= read -r where; do [ -z "$where" ] || oldj="${oldj:+$oldj, }$where"; done < <(
+rows="$(
     while IFS= read -r file; do
+        [ -n "$file" ] || continue
         awk -v file="$file" "$SPEC_SKIP_AWK"'{ if (spec_skip($0)) next }
-            /^[[:space:]]*[-*][[:space:]]+\*\*J-[0-9][[:space:]*]/ { print file ":" NR }' "$root/$file"
-    done < <(spec_files "$root"))
+            /^[[:space:]]*[-*][[:space:]]+\*\*J-[0-9][[:space:]*]/ { print file ":" NR }' "$root/$file" || exit 1
+    done <<< "$listed")"
+while IFS= read -r where; do [ -z "$where" ] || oldj="${oldj:+$oldj, }$where"; done <<< "$rows"
 [ -z "$oldj" ] || advisories+=("One-digit journey IDs at $oldj (the 1.0 form): the Restructure in .prdkit/workflows/compact.md renumbers them to J-01")
 
 cite_files=()
-while IFS= read -r file; do cite_files+=("$file"); done < <(
-    spec_files "$root"
-    spec_test_files "$root")
+test_files="$(verify_lines spec_test_files "$root")"
+while IFS= read -r file; do [ -z "$file" ] || cite_files+=("$file"); done <<< "$listed"$'\n'"$test_files"
 if [ "${#cite_files[@]}" -gt 0 ]; then
-    while IFS= read -r problem; do [ -z "$problem" ] || advisories+=("$problem"); done < <(
-        { printf '%s\n' "$items" | awk -F "$SEP" 'NF { print "D" FS $1 FS $5 }'
+    rows="$(
+        { printf '%s\n' "$items" | awk -F "$SEP" 'NF { print "D" FS $1 FS $5 }' || exit 1
           spec_citations "$root" "${cite_files[@]}" | awk -F "$SEP" '{ print "C" FS $1 FS $2 }'; } |
         awk -F "$SEP" '
             $1 == "D" { defined[$2] = 1; if ($3 == "yes") retired[$2] = 1; next }
@@ -189,7 +227,8 @@ if [ "${#cite_files[@]}" -gt 0 ]; then
             END {
                 for (i = 1; i <= n; i++) print "ID " order[i] " is cited at " undef[order[i]] " but defined nowhere in the spec"
                 for (i = 1; i <= m; i++) print "Retired ID " rorder[i] " is still cited by a test at " ret[rorder[i]] "; edit the test or the line"
-            }')
+            }')"
+    while IFS= read -r problem; do [ -z "$problem" ] || advisories+=("$problem"); done <<< "$rows"
 fi
 
 # --- References: every link resolves; every spec file is reached from a summary ---------------
@@ -214,7 +253,7 @@ reach_awk='
 reach() { # roots message always links file...: always reports even when no root exists
     local roots="$1" msg="$2" always="$3" edges="$4" file; shift 4
     { for file in "$@"; do
-          awk -v f="$file" '/^#/ { r = (tolower($0) ~ /retired:/); exit } END { print "F\037" f "\037" (r ? 1 : 0) }' "$root/$file"
+          awk -v f="$file" '/^#/ && !seen++ { r = (tolower($0) ~ /retired:/) } END { print "F\037" f "\037" (r ? 1 : 0) }' "$root/$file" || return 1
       done
       printf '%s\n' "$edges" | awk 'NF { print "E\037" $0 }'; } |
     awk -F "$SEP" -v roots="$roots" -v msg="$msg" -v always="$always" "$reach_awk"
@@ -228,33 +267,35 @@ missing_links() { # links
     done <<< "$1"
 }
 links="$(spec_links "$root")"
-spec_list=(); while IFS= read -r file; do spec_list+=("$file"); done < <(spec_files "$root")
+spec_list=(); while IFS= read -r file; do [ -z "$file" ] || spec_list+=("$file"); done <<< "$listed"
 observed=(); for file in "$root"/specs/observed.md "$root"/specs/observed/*.md; do [ -f "$file" ] && observed+=("${file#"$root"/}"); done
 observed_links=""; [ "${#observed[@]}" -eq 0 ] || observed_links="$(spec_links "$root" "${observed[@]}")"
 archive_links=""; [ ! -f "$root/specs/archive.md" ] || archive_links="$(spec_links "$root" specs/archive.md)"
-while IFS= read -r problem; do [ -z "$problem" ] || advisories+=("$problem"); done < <(
-    missing_links "$links"; missing_links "$observed_links"; missing_links "$archive_links"
+rows="$(
+    missing_links "$links" && missing_links "$observed_links" && missing_links "$archive_links" || exit 1
     if [ -d "$root/specs/product" ] && [ "${#spec_list[@]}" -gt 0 ]; then
         reach "specs/product.md specs/architecture.md specs/SPEC.md" \
             "is reached from no summary (product.md, architecture.md or a file they link); give it a line and a link in its parent (spec.md, Layout)" \
-            0 "$links" "${spec_list[@]}"
+            0 "$links" "${spec_list[@]}" || exit 1
     fi
     if [ -d "$root/specs/observed" ] && [ "${#observed[@]}" -gt 0 ]; then
         reach "specs/observed.md" "is not linked from specs/observed.md; give it a line and a link there" \
             1 "$observed_links" "${observed[@]}"
-    fi)
+    fi)"
+while IFS= read -r problem; do [ -z "$problem" ] || advisories+=("$problem"); done <<< "$rows"
 
 # --- Lifecycle: the current stage, from: markers, the product page's stage columns ----------
-stages="$(spec_stages "$root")"
+stages="$(verify_lines spec_stages "$root")"
 spec_lifecycle_load "$root"
 now="$SPEC_STAGE_NOW"
 while IFS= read -r problem; do [ -z "$problem" ] || findings+=("$problem"); done <<< "$SPEC_STAGE_ERRORS"
 # Without an explicit vocabulary, retain the legacy source-note advisory. An explicit order
 # makes markers strict. Derived classification tools reject unknown markers in either form.
+rows="$(printf '%s\n' "$stages" | spec_stage_problems)"
 while IFS= read -r problem; do
     [ -n "$problem" ] || continue
     if [ "$SPEC_STAGE_CUSTOM" = 1 ]; then findings+=("$problem"); else advisories+=("$problem"); fi
-done < <(printf '%s\n' "$stages" | spec_stage_problems)
+done <<< "$rows"
 if [ -n "$SPEC_STAGE_ERRORS" ]; then now=""; fi
 if [ -n "$stages" ] && [ -z "$now" ] && [ -z "$SPEC_STAGE_ERRORS" ]; then
     advisories+=("Lifecycle: items carry from: markers, but the canonical lifecycle names no current stage, so every item counts as needed now")
@@ -269,8 +310,8 @@ if [ -n "$now" ]; then
     fi
     # product.md may show journeys in stage columns; each must match the journey's own marker.
     if [ -f "$root/specs/product.md" ]; then
-        while IFS= read -r problem; do [ -z "$problem" ] || advisories+=("$problem"); done < <(
-            { printf '%s\n' "$stages" | awk -F "$SEP" 'NF && $1 ~ /^J-/ { print "S" FS $1 FS $2 }'
+        rows="$(
+            { printf '%s\n' "$stages" | awk -F "$SEP" 'NF && $1 ~ /^J-/ { print "S" FS $1 FS $2 }' || exit 1
               awk "$SPEC_SKIP_AWK"'{ if (spec_skip($0)) next } { print "L" "\037" FNR "\037" $0 }' "$root/specs/product.md"; } |
             awk -F "$SEP" -v now="$now" -v stage_order="$SPEC_STAGE_ORDER" -v stage_custom="$SPEC_STAGE_CUSTOM" "$SPEC_STAGE_AWK"'
                 $1 == "S" { from[$2] = $3; next }
@@ -295,7 +336,8 @@ if [ -n "$now" ]; then
                                 print "product.md:" $2 " shows " j " in the" colname[i] "column, but its file says from: " from[j]
                         }
                     }
-                }')
+                }')"
+        while IFS= read -r problem; do [ -z "$problem" ] || advisories+=("$problem"); done <<< "$rows"
     fi
 fi
 
@@ -308,7 +350,7 @@ for path in "$root"/specs/product/lifecycle.md "$root"/specs/product/lifecycle/*
     if [ -f "$path" ]; then stage_files+=("${path#"$root"/}"); fi
 done
 if [ "${#env_files[@]}" -gt 0 ] && [ "${#stage_files[@]}" -gt 0 ]; then
-    while IFS= read -r problem; do [ -z "$problem" ] || advisories+=("$problem"); done < <(
+    rows="$(
         cd "$root" && awk "$SPEC_SKIP_AWK"'
             # A name as written: no emphasis, code, link target, or note after it (`TEST (early)`).
             function plain(s) {
@@ -365,7 +407,8 @@ if [ "${#env_files[@]}" -gt 0 ] && [ "${#stage_files[@]}" -gt 0 ]; then
                 if (list == "" && headed) print "Environments: the | Environment | table in specs/architecture/environments.md holds only placeholders; name each environment, so stages can name where they run"
                 else if (list == "") print "Environments: specs/architecture/environments.md has no table headed | Environment |, so no stage can name where it runs"
             }
-        ' "${env_files[@]}" "${stage_files[@]}")
+        ' "${env_files[@]}" "${stage_files[@]}")"
+    while IFS= read -r problem; do [ -z "$problem" ] || advisories+=("$problem"); done <<< "$rows"
 fi
 
 # --- Trace: spec to code, plans, retired IDs, allocation, change records -----------------------
@@ -385,8 +428,9 @@ pick() { printf '%s\n' "$1" | awk -F "$SEP" -v k="$2" '$1 == k { print $2 }'; } 
 # Placeholders, globs, commands, URLs, absolute paths and org/repo:path are not judged; a
 # #anchor or :line suffix is dropped.
 code_paths_missing() {
-    local kind path where prev="" bases="" base found
+    local kind path where prev="" bases="" base found code_rows
     local line_re='^(.*):[0-9]+(-[0-9]+)?$' ext_re='\.[A-Za-z][A-Za-z0-9]*$' odd_re="[][:space:]<>*?{}\$|=:'\"[]"
+    code_rows="$(verify_lines spec_code_paths "$root")" || return 1
     while IFS="$SEP" read -r kind path where; do
         [ "$where" = "$prev" ] || { prev="$where"; bases=""; }
         path="${path#./}"; path="${path%%#*}"
@@ -411,15 +455,21 @@ code_paths_missing() {
         elif [ -n "$bases" ] || [ "${path#*/}" != "$path" ]; then
             printf '%s at %s\n' "$path" "$where"
         fi
-    done < <(spec_code_paths "$root")
+    done <<< "$code_rows"
 }
-trace code-path "Code path not in the repository" "name repo-relative paths that exist (spec.md, Writing)" "$(code_paths_missing)"
+rows="$(code_paths_missing)"
+trace code-path "Code path not in the repository" "name repo-relative paths that exist (spec.md, Writing)" "$rows"
 
 # planned: <change> names an open change record (here, or in a worktree unless the log closed
 # it), else a closed or unknown one. A live item's marker naming no change number (M1, 12) is
 # unknown too; org/repo#n names another repository's change.
-closed_ids=" $(spec_log_entries "$root" | sed -n 's/^- [0-9-]* \([^ :]*\):.*/\1/p' | tr '\n' ' ')"
+closed_ids=' '; open_changes=''
+if $compaction_verified; then
+    closed_ids=" $(spec_log_entries "$root" | sed -n 's/^- [0-9-]* \([^ :]*\):.*/\1/p' | tr '\n' ' ')"
+    open_changes="$(verify_lines spec_open_changes "$root")"
+fi
 open_ids=" "
+checkouts="$(verify_lines spec_checkouts "$root")"
 while IFS="$SEP" read -r path _ loc; do
     for file in "$path"/specs/changes/*.md; do
         [ -f "$file" ] || continue
@@ -427,14 +477,16 @@ while IFS="$SEP" read -r path _ loc; do
         [ "$loc" = . ] || case "$closed_ids" in *" $id "*) continue ;; esac
         open_ids="$open_ids$id "
     done
-done < <(spec_checkouts "$root")
+done <<< "$checkouts"
 while IFS="$SEP" read -r id _ _ _ _ _ _ _ _ _ _ _ ws ns loc; do
+    [ -n "$id" ] || continue
     file="specs/changes/$id.md"
     [ "$loc" = . ] || file="$loc/$file"
     [ "$ws" = present ] || advisories+=("$file (## State): Waiting on is $ws")
     [ "$ns" = present ] || advisories+=("$file (## State): Next is $ns")
-done < <(spec_open_changes "$root")
+done <<< "$open_changes"
 planned_closed=""; planned_unknown=""
+rows="$(verify_lines spec_planned_at "$root")"
 while IFS="$SEP" read -r id where; do
     [ -n "$id" ] || continue
     case "$open_ids" in *" ${id%%-*}-"*) continue ;; esac
@@ -442,7 +494,7 @@ while IFS="$SEP" read -r id where; do
         *" ${id%%-*}-"*) planned_closed+="${id%-} at $where"$'\n' ;;
         *) planned_unknown+="${id%-} at $where"$'\n' ;;
     esac
-done < <(spec_planned_at "$root")
+done <<< "$rows"
 xrepo_re='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(#[0-9]+)?$'
 while IFS="$SEP" read -r _ _ _ target retired _ where; do
     [ "$retired" = no ] || continue
@@ -477,7 +529,7 @@ cited_in=(); retired_in=(); for file in ${spec_list[@]+"${spec_list[@]}"}; do
 done
 retired_cited=""
 if [ "${#retired_in[@]}" -gt 0 ]; then
-    retired_cited="$({ printf '%s\n' "$items" | awk -F "$SEP" 'NF && $5 == "yes" { print "R" FS $1 }'
+    retired_cited="$({ printf '%s\n' "$items" | awk -F "$SEP" 'NF && $5 == "yes" { print "R" FS $1 }' || exit 1
         (cd "$root" && awk "$SPEC_SKIP_AWK $SPEC_ID_AWK $ITEM_AWK"'
             function flush(   i) {
                 if (gone || tolower(text) ~ /retired|supersed|replac/) return
@@ -496,9 +548,9 @@ trace retired-cited "Retired ID cited in the spec" "cite what replaced it, or dr
 alloc=(); for file in ${cited_in[@]+"${cited_in[@]}"}; do
     case "$file" in specs/SPEC.md|specs/architecture*|specs/parts/*|specs/decisions/*) alloc+=("$file") ;; esac
 done
-allocation="$({ printf '%s\n' "$items" | awk 'NF { print "T\037" $0 }'
-    printf '%s\n' "$stages" | awk 'NF { print "S\037" $0 }'
-    spec_part_headings "$root" | awk 'NF { print "H\037" $0 }'
+allocation="$({ printf '%s\n' "$items" | awk 'NF { print "T\037" $0 }' || exit 1
+    printf '%s\n' "$stages" | awk 'NF { print "S\037" $0 }' || exit 1
+    printf '%s\n' "$parts" | awk 'NF { print "H\037" $0 }' || exit 1
     [ "${#alloc[@]}" -eq 0 ] || (cd "$root" && awk "$SPEC_SKIP_AWK $ITEM_AWK"'
         function cites(s, where,   w, pre, tok, post, end, lo, hi, k, pad) {
             w = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"
@@ -550,8 +602,8 @@ trace part-need "Part citing no journey, R or Q" "say in Why it exists which J, 
 change_files=(); for file in "$root"/specs/changes/*.md; do [ -f "$file" ] && change_files+=("${file#"$root"/}"); done
 change_ids=""
 if [ "${#change_files[@]}" -gt 0 ]; then
-    change_ids="$({ printf '%s\n' "$items" | awk -F "$SEP" 'NF { print "D" FS $1 FS $7 }'
-        spec_items "$root" "${change_files[@]}" | awk -F "$SEP" 'NF { print "N" FS $1 FS $7 }'
+    change_ids="$({ printf '%s\n' "$items" | awk -F "$SEP" 'NF { print "D" FS $1 FS $7 }' || exit 1
+        spec_items "$root" "${change_files[@]}" | awk -F "$SEP" 'NF { print "N" FS $1 FS $7 }' || exit 1
         (cd "$root" && awk "$SPEC_SKIP_AWK $SPEC_ID_AWK"'
             FNR == 1 { fence = 0; comment = 0; edits = 0 }
             { if (spec_skip($0)) next }
@@ -570,6 +622,7 @@ trace change-undefined "Change record cites an ID defined nowhere" "list it unde
     "$(pick "$change_ids" U)"
 
 # --- Records and inbox -----------------------------------------------------------------------
+rows="$(verify_lines spec_records "$root")"
 while IFS="$SEP" read -r line type name who _ _ _ date until _ reason; do
     [ -n "$line" ] || continue
     case "$type" in
@@ -583,11 +636,15 @@ while IFS="$SEP" read -r line type name who _ _ _ date until _ reason; do
                 fi
             fi ;;
     esac
-done < <(spec_records "$root")
+done <<< "$rows"
 open_count=0; oldest=""; undisposed=0; unparsed=""; oneline=0; resolved=0; processing=0
+rows="$(verify_lines spec_inbox "$root")"
 while IFS="$SEP" read -r line date who state _ _ _ _ _ _ problems; do
     [ -n "$line" ] || continue
-    [ "$state" = unparsed ] || [ "$(sed -n "${line}p" "$root/specs/inbox.md" | cut -c1-4)" = "### " ] || oneline=$((oneline + 1))
+    if [ "$state" != unparsed ]; then
+        heading="$(sed -n "${line}p" "$root/specs/inbox.md" | cut -c1-4)"
+        [ "$heading" = "### " ] || oneline=$((oneline + 1))
+    fi
     case "$state" in
         open) open_count=$((open_count + 1)); { [ -n "$oldest" ] && [[ ! "$date" < "$oldest" ]]; } || oldest="$date" ;;
         processing) processing=$((processing + 1)) ;;
@@ -601,7 +658,7 @@ while IFS="$SEP" read -r line date who state _ _ _ _ _ _ problems; do
             *) advisories+=("Owner inbox specs/inbox.md:$line: $problems; reconcile with /prdkit-inbox") ;;
         esac
     fi
-done < <(spec_inbox "$root")
+done <<< "$rows"
 [ "$open_count" -eq 0 ] || advisories+=("Owner inbox: $open_count open item(s), oldest from $oldest ($(spec_days_between "$oldest" "$today") days)")
 [ "$processing" -eq 0 ] || advisories+=("Owner inbox: $processing item(s) awaiting agent processing, not another owner answer; incorporate and verify spec/policy, provenance and obligations with /prdkit-inbox")
 [ "$resolved" -eq 0 ] || advisories+=("Owner inbox: $resolved resolved-state item(s) retained; verify canonical decisions, provenance and remaining obligations, then remove them (spec.md, Resolve owner answers)")
@@ -614,17 +671,17 @@ done < <(spec_inbox "$root")
 # default is not, nor is a `>` quote: owner words stay verbatim. 0.x folders and a leftover
 # specs/archive/, each its own advisory until removed, keep their history as it was.
 path_files=()
-while IFS= read -r file; do path_files+=("$file"); done < <(
-    if git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        git -C "$root" ls-files -- '*.md' ':(exclude)specs/archive/**' ':(exclude)specs/features/**' \
-            ':(exclude).prdkit/templates/**' ':(exclude).prdkit/workflows/**' ':(exclude).product-kit/**'
-    else
-        spec_files "$root"
-        for file in specs/inbox.md specs/records.md specs/observed.md specs/log.md \
-                    .prdkit/memory/constitution.md AGENTS.md CLAUDE.md; do
-            [ -f "$root/$file" ] && printf '%s\n' "$file"
-        done
-    fi)
+if $in_git; then
+    rows="$(verify_lines git -C "$root" ls-files -- '*.md' ':(exclude)specs/archive/**' ':(exclude)specs/features/**' \
+        ':(exclude).prdkit/templates/**' ':(exclude).prdkit/workflows/**' ':(exclude).product-kit/**')"
+else
+    rows="$listed"
+    for file in specs/inbox.md specs/records.md specs/observed.md specs/log.md \
+                .prdkit/memory/constitution.md AGENTS.md CLAUDE.md; do
+        [ ! -f "$root/$file" ] || rows="$rows"$'\n'"$file"
+    done
+fi
+while IFS= read -r file; do [ -z "$file" ] || path_files+=("$file"); done <<< "$rows"
 if [ "${#path_files[@]}" -gt 0 ]; then
     present=()
     for file in "${path_files[@]}"; do
@@ -647,33 +704,36 @@ for entry_file in "$root"/specs/log/* "$root"/specs/log/.[!.]* "$root"/specs/log
     [ -e "$entry_file" ] || [ -L "$entry_file" ] || continue
     entry_id="${entry_file##*/}"; entry_id="${entry_id%.md}"
     if [ "${entry_file##*/}" = "$entry_id.md" ] && is_change_id "$entry_id" && [ -f "$entry_file" ] && [ ! -L "$entry_file" ] &&
+        verify_lf_file "$entry_file" &&
         [ "$(awk 'END { print NR }' "$entry_file")" = 1 ] &&
         grep -q "^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] $entry_id: ." "$entry_file"; then continue; fi
     findings+=("Malformed log entry specs/log/${entry_file##*/}: a plain file <id>.md holding one line, '- <date> <id>: <what changed>', for the change its name gives (close-change.sh writes it)")
 done
-if git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    if $compaction_verified; then
+if $in_git; then
+    if $compaction_verified && $has_head; then
         unlogged=""; through="$(spec_archive_log_through "$root")"; entries="$(spec_log_entries "$root")"
+        history="$(verify_lines git -C "$root" log -M --diff-filter=D --name-only --format= -- 'specs/changes/*.md')"
+        rows="$(printf '%s\n' "$history" | sed -n 's|^specs/changes/\(.*\)\.md$|\1|p' | sort -u)"
         while IFS= read -r id; do
             [ -n "$id" ] && [ ! -f "$root/specs/changes/$id.md" ] || continue
             # Entries condensed into specs/archive.md (compact.md) left the log on purpose.
             case "${id%%-*}" in ''|*[!0-9]*) ;; *) [ "$((10#${id%%-*}))" -gt "${through:-0}" ] || continue ;; esac
             grep -q "^- [0-9-]* $id:" <<< "$entries" || unlogged="${unlogged:+$unlogged, }$id"
-        done < <(git -C "$root" log -M --diff-filter=D --name-only --format= -- 'specs/changes/*.md' 2>/dev/null |
-            sed -n 's|^specs/changes/\(.*\)\.md$|\1|p' | sort -u)
+        done <<< "$rows"
         [ -z "$unlogged" ] || findings+=("Closed without a log entry: $unlogged; the change that deletes its record adds specs/log/<id>.md, '- <date> <id>: <what changed>' (close-change.sh)")
     fi
     # A reviewed record still on the default branch and in this checkout: its change merged
     # without closing. A branch that closes it (record deleted, log line added) is not flagged.
     base="$(spec_default_branch "$root")"
-    if [ -n "$base" ] && spec_objects_local "$root"; then
-        named=" $(spec_open_changes "$root" | awk -F "$SEP" '{ v = $7; gsub(/`/, "", v); if (v != "") printf "%s ", v }')"
+    if $compaction_verified && [ -n "$base" ] && spec_objects_local "$root"; then
+        named=" $(printf '%s\n' "$open_changes" | awk -F "$SEP" '{ v = $7; gsub(/`/, "", v); if (v != "") printf "%s ", v }')"
+        rows="$(verify_lines spec_unclosed_changes "$root" "$base")"
         unclosed=""; n=0
         while IFS= read -r cid; do
             [ -f "$root/specs/changes/$cid.md" ] || continue
             case "$named" in *" $cid "*) continue ;; esac
             n=$((n + 1)); [ "$n" -gt 8 ] || unclosed="${unclosed:+$unclosed, }$cid"
-        done < <(spec_unclosed_changes "$root" "$base")
+        done <<< "$rows"
         [ "$n" -le 8 ] || unclosed="$unclosed and $((n - 8)) more"
         [ "$n" -eq 0 ] || advisories+=("Merged without closing: $unclosed records are still on $base, with no child or outcome checkpoint keeping them open; close each in the next relevant PR, or give one that spans PRs an outcome checkpoint (.prdkit/workflows/review.md, Closing)")
     fi
@@ -682,7 +742,14 @@ fi
 # --- Raw evidence under specs/ (it belongs in CI, the PR or .prdkit/cache/evidence/) -------------
 if $in_git; then
     raw_count=0; raw_bytes=0; raw_first=""
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' EXIT
+    git -C "$root" ls-files -z -- specs > "$work/spec-paths"
+    expected="$(verify_nul_count "$work/spec-paths")"
+    checked=0
     while IFS= read -r -d '' path; do
+        checked=$((checked + 1))
+        [ -n "$path" ] || { findings+=("Empty record in tracked spec inventory"); continue; }
         case "$path" in
             *.md) continue ;;
             */reviews/*|*/results/*|*/evidence/*|*.patch|*.trx|*.log) ;;
@@ -690,14 +757,17 @@ if $in_git; then
         esac
         raw_count=$((raw_count + 1)); [ -n "$raw_first" ] || raw_first="$path"
         if [ -f "$root/$path" ] && [ ! -L "$root/$path" ]; then
-            raw_bytes=$((raw_bytes + $(wc -c < "$root/$path" | tr -d ' ')))
+            size="$(wc -c < "$root/$path" | tr -d '[:space:]')"
+            raw_bytes=$((raw_bytes + size))
         fi
-    done < <(git -C "$root" ls-files -z -- specs 2>/dev/null || true)
+    done < "$work/spec-paths"
+    [ "$checked" -eq "$expected" ] || findings+=("Incomplete tracked spec inventory: expected $expected, checked $checked")
     [ "$raw_count" -eq 0 ] || advisories+=("Raw evidence tracked under specs/: $raw_count file(s), $((raw_bytes / 1024)) KB, e.g. $raw_first. Keep packages and outputs in .prdkit/cache/evidence/ or CI and link them; untrack with git rm --cached")
 fi
 
 # --- Agent context and agent definitions ---------------------------------------------------------
-while IFS= read -r advisory; do [ -z "$advisory" ] || advisories+=("$advisory"); done < <(context_budget_advisories "$root")
+rows="$(verify_lines context_budget_advisories "$root")"
+while IFS= read -r advisory; do [ -z "$advisory" ] || advisories+=("$advisory"); done <<< "$rows"
 # Agent context loads on every turn: a path into 0.x folders or an archive the cutover removed
 # sends agents to files that are gone; history questions go to specs/archive.md. Only a plain
 # repo-relative path counts, `./` and an `@` import too: not one after ":", "/" or a word
@@ -705,8 +775,10 @@ while IFS= read -r advisory; do [ -z "$advisory" ] || advisories+=("$advisory");
 # a placeholder or glob (<, *, {), not a bare folder (a rule such as "never recreate
 # specs/features/"). A function: bash 3.2 misparses case patterns inside a process substitution.
 context_0x_paths() { # file
-    local token path
-    { grep -oE '(\./|[^[:space:]])?specs/(archive|product-spec|targets|features)/[^[:space:]]*' "$1" 2>/dev/null || true; } |
+    local token path tokens
+    tokens="$(grep -oE '(\./|[^[:space:]])?specs/(archive|product-spec|targets|features)/[^[:space:]]*' "$1")" ||
+        { [ "$?" -eq 1 ] || return 1; }
+    printf '%s\n' "$tokens" |
         while IFS= read -r token; do
             case "$token" in
                 specs/*) path="$token" ;;
@@ -727,10 +799,15 @@ context_0x_paths() { # file
 stale_paths=""
 for name in $CONTEXT_AGENT_FILES; do
     [ -f "$root/$name" ] || continue
-    if $in_git && ! git -C "$root" ls-files --error-unmatch -- "$name" >/dev/null 2>&1; then continue; fi
+    if $in_git; then
+        tracked="$(verify_lines git -C "$root" ls-files -- "$name")"
+        [ -n "$tracked" ] || continue
+    fi
+    rows="$(verify_lines context_0x_paths "$root/$name")"
     while IFS= read -r path; do
+        [ -n "$path" ] || continue
         [ -e "$root/$path" ] || stale_paths="${stale_paths:+$stale_paths, }$name: $path"
-    done < <(context_0x_paths "$root/$name")
+    done <<< "$rows"
 done
 [ -z "$stale_paths" ] || advisories+=("Agent context names removed 0.x paths ($stale_paths); point it at the current spec, and history questions at specs/archive.md; qualify paths in other repositories as owner/repo:path (.prdkit/workflows/compact.md)")
 roster="$root/.prdkit/memory/agents.md"
@@ -750,17 +827,22 @@ done
 if $tiers_used && [ ! -f "$root/.prdkit/scripts/bash/render-agents.sh" ]; then
     findings+=("Agent tiers are in use (.prdkit/agents/ or .prdkit/agent-library/) but render-agents.sh is not installed: run init.sh --upgrade --with agent-tiers")
 fi
-while IFS= read -r finding; do [ -z "$finding" ] || findings+=("$finding"); done < <(agent_tier_findings "$root")
+if rows="$(verify_lines agent_tier_findings "$root")"; then
+    while IFS= read -r finding; do [ -z "$finding" ] || findings+=("$finding"); done <<< "$rows"
+else
+    findings+=("Agent tier inventory did not complete")
+fi
 # A worktree directory removed without `git worktree remove` leaves a prunable registration
 # that a resuming session cannot re-enter. Detect only; pruning is cleanup-change.sh's job.
 if $in_git; then
     wt_path=""
+    rows="$(spec_worktrees "$root")"
     while IFS= read -r line; do
         case "$line" in
             "worktree "*) wt_path="${line#worktree }" ;;
             "prunable"*) [ -z "$wt_path" ] || advisories+=("Stale worktree registration: $wt_path (directory gone; clear it with .prdkit/scripts/bash/cleanup-change.sh --prune)") ;;
         esac
-    done < <(git -C "$root" worktree list --porcelain 2>/dev/null || true)
+    done <<< "$rows"
 fi
 
 if $strict; then findings+=(${advisories[@]+"${advisories[@]}"}); advisories=(); fi

@@ -46,6 +46,8 @@ checkout at all (a `mode: symlink` install still needs the source present for it
 to resolve). When the kit source is readable, its VERSION and shipped command set are
 cross-checked as well. `--json` includes `source_verification:"not-requested"` alongside
 `result`, `checks` and `findings`; a pass in this lane must not be treated as source proof.
+Both adoption lanes expect a non-empty LF-terminated manifest and, when present, adoption
+configuration. A failed or incomplete inventory is not a clean result.
 
 ### Strict pinned-source installation proof
 

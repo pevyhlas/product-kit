@@ -51,6 +51,56 @@ review_text_stream() (
     cat > "$file" && review_file_without_nul "$file" && cat "$file"
 )
 
+# Line-oriented verifier input must be ordinary LF text. Only callers with an
+# explicitly optional/empty inventory may pass allow-empty.
+verify_lf_file() (
+    set -o pipefail
+    local bytes kept last
+    bytes="$(wc -c < "$1" | tr -d '[:space:]')" || return 1
+    [[ "$bytes" =~ ^[0-9]+$ ]] || return 1
+    if [ "$bytes" -eq 0 ]; then [ "${2:-}" = allow-empty ]; return; fi
+    kept="$(LC_ALL=C tr -d '\000\r' < "$1" | wc -c | tr -d '[:space:]')" || return 1
+    [ "$bytes" = "$kept" ] || return 1
+    last="$(tail -c 1 "$1" && printf x)" || return 1
+    [ "$last" = $'\nx' ]
+)
+
+# Materialize a line producer before consuming its output. Preserve the final
+# delimiter until it is checked; command substitution otherwise hides a short
+# final record. Empty successful streams are allowed by this transport helper.
+verify_lines() (
+    set -o pipefail
+    local rows
+    rows="$("$@" | {
+        if IFS= read -r -d '' rows; then
+            printf 'Invalid NUL in output from %s\n' "$1" >&2
+            exit 1
+        fi
+        printf '%sx' "$rows"
+    })" || {
+        printf 'Incomplete output from %s: producer or reader failed\n' "$1" >&2
+        return 1
+    }
+    rows="${rows%x}"
+    case "$rows" in
+        ''|*$'\n') ;;
+        *) printf 'Incomplete output from %s: missing final LF\n' "$1" >&2; return 1 ;;
+    esac
+    case "$rows" in *$'\r'*) printf 'Invalid CR in output from %s\n' "$1" >&2; return 1 ;; esac
+    printf '%s' "$rows"
+)
+
+# Count NUL records in a completed spool without putting binary data into a
+# shell variable. The consumer compares this count with successful reads.
+verify_nul_count() (
+    set -o pipefail
+    local last
+    [ -s "$1" ] || { [ -r "$1" ] && printf '0\n'; return; }
+    last="$(tail -c 1 "$1" | od -An -tu1 | tr -d '[:space:]')" || return 1
+    [ "$last" = 0 ] || return 1
+    LC_ALL=C tr -cd '\000' < "$1" | wc -c | tr -d '[:space:]'
+)
+
 # Escape a UTF-8 value for embedding inside a double-quoted JSON string. Bash
 # strings cannot contain NUL; every other U+0001–U+001F control must be escaped.
 json_escape() {

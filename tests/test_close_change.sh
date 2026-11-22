@@ -226,8 +226,8 @@ assert_eq '- 2026-11-01 000-a: earlier — #1' "$(sed -n 3p specs/log.md)" "spec
 
 it "an entry that cannot be written stops the close before anything changes"
 git checkout -q "$DEFAULT"
-printf '# Closed changes\r\n\r\n- 2026-11-01 000-d: same day\r\n- 2026-11-01 000-c: same day\r\n' > specs/log.md
-git add specs/log.md; git commit -qm 'crlf log' >/dev/null
+printf '# Closed changes\n\n- 2026-11-01 000-d: same day\n- 2026-11-01 000-c: same day\n' > specs/log.md
+git add specs/log.md; git commit -qm 'shared log' >/dev/null
 git update-ref "refs/remotes/origin/$DEFAULT" HEAD
 branch_with_code 013-guard
 pass_line code "$(git merge-base HEAD "$DEFAULT")" "$(git rev-parse HEAD)" >> specs/changes/013-guard.md
@@ -313,8 +313,7 @@ assert_eq "$GUARDED" "$(git rev-parse HEAD~1)" 'retry creates one close commit'
 assert_eq '- 2026-11-01 013-guard: guarded — R-01 — #6' "$(git show HEAD:specs/log/013-guard.md)" 'retry commits the expected entry'
 assert_eq "$other_blob" "$(git hash-object specs/log/099-other.md)" 'retry preserves unrelated entry'
 rm specs/log/099-other.md
-assert_eq '' "$(git diff HEAD~1 HEAD -- specs/log.md)" "the CRLF log is untouched"
-assert_eq 0 "$(grep -cv "$(printf '\r')\$" specs/log.md)" "every line still ends in CRLF"
+assert_eq '' "$(git diff HEAD~1 HEAD -- specs/log.md)" "the shared log is untouched"
 git checkout -q -b 013-again HEAD~1
 mkdir -p specs/log; printf -- '- 2026-11-01 013-guard: elsewhere\n' > specs/log/013-guard.md
 run bash "$B/close-change.sh" 013-guard "again — R-01 — #6"
@@ -322,7 +321,7 @@ assert_eq 1 "$STATUS" "an entry file already there is refused"
 assert_contains "$OUTPUT" "the log already has an entry for 013-guard" "names the change"
 rm -rf specs/log; git checkout -q 013-guard; git branch -q -D 013-again
 git checkout -q -b 013-logged HEAD~1
-printf -- '- 2026-11-01 013-guard: by hand\r\n' >> specs/log.md; git commit -qam 'hand-written line' >/dev/null
+printf -- '- 2026-11-01 013-guard: by hand\n' >> specs/log.md; git commit -qam 'hand-written line' >/dev/null
 run bash "$B/close-change.sh" 013-guard "again — R-01 — #6"
 assert_eq 1 "$STATUS" "a line already in specs/log.md is refused"
 assert_contains "$OUTPUT" "the log already has an entry for 013-guard" "names the change"
@@ -426,7 +425,7 @@ assert_contains "$OUTPUT" "is already on origin/$DEFAULT" "the default-branch re
 
 it "closing the left record removes only its advisory, not other open leaves"
 git rm -q specs/changes/004-left.md
-printf -- '- 2026-11-09 004-left: left open — R-01 — #5; closed in #8\r\n' >> specs/log.md
+printf -- '- 2026-11-09 004-left: left open — R-01 — #5; closed in #8\n' >> specs/log.md
 git add specs/log.md; git commit -qm "close 004-left in the next PR" >/dev/null
 run bash "$B/doctor.sh"
 assert_not_contains "$OUTPUT" "004-left" "doctor reads the checkout, not only the default branch"

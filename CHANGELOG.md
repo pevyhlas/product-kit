@@ -8,6 +8,13 @@ change by change.
 
 ## [Unreleased]
 
+### Fixed
+
+- Adoption (including pinned-source proof), delivery, doctor, status, and change-close
+  preflight fail rather than treating an incomplete inventory as clean. Parsed spec input
+  and line-oriented verifier evidence require LF line endings and a final newline;
+  `read-spec.sh --raw` still returns the original bytes.
+
 ## [2.0.2] — 2026-11-21 — safer worktree cleanup and complete review patches
 
 ### Fixed

@@ -5,6 +5,9 @@
 # fields — and never writes. Bash 3.2 and POSIX awk only.
 # shellcheck disable=SC2034 # used by the scripts that source this library
 SPEC_SEP="$(printf '\037')"
+if ! declare -F verify_lf_file >/dev/null; then
+    source "$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+fi
 source "$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/spec-navigation-lib.sh"
 
 # Text carried in row fields must never introduce a field or record boundary.
@@ -214,13 +217,20 @@ spec_archive_log_through() { # root
 # change touch different files and never conflict. Compaction folds the entry files into
 # specs/log.md (compact.md). Callers match the dated lines they need; awk ends every line.
 spec_log_entries() { # root
-    [ ! -f "$1/specs/log.md" ] || awk 1 "$1/specs/log.md"
+    if [ -f "$1/specs/log.md" ]; then
+        verify_lf_file "$1/specs/log.md" || { echo 'Invalid text in specs/log.md' >&2; return 1; }
+        awk 1 "$1/specs/log.md" || return 1
+    fi
     spec_log_files "$1"
-    return 0
 }
 spec_log_files() { # root -> the entry files' lines only; a symlink is never an entry
     local file
-    for file in "$1"/specs/log/[0-9]*.md; do [ ! -f "$file" ] || [ -L "$file" ] || awk 1 "$file"; done
+    for file in "$1"/specs/log/[0-9]*.md; do
+        [ -f "$file" ] && [ ! -L "$file" ] || continue
+        if ! verify_lf_file "$file" || ! awk 1 "$file"; then
+            printf 'Invalid log entry text: %s\n' "$file" >&2; return 1
+        fi
+    done
     return 0
 }
 # The same at a commit, for a gate that reads a ref and never the checkout. Only regular files
@@ -245,7 +255,7 @@ spec_log_entries_at() { # root rev
 # newer: compaction folds them all. Keep status and doctor on this same accounting.
 # A failed folded-log read must not be mistaken for an absent log.
 spec_compaction() { # root
-    local root="$1" compaction=0 closed_since last_pass pending
+    local root="$1" compaction='0 0' closed_since last_pass pending expected checked
     if [ -f "$root/specs/log.md" ]; then
         # Read order and counts together. Equal first/last dates mean newest-first.
         compaction="$(LC_ALL=C awk '
@@ -255,13 +265,21 @@ spec_compaction() { # root
             /^- [0-9-]+ compaction:/ { if (!seen++) { above = c; top = $2 }; c = 0; last = $2; next }
             /^- [0-9-]+ [0-9][0-9][0-9][0-9]*-[a-z0-9-]*:/ { c++ }
             END {
+                printf "%d ", NR
                 if (!seen) print c + 0
                 else if (n && first_date >= last_date) print above + 0, top
                 else print c + 0, last
             }' "$root/specs/log.md")" || return "$?"
+        verify_lf_file "$root/specs/log.md" || { echo 'Invalid text in specs/log.md' >&2; return 1; }
+        expected="$(wc -l < "$root/specs/log.md")" || return 1
+        if ! [ "${compaction%% *}" -eq "$expected" ]; then
+            printf 'Incomplete specs/log.md: expected %s lines, checked %s\n' "$expected" "${compaction%% *}" >&2
+            return 1
+        fi
     fi
-    read -r closed_since last_pass <<< "$compaction"
+    read -r checked closed_since last_pass <<< "$compaction"
     pending="$(spec_log_files "$root" | LC_ALL=C awk '/^- [0-9-]+ [0-9][0-9][0-9][0-9]*-[a-z0-9-]*:/ { c++ } END { print c + 0 }')" || return "$?"
+    [[ "$closed_since" =~ ^[0-9]+$ && "$pending" =~ ^[0-9]+$ ]] || return 1
     printf '%s %s\n' "$((closed_since + pending))" "$last_pass"
 }
 
@@ -294,7 +312,9 @@ spec_files() { # root
                 "$root"/specs/product/*/*.md "$root"/specs/architecture.md "$root"/specs/architecture/*.md \
                 "$root"/specs/architecture/*/*.md \
                 "$root"/specs/parts/*.md "$root"/specs/parts/*/*.md "$root"/specs/decisions/*.md; do
-        [ -f "$path" ] && printf '%s\n' "${path#"$root"/}"
+        [ -f "$path" ] || continue
+        case "$path" in *$'\n'*|*$'\r'*|*"$SPEC_SEP"*) printf 'Unsupported record separator in spec path: %s\n' "$path" >&2; return 1 ;; esac
+        printf '%s\n' "${path#"$root"/}" || return 1
     done
     return 0
 }
@@ -306,9 +326,12 @@ spec_files() { # root
 # count when the destination looks like a path, footnotes never. URLs (`//host` too) and targets
 # leaving the repository are not printed.
 spec_links() { # root [file...]
-    local root="$1" files=() file; shift
+    local root="$1" files=() file listed; shift
     if [ "$#" -gt 0 ]; then files=("$@")
-    else while IFS= read -r file; do files+=("$file"); done < <(spec_files "$root"); fi
+    else
+        listed="$(verify_lines spec_files "$root")" || return 1
+        while IFS= read -r file; do [ -z "$file" ] || files+=("$file"); done <<< "$listed"
+    fi
     [ "${#files[@]}" -gt 0 ] || return 0
     (cd "$root" && awk "$SPEC_SKIP_AWK"'
         function norm(p,   n, a, i, k, st, out) {
@@ -364,11 +387,16 @@ spec_links() { # root [file...]
 # sub-bullets included, decides by its own value, which runs to the end of its bullet; without
 # one, a live Q or I is unenforced, and any item that says `unenforced` is.
 spec_items() { # root [file...]: the spec files when none are given
-    local root="$1" files=() file; shift
+    local root="$1" files=() file listed expected; shift
     if [ "$#" -gt 0 ]; then files=("$@")
-    else while IFS= read -r file; do files+=("$file"); done < <(spec_files "$root"); fi
+    else
+        listed="$(verify_lines spec_files "$root")" || return 1
+        while IFS= read -r file; do [ -z "$file" ] || files+=("$file"); done <<< "$listed"
+    fi
     for file in ${files[@]+"${files[@]}"}; do
-        awk -v file="$(spec_field "$file")" "$SPEC_SKIP_AWK"'
+        verify_lf_file "$root/$file" || { printf 'Invalid spec text: %s (expected non-empty LF-terminated text)\n' "$file" >&2; return 1; }
+        expected="$(wc -l < "$root/$file")" || return 1
+        awk -v expected="$expected" -v file="$(spec_field "$file")" "$SPEC_SKIP_AWK"'
             BEGIN { gsub(/[\037\r\n]/, " ", file) }
             function indent(s) { sub(/[^[:space:]].*/, "", s); return length(s) }
             function flags(line, id, block,   m, p, t, b, v, i, u) {
@@ -429,8 +457,11 @@ spec_items() { # root [file...]: the spec files when none are given
                 title = body; sub(/^[^[:space:]*]+[[:space:]]*/, "", title); sub(/\*\*.*/, "", title)
                 pend = $0; pend_id = id; pend_title = title; pend_nr = NR; pend_ind = indent($0)
             }
-            END { flush() }
-        ' "$root/$file"
+            END {
+                if (NR != expected) { print "Incomplete spec " file ": expected " expected + 0 " lines, checked " NR; exit 1 }
+                flush()
+            }
+        ' "$root/$file" || { printf 'Spec item reader failed: %s\n' "$file" >&2; return 1; }
     done
 }
 
@@ -438,8 +469,9 @@ spec_items() { # root [file...]: the spec files when none are given
 # table row or blank line (a paragraph too), so a marker that wraps is read whole. Prints
 # file:line where the item starts, then its lines joined by \036. Comments and fences are skipped.
 _spec_paragraphs() { # root
-    local root="$1" files=() file
-    while IFS= read -r file; do files+=("$file"); done < <(spec_files "$root")
+    local root="$1" files=() file listed
+    listed="$(verify_lines spec_files "$root")" || return 1
+    while IFS= read -r file; do [ -z "$file" ] || files+=("$file"); done <<< "$listed"
     [ "${#files[@]}" -gt 0 ] || return 0
     (cd "$root" && awk "$SPEC_SKIP_AWK"'
         function flush() { if (item != "") print where "\037" item; item = "" }
@@ -492,10 +524,12 @@ spec_code_paths() { # root
 # Emits tagged rows, including errors; loader keeps errors available to doctor without
 # terminating its other diagnostics. Names are plain ASCII words, digits, spaces and hyphens.
 spec_lifecycle() { # root
-    local file="specs/product/lifecycle.md" single=0
+    local file="specs/product/lifecycle.md" single=0 expected
     if [ -f "$1/specs/SPEC.md" ]; then file="specs/SPEC.md"; single=1; fi
     if [ ! -f "$1/$file" ]; then printf 'order\037%s\ncustom\0370\n' "$SPEC_STAGE_DEFAULT"; return 0; fi
-    LC_ALL=C awk -v source="$file" -v single="$single" -v default_order="$SPEC_STAGE_DEFAULT" "$SPEC_STAGE_AWK"'
+    verify_lf_file "$1/$file" || return 1
+    expected="$(wc -l < "$1/$file")" || return 1
+    LC_ALL=C awk -v source="$file" -v single="$single" -v default_order="$SPEC_STAGE_DEFAULT" -v expected="$expected" "$SPEC_STAGE_AWK"'
         function problem(s) { print "error\037Lifecycle: " source " " s }
         function field(name,   t, mark) {
             mark = "**" name "**:"
@@ -554,6 +588,7 @@ spec_lifecycle() { # root
             if (index(line, "**Next**") && !index(line, "**Next**:")) problem("needs **Next**: <stage>")
         }
         END {
+            if (NR != expected) exit 1
             list = stage_order; gsub(/>/, ", ", list)
             now = stage_name(now); next_ = stage_name(next_)
             if (present && !stage_rank(now)) problem("needs '\''**Now**: <stage>'\'', one of: " list)
@@ -568,10 +603,18 @@ spec_lifecycle() { # root
 }
 
 spec_lifecycle_load() { # root -> SPEC_STAGE_{ORDER,LIST,CUSTOM,NOW,NEXT,ERRORS}
-    local rows key value
-    rows="$(spec_lifecycle "$1")" || return
+    local rows key value seen=' ' expected=4 checked=0
+    rows="$(verify_lines spec_lifecycle "$1")" || return
+    [ -f "$1/specs/SPEC.md" ] || [ -f "$1/specs/product/lifecycle.md" ] || expected=2
     SPEC_STAGE_ORDER=""; SPEC_STAGE_CUSTOM=0; SPEC_STAGE_NOW=""; SPEC_STAGE_NEXT=""; SPEC_STAGE_ERRORS=""
     while IFS="$SPEC_SEP" read -r key value; do
+        case "$key" in
+            order|custom|now|next)
+                case "$seen" in *" $key "*) return 1 ;; esac
+                seen="$seen$key "; checked=$((checked + 1)) ;;
+            error) ;;
+            *) return 1 ;;
+        esac
         case "$key" in
             order) SPEC_STAGE_ORDER="$value" ;;
             custom) SPEC_STAGE_CUSTOM="$value" ;;
@@ -580,6 +623,10 @@ spec_lifecycle_load() { # root -> SPEC_STAGE_{ORDER,LIST,CUSTOM,NOW,NEXT,ERRORS}
             error) SPEC_STAGE_ERRORS="${SPEC_STAGE_ERRORS}${SPEC_STAGE_ERRORS:+$'\n'}$value" ;;
         esac
     done <<< "$rows"
+    if [ "$checked" -ne "$expected" ] || { [ -z "$SPEC_STAGE_ORDER" ] && [ -z "$SPEC_STAGE_ERRORS" ]; }; then
+        printf 'Incomplete lifecycle inventory: expected %s fields, checked %s\n' "$expected" "$checked" >&2
+        return 1
+    fi
     SPEC_STAGE_LIST="${SPEC_STAGE_ORDER//>/, }"
 }
 
@@ -612,8 +659,10 @@ spec_lifecycle_require() { # root -> load configuration and reject unclassifiabl
 # Items marked for a later stage: id, stage (lowercased), file:line. The marker sits in a
 # heading's or bullet's parenthetical (`(hypothesis, from: ga)`) or a part's Maturity cell.
 spec_stages() { # root
-    local root="$1" file
+    local root="$1" file listed
+    listed="$(verify_lines spec_files "$root")" || return 1
     while IFS= read -r file; do
+        [ -n "$file" ] || continue
         awk -v file="$(spec_field "$file")" "$SPEC_SKIP_AWK $SPEC_STAGE_AWK"'
             BEGIN { gsub(/[\037\r\n]/, " ", file) }
             function emit(id, text,   s) { s = stage_from(text); if (s != "") print id "\037" s "\037" file ":" NR }
@@ -633,17 +682,18 @@ spec_stages() { # root
                 rest = $0; sub(/^[^*]*\*\*[^*]*\*\*/, "", rest)
                 if (match(rest, /^[[:space:]]*\([^)]*\)/)) emit(id, substr(rest, RSTART, RLENGTH))
             }
-        ' "$root/$file"
-    done < <(spec_files "$root")
+        ' "$root/$file" || return 1
+    done <<< "$listed"
 }
 
 # Part file headings: file, part id declared by its `# P<n> name` heading (blank if none). A
 # component file in parts/p<n>-<slug>/ declares its part's id too.
 spec_part_headings() { # root
-    local root="$1" path
+    local root="$1" path part
     for path in "$root"/specs/parts/*.md "$root"/specs/parts/*/*.md; do
         [ -f "$path" ] || continue
-        printf '%s\037%s\n' "${path#"$root"/}" "$(awk '/^#[[:space:]]+P[0-9]+([[:space:]]|$)/ { print $2; exit }' "$path")"
+        part="$(awk '/^#[[:space:]]+P[0-9]+([[:space:]]|$)/ && !found++ { print $2 }' "$path")" || return 1
+        printf '%s\037%s\n' "${path#"$root"/}" "$part"
     done
     return 0
 }
@@ -678,10 +728,13 @@ spec_test_files() { # root
 # line prints state "unparsed" with its title as words; so does prose outside an item, except in
 # an inbox of headed items, where it is ordinary text (such as "Nothing open.").
 spec_inbox() { # root
-    local file="$1/specs/inbox.md" headed=0
+    local file="$1/specs/inbox.md" headed=0 expected
     [ -f "$file" ] || return 0
-    grep -q '^###[[:space:]]' "$file" && headed=1
-    awk -v headed="$headed" "$SPEC_SKIP_AWK"'
+    verify_lf_file "$file" allow-empty || { echo 'Invalid text in specs/inbox.md' >&2; return 1; }
+    if grep '^###[[:space:]]' "$file" >/dev/null; then headed=1
+    elif [ "$?" -ne 1 ]; then return 1; fi
+    expected="$(wc -l < "$file")" || return 1
+    awk -v headed="$headed" -v expected="$expected" "$SPEC_SKIP_AWK"'
         function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
         function problem(s) { problems = problems (problems == "" ? "" : "; ") s }
         function flush(   state) {
@@ -794,15 +847,17 @@ spec_inbox() { # root
             if (state == "open" && w[2] == "owner") state = "processing"
             print NR "\037" w[1] "\037" w[2] "\037" state "\037" words "\037\037\037\037\037\037"
         }
-        END { flush() }' "$file"
+        END { if (NR != expected) exit 1; flush() }' "$file"
 }
 
 # Records: line, type, name, owner, scope, env, rev, date, until, check, reason. A line that
 # is not a valid record prints type INVALID and the problem as its reason.
 spec_records() { # root
-    local file="$1/specs/records.md"
+    local file="$1/specs/records.md" expected
     [ -f "$file" ] || return 0
-    awk "$SPEC_SKIP_AWK"'
+    verify_lf_file "$file" allow-empty || { echo 'Invalid text in specs/records.md' >&2; return 1; }
+    expected="$(wc -l < "$file")" || return 1
+    awk -v expected="$expected" "$SPEC_SKIP_AWK"'
         function isdate(s) { return s ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ }
         function bad(why) { print NR "\037INVALID\037\037\037\037\037\037\037\037\037" why; }
         { gsub(/\037/, " "); if (spec_skip($0)) next }
@@ -840,17 +895,20 @@ spec_records() { # root
             rev = (type == "ATTEST") ? kv["version"] : kv["rev"]
             check = (type == "ATTEST") ? kv["what"] : kv["check"]
             print NR "\037" type "\037" name "\037" who "\037" kv["scope"] "\037" kv["env"] "\037" rev "\037" date "\037" until "\037" check "\037" reason
-        }' "$file"
+        }
+        END { if (NR != expected) exit 1 }' "$file"
 }
 
 # Open changes: id, title, opened, step, waiting on, next, parent, acceptance total, passed,
 # failed or blocked, highest attempts, stalled items (not passed, and attempts >= 3 or BLOCKED;
 # comma-separated), Waiting on and Next field status.
 spec_changes() { # root
-    local root="$1" path
+    local root="$1" path expected
     for path in "$root"/specs/changes/*.md; do
         [ -f "$path" ] || continue
-        awk -v id="$(spec_field "$(basename "$path" .md)")" '
+        verify_lf_file "$path" || { printf 'Invalid change record text: %s\n' "$path" >&2; return 1; }
+        expected="$(wc -l < "$path")" || return 1
+        awk -v expected="$expected" -v id="$(spec_field "$(basename "$path" .md)")" '
             BEGIN { gsub(/[\037\r\n]/, " ", id) }
             function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
             function field(line, name,   v) {
@@ -888,9 +946,10 @@ spec_changes() { # root
                     stalled = stalled (stalled == "" ? "" : ",") item
             }
             END {
+                if (NR != expected) exit 1
                 gsub(/\t/, " ", title); gsub(/\t/, " ", waiting); gsub(/\t/, " ", nxt)
                 print id "\037" title "\037" opened "\037" step "\037" (nw==1 ? waiting : "") "\037" (nn==1 ? nxt : "") "\037" parent "\037" total + 0 "\037" passed + 0 "\037" failed + 0 "\037" maxatt + 0 "\037" stalled "\037" presence(nw,waiting) "\037" presence(nn,nxt)
-            }' "$path"
+            }' "$path" || { printf 'Change record reader failed: %s (expected %s lines)\n' "$path" "$expected" >&2; return 1; }
     done
     return 0
 }
@@ -898,9 +957,12 @@ spec_changes() { # root
 spec_change_progress() { # file [required=true] [advisories] -> outcome, milestone, critical path, allocation, progress,
     # selection, no-progress count (number|null), limit (number|null), count signal.
     # Project recorded State only; no inference from acceptance, PR totals or dates in prose.
-    local file="$1"
-    [ -f "$file" ] || file=/dev/null
-    awk -v required="${2:-false}" -v report="${3:-}" "$SPEC_SKIP_AWK"'
+    local file="$1" expected=0
+    if [ "$file" != /dev/null ]; then
+        [ -f "$file" ] && verify_lf_file "$file" || return 1
+        expected="$(wc -l < "$file")" || return 1
+    fi
+    awk -v expected="$expected" -v required="${2:-false}" -v report="${3:-}" "$SPEC_SKIP_AWK"'
         function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
         function uint(s) { return s ~ /^(0|[1-9][0-9]*)$/ }
         # Compare decimal strings without machine-integer overflow or floating-point rounding.
@@ -922,6 +984,7 @@ spec_change_progress() { # file [required=true] [advisories] -> outcome, milesto
             if (!block) outside = 1
         }
         END {
+            if (NR != expected) exit 1
             # Accept the distinctive 1.3.1 checkpoint shape, never a lone generic Outcome.
             legacy = counts[0, "No-progress changes"] || counts[0, "Progress limit"] ||
                 (counts[0, "Outcome"] && counts[0, "Milestone"] &&
@@ -956,26 +1019,48 @@ spec_change_progress() { # file [required=true] [advisories] -> outcome, milesto
 # Checkouts that can hold open change records, as path, branch and location (relative to root,
 # "." for root itself): root first, then every other registered worktree whose directory exists
 # (new-change.sh creates the record in one). Local git metadata only.
+spec_worktrees() { # root -> Git porcelain, checked before exposing any rows
+    local input
+    input="$(verify_lines git -C "$1" worktree list --porcelain && printf x)" || return 1
+    case "$input" in worktree\ *$'\n\nx') ;; *) echo 'Incomplete Git worktree inventory' >&2; return 1 ;; esac
+    printf '%s' "${input%x}" | LC_ALL=C awk '
+        /^worktree / { if (open || length($0) == 9 || substr($0,10,1) == "\"") bad=1; open=1; expected++; next }
+        /^HEAD [0-9a-f]+$/ { if (!open || head || (length($2) != 40 && length($2) != 64)) bad=1; head=1; next }
+        /^bare$/ { if (!open || head) bad=1; head=kind=1; next }
+        /^branch refs\/heads\/.+|^detached$/ { if (!head || kind) bad=1; kind=1; next }
+        /^$/ { if (!open || !head || !kind) bad=1; open=head=kind=0; checked++; next }
+        !open || !/^(locked( |$)|prunable( |$))/ { bad=1 }
+        END {
+            if (bad || open || !expected || checked != expected) exit 1
+        }' || { echo 'Invalid or incomplete Git worktree records' >&2; return 1; }
+    printf '%s' "${input%x}"
+}
+
 spec_checkouts() { # root
-    local root="$1" top line path="" branch="" real
-    case "$root" in *"$SPEC_SEP"*|*$'\n'*) printf 'Cannot read status rows from a checkout path containing a record separator\n' >&2; return 0 ;; esac
-    printf '%s\037%s\037.\n' "$root" "$(git -C "$root" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
-    git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
-    top="$(CDPATH="" cd "$root" && pwd -P)"
+    local root="$1" top line path="" branch="" real rows
+    case "$root" in *"$SPEC_SEP"*|*$'\n'*|*$'\r'*) printf 'Cannot read status rows from a checkout path containing a record separator\n' >&2; return 1 ;; esac
+    if ! git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        printf '%s\037\037.\n' "$root"
+        return
+    fi
+    branch="$(git -C "$root" symbolic-ref --quiet --short HEAD 2>/dev/null)" || { [ "$?" -eq 1 ] || return 1; }
+    top="$(CDPATH="" cd "$root" && pwd -P)" || return 1
+    rows="$(spec_worktrees "$root")" || return 1
+    printf '%s\037%s\037.\n' "$root" "$branch"
     while IFS= read -r line; do
         case "$line" in
             "worktree "*) path="${line#worktree }"; branch="" ;;
             "branch refs/heads/"*) branch="${line#branch refs/heads/}" ;;
             "")
                 real=""
-                [ -z "$path" ] || [ ! -d "$path" ] || real="$(CDPATH="" cd "$path" && pwd -P)"
+                [ -z "$path" ] || [ ! -d "$path" ] || real="$(CDPATH="" cd "$path" && pwd -P)" || return 1
                 if [ -n "$real" ] && [ "$real" != "$top" ]; then
-                    case "$real" in *"$SPEC_SEP"*|*$'\n'*) printf 'Skipping checkout path containing a record separator\n' >&2; continue ;; esac
+                    case "$real" in *"$SPEC_SEP"*|*$'\n'*|*$'\r'*) printf 'Cannot read status rows from a checkout path containing a record separator\n' >&2; return 1 ;; esac
                     printf '%s\037%s\037%s\n' "$real" "$branch" "${real#"$top"/}"
                 fi
                 path="" ;;
         esac
-    done < <(git -C "$root" worktree list --porcelain 2>/dev/null; echo)
+    done <<< "$rows"$'\n'
     return 0
 }
 
@@ -983,16 +1068,19 @@ spec_checkouts() { # root
 # found in several checkouts is listed once: the copy on the branch named after the change wins,
 # else the first found.
 spec_open_changes() { # root
-    local root="$1" path branch loc row closed
+    local root="$1" path branch loc row closed checkouts changes
     # A worktree branched before a close still carries the record: the root's log has the final word.
-    closed=" $(spec_log_entries "$root" | sed -n 's/^- [0-9-]* \([^ :]*\):.*/\1/p' | tr '\n' ' ')"
+    closed=" $(spec_log_entries "$root" | sed -n 's/^- [0-9-]* \([^ :]*\):.*/\1/p' | tr '\n' ' ')" || return 1
+    checkouts="$(verify_lines spec_checkouts "$root")" || return 1
+    [ -n "$checkouts" ] || return 1
     while IFS="$SPEC_SEP" read -r path branch loc; do
         [ -n "$path" ] || continue
+        changes="$(verify_lines spec_changes "$path")" || return 1
         while IFS= read -r row; do
             [ -n "$row" ] || continue
             printf '%s\037%s\037%s\n' "$row" "$loc" "$([ "${row%%"$SPEC_SEP"*}" = "$branch" ] && echo 1 || echo 0)"
-        done < <(spec_changes "$path")
-    done < <(spec_checkouts "$root") | awk -F '\037' -v closed="$closed" 'NF {
+        done <<< "$changes"
+    done <<< "$checkouts" | awk -F '\037' -v closed="$closed" 'NF {
             own = $NF; r = $0; sub("\037[01]$", "", r)
             if ($(NF - 1) != "." && index(closed, " " $1 " ")) next
             if (!($1 in row)) order[++n] = $1
@@ -1000,16 +1088,17 @@ spec_open_changes() { # root
             row[$1] = r; mine[$1] = own
         }
         END { for (i = 1; i <= n; i++) print row[order[i]] }'
-    return 0
 }
 
 # The default integration branch: origin/HEAD, else a local main or master; blank without one.
 spec_default_branch() { # root
     local base candidate
-    base="$(git -C "$1" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+    base="$(git -C "$1" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)" ||
+        { [ "$?" -eq 1 ] || return 1; }
     for candidate in main master; do
         [ -n "$base" ] && break
-        git -C "$1" show-ref --verify --quiet "refs/heads/$candidate" && base="$candidate"
+        if git -C "$1" show-ref --verify --quiet "refs/heads/$candidate"; then base="$candidate"
+        elif [ "$?" -ne 1 ]; then return 1; fi
     done
     printf '%s\n' "$base"
 }
@@ -1075,11 +1164,13 @@ spec_objects_local() { # root
 # Verdicts are host receipts, not record text: T0 and not-yet-reviewed records are listed too.
 # Committed objects only; prints change ids.
 spec_unclosed_changes() { # root rev
-    local root="$1" rev="$2" path
-    git -C "$root" rev-parse --verify --quiet "$rev^{commit}" >/dev/null 2>&1 || return 0
-    GIT_NO_LAZY_FETCH=1 git -C "$root" ls-tree --name-only "$rev" -- specs/changes/ 2>/dev/null | while IFS= read -r path; do
+    local root="$1" rev="$2" path paths record_text
+    paths="$(GIT_NO_LAZY_FETCH=1 verify_lines git -C "$root" ls-tree --name-only "$rev" -- specs/changes/)" || return 1
+    while IFS= read -r path; do
         case "$path" in specs/changes/*.md) ;; *) continue ;; esac
-        GIT_NO_LAZY_FETCH=1 git -C "$root" show "$rev:$path" 2>/dev/null |
+        record_text="$(GIT_NO_LAZY_FETCH=1 verify_lines git -C "$root" cat-file blob "$rev:$path")" || return 1
+        [ -n "$record_text" ] || { printf 'Empty committed change record: %s\n' "$path" >&2; return 1; }
+        printf '%s\n' "$record_text" |
             awk -v id="$(spec_field "$(basename "$path" .md)")" "$SPEC_SKIP_AWK"'
             function trim(s) { gsub(/`/, "", s); gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
             { gsub(/\037/, " "); if (spec_skip($0)) next }
@@ -1098,8 +1189,7 @@ spec_unclosed_changes() { # root rev
                 if (keys["No-progress changes"] || keys["Progress limit"] || (keys["Outcome"] && keys["Milestone"] &&
                     (keys["Critical path"] || keys["Allocation"] || keys["Progress"] || keys["Selection"]))) checkpoint = 1
                 print id "\037" parent "\037" (!checkpoint)
-            }'
-    done | awk -F '\037' '{ id[++n] = $1; flagged[n] = $3; if ($2 != "") named[$2] = 1 }
+            }' || return 1
+    done <<< "$paths" | awk -F '\037' '{ id[++n] = $1; flagged[n] = $3; if ($2 != "") named[$2] = 1 }
         END { for (i = 1; i <= n; i++) if (flagged[i] && !(id[i] in named)) print id[i] }'
-    return 0
 }

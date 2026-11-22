@@ -57,21 +57,43 @@ check_paths() {
     done
 }
 check_paths
-git -C "$root" cat-file -e "HEAD:$path" 2>/dev/null || refuse "no record $path at HEAD"
 git -C "$root" diff --quiet HEAD -- "$path" ||
     refuse "$path has uncommitted edits: commit the record edits first; the check reads committed state"
+verify_lf_file "$root/$path" || refuse "invalid record $path: expected non-empty LF-terminated text"
+record_oid="$(verify_lines git -C "$root" rev-parse --verify "HEAD:$path")" ||
+    refuse "cannot identify record $path at HEAD"
+record_hash="$(verify_lines git -C "$root" hash-object --no-filters -- "$root/$path")" ||
+    refuse "cannot hash record $path"
+[[ "$record_oid" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ && "$record_hash" = "$record_oid" ]] ||
+    refuse "record $path does not match the bytes at HEAD"
 git -C "$root" diff --cached --quiet || refuse "other changes are staged; commit or unstage them, so this commit holds only the record and its log entry"
-if [ -e "$root/$entry" ] || git -C "$root" cat-file -e "HEAD:$entry" 2>/dev/null ||
-    { [ -f "$root/$log" ] && grep -q "^- [0-9-]* $id:" "$root/$log"; }; then
+existing="$(verify_lines git -C "$root" ls-tree --name-only HEAD -- ":(literal)$entry")" ||
+    refuse "could not check for $entry at HEAD"
+if [ -e "$root/$entry" ] || [ -n "$existing" ]; then
     refuse "the log already has an entry for $id"
 fi
-default="$(spec_default_branch "$root")"
-if [ -n "$default" ] && git -C "$root" cat-file -e "$default:$path" 2>/dev/null; then
-    refuse "$path is already on $default: a change merged with its record closes inside the next relevant PR, before that PR's final review (review.md, Closing)"
+if [ -e "$root/$log" ]; then
+    if [ ! -f "$root/$log" ] || ! verify_lf_file "$root/$log"; then
+        refuse "invalid $log: expected non-empty LF-terminated text"
+    fi
+    # Do not use grep -q: finding a match early can mask a later read failure.
+    if grep "^- [0-9-]* $id:" "$root/$log" >/dev/null; then
+        refuse "the log already has an entry for $id"
+    elif [ "$?" -ne 1 ]; then
+        refuse "could not check $log for an existing entry"
+    fi
+fi
+default="$(spec_default_branch "$root")" || refuse "could not identify the default branch"
+if [ -n "$default" ]; then
+    existing="$(verify_lines git -C "$root" ls-tree --name-only "$default" -- ":(literal)$path")" ||
+        refuse "could not check for $path on $default"
+    if [ -n "$existing" ]; then
+        refuse "$path is already on $default: a change merged with its record closes inside the next relevant PR, before that PR's final review (review.md, Closing)"
+    fi
 fi
 
 check() { bash "$SCRIPT_DIR/check-review.sh" --pr "$pr" --repo "$root" --head HEAD ${base_args[@]+"${base_args[@]}"} "$id" 2>&1; }
-if ! out="$(check)"; then
+if ! out="$(verify_lines check)" || [ -z "$out" ]; then
     printf '%s\n' "$out" >&2
     refuse "check-review.sh does not pass at HEAD; publish the remaining verdicts first"
 fi
@@ -125,7 +147,7 @@ git -C "$root" commit -q -m "${message:-$id: close (log entry, record deleted)}"
     refuse "the commit failed; the record deletion and the log entry are staged"
 
 head="$(git -C "$root" rev-parse --short HEAD)"
-if out="$(check)"; then
+if out="$(verify_lines check)" && [ -n "$out" ]; then
     printf 'Closed %s in %s.\n%s\n' "$id" "$head" "$out"
 else
     printf '%s\n' "$out" >&2

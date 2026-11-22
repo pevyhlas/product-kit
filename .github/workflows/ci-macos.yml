@@ -75,4 +75,5 @@ jobs:
           /bin/bash tests/test_review_package_lock_safety.sh
           /bin/bash tests/test_review_package_completion.sh
           /bin/bash tests/test_delivery_checkpoint.sh
+          /bin/bash tests/test_fail_closed_verifiers.sh
           /bin/bash tests/test_release.sh
