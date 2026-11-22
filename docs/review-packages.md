@@ -31,9 +31,12 @@ use the disjoint `context-sections/` namespace. Repeated exact spans share an ar
 retaining each obligation's provenance. Final artifact bytes/hashes are checked before completion.
 Spec enumeration uses literal NUL-delimited Git paths; rejected entries remain named gaps.
 
-Equal fingerprints refuse with **no round needed** before allocating a round or changing old
-artifacts. Omitting `--since` also compares the latest completed, comparable package's actual
-head, recomputing content from Git objects, not trusting its saved digest. Interrupted rounds
+An unchanged `--since` range refuses with **no round needed**. The latest comparable completed
+package is fingerprinted from its actual head and recorded base tip, not a saved digest or
+today's base tip. Equal fingerprints allow automatic reuse only for clean, ordinary full packages
+with the same base branch, range start, trusted policy revision and committed tree. A changed
+closed head is rebuilt because its historical record can differ. Extra context, evidence, a
+focused patch or live gate inputs also prevent automatic reuse. Interrupted rounds
 retain evidence and numbering; their existence does not prove completion. A completion binding
 is published last by same-directory rename. Empty, unterminated or malformed historical
 bindings remain incomplete evidence, preserving numbering and ordinary unknown-comparison
