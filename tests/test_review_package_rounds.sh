@@ -135,6 +135,59 @@ pkg="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
 assert_file "$pkg/context/empty.txt"
 git update-ref "refs/remotes/origin/$MAIN" "$TIP"
 
+BADGIT="$(mktemp -d)"; track_tmp "$BADGIT"
+REAL_GIT="$(command -v git)"; export REAL_GIT
+cat > "$BADGIT/git" <<'EOF'
+#!/usr/bin/env bash
+previous=""; blob=false
+for arg in "$@"; do
+    if [ "$previous" = cat-file ] && [ "$arg" = blob ]; then blob=true
+    elif $blob; then [ "$arg" != "$DENIED_BLOB" ] || exit 128; blob=false; fi
+    previous="$arg"
+done
+exec "$REAL_GIT" "$@"
+EOF
+chmod +x "$BADGIT/git"
+it "Restored automatic context and incomplete artifacts need new rounds"
+for gap in canon historical; do
+    id="008-$gap"
+    cp specs/changes/001-equal.md "specs/changes/$id.md"
+    git add "specs/changes/$id.md"; git commit -qm 'add context record'
+    if [ "$gap" = historical ]; then
+        git rm -q "specs/changes/$id.md"; git commit -qm 'retire context record'
+        ln -s 001-equal.md "specs/changes/$id.md"
+        run bash "$SCRIPT" "$id" "$TIP"
+        rm "specs/changes/$id.md"
+    else
+        run env DENIED_BLOB="$(git rev-parse HEAD:specs/architecture.md)" PATH="$BADGIT:$PATH" bash "$SCRIPT" "$id" "$TIP"
+    fi
+    assert_eq 0 "$STATUS" "structural package with $gap gap: $OUTPUT"
+    pkg="$P/.prdkit/cache/evidence/$id/reviews/round-1"
+    case "$gap" in
+        canon) assert_contains "$(cat "$pkg/context-gaps.txt")" 'unreadable/non-text input specs/architecture.md' ;;
+        historical) assert_contains "$(cat "$pkg/context-gaps.txt")" 'bounds unavailable' ;;
+    esac
+    run bash "$SCRIPT" "$id" "$TIP"
+    assert_eq 0 "$STATUS" "M3: $gap context recovered without moving the head: $OUTPUT" || continue
+    pkg="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
+    assert_file "$pkg/bounds.txt"
+done
+for damage in missing-patch changed-section manifest; do
+    id="009-$damage"
+    cp specs/changes/001-equal.md "specs/changes/$id.md"
+    git add "specs/changes/$id.md"; git commit -qm 'prepare complete context'
+    pkg="$(bash "$SCRIPT" "$id" "$TIP" | jq -r .PACKAGE_DIR)"
+    case "$damage" in
+        missing-patch) rm "$pkg/diff.patch" ;;
+        changed-section) printf 'changed artifact\n' >> "$pkg/context-sections/1.txt" ;;
+        manifest) rm "$pkg/manifest.tsv" ;;
+    esac
+    run bash "$SCRIPT" "$id" "$TIP"
+    assert_eq 0 "$STATUS" "M3: $damage gets a fresh round: $OUTPUT" || continue
+    pkg="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
+    assert_file "$pkg/diff.patch"
+done
+
 it "Snapshot negative controls detect path swaps, modes and new directories"
 CONTROL="$(mktemp -d)"; track_tmp "$CONTROL"
 printf 'a\n' > "$CONTROL/one"; printf 'b\n' > "$CONTROL/two"
