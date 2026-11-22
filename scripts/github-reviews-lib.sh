@@ -5,6 +5,7 @@
 # Only the latest exact-head submission per eligible non-author account can grant approval.
 # Its undismissed objections on any PR commit require a later exact-head approval by that account.
 # Report open objections separately from approvals after complete, consistent pagination.
+# With lenses, publisher eligibility is the union of accounts mapped to trusted reviewers.
 #
 # Threat model:
 # Review text and candidate policy are untrusted. Trust the authenticated GitHub response;
@@ -12,28 +13,74 @@
 # shellcheck disable=SC2034,SC2016 # Public outputs; jq/GraphQL variables are literal.
 
 github_review_policy() {
-    local root="$1" at="$2" config fields
+    local root="$1" at="$2" config fields registry area entry
     RC_ERROR="Cannot read trusted review policy at ${at:-origin/HEAD}"
     [ -n "$at" ] || return 1
     config="$(git -C "$root" show "$at:.prdkit/memory/config.md" | review_text_stream)" || return 1
-    RC_ERROR='Trusted policy requires review-host: github, numeric review-publishers and numeric review-owner'
     fields="$(printf '%s\n' "$config" | awk "$SPEC_SKIP_AWK"'
+        function fail(reason) { print reason; exit 1 }
         { if (spec_skip($0)) next }
         /^## / { active=($0=="## Configuration"); next }
-        active && /^- review-(host|publishers|owner|publisher-isolation):/ {
+        active && /^- review-lenses([[:space:]]|$)/ { malformed=1 }
+        active && /^- review-(host|publishers|owner|publisher-isolation|lenses):/ {
             key=$0; sub(/:.*/, "", key); sub(/^- /,"",key)
             sub(/^[^:]*:[[:space:]]*/,""); sub(/[[:space:]]+$/,"")
             values[key]=$0; count[key]++
         }
         END {
+            if (malformed) fail("Invalid review-lenses key: expected - review-lenses: <mapping>")
+            pub=values["review-publishers"]; lenses=values["review-lenses"]
             if (count["review-host"]!=1 || values["review-host"]!="github" ||
-                count["review-publishers"]!=1 || values["review-publishers"]!~/^(bot|user):[1-9][0-9]*([[:space:]]*,[[:space:]]*(bot|user):[1-9][0-9]*)*$/ ||
-                count["review-owner"]!=1 || values["review-owner"]!~/^user:[1-9][0-9]*([[:space:]]*,[[:space:]]*user:[1-9][0-9]*)*$/) exit 1
+                count["review-owner"]!=1 || values["review-owner"]!~/^user:[1-9][0-9]*([[:space:]]*,[[:space:]]*user:[1-9][0-9]*)*$/) {
+                if (count["review-lenses"]) fail("Trusted policy requires review-host: github and numeric review-owner")
+                fail("Trusted policy requires review-host: github, numeric review-publishers and numeric review-owner")
+            }
+            if (count["review-publishers"] || !count["review-lenses"]) {
+                if (count["review-publishers"]!=1 || pub!~/^(bot|user):[1-9][0-9]*([[:space:]]*,[[:space:]]*(bot|user):[1-9][0-9]*)*$/)
+                    fail("Trusted policy requires review-host: github, numeric review-publishers and numeric review-owner")
+            }
+            if (count["review-lenses"]) {
+                if (count["review-lenses"]!=1 || !length(lenses)) fail("Expected one nonempty review-lenses mapping")
+                gsub(/[[:space:]]*,[[:space:]]*/, ",", lenses)
+                n=split(lenses, entries, ",")
+                for (i=1;i<=n;i++) {
+                    if (entries[i]!~/^[a-z0-9][a-z0-9_.-]*=(bot|user):[1-9][0-9]*(\|(bot|user):[1-9][0-9]*)*$/)
+                        fail("Invalid review-lenses entry: " entries[i])
+                    split(entries[i], pair, "=")
+                    if (area[pair[1]]++) fail("Duplicate review-lenses area: " pair[1])
+                    m=split(pair[2], ids, "[|]")
+                    for (j=1;j<=m;j++) {
+                        id=ids[j]; num=id; sub(/^[^:]+:/,"",num)
+                        if ((num in typed) && typed[num]!=id) fail("Conflicting review-lenses account types: " id)
+                        typed[num]=id
+                        if (!(id in mapped)) union=union (length(union)?",":"") id
+                        mapped[id]=1
+                    }
+                }
+                if (count["review-publishers"]) {
+                    gsub(/[[:space:]]/, "", pub); n=split(pub, ids, ",")
+                    for (i=1;i<=n;i++) {
+                        if (!(ids[i] in mapped)) fail("review-publishers differs from the review-lenses union")
+                        listed[ids[i]]=1
+                    }
+                    for (id in mapped) if (!(id in listed)) fail("review-publishers differs from the review-lenses union")
+                }
+                pub=union
+            }
             if (count["review-publisher-isolation"]) print "Warning: review-publisher-isolation is retired; remove it after the 2.0 check is no longer required. The PR author never counts." > "/dev/stderr"
-            print values["review-publishers"] "|" values["review-owner"]
-        }')" || return 1
+            print pub ";" values["review-owner"] ";" lenses
+        }')" || { RC_ERROR="${fields:-Cannot parse trusted review policy}"; return 1; }
     fields="$(printf '%s' "$fields" | tr -d ' \t\r' | sed 's/bot://g;s/user://g')"
-    REVIEW_PUBLISHERS="${fields%|*}"; REVIEW_OWNERS="${fields#*|}"
+    IFS=';' read -r REVIEW_PUBLISHERS REVIEW_OWNERS REVIEW_LENSES <<< "$fields"
+    if [ -n "$REVIEW_LENSES" ]; then
+        RC_ERROR="Cannot read trusted review-lenses registry in agents.md"
+        registry="$(git -C "$root" show "$at:.prdkit/memory/agents.md" | review_text_stream | review_registry)" || return 1
+        while IFS= read -r entry; do
+            area="${entry%%=*}"
+            RC_ERROR="review-lenses area '$area' must name one eligible reviewer in trusted agents.md"
+            grep -Fxq -- "$area" <<< "$registry" || return 1
+        done <<< "${REVIEW_LENSES//,/$'\n'}"
+    fi
     RC_ERROR=""
 }
 

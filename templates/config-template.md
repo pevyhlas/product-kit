@@ -43,3 +43,18 @@ a branch can add workflows using it. Remove the retired `review-publisher-isolat
 only after the 3.0 check is enforcing and the 2.0 check is no longer required.
 An ID listed in both keys counts only as owner. The PR author is always ineligible.
 Reviewers submit normal reviews under their own accounts.
+
+Optionally use `review-lenses` in `## Configuration` to assign accounts to the existing
+reviewer identities in trusted `.prdkit/memory/agents.md`. Use each lowercase name
+once; makers, unregistered names and ambiguous registrations cannot be mapped. For
+example, if `code` and `design` are registered reviewers:
+
+```text
+- review-lenses: code=bot:1001, design=bot:1001|user:1004
+```
+
+Either account can cover `design`; one approval from `1001` covers both names.
+Use separate IDs if separate Apps perform the reviews. You may omit `review-publishers`
+with lenses; if present it must list exactly the same set of typed accounts as the
+mapping. T3 requires a `design` mapping and a distinct owner approval. Without lenses
+the publisher list and tier minimums work as before.

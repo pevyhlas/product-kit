@@ -504,6 +504,16 @@ if [ "$native_exit" -eq 0 ]; then
         .diagnostics.policy_at == $p and .blocking == [] and (.reviews | type == "array") and
         all(.reviews[]; (.reviewer|type=="number" and .>0 and floor==.) and (.role|IN("publisher","owner"))) and
         ([.reviews[].reviewer] | length == (unique|length)) and
+        (if has("areas") then
+            .reviews as $reviews | .tier as $tier |
+            (.areas|type=="array" and length>0) and
+            all(.areas[]; . as $a |
+                (.area|type=="string") and
+                ((.reviewer==null and .review==null) or
+                 ((.review|type=="string") and any($reviews[]; .role=="publisher" and
+                     .reviewer==$a.reviewer and .review==$a.review)))) and
+            ($tier=="T0" or any(.areas[]; .review!=null and ($tier!="T3" or .area=="design")))
+         else true end) and
         (.tier == "T0" or
          ((.tier | IN("T1","T2","T3")) and any(.reviews[]; .role=="publisher") and
           (.tier != "T3" or any(.reviews[]; .role=="owner"))))

@@ -57,6 +57,12 @@ head. A comment or someone else’s approval cannot clear it. If an owner/mainta
 dismisses the objection on GitHub, they must dismiss that specific review. Use `blocking`
 to find its review ID and commit.
 
+If trusted policy sets `review-lenses`, dispatch each applicable concern to an account
+mapped to its registered reviewer name. One account can cover several concerns with
+one approval. Check `areas` in the live gate JSON for the account and review that covered
+each concern. T1 and T2 need at least one mapped approval; the worker still verifies
+all applicable T2 concerns. T3 needs a mapped `design` approval and the separate owner.
+
 Run `.prdkit/scripts/bash/check-review.sh --pr <url> --head <sha> <change-id>` and the
 required checks. With merge authority, merge only the checked SHA (`--match-head-commit`).
 Without `--pr` a successful structural preview exits 3 and cannot authorize merge.

@@ -103,6 +103,13 @@ does not count; a later submitted comment, dismissal or changes request on that
 head supersedes its approval. Commit authorship is irrelevant. Obtain the tier’s required approvals for
 each open PR’s current SHA, including any new SHA created by `close-change.sh`.
 
+**Optional after cutover:** keep one bundled publisher, or configure
+[`review-lenses`](../templates/config-template.md) on the trusted default branch.
+Use your existing registered reviewer names; map every area to the same account
+for a bundled App, or map areas to different accounts. Include `design` for T3.
+Keep `review-owner`. If you retain `review-publishers`, its accounts must equal the
+union of the mappings. No change to a record or new review-plan file is needed.
+
 ## Roll back to 2.0.x
 
 Keep the enforcing 3.0 requirement during rollback. Restore the recorded 2.0.x

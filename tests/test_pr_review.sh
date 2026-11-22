@@ -327,7 +327,7 @@ assert_eq 0 "$STATUS" "$OUTPUT"
 assert_eq '[null,17,true]' "$(printf '%s' "$OUTPUT" | jq -c .native.extension.keep)"
 NATIVE="$(printf '%s' "$OUTPUT" | jq -c .native)"
 # Synthetic NEGATIVE output-contract tests, not replacements for the real-native positive control.
-for fault in multiple malformed nul binding preview wrong-type missing-publisher missing-owner same-account outstanding-objection exit-result overflow timeout; do
+for fault in multiple malformed nul binding preview wrong-type missing-publisher missing-owner same-account outstanding-objection wrong-area-review missing-design exit-result overflow timeout; do
     git checkout -q --detach "$BASE"
     case "$fault" in
         multiple) printf '#!/bin/bash\nprintf '\''{}\\n{}\\n'\''\n' > "$FIX/gate" ;;
@@ -345,6 +345,8 @@ for fault in multiple malformed nul binding preview wrong-type missing-publisher
                 missing-owner) filter='.tier="T3"|.reviews[0].role="publisher"' ;;
                 same-account) filter='.tier="T3"|.reviews=[(.reviews[0]+{role:"publisher"}),(.reviews[0]+{role:"owner"})]' ;;
                 outstanding-objection) filter='.blocking=[{reviewer:1003,review:"42",role:"owner"}]' ;;
+                wrong-area-review) filter='.areas=[(.reviews[0]|{area:"code",reviewer,review:"999999"})]' ;;
+                missing-design) filter='.tier="T3"|.areas=[(.reviews[0]|{area:"code",reviewer,review})]|.reviews += [{role:"owner",reviewer:1003,review:"42"}]' ;;
                 exit-result) rc=1 ;;
             esac
             {
