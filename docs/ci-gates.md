@@ -135,8 +135,7 @@ bootstrap action or registration API):
 
 ```text
 host-registered immutable required workflow W
-  pull_request: opened, reopened, synchronize, edited, ready_for_review, converted_to_draft
-  pull_request_review: submitted, dismissed
+  pull_request: opened, synchronize, reopened
   every applicable PR, forks and drafts included; no path/numbered-branch skips
   fresh GitHub-hosted ubuntu-24.04 job; finite job timeout (at least 11 minutes)
   permissions: {} by default; this job: contents: read, pull-requests: read
@@ -145,12 +144,51 @@ host-registered immutable required workflow W
     check-pr-review.sh --repository <fixed-owner/name> --event <private-host-event-path>
 ```
 
-The review events re-run the same check even when the head has not moved. They supply
-`pull_request.number`; the launcher reads the live review list, not the payload verdict.
-An edited review body or an issue comment does not grant approval. Serialize evaluations
-per PR across both event types so an older result cannot overwrite a newer one. Verify
-the protected branch consumes the new result even after dismissal; see the
-[one-PR cutover test](migrating-to-3.0.md#prove-enforcement-on-one-pilot-pr).
+[GitHub ruleset workflows][events] support only `pull_request`, `pull_request_target` and
+`merge_group`, using their default activity types. This integration uses only `pull_request`.
+A **required workflow** identifies W; a **required status check** is a different
+[ruleset rule][rules]. An ordinary Actions run on `pull_request_review` is not a new
+attempt of W. The launcher can consume review events in other trusted integrations;
+that capability does not make GitHub dispatch them to W.
+
+#### Refresh the required verdict
+
+1. After **any submitted review or dismissal**, the reviewer/dismisser alerts the
+   merge owner and requests a **full rerun** of W. If they lack repository write
+   access, the owner does it. Use the PR's required workflow details to select
+   the **latest run of W for this PR, target and current head H**. Check W's trusted
+   source and its recorded event `pull_request.number` and `pull_request.head.sha`
+   against the live PR. Do not select a run by job name or branch alone.
+2. With the operator's existing access, use **Re-run all jobs** on that run or
+   `gh run rerun RUN_ID --repo OWNER/REPO` ([GitHub instructions][rerun]).
+   A rerun uses the original event SHA/ref and original actor's privileges. W
+   rechecks the event bindings and fetches the **live** reviews. This works for a
+   previously green run too; do not use `--failed`, start a separate workflow or
+   give a write credential to the launcher. Serialize attempts. If a review changes
+   during a run, discard its result and rerun once the change is visible.
+3. Immediately before each merge the owner repeats the full rerun, waits for its
+   new attempt, and verifies the protected PR consumes **that attempt** with a
+   host pass on the still-current H and target. If the head/target changed, the
+   event no longer binds, the run cannot be rerun, or the ruleset still accepts an
+   earlier green result, **hold the merge**. Never waive a failed or missing run.
+
+**Threat model: a pass is a snapshot.** Dismissal after the last live review read
+(even before the job finishes) can leave a stale green check until a rerun.
+Owner-coordinated merges narrow that window; they do not make review and merge
+atomic. Do not use unattended auto-merge with this procedure. A [merge queue][queue]
+can request checks on a new group SHA, but this PR launcher checks an individual
+PR head, not a group or its constituent PRs. Adding `merge_group` to W does not
+implement that mapping or check their live approvals. Consumers requiring queue
+support or protection against a concurrent dismissal must keep their existing
+enforcement until they have a separately verified merge-time control. Prove the
+rerun behavior with the [one-PR cutover test](migrating-to-3.0.md#prove-enforcement-on-one-pilot-pr).
+
+[events]: https://docs.github.com/en/enterprise-cloud@latest/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/troubleshooting-rules#supported-ruleset-workflow-events
+[rules]: https://docs.github.com/en/enterprise-cloud@latest/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets
+[rerun]: https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs
+[queue]: https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue
+
+#### Launcher contract
 
 **Before any shell starts**, W's trusted parent must construct an allowlisted environment with a
 fixed fresh-host tool PATH, C locale, private HOME/GH_CONFIG_DIR/XDG_CONFIG_HOME/TMPDIR and umask

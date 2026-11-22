@@ -3,6 +3,16 @@
 Stay on the pinned 2.0.x kit, its required check and its receipt publisher until you
 can complete the cutover below. Installing files does not change branch protection.
 
+**Before installing:** identify the protected branch's actual rule. This guide
+uses a source-bound **required workflow**, not a required status-check name. Confirm
+in a sandbox that the merge owner can rerun the exact required workflow, including
+a previously green run, and that protection uses its new attempt. Assign an owner
+for each review change and the final pre-merge rerun. Read the [rerun procedure
+and stale-approval window](ci-gates.md#refresh-the-required-verdict). If you have
+only automatic PR dispatch, cannot control when merges occur, use a merge queue,
+or cannot accept that window, stay on 2.0.x. An ordinary review-triggered job is
+not a substitute for the required workflow.
+
 ## Prepare both checks
 
 1. Record the working 2.0.x kit commit, consumer installation commit (including the
@@ -35,7 +45,7 @@ can complete the cutover below. Installing files does not change branch protecti
 
 Use a disposable PR targeting the actual protected branch, with a valid change record
 and otherwise passing checks. Do not merge it. In the active ruleset **add** the trusted
-3.0 workflow/check for that target while 2.0 remains required. Verify the source
+3.0 required workflow for that target while 2.0 remains required. Verify the source
 identity and no-bypass policy (not just a display name). Check the merge requirements
 on the PR as well as the Actions log. Keep its head SHA `H` fixed. Publish any
 necessary 2.0 receipt **before** testing the native approval: the old publisher
@@ -44,14 +54,14 @@ posts a `COMMENTED` review, which supersedes that account’s earlier approval o
 | Action | Evidence to record for `H` |
 | --- | --- |
 | Open the PR without an eligible approval. | The new required check runs and fails for missing approval; branch protection lists it as blocking. |
-| Have an eligible non-author submit a normal `APPROVED` review of `H` (`commit_id: H` when using the API). | `pull_request_review: submitted` starts a fresh evaluation; the **same required check** passes on `H`. |
-| Have an authorized user dismiss that approval, leaving no qualifying approval. | `pull_request_review: dismissed` starts another evaluation without a push. It fails and the ruleset blocks again; the earlier green run no longer satisfies it. |
+| Have an eligible non-author submit a normal `APPROVED` review of `H` (`commit_id: H` when using the API). The reviewer or owner reruns all jobs of the required run. | Record the new attempt of the **same run**, the live approval and host pass on `H`. Confirm protection accepts that attempt. |
+| Dismiss that approval, leaving no qualifying approval. The dismisser or owner reruns **the previously green run** without a push. | Record the incremented attempt, its failure on `H`, and the protected PR blocking again. The earlier green result must no longer satisfy the rule. |
 
-Save the PR, review, run and ruleset evidence. PR open/reopen, synchronize, retarget/edit
-and draft/ready transitions also trigger checks. A shell invocation, an optional job,
-or a dismissal that leaves the old green result effective is not proof. If the host
-does not deliver those events to the enforcing check or cannot bind it to the trusted
-source, **stop the cutover**; retain the old requirement. Remove a failed staged
+Save the PR, review, run ID and attempt numbers, and ruleset evidence. Opening,
+reopening or synchronizing a PR triggers the required workflow; review changes
+require the explicit rerun above. A shell invocation or optional job is not proof.
+If the new attempt is not bound to the trusted source and reflected in protection,
+**stop the cutover**; retain the old requirement. Remove a failed staged
 requirement only after confirming the old one is still enforcing.
 
 ## Switch and retire
