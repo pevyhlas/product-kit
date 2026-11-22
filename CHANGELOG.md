@@ -13,7 +13,8 @@ change by change.
 - **Faster contributor CI.** Two Ubuntu shards run the complete shell suite alongside a
   separate checks job, and four macOS shards keep the existing native coverage. The runner
   balances suites by measured duration and logs per-suite seconds. Required check names and
-  release gating are unchanged; all expected jobs must succeed.
+  release gating are unchanged; all expected jobs must succeed. New PR commits cancel
+  superseded runs for that PR without cancelling main or manual runs.
 
 ## [2.0.3] — 2026-11-22 — review bindings and concurrent evidence preservation
 

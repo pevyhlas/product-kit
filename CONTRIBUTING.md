@@ -81,7 +81,13 @@ for every pull request and push to main and on demand. Shards use
 [median suite timings](tests/suite-weights.txt) for balancing, always include untimed suites
 from their input list, and log elapsed seconds after each suite. Locally, `bash tests/run.sh`
 still runs everything; `bash tests/run.sh --shard 1/2 --list` previews a shard (add `--native`
-for the macOS list).
+for the macOS list). When macOS runner slots are busy, shards start in waves, so total
+workflow time can exceed the longest shard's run time.
+
+Pushing a new commit to a pull request cancels older runs of each CI workflow for that
+pull request. Other pull requests, pushes to main and manually dispatched runs are not
+cancelled by this policy. Required checks must pass for the current PR revision; an older
+revision's check cannot satisfy them.
 
 The required checks, `test` and `portable helpers (macOS)`, pass only when their expected
 shards (and the Linux checks job) all succeed. Both must pass before a merge. Only `CI`

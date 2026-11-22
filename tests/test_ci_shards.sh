@@ -94,6 +94,18 @@ aggregate() {
     run env -i PATH="$PATH" "$@" bash --noprofile --norc -eo pipefail -c "$gate_script"
 }
 
+it "supersede runs per workflow and PR without cancelling main pushes or manual runs"
+for workflow in "$PK_ROOT"/.github/workflows/ci{,-macos}.yml; do
+    assert_eq 'concurrency:' "$(grep -E '^[[:space:]]*concurrency:' "$workflow" || true)" \
+        "${workflow##*/}: only workflow-level concurrency"
+    assert_eq "  group: \${{ github.workflow }}-\${{ github.event_name }}-\${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: \${{ github.event_name == 'pull_request' }}" \
+        "$(awk '/^concurrency:$/ { found = 1; next }
+            found && /^  / { if ($0 !~ /^  *#/) print; next }
+            found { exit }' "$workflow")" \
+        "${workflow##*/}: PR heads share a workflow-specific group; other runs have distinct IDs and are never cancelled"
+done
+
 it "the workflows require each matrix leg individually, preserve check names, and fail closed"
 for platform in linux native; do
     if [ "$platform" = linux ]; then
