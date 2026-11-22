@@ -3,7 +3,7 @@
 # common.sh and spec-lib.sh. Read-only, local Git only, Bash 3.2 and POSIX awk.
 #
 # A change's content is its delta from where it leaves the base (the unique merge base of the
-# base and the revision) to the revision, outside its own record and log. The canonical stream
+# base and the revision) to the revision, outside its own record and closing metadata. The canonical stream
 # is one chunk per changed path, in Git's path order:
 #   T <old mode> <new mode>\t<path>    a regular file edited in place, its mode unchanged, whose
 #                                     blobs hold no NUL and whose every hunk is anchored by
@@ -14,7 +14,9 @@
 #                                     more than 3 lines away leaves it unchanged
 #   R <old mode> <new mode> <old id> <new id> <status>\t<path>
 #                                     anything else (an add, a delete, a binary file, a link,
-#                                     a submodule, a type or mode change), bound to exact objects
+#                                     a submodule, a type or mode change), bound to exact objects.
+#                                     The shared log also uses this form, after removing only
+#                                     the selected change's validated new close line, if any.
 # Where the edited lines' surroundings repeat in the file, the file is bound to its exact objects:
 # hunks without positions would not say which occurrence changed.
 # Tag lines start with "T " or "R " or "@@", hunk lines with a space, +, - or \, so the encoding
@@ -93,13 +95,59 @@ _review_anchored() { # old-blob-file diff-file
         }' "$1" "$2"
 }
 
+# A legacy shared-log close is metadata only if the selected record was deleted in this
+# range, there is no per-change entry, and exactly one well-formed line was added for it.
+# Return the blob ID of the log without that line, or fail to keep the original log delta.
+_review_shared_log_without_close() { # root id start rev old-mode old-id new-id oldtext newtext deletion-text
+    local root="$1" id="$2" start="$3" rev="$4" oldmode="$5" last entry lines deletion_lines
+    local record="specs/changes/$id.md" own="specs/log/$id.md"
+    is_change_id "$id" && spec_objects_local "$root" || return 1
+    [ "$(git -C "$root" ls-tree "$rev" -- "$record" "$own" || echo unreadable)" = "" ] &&
+        [ "$(git -C "$root" ls-tree "$start" -- "$own" || echo unreadable)" = "" ] || return 1
+    last="$(git -C "$root" log -1 --format=%H "$start..$rev" -- "$record")" && [ -n "$last" ] || return 1
+    entry="$(git -C "$root" ls-tree "$last^" -- "$record")" || return 1
+    case "$entry" in "100644 blob "*) ;; *) return 1 ;; esac
+    entry="$(git -C "$root" ls-tree "$last" -- specs/log.md)" || return 1
+    case "$entry" in "100644 blob "*) ;; *) return 1 ;; esac
+    _review_blob_text "$root" "$last:specs/log.md" "${10}" || return 1
+    deletion_lines="$(wc -l < "${10}")" || return 1
+
+    if [ "$oldmode" = 000000 ]; then : > "$8" || return 1
+    else _review_blob_text "$root" "$6" "$8" || return 1; fi
+    _review_blob_text "$root" "$7" "$9" || return 1
+    lines="$(wc -l < "$9")" || return 1
+    # Preserve every other byte, including a missing final newline on a retained line.
+    ( set -o pipefail
+      LC_ALL=C awk -v id="$id" -v lines="$lines" -v deletion_lines="$deletion_lines" '
+        BEGIN { key = "^- [0-9-]+ " id ":" }
+        FILENAME == ARGV[1] { if ($0 ~ key) old++; next }
+        FILENAME == ARGV[2] {
+            if ($0 ~ key) { at_close++; original=$0; terminated=(FNR <= deletion_lines) }
+            next
+        }
+        $0 ~ key {
+            n++
+            if ($0 != original || terminated != (FNR <= lines)) next
+            text=$0
+            if (FNR <= lines) sub(/\r$/, "", text)
+            if (text !~ /\r/ && text ~ ("^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] " id ": .*[^[:space:]]")) valid++
+            next
+        }
+        { printf "%s%s", $0, (FNR <= lines ? "\n" : "") }
+        END { exit (old || at_close != 1 || n != 1 || valid != 1) }
+      ' "$8" "${10}" "$9" | git -C "$root" hash-object --no-filters --stdin )
+}
+
 # The canonical stream on stdout. On failure sets REVIEW_FP_ERROR and returns 1; never prints a
 # stream that looks valid after a Git error. Call it without a subshell to keep the error text.
 review_delta_stream() { # root id base rev [pathspec...]
     local root="$1" id="$2" base="$3" rev="$4" raw meta file om nm oid nid st hunks oldtext newtext status
+    local normalized empty_blob
     shift 4
     [ "$#" -gt 0 ] || set -- . ":(top,literal,exclude)specs/changes/$id.md" \
-        ':(top,literal,exclude)specs/log.md' ":(top,literal,exclude)specs/log/$id.md"
+        ":(top,literal,exclude)specs/log/$id.md"
+    local GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
+    export GIT_NO_REPLACE_OBJECTS GIT_NO_LAZY_FETCH
     review_merge_base "$root" "$base" "$rev" >/dev/null || return 1
     if ! raw="$(LC_ALL=C GIT_NO_REPLACE_OBJECTS=1 git -C "$root" -c core.quotepath=true diff --raw --no-abbrev \
         --no-renames --no-ext-diff --no-textconv --no-color --no-relative --ignore-submodules=none -O/dev/null \
@@ -115,7 +163,19 @@ review_delta_stream() { # root id base rev [pathspec...]
         [ -n "$meta" ] || continue
         meta="${meta#:}"
         read -r om nm oid nid st <<< "$meta"
-        if [ "$st" = M ] && [ "$om" = "$nm" ] && case "$om" in 100644|100755) true ;; *) false ;; esac; then
+        if [ "$file" = specs/log.md ]; then
+            case "$om:$nm" in
+                000000:100644|100644:100644)
+                    if normalized="$(_review_shared_log_without_close "$root" "$id" "$REVIEW_MB" "$rev" "$om" "$oid" "$nid" "$oldtext" "$newtext" "$hunks")"; then
+                        if [ "$om" = 000000 ]; then
+                            empty_blob="$(git -C "$root" hash-object --no-filters --stdin < /dev/null)" || { status=2; break; }
+                            [ "$normalized" != "$empty_blob" ] || continue
+                        elif [ "$normalized" = "$oid" ]; then continue
+                        fi
+                        nid="$normalized"
+                    fi ;;
+            esac
+        elif [ "$st" = M ] && [ "$om" = "$nm" ] && case "$om" in 100644|100755) true ;; *) false ;; esac; then
             if _review_blob_text "$root" "$oid" "$oldtext"; then status=0; else status=$?; fi
             if [ "$status" -eq 0 ]; then
                 if _review_blob_text "$root" "$nid" "$newtext"; then status=0; else status=$?; fi
@@ -154,6 +214,13 @@ review_fingerprint() { # root id base rev [pathspec...]
     rm -f "$stream"
     REVIEW_FP="fp1:$digest"
     printf '%s\n' "$REVIEW_FP"
+}
+
+# Validate historical v3 receipt provenance only. Never use the old shared-log
+# exclusion to publish a verdict or check what content the current head carries.
+review_legacy_log_fingerprint() { # root id base rev
+    review_fingerprint "$@" . ":(top,literal,exclude)specs/changes/$2.md" \
+        ':(top,literal,exclude)specs/log.md' ":(top,literal,exclude)specs/log/$2.md"
 }
 
 # The paths whose chunks differ between two streams (files), one per line, sorted: for messages.

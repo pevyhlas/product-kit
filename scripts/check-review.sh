@@ -198,7 +198,7 @@ if $receipt_ready; then
 fi
 diagnostic_capture owner
 legacy_receipts=""; LL_BLOCKERS=(); LL_EMPTY_VALID=(); LL_EMPTY_ALLOWED=()
-if $receipt_ready; then legacy_receipts="$RC_FILE"; fi
+if $receipt_ready; then legacy_receipts="$RC_VERIFIED"; fi
 if [ -n "$fp_base" ]; then
     review_legacy_resolve "$root" "$id" "$fp_base" "$head" "$rigor" "$registry" "$fp_cache/legacy" "$legacy_receipts" "$RC_PR" || true
     [ "${LL_NUL_UNAVAILABLE:-false}" != true ] || authority=unavailable
@@ -230,7 +230,7 @@ highest_tier() { grep -x 'T[0-3]' | sort | tail -n 1; } # tiers on stdin -> the 
 tier_floor_of() { # rev -> the highest tier the record names there, if any
     { git -C "$root" show "$1:$path" 2>/dev/null || true; } | floor_tiers | highest_tier || true
 }
-# T0 is docs only: every changed path outside the record and the log must be a regular,
+# T0 is docs only: every changed path outside the record and closing metadata must be a regular,
 # non-executable file under a path the trusted config lists in review-t0-paths (literal paths;
 # a trailing / names a directory), and never the kit's policy, another change record or the L0/L1
 # spec. Prints the paths that do not qualify; fails when the diff cannot be read.
@@ -256,10 +256,10 @@ t0_violations() { # from to
     allowed="$(t0_paths "$policy_at")"
     raw="$(LC_ALL=C GIT_NO_REPLACE_OBJECTS=1 git -C "$root" -c core.quotepath=true diff --raw --no-abbrev \
         --no-renames --no-ext-diff --no-textconv --no-color --no-relative --ignore-submodules=none "$1" "$2" -- . \
-        ":(top,literal,exclude)$path" ":(top,literal,exclude)specs/log.md" \
-        ":(top,literal,exclude)specs/log/$id.md")" || return 1
+        ":(top,literal,exclude)$path" ":(top,literal,exclude)specs/log/$id.md")" || return 1
     while IFS="$(printf '\t')" read -r meta file; do
         [ -n "$meta" ] || continue
+        if [ "$file" = specs/log.md ] && [ -z "$shared_log_delta" ]; then continue; fi
         old="${meta%% *}"; old="${old#:}"; new="${meta#* }"; new="${new%% *}"
         ok=false
         case "$old:$new" in 000000:100644|100644:100644|100644:000000) ok=true ;; esac
@@ -283,7 +283,7 @@ t0_violations() { # from to
 eligible() { [ "$(review_eligibility "$registry" "$1")" = reviewer ]; }
 path="specs/changes/$id.md"
 spec_l01=(specs/product.md specs/product specs/architecture.md specs/architecture specs/SPEC.md specs/decisions)
-changed_since() { # sha [pathspec...] -> paths changed from sha to head, outside the record and the log
+changed_since() { # sha [pathspec...] -> paths changed from sha to head; check the shared log separately
     local sha="$1"; shift
     [ "$#" -gt 0 ] || set -- . ":(exclude)$path" ":(exclude)specs/log.md" ":(exclude)specs/log/$id.md"
     git -C "$root" diff --name-only --no-renames --ignore-submodules=none "$sha" "$head" -- "$@" | tr '\n' ' ' | sed 's/ $//'
@@ -310,8 +310,7 @@ else
     elif ! grep -q "^- [0-9-]* $id:" <<< "$log"; then
         problems+=("$id is closed (its record is deleted) but the log at $head has no '- <date> $id: <what changed>' entry (specs/log/$id.md, as close-change.sh writes it, or a line in specs/log.md)")
     fi
-    # The log paths leave review coverage, so each must be a plain file at the head: a pathspec
-    # also excludes whatever lies under a directory of that name. The entry is its own one line.
+    # Closing metadata must be plain files. The per-change entry is its own one line.
     while read -r log_mode log_type log_sha log_path; do
         case "$log_mode $log_type" in
             "100644 blob"|"100755 blob")
@@ -378,7 +377,7 @@ else
         problems+=("The record claims $tier, but its floor is $floor, from $floor_at: a branch may raise its tier, never lower it; claim **Tier**: $floor")
         tier="$floor"
     fi
-    # The record and the log are exempt from coverage only as regular, non-executable files, where
+    # The record and closing metadata are exempt only as regular, non-executable files, where
     # the change starts and at its head: a directory there would exempt everything inside it, and
     # converting or deleting an unsafe entry would hide that transition.
     metadata_ends=("$head"); [ -z "$start" ] || [ "$start" = "$head" ] || metadata_ends=("$start" "$head")
@@ -392,13 +391,20 @@ else
             problems+=("$(printf '%s' "$odd" | tr '\n' ' ' | sed 's/ $//') is not a regular, non-executable file at $where, so changing it cannot be exempt from review; fix it on the base first")
         fi
     done
-    if $base_trusted && [ -n "$start" ] && [ "$start" != "$head" ] && [ -z "$(changed_since "$start")" ]; then
+    shared_log_delta=""
+    if [ -n "$start" ] &&
+        ! shared_log_delta="$(review_delta_stream "$root" "$id" "$start" "$head" ':(top,literal)specs/log.md')"; then
+        shared_log_delta=unreadable
+        problems+=("The shared log's diff from ${start:0:12} to $head cannot be checked")
+    fi
+    if $base_trusted && [ -n "$start" ] && [ "$start" != "$head" ] &&
+        [ -z "$shared_log_delta" ] && [ -z "$(changed_since "$start")" ]; then
         record_only=true
     fi
     # All verdicts come from the validated host/snapshot list, in host order.
-    v_line=(); v_rev=(); v_round=(); v_from=(); v_to=(); v_verdict=(); v_c=(); v_h=(); v_m=(); v_l=(); v_link=()
+    v_line=(); v_rev=(); v_round=(); v_from=(); v_to=(); v_verdict=(); v_c=(); v_h=(); v_m=(); v_l=(); v_link=(); v_provenance=()
     if $receipt_ready; then
-        while IFS="$sep37" read -r kind seq origin review submitted receipt_id change reviewer from to receipt_head since receipt_base base_at verdict critical high medium low link carried; do
+        while IFS="$sep37" read -r kind seq origin review submitted receipt_id change reviewer from to receipt_head since receipt_base base_at verdict critical high medium low link carried provenance; do
             [ "$kind" = R ] || continue
             empty_clearance=false
             for valid in ${LL_EMPTY_VALID[@]+"${LL_EMPTY_VALID[@]}"}; do [ "$seq" != "$valid" ] || empty_clearance=true; done
@@ -408,6 +414,7 @@ else
             v_verdict+=("$verdict"); v_c+=("$critical"); v_h+=("$high"); v_m+=("$medium"); v_l+=("$low"); v_link+=("$link")
             v_receipt+=("https://github.com/$RC_REPO/pull/$origin#pullrequestreview-$review")
             v_receipt_head+=("$receipt_head")
+            v_provenance+=("$provenance")
             v_empty_clearance+=("$empty_clearance")
         done < "$RC_COVERAGE"
     fi
@@ -463,7 +470,7 @@ else
             shown="$(printf '%s\n' "$t0_bad" | head -n 10 | tr '\n' ' ' | sed 's/ $//')"
             [ "$n_bad" -le 10 ] || shown="$shown and $((n_bad - 10)) more"
             if [ -z "$(t0_paths "$policy_at")" ]; then
-                problems+=("T0 is docs only, and the trusted base's .prdkit/memory/config.md lists no review-t0-paths, so T0 covers only the record and the log; this change also touches: $shown. Claim T1 or higher")
+                problems+=("T0 is docs only, and the trusted base's .prdkit/memory/config.md lists no review-t0-paths, so T0 covers only the record and its validated closing metadata; this change also touches: $shown. Claim T1 or higher")
             else
                 problems+=("T0 is docs only: these changed paths are not regular files under the trusted base's review-t0-paths (or are policy, another change record or the L0/L1 spec): $shown. Claim T1 or higher")
             fi
@@ -514,9 +521,9 @@ if $json; then
         for i in ${latest[@]+"${latest[@]}"}; do
             standing=false
             for k in ${coverage_standing[@]+"${coverage_standing[@]}"}; do [ "${v_rev[k]}" != "${v_rev[i]}" ] || standing=true; done
-            printf '%s{"reviewer":"%s","eligibility":"%s","receipt":"%s","from":"%s","to":"%s","clean":%s,"end_covered":%s,"standing":%s}' \
+            printf '%s{"reviewer":"%s","eligibility":"%s","receipt":"%s","from":"%s","to":"%s","clean":%s,"end_covered":%s,"standing":%s,"provenance":"%s"}' \
                 "$sep" "$(json_escape "${v_rev[i]}")" "$(review_eligibility "$registry" "${v_rev[i]}")" "$(json_escape "${v_receipt[i]}")" \
-                "${v_from[i]}" "${v_to[i]}" "${coverage_clean[i]:-false}" "${coverage_end[i]:-false}" "$standing"
+                "${v_from[i]}" "${v_to[i]}" "${coverage_clean[i]:-false}" "${coverage_end[i]:-false}" "$standing" "${v_provenance[i]}"
             sep=,
         done
         printf '],"standing":['; sep=""
@@ -524,10 +531,11 @@ if $json; then
             printf '%s{"reviewer":"%s","to":"%s","receipt":"%s"}' "$sep" "$(json_escape "${v_rev[i]}")" "${v_to[i]}" "$(json_escape "${v_receipt[i]}")"; sep=,
         done
         printf '],"scope_blockers":['; sep=""
-        for row in ${RC_SCOPE_BLOCKERS[@]+"${RC_SCOPE_BLOCKERS[@]}"}; do
+        for k in ${RC_SCOPE_BLOCKERS[@]+"${!RC_SCOPE_BLOCKERS[@]}"}; do
+            row="${RC_SCOPE_BLOCKERS[k]}"
             IFS="$sep37" read -r kind seq origin review submitted receipt_id change reviewer from to rest <<< "$row"
-            printf '%s{"reviewer":"%s","change":"%s","origin_pr":"%s","to":"%s","receipt":"%s"}' "$sep" \
-                "$(json_escape "$reviewer")" "$change" "$origin" "$to" "https://github.com/$RC_REPO/pull/$origin#pullrequestreview-$review"; sep=,
+            printf '%s{"reviewer":"%s","change":"%s","origin_pr":"%s","to":"%s","receipt":"%s","full_required":%s}' "$sep" \
+                "$(json_escape "$reviewer")" "$change" "$origin" "$to" "https://github.com/$RC_REPO/pull/$origin#pullrequestreview-$review" "${RC_FULL_REQUIRED[k]}"; sep=,
         done
         printf '],"references":%s,"current_reviewers":%s,"current_pr":"%s","problem_classes":%s}' \
             "$(json_array ${RC_REFERENCES[@]+"${RC_REFERENCES[@]}"})" \

@@ -8,11 +8,42 @@ change by change.
 
 ## [Unreleased]
 
+- Cleanup and close tests now run against seeded combinations of local Git states and
+  check that commits and working files survive. The generator is test-only.
+
 ### Documentation
 
 - Document safety invariants and threat models in the worktree, close, publication, adoption,
   review and upgrade scripts. Contributor and review checklists now ask for those contracts
   to be checked when the scripts change. Script behavior is unchanged.
+
+## [2.0.3] — 2026-11-22 — review bindings and concurrent evidence preservation
+
+### Fixed
+
+- Review fingerprints bind shared-log edits, including compaction and changes to other
+  entries. T0 automatically exempts only the record and its validated closing metadata.
+  The shared-log line must match the one at record deletion; other edits follow normal
+  tier and allowlist rules. A legacy-only or locally unverifiable receipt cannot grant
+  coverage or clear a blocker. Its reviewer still needs a corrected full PASS.
+- Concurrent cleanup runs publish evidence without replacing an existing copy. Matching
+  bytes are accepted; a conflict leaves the losing worktree in place. Publishing new
+  evidence requires hard-link support in the destination directory. Cleanup pins its
+  private staging directory and rechecks the published copy's identity before retirement.
+- Review package reuse compares the previous range against its original base tip and
+  checks the recorded patch start, trusted policy, automatic context and artifact inventory.
+  A partial integration, context gap or incomplete restore gets a fresh package.
+
+### Adoption
+
+From 2.0.2, pin `v2.0.3` and run `bash .product-kit/scripts/init.sh --upgrade`.
+Existing receipt fingerprints are unchanged when the reviewed delta did not edit the
+shared log (or only added the selected change's valid close line). For in-flight changes
+with any other shared-log edits, regenerate the review package and publish fresh full
+reviews against the corrected fingerprint. Old receipts keep their original scope and
+blocking verdicts still stand; do not rewrite them. Update the kit
+on all gate and publication checkouts together. Older packages remain on disk but do not
+qualify for automatic reuse.
 
 ## [2.0.2] — 2026-11-21 — safer worktree cleanup and complete review patches
 

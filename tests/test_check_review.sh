@@ -330,7 +330,7 @@ it "a self-declared T0 on code fails: T0 is checked against the trusted review-t
 record T0
 run bash "$CHECK"
 assert_eq 1 "$STATUS" "T0 with code and no T0 paths configured fails"
-assert_contains "$OUTPUT" "lists no review-t0-paths, so T0 covers only the record and the log; this change also touches: src/app.txt" "says why"
+assert_contains "$OUTPUT" "lists no review-t0-paths, so T0 covers only the record and its validated closing metadata; this change also touches: src/app.txt" "says why"
 assert_not_contains "$OUTPUT" "PASS 001-greet" "never the old claim-based pass"
 TRUSTED_TIP="$(git rev-parse "refs/remotes/origin/$DEFAULT")"
 { git show "$TRUSTED_TIP:.prdkit/memory/config.md"; printf -- '- review-t0-paths: docs/, README.md\n'; } |

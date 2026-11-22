@@ -52,6 +52,22 @@ for script in cleanup-change close-change publish-review check-adoption install-
     assert_eq 0 "$STATUS" "scripts/$script.sh has both safety blocks: $OUTPUT"
 done
 
+it "fixture Git ignores inherited repository and index selection"
+sentinel="$(make_project)"; track_tmp "$sentinel"
+refs="$(git -C "$sentinel" show-ref)"; index="$(git hash-object "$sentinel/.git/index")"
+fixture="$(make_project)"; track_tmp "$fixture"
+# shellcheck disable=SC2016 # Exercise the environment inside the fixture shell.
+run env GIT_DIR="$sentinel/.git" GIT_WORK_TREE="$sentinel" GIT_INDEX_FILE="$sentinel/.git/index" \
+    GIT_OBJECT_DIRECTORY="$sentinel/.git/objects" GIT_COMMON_DIR="$sentinel/.git" \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES="$sentinel/.git/objects" bash -c '
+        source "$1"
+        git -C "$2" branch fixture-only && git -C "$2" read-tree --empty &&
+        test -z "${GIT_DIR-}${GIT_WORK_TREE-}${GIT_INDEX_FILE-}${GIT_OBJECT_DIRECTORY-}${GIT_COMMON_DIR-}${GIT_ALTERNATE_OBJECT_DIRECTORIES-}"
+    ' _ "$TESTS_DIR/lib.sh" "$fixture"
+assert_eq 0 "$STATUS" 'M5: fixture commands have their own repository, worktree, index and objects'
+assert_eq "$refs" "$(git -C "$sentinel" show-ref)" 'sentinel refs unchanged'
+assert_eq "$index" "$(git hash-object "$sentinel/.git/index")" 'sentinel index byte-identical'
+
 # ---------------------------------------------------------------------------
 it "json_escape escapes quotes and backslashes"
 # shellcheck source=/dev/null
@@ -818,7 +834,7 @@ it "kit scripts use the approved runtime allowlist"
 # Keep language runtimes distinct from ordinary system tools and the existing
 # GitHub/JSON CLIs. This best-effort check inventories static commands and shebangs.
 runtime_allowlist=(sh bash awk sed jq)
-kit_tools=(basename cat chmod cmp cp cut date dd dirname env find gh git grep head hostname ln mkdir mkfifo mktemp mv od openssl ps readlink rm rmdir sha256sum shasum sleep sort tail touch tr uname wc)
+kit_tools=(basename cat chmod cmp cp cut date dd dirname env find gh git grep head hostname ln mkdir mkfifo mktemp mv od openssl ps readlink rm rmdir sha256sum shasum sleep sort stat tail touch tr uname wc)
 runtime_check() (
     local file
     {

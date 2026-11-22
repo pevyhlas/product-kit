@@ -139,7 +139,7 @@ online
 assert_eq true "$(printf '%s' "$OUTPUT" | jq '.legacy_blockers[0].cleared')" 'clearance uses base_at independently of current coverage'
 publish code; online; cleared
 
-it 'absent head/base evidence cannot clear, although authenticated coverage tokens may survive'
+it 'absent head/base evidence cannot clear a legacy blocker'
 for field in head base_at; do
     fresh; record "$B" T1 "$FAIL"; printf code > source.txt; commit failure; host
     publish code "$ID" HEAD ".$field=\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""

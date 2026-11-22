@@ -438,6 +438,9 @@ retire() (
     if ! same_mount "$admin" "$slot" || { [ "$mode" != stale ] && ! same_mount "$path" "$slot"; }; then
         echo "cannot guarantee a same-filesystem move to $slot"; return 1
     fi
+    if [ "$mode" = live ] && ! verify_preserved; then
+        echo "could not preserve its evidence: destination identity changed"; return 1
+    fi
     # Keep native Git from pruning the registration while the checkout is
     # absent. An interrupted partial retirement stays locked for recovery.
     printf 'Product-Kit retirement: %s\n' "$slot" > "$slot/lock-reason" &&
@@ -520,23 +523,61 @@ unlinked_path() { # absolute child and trusted checkout root
         p="${p%/*}"
     done
 }
+file_identity() { # physical device:inode, GNU or BSD stat
+    stat -c '%d:%i' "$1" 2>/dev/null || stat -f '%d:%i' "$1"
+}
+verify_preserved() {
+    local i dest
+    for i in ${preserved_paths[@]+"${!preserved_paths[@]}"}; do
+        dest="${preserved_paths[i]}"
+        unlinked_path "$dest" "$ROOT" && [ -f "$dest" ] &&
+            [ "$(file_identity "${dest%/*}")/$(file_identity "$dest")" = "${preserved_ids[i]}" ] || return 1
+    done
+}
+preserve_file() ( # source destination; work beside the destination on its filesystem
+    local file="$1" dest="$2" dir="${2%/*}" name="${2##*/}" stage parent_id stage_id published
+    mkdir -p "$dir" && unlinked_path "$dir" "$ROOT" || return 1
+    cd -P "$dir" && [ "$(pwd -P)" = "$dir" ] || return 1
+    parent_id="$(file_identity .)" || return 1
+    stage="$(mktemp -d .prdkit-evidence.XXXXXXXX)" || return 1
+    stage_id="$(file_identity "$stage")" && cd -P "$stage" &&
+        [ "$(pwd -P)" = "$dir/$stage" ] && [ "$(file_identity .)" = "$stage_id" ] || return 1
+    trap 'rm -f "./$name"; if unlinked_path "$dir/$stage" "$ROOT" && [ "$dir/$stage" -ef . ]; then rmdir "$dir/$stage"; fi' EXIT
+    cp -p "$file" "./$name" && cmp -s "$file" "./$name" || return 1
+    unlinked_path "$dest" "$ROOT" && [ "$dir/$stage" -ef . ] && [ "$dir" -ef .. ] &&
+        [ "$(file_identity ..)" = "$parent_id" ] || return 1
+    # Use the destination directory as the ln operand. An existing leaf, even an
+    # actual directory or symlink, cannot redirect the link to another name.
+    if ln "./$name" .. 2>/dev/null; then
+        [ ! -L "../$name" ] && [ "../$name" -ef "./$name" ] || return 1
+    fi
+    # No replacement on publication. If someone else won, accept only the same bytes.
+    [ -f "../$name" ] && [ ! -L "../$name" ] && published="$(file_identity "../$name")" &&
+        cmp -s "./$name" "../$name" && cmp -s "$file" "../$name" &&
+        unlinked_path "$dest" "$ROOT" && [ "$dir" -ef .. ] && [ "$(file_identity "$dest")" = "$published" ] &&
+        printf '%s/%s\n' "$parent_id" "$published"
+)
 preserve() { # path relative to .prdkit/ (a directory or a file)
-    local src="$WT/.prdkit/$1" dest="$ROOT/.prdkit/$1" file rel list rc=0
+    local src="$WT/.prdkit/$1" dest="$ROOT/.prdkit/$1" file rel list rc=0 published target
     unlinked_path "$src" "$WT" && unlinked_path "$dest" "$ROOT" || return 1
     [ -e "$src" ] || return 0
     list="$(mktemp)" || return 1
     if ! find -P "$src" -type f -print0 > "$list"; then rm -f "$list"; return 1; fi
     while IFS= read -r -d '' file; do
         rel="${file#"$src"}"
+        target="$dest$rel"
         if ! unlinked_path "$file" "$WT" || ! unlinked_path "$dest$rel" "$ROOT"; then rc=1; break; fi
         if [ -e "$dest$rel" ]; then
-            cmp -s "$file" "$dest$rel" || { CONFLICT="$dest$rel"; rc=1; break; }
-        else
-            if ! { mkdir -p "$(dirname "$dest$rel")" && cp -p "$file" "$dest$rel" && cmp -s "$file" "$dest$rel"; }; then
+            if [ ! -f "$target" ] || [ -L "$target" ] ||
+                ! published="$(file_identity "${target%/*}")" || ! published="$published/$(file_identity "$target")" ||
+                ! cmp -s "$file" "$target"; then
                 CONFLICT="$dest$rel"; rc=1; break
             fi
+        else
+            published="$(preserve_file "$file" "$target")" || { CONFLICT="$target"; rc=1; break; }
             PRESERVED=$((PRESERVED + 1))
         fi
+        preserved_paths+=("$target"); preserved_ids+=("$published")
     done < "$list"
     rm -f "$list"
     return "$rc"
@@ -564,6 +605,7 @@ refuse_git() { # git's reason
 
 remove_worktree() { # path label locked
     local label="$2" locked="$3" state admin slot
+    local preserved_paths=() preserved_ids=()
     WT="$1"; PRESERVED=0; CONFLICT=""
     admin="$(registration "$WT")" || { refuse_git "cannot resolve worktree registration"; return 1; }
     if [ -d "$admin/prdkit-cleanup.lock" ]; then refuse_git "another cleanup-change.sh run holds $admin/prdkit-cleanup.lock"; return 1; fi

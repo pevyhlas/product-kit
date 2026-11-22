@@ -44,6 +44,8 @@ context_select_spans() { # source file; at/selector passed as awk -v arguments
 }
 
 context_gap() {
+    # Verification is a dispatch reminder even for a complete structural package.
+    [ "$1" = verification ] || reuse_context=custom
     printf '%s\n' "$*" >> "$PACKAGE_DIR/context-gaps.txt"
     printf -- '-\t-\t-\t-\t-\t-\t%s\t%s\n' "$(spec_field "$1")" "$(spec_field "$*")" >> "$PACKAGE_DIR/context-manifest.tsv"
 }
