@@ -267,7 +267,14 @@ mkdir -p "$REVIEW_DIR"
 if ! acquire_review_lock; then
     echo "ERROR: package allocation busy or claim unconfirmed; reconcile retained evidence before retrying" >&2; exit 1
 fi
-ROUND=1; COMPLETED=0; COMPLETED_HEAD=""
+# Only a clean, ordinary full package can be reused automatically. Caller snapshots,
+# focused deltas and native evaluations can change independently of the source fingerprint.
+reuse_context=full
+if [ -n "$SINCE$PR_URL$REVIEW_PLAN" ] || [ "${#CONTEXT[@]}" -ne 0 ] || [ "${#EVIDENCE[@]}" -ne 0 ] ||
+    ! git -C "$REPO_ROOT" diff --quiet --ignore-submodules=none "$HEAD_SHA" --; then
+    reuse_context=custom
+fi
+ROUND=1; COMPLETED=0; COMPLETED_HEAD=""; COMPLETED_BASE=""; COMPLETED_TIP=""; COMPLETED_POLICY=""; COMPLETED_CONTEXT=""
 for d in "$REVIEW_DIR"/round-*/; do
     [[ -d "$d" ]] || continue
     [ ! -L "${d%/}" ] || { echo "ERROR: symlinked round directory" >&2; exit 1; }
@@ -284,23 +291,38 @@ for d in "$REVIEW_DIR"/round-*/; do
         # Older interrupted writers can leave empty/unterminated files. A failed complete
         # read or malformed record is incomplete evidence, never a fatal errexit or binding.
         if review_file_without_nul "$d/completed.tsv" &&
-            awk -F '\t' 'NR!=1 || NF!=7 { bad=1 } END { exit (bad || NR!=1) }' "$d/completed.tsv" &&
-            IFS=$'\t' read -r version bound_id bound_head bound_base bound_tip bound_policy bound_comparison < "$d/completed.tsv" &&
-            [ "$version" = package2 ] && [ "$bound_id" = "$CHANGE_ID" ] && [ "$bound_comparison" = known ] &&
+            awk -F '\t' 'NR!=1 || NF!=8 { bad=1 } END { exit (bad || NR!=1) }' "$d/completed.tsv" &&
+            IFS=$'\t' read -r version bound_id bound_head bound_base bound_tip bound_policy bound_comparison bound_context < "$d/completed.tsv" &&
+            [ "$version" = package3 ] && [ "$bound_id" = "$CHANGE_ID" ] && [ "$bound_comparison" = known ] &&
             [[ "$bound_head" =~ ^[0-9a-f]{40}$ && "$bound_tip" =~ ^[0-9a-f]{40}$ && "$bound_policy" =~ ^[0-9a-f]{40}$ ]] &&
-            [[ "$bound_base" == refs/remotes/* ]]; then
-            COMPLETED="$n"; COMPLETED_HEAD="$bound_head"
+            [[ "$bound_base" == refs/remotes/* && ( "$bound_context" = full || "$bound_context" = custom ) ]]; then
+            COMPLETED="$n"; COMPLETED_HEAD="$bound_head"; COMPLETED_BASE="$bound_base"
+            COMPLETED_TIP="$bound_tip"; COMPLETED_POLICY="$bound_policy"; COMPLETED_CONTEXT="$bound_context"
         fi
     fi
 done
 if [ -n "$COMPLETED_HEAD" ] && [ -n "$FP_BASE_AT" ]; then
     prior_fp=""
-    if review_fingerprint "$REPO_ROOT" "$CHANGE_ID" "$FP_BASE_AT" "$COMPLETED_HEAD" >/dev/null; then prior_fp="$REVIEW_FP"; fi
+    if review_fingerprint "$REPO_ROOT" "$CHANGE_ID" "$COMPLETED_TIP" "$COMPLETED_HEAD" >/dev/null; then prior_fp="$REVIEW_FP"; fi
     if [ -n "$FINGERPRINT" ] && [ "$prior_fp" = "$FINGERPRINT" ]; then
-        echo "ERROR: reviewed content equals completed round-$COMPLETED; no round needed (reuse its artifacts)" >&2; exit 1
+        # The same fingerprint can omit record/context changes. Reuse only an identical
+        # full tree and range start, under the same trusted policy and base branch.
+        # A different head must have a live record: a closed head can recover context
+        # from different history even when both trees are identical.
+        if [ "$FP_REF" = "$COMPLETED_BASE" ] && [ "$POLICY_AT" = "$COMPLETED_POLICY" ] &&
+            [ "$BASE_SHA" = "$REVIEW_MB" ] && [ "$reuse_context" = full ] && [ "$COMPLETED_CONTEXT" = full ] &&
+            { [ "$HEAD_SHA" = "$COMPLETED_HEAD" ] ||
+                { prior_tree="$(git -C "$REPO_ROOT" rev-parse --verify "$COMPLETED_HEAD^{tree}")" &&
+                    current_tree="$(git -C "$REPO_ROOT" rev-parse --verify "$HEAD_SHA^{tree}")" && [ "$prior_tree" = "$current_tree" ] &&
+                    context_object "$HEAD_SHA" "specs/changes/$CHANGE_ID.md" >/dev/null; }; }; then
+            echo "ERROR: reviewed content and package context equal completed round-$COMPLETED; no round needed (reuse its artifacts)" >&2; exit 1
+        fi
+        COMPARISON_TEXT="same reviewed content as completed round-$COMPLETED, but package context or bindings differ"
+    elif [ -z "$prior_fp" ]; then
+        COMPARISON_TEXT="unknown: completed round-$COMPLETED head or base tip is unreadable"
+    elif [ -n "$FINGERPRINT" ]; then
+        COMPARISON_TEXT="changed from completed round-$COMPLETED (recomputed from objects)"
     fi
-    if [ -z "$prior_fp" ]; then COMPARISON_TEXT="unknown: completed round-$COMPLETED head is unreadable"
-    elif [ -n "$FINGERPRINT" ]; then COMPARISON_TEXT="changed from completed round-$COMPLETED (recomputed from objects)"; fi
     if [ -n "$SINCE" ] && [ -z "$prior_fp" ]; then
         echo "ERROR: completed package comparison unknown; no targeted round allocated" >&2; exit 1
     fi
@@ -471,9 +493,10 @@ while IFS=$'\t' read -r file bytes oid source; do
     fi
 done < "$PACKAGE_DIR/manifest.tsv"
 # Completion is written LAST, never to an interrupted round. It is a comparison binding, not
-# approval: later calls recompute the prior head's content from immutable objects.
+# approval: later calls recompute the prior head's content against its recorded base tip.
 comparison=unknown; [ -z "$FINGERPRINT" ] || comparison=known
-printf 'package2\t%s\t%s\t%s\t%s\t%s\t%s\n' "$CHANGE_ID" "$HEAD_SHA" "$FP_REF" "$FP_BASE_AT" "$POLICY_AT" "$comparison" > "$PACKAGE_DIR/completed.pending"
+if grep -q '^working tree differs from bound HEAD;' "$PACKAGE_DIR/context-gaps.txt"; then reuse_context=custom; fi
+printf 'package3\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$CHANGE_ID" "$HEAD_SHA" "$FP_REF" "$FP_BASE_AT" "$POLICY_AT" "$comparison" "$reuse_context" > "$PACKAGE_DIR/completed.pending"
 mv "$PACKAGE_DIR/completed.pending" "$PACKAGE_DIR/completed.tsv"
 
 printf '{"ROUND":%d,"BASE_SHA":"%s","HEAD_SHA":"%s","PACKAGE_DIR":"%s","REPORT_PATH":"%s","INDEX_PATH":"%s","SINCE_SHA":"%s","FINGERPRINT":"%s","SINCE_FINGERPRINT":"%s"}\n' "$ROUND" "$BASE_SHA" "$HEAD_SHA" "$(json_escape "$PACKAGE_DIR")" "$(json_escape "$PACKAGE_DIR/report.md")" "$(json_escape "$PACKAGE_DIR/index.md")" "$SINCE" "$FINGERPRINT" "$SINCE_FINGERPRINT"

@@ -165,10 +165,12 @@ receipt_raw_run bash "$CHECK" --repo "$P" --json --diagnostics --pr https://gith
 assert_eq 0 "$STATUS" "real evaluator accepts synthetic narrow receipt: $OUTPUT"
 assert_eq true "$(printf '%s' "$OUTPUT" | jq '.diagnostics.latest[] | select(.reviewer=="security") | .end_covered')" 'actual security retention'
 parity
-# Native receipt change alone cannot allocate another package.
+# A full request cannot reuse a package assembled with an earlier native evaluation and plan.
 receipt_raw_run bash "$BUILD" "$ID" "$BASE"
-assert_eq 1 "$STATUS" 'receipt is not source change'
-assert_contains "$OUTPUT" 'no round needed' 'reuse existing package'
+assert_eq 0 "$STATUS" 'the same source can get a fresh package for different inputs'
+fresh="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
+assert_contains "$(cat "$fresh/index.md")" 'package context or bindings differ'
+assert_eq false "$([ -e "$fresh/gate.json" ] && echo true || echo false)" 'does not inherit the previous native evaluation'
 
 it "Full replacement PASS clears own FAIL but does not bridge another approval"
 cp "$GH_STUB_DIR/original.json" "$GH_STUB_DIR/reviews/7.json"

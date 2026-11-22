@@ -76,10 +76,11 @@ no hypothetical receipt is evaluated or published. Unavailable/partial host evid
 and unpublished changed code cannot establish current retention. Ordinary structural packages
 remain possible without host tools. Neither a plan nor a package authorizes merging.
 
-Equal reviewed content refuses before round allocation, including comparison with the latest
-completed object-bound package when `--since` is omitted. Reuse the existing package for receipt
-repairs, owner action or new verification evidence. Incomplete rounds keep their evidence and
-number; unknown comparison is never equality. Concurrent allocation is serialized.
+An unchanged `--since` range refuses a focused round. A full package can be reused only when the
+latest comparable package has the same reviewed content, range start, trusted policy and compatible
+context. Requests with explicit context, evidence or live gate data do not auto-reuse older
+artifacts. Incomplete rounds keep their evidence and number; unknown comparison is never equality.
+Concurrent allocation is serialized.
 
 Trusted default-branch policy names `review-host: github`, numeric `review-publishers`, personal
 numeric `review-owner` ids, and `review-publisher-isolation: required|shared`. Register eligible
@@ -177,8 +178,9 @@ It does not know which concerns a T2 change needed; the reviewer list is the wor
 checks recorded verdicts, never grants merge authority, and is the gate where the plan has no
 branch protection.
 
-A verdict holds while the reviewed content is unchanged: record and log commits, an edit later
-reverted, a rebase, a squash and a base merge that does not overlap keep it. A real fix or an
+A verdict holds while the reviewed content is unchanged: the change's own record and closing
+metadata, an edit later reverted, a rebase, a squash and a base merge that does not overlap keep
+it. Other shared-log edits, including compaction, stay in scope. A real fix or an
 overlapping base merge voids it. Overlapping means the base's own changes touch a line the change
 adds or removes, or one of the 3 unchanged context lines around it the reviewer saw (a clean
 merge more than 3 lines away keeps it), or base and change both touch a binary file, a symlink, a

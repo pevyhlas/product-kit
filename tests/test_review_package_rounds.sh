@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Equal content is refused before allocating or mutating durable artifacts. No host needed.
+# Equal content and compatible package context avoid another allocation. No host needed.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 source "$PK_ROOT/scripts/common.sh"
@@ -28,15 +28,21 @@ equal() {
     assert_eq 1 "$STATUS" "equal refused: $OUTPUT"
     assert_contains "$OUTPUT" 'no round needed' 'explicit equality, not unknown'
     assert_eq "$before" "$(snapshot)" 'all artifacts byte-identical'
-    assert_eq absent "$([ -d "$ROOT/round-2" ] && echo present || echo absent)" 'no new round'
 }
-it "Metadata-only and reverted commits refuse with and without --since"
+it "A changed record needs fresh context even when the review fingerprint is unchanged"
 printf '\nrecord note\n' >> specs/changes/001-equal.md
 git commit -qam metadata
 equal "$BASE" "$F1"
+run bash "$SCRIPT" 001-equal "$BASE"
+assert_eq 0 "$STATUS" "fresh package for the new record: $OUTPUT"
+pkg="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
+assert_contains "$(cat "$pkg/index.md")" 'package context or bindings differ'
+assert_contains "$(cat "$pkg"/context-sections/*.txt)" 'record note'
+before="$(snapshot)"
 equal "$BASE"
 printf 'try\n' >> src/app.txt; git commit -qam try; git revert --no-edit HEAD >/dev/null
 equal "$BASE" "$F1"
+equal "$BASE"
 
 it "Squash and rebase equivalents refuse"
 tree="$(git rev-parse 'HEAD^{tree}')"; squashed="$(git commit-tree "$tree" -p "$BASE" -m synthetic-squash)"
@@ -48,7 +54,6 @@ printf 'base addition\n' > other.txt; git add other.txt; git commit -qm nonoverl
 TIP="$(git rev-parse HEAD)"; git update-ref "refs/remotes/origin/$MAIN" "$TIP"
 git checkout -q 001-equal; git merge -q --no-edit "$MAIN"
 equal "$TIP" "$F1"
-equal "$TIP"
 git rebase -q "$MAIN" >/dev/null 2>&1
 equal "$TIP" "$F1"
 
@@ -59,7 +64,7 @@ TIP="$(git rev-parse HEAD)"; git update-ref "refs/remotes/origin/$MAIN" "$TIP"
 git checkout -q 001-equal; git merge -q --no-edit "$MAIN"
 run bash "$SCRIPT" 001-equal "$TIP" --since "$F1"
 assert_eq 0 "$STATUS" "overlap allocates a changed-content round: $OUTPUT"
-assert_eq 2 "$(printf '%s' "$OUTPUT" | jq .ROUND)" 'overlap is round 2'
+assert_eq 3 "$(printf '%s' "$OUTPUT" | jq .ROUND)" 'overlap is round 3'
 
 it "Incomplete rounds retain evidence/numbering but do not prove completion"
 printf 'fix\n' >> src/app.txt; git commit -qam fix
@@ -101,6 +106,41 @@ assert_eq 0 "$STATUS" 'whole-file empty context supported'
 pkg="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
 assert_eq 0 "$(wc -c < "$pkg/context/empty.txt" | tr -d ' ')" 'empty snapshot retained'
 assert_contains "$(cat "$pkg/context-manifest.tsv")" "$(git rev-parse HEAD:empty.txt)" 'empty blob provenance'
+
+it "When the base absorbs part of a package, the remaining range gets a fresh package"
+git checkout -qb partial-range "$TIP"
+printf 'first part\n' > first-part.txt; git add first-part.txt; git commit -qm 'first part'
+PARTIAL="$(git rev-parse HEAD)"
+printf 'second part\n' > second-part.txt; git add second-part.txt; git commit -qm 'second part'
+run bash "$SCRIPT" 006-partial "$TIP"
+assert_eq 0 "$STATUS" "package the entire range: $OUTPUT"
+old_pkg="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
+before="$(package_snapshot "$old_pkg")"
+assert_contains "$(cat "$old_pkg/diff.patch")" first-part.txt 'prior package includes the absorbed part'
+git update-ref "refs/remotes/origin/$MAIN" "$PARTIAL"
+run bash "$SCRIPT" 006-partial "$PARTIAL"
+assert_eq 0 "$STATUS" "remaining range needs a fresh package: $OUTPUT"
+pkg="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
+assert_eq 2 "$(printf '%s' "$OUTPUT" | jq .ROUND)" 'a new round was allocated'
+assert_not_contains "$(cat "$pkg/diff.patch")" first-part.txt 'already integrated part excluded'
+assert_contains "$(cat "$pkg/diff.patch")" second-part.txt 'remaining part included'
+assert_contains "$(cat "$pkg/index.md")" 'changed from completed round-1' 'old fingerprint uses its recorded tip'
+assert_eq "$before" "$(package_snapshot "$old_pkg")" 'prior artifacts not touched'
+
+it "Updated trusted policy or explicit context prevents reuse at the same source"
+git checkout -q 001-equal
+run bash "$SCRIPT" 007-context "$TIP"
+assert_eq 0 "$STATUS" "record a full package at the current policy: $OUTPUT"
+git update-ref "refs/remotes/origin/$MAIN" "$(git commit-tree "$PARTIAL^{tree}" -p "$PARTIAL" -m 'advance trusted policy revision')"
+run bash "$SCRIPT" 007-context "$TIP"
+assert_eq 0 "$STATUS" "fresh package under a new trusted policy revision: $OUTPUT"
+pkg="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
+assert_contains "$(cat "$pkg/index.md")" 'package context or bindings differ'
+run bash "$SCRIPT" 007-context "$TIP" --context empty.txt
+assert_eq 0 "$STATUS" "new explicit context needs a new package: $OUTPUT"
+pkg="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
+assert_file "$pkg/context/empty.txt"
+git update-ref "refs/remotes/origin/$MAIN" "$TIP"
 
 it "Targeted unreadable current/since/completed content refuses before artifact mutation"
 # Selectively deny one old blob, not all object reads: the other comparisons remain usable.

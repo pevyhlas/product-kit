@@ -8,6 +8,31 @@ change by change.
 
 ## [Unreleased]
 
+## [2.0.3] — 2026-11-22 — review bindings and concurrent evidence preservation
+
+### Fixed
+
+- Review fingerprints bind shared-log edits, including compaction and changes to other
+  entries. Only the selected change's validated new close line is exempt when closing
+  through the shared log. A close that changes anything else there needs review.
+- Concurrent cleanup runs publish evidence without replacing an existing copy. Matching
+  bytes are accepted; a conflict leaves the losing worktree in place. Publishing new
+  evidence requires hard-link support in the destination directory.
+- Review package reuse compares the previous range against its original base tip and
+  checks the range start, trusted policy and package context. If part of the previous
+  range has landed, the remaining range gets a fresh package.
+
+### Adoption
+
+From 2.0.2, pin `v2.0.3` and run `bash .product-kit/scripts/init.sh --upgrade`.
+Existing receipt fingerprints are unchanged when the reviewed delta did not edit the
+shared log (or only added the selected change's valid close line). For in-flight changes
+with any other shared-log edits, regenerate the review package and publish fresh full
+reviews against the corrected fingerprint. Old receipts keep their original scope and
+blocking verdicts still stand; do not rewrite them. Update the kit
+on all gate and publication checkouts together. Older packages remain on disk but do not
+qualify for automatic reuse.
+
 ## [2.0.2] — 2026-11-21 — safer worktree cleanup and complete review patches
 
 ### Fixed

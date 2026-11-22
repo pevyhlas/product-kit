@@ -19,6 +19,8 @@ cat >> .prdkit/memory/config.md <<'EOF'
 - review-t0-paths: docs/
 EOF
 printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n' >> .prdkit/memory/agents.md
+mkdir -p specs
+printf -- '- 2026-01-02 002-earlier: completed\n' > specs/log.md
 git add -A; git commit -qm baseline
 BASE="$(git rev-parse HEAD)"
 git update-ref refs/remotes/origin/main HEAD
@@ -196,6 +198,66 @@ online
 assert_eq 0 "$STATUS" "$OUTPUT"
 assert_contains "$OUTPUT" '"head_is_pr_head":false'
 assert_contains "$OUTPUT" "\"pr_head\":\"$PR_HEAD\""
+
+it 'a legacy shared-log close preserves only its own new line as metadata'
+git checkout -qb shared-log-close "$PR_HEAD"
+printf -- '- 2026-01-03 001-reviewed: closed\n' >> specs/log.md
+git commit -qam 'write the shared log while the record is still open'
+run bash "$CHECK" --json --pr "$PR" 001-reviewed
+assert_eq 1 "$STATUS" 'an open record cannot exempt even its own log line'
+assert_contains "$OUTPUT" 'PR head does not match the content'
+git rm -q specs/changes/001-reviewed.md; git commit -qm 'close the selected change'
+SHARED_CLOSE="$(git rev-parse HEAD)"
+online
+assert_eq 0 "$STATUS" "a valid shared-log close keeps the old receipt: $OUTPUT"
+assert_eq "$FP" "$(printf '%s' "$OUTPUT" | jq -r .fingerprint)" 'the close alone leaves the fingerprint unchanged'
+git update-ref refs/remotes/origin/main "$PR_HEAD"
+online
+assert_eq 0 "$STATUS" 'a clean bridge close after the implementation merged needs no new receipt'
+assert_contains "$OUTPUT" '"record_only":true'
+git update-ref refs/remotes/origin/main "$BASE"
+printf -- '- 2026-01-03 001-reviewed: closed\n' > specs/log.md
+git commit -qam 'drop another change from the shared log'
+online
+assert_eq 1 "$STATUS" 'dropping another close breaks the unpushed close bridge'
+assert_contains "$OUTPUT" 'PR head does not match the content'
+assert_not_contains "$OUTPUT" "\"fingerprint\":\"$FP\"" 'the shared-log loss changes the fingerprint'
+fx_pr 7 "$(git rev-parse HEAD)"
+online
+assert_eq 1 "$STATUS" 'publishing the bad merge resolution does not restore receipt coverage'
+assert_contains "$OUTPUT" 'reviewed content differs at: specs/log.md'
+BAD_HEAD="$(git rev-parse HEAD)"
+git update-ref refs/remotes/origin/main "$PR_HEAD"
+online
+assert_eq 1 "$STATUS" 'a bridge after the implementation merged still needs review for the shared-log loss'
+assert_contains "$OUTPUT" '"record_only":false'
+git update-ref refs/remotes/origin/main "$BASE"
+
+it 'old receipts keep their posted fingerprints but do not grandfather shared-log edits'
+OLD_FP="$(review_legacy_log_fingerprint "$PROJ" 001-reviewed "$BASE" "$BAD_HEAD")"
+NEW_FP="$(review_fingerprint "$PROJ" 001-reviewed "$BASE" "$BAD_HEAD")"
+assert_eq "$FP" "$OLD_FP" 'untouched shared-log behavior is fingerprint-compatible'
+assert_not_contains "$OLD_FP" "$NEW_FP" 'the old algorithm did not bind the log edit'
+cp "$GH_STUB_DIR/reviews/7.json" "$GH_STUB_DIR/reviews-original.json"
+publish 7 ".id=\"00000000000000000000000000000003\"|.head=\"$BAD_HEAD\"|.to=\"$OLD_FP\"|.verdict=\"FAIL\""
+online
+assert_eq 1 "$STATUS" 'a pre-upgrade FAIL still blocks'
+assert_contains "$OUTPUT" '"invalid_receipts":0' 'old matching provenance is recognized'
+assert_contains "$OUTPUT" 'blocking verdict stands'
+publish 7 ".id=\"00000000000000000000000000000004\"|.head=\"$BAD_HEAD\"|.to=\"$NEW_FP\""
+online
+assert_eq 0 "$STATUS" "a new full PASS reviews the log and clears the old blocker: $OUTPUT"
+mv "$GH_STUB_DIR/reviews-original.json" "$GH_STUB_DIR/reviews/7.json"
+
+it 'compaction is not closing metadata'
+git checkout -q "$SHARED_CLOSE"
+printf -- '- 2026-01-04 compaction: retain current entries\n' >> specs/log.md
+git commit -qam 'compact the shared log'
+fx_pr 7 "$PR_HEAD"
+online
+assert_eq 1 "$STATUS" 'compaction also changes the reviewed fingerprint'
+assert_contains "$OUTPUT" 'PR head does not match the content'
+git checkout -q 001-reviewed
 
 it 'record-only and T0 exempt coverage, never blocker enumeration'
 git update-ref refs/remotes/origin/main "$before"

@@ -506,6 +506,22 @@ unlinked_path() { # absolute child and trusted checkout root
         p="${p%/*}"
     done
 }
+preserve_file() ( # source destination; work beside the destination on its filesystem
+    local file="$1" dest="$2" dir="${2%/*}" name="${2##*/}" stage
+    mkdir -p "$dir" && unlinked_path "$dir" "$ROOT" || return 1
+    cd -P "$dir" && [ "$(pwd -P)" = "$dir" ] || return 1
+    stage="$(mktemp -d .prdkit-evidence.XXXXXXXX)" || return 1
+    trap 'rm -f "$stage/$name"; rmdir "$stage"' EXIT
+    cp -p "$file" "$stage/$name" && cmp -s "$file" "$stage/$name" || return 1
+    # Use the destination directory as the ln operand. An existing leaf, even an
+    # actual directory or symlink, cannot redirect the link to another name.
+    if ln "$stage/$name" . 2>/dev/null; then
+        [ ! -L "./$name" ] && [ "./$name" -ef "$stage/$name" ] || return 1
+    fi
+    # No replacement on publication. If someone else won, accept only the same bytes.
+    [ -f "./$name" ] && [ ! -L "./$name" ] &&
+        cmp -s "$stage/$name" "./$name" && cmp -s "$file" "./$name"
+)
 preserve() { # path relative to .prdkit/ (a directory or a file)
     local src="$WT/.prdkit/$1" dest="$ROOT/.prdkit/$1" file rel list rc=0
     unlinked_path "$src" "$WT" && unlinked_path "$dest" "$ROOT" || return 1
@@ -516,11 +532,11 @@ preserve() { # path relative to .prdkit/ (a directory or a file)
         rel="${file#"$src"}"
         if ! unlinked_path "$file" "$WT" || ! unlinked_path "$dest$rel" "$ROOT"; then rc=1; break; fi
         if [ -e "$dest$rel" ]; then
-            cmp -s "$file" "$dest$rel" || { CONFLICT="$dest$rel"; rc=1; break; }
-        else
-            if ! { mkdir -p "$(dirname "$dest$rel")" && cp -p "$file" "$dest$rel" && cmp -s "$file" "$dest$rel"; }; then
+            if [ ! -f "$dest$rel" ] || [ -L "$dest$rel" ] || ! cmp -s "$file" "$dest$rel"; then
                 CONFLICT="$dest$rel"; rc=1; break
             fi
+        else
+            preserve_file "$file" "$dest$rel" || { CONFLICT="$dest$rel"; rc=1; break; }
             PRESERVED=$((PRESERVED + 1))
         fi
     done < "$list"

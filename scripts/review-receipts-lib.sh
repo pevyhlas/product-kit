@@ -96,8 +96,18 @@ _receipts_reviews() { # repo PR output-directory; validate the entire GraphQL st
         reviews:[.[].data.repository.pullRequest.reviews.nodes[]]}' "$work/pages-$number" > "$work/source-$number.json"
 }
 
+_receipt_matches_v3() { # root change base_at rev token -> 0 match, 1 mismatch, 2 unreadable
+    local fp
+    fp="$(review_fingerprint "$1" "$2" "$3" "$4")" || return 2
+    [ "$fp" != "$5" ] || return 0
+    # Existing signatures omitted all shared-log edits. Keep the authenticated token
+    # as posted, not the new digest: it cannot cover a shared-log edit retroactively.
+    fp="$(review_legacy_log_fingerprint "$1" "$2" "$3" "$4")" || return 2
+    [ "$fp" = "$5" ]
+}
+
 _receipts_consistency() { # root change from to head since base base_at -> RC_ERROR
-    local root="$1" change="$2" from="$3" to="$4" head="$5" since="$6" base="$7" base_at="$8" fp
+    local root="$1" change="$2" from="$3" to="$4" head="$5" since="$6" base="$7" base_at="$8"
     RC_ERROR=""
     git check-ref-format "$base" >/dev/null 2>&1 || { RC_ERROR='invalid base ref'; return 1; }
     if ! spec_objects_local "$root"; then
@@ -106,12 +116,18 @@ _receipts_consistency() { # root change from to head since base base_at -> RC_ER
     # Absent provenance is permitted; tokens remain authenticated. Never fetch it implicitly.
     if ! GIT_NO_LAZY_FETCH=1 git -C "$root" cat-file -e "$base_at^{commit}" 2>/dev/null; then return 0; fi
     if [ "$to" != none ] && GIT_NO_LAZY_FETCH=1 git -C "$root" cat-file -e "$head^{commit}" 2>/dev/null; then
-        if ! fp="$(review_fingerprint "$root" "$change" "$base_at" "$head")"; then RC_ERROR='cannot fingerprint the receipt head against base_at'; return 1; fi
-        [ "$fp" = "$to" ] || { RC_ERROR="its to is not the content of its head ${head:0:12}; the publisher computed it against another base or is wrong; publish the verdict again"; return 1; }
+        _receipt_matches_v3 "$root" "$change" "$base_at" "$head" "$to" || {
+            if [ "$?" = 2 ]; then RC_ERROR='cannot fingerprint the receipt head against base_at'
+            else RC_ERROR="its to is not the content of its head ${head:0:12}; the publisher computed it against another base or is wrong; publish the verdict again"; fi
+            return 1
+        }
     fi
     if [ -n "$since" ] && GIT_NO_LAZY_FETCH=1 git -C "$root" cat-file -e "$since^{commit}" 2>/dev/null; then
-        if ! fp="$(review_fingerprint "$root" "$change" "$base_at" "$since")"; then RC_ERROR='cannot fingerprint since against base_at'; return 1; fi
-        [ "$fp" = "$from" ] || { RC_ERROR='its from is not the content of since against base_at; publish the verdict again'; return 1; }
+        _receipt_matches_v3 "$root" "$change" "$base_at" "$since" "$from" || {
+            if [ "$?" = 2 ]; then RC_ERROR='cannot fingerprint since against base_at'
+            else RC_ERROR='its from is not the content of since against base_at; publish the verdict again'; fi
+            return 1
+        }
     fi
 }
 

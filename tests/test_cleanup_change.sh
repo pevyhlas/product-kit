@@ -929,6 +929,63 @@ assert_eq 0 "$STATUS" "the first run removes the worktree"
 run test ! -d "$PROJ2/.worktrees/079-sub-overlap"
 assert_eq 0 "$STATUS" "worktree gone"
 
+it "concurrent cleanup of different worktrees publishes shared evidence without replacement"
+race="$(mktemp -d)"; track_tmp "$race"
+cat > "$race/cp" <<'SH'
+#!/usr/bin/env bash
+if [ "${2##*/}" = shared-race.txt ]; then
+    : > "$SYNC/$WRITER.ready"
+    case "$WRITER" in
+        first) other="$SYNC/second.ready" ;;
+        second) other="$SYNC/first.done" ;;
+    esac
+    # Hold both past the absence check, then let the first complete before the second copies.
+    for ((n=0; n<300; n++)); do
+        [ ! -e "$other" ] || break
+        sleep 0.1
+    done
+    [ -e "$other" ] || exit 1
+fi
+exec "$REAL_CP" "$@"
+SH
+chmod +x "$race/cp"
+for variant in different identical; do
+    sync="$race/$variant"; mkdir "$sync"
+    first_id="130-first-$variant"; second_id="131-second-$variant"
+    rel=".prdkit/cache/evidence/$variant/shared-race.txt"
+    for id in "$first_id" "$second_id"; do
+        work="$PROJ/.worktrees/$id"
+        git -C "$PROJ" worktree add -qb "$id" "$work" || exit 1
+        mkdir -p "$work/${rel%/*}"
+        bytes=first
+        if [ "$id" = "$second_id" ] && [ "$variant" = different ]; then bytes=second; fi
+        printf '%s\n' "$bytes" > "$work/$rel"
+    done
+    (
+        rc=0
+        env PATH="$race:$PATH" SYNC="$sync" WRITER=first REAL_CP="$(command -v cp)" bash "$CLEAN" "$first_id" || rc=$?
+        : > "$sync/first.done"
+        exit "$rc"
+    ) > "$sync/first.out" 2>&1 &
+    first=$!
+    env PATH="$race:$PATH" SYNC="$sync" WRITER=second REAL_CP="$(command -v cp)" bash "$CLEAN" "$second_id" > "$sync/second.out" 2>&1 &
+    second=$!
+    rc=0; wait "$first" || rc=$?
+    assert_eq 0 "$rc" "first cleanup succeeds: $(cat "$sync/first.out")"
+    assert_file "$sync/first.ready"; assert_file "$sync/second.ready"
+    rc=0; wait "$second" || rc=$?
+    if [ "$variant" = different ]; then
+        assert_eq 1 "$rc" "the conflicting cleanup refuses"
+        assert_contains "$(cat "$sync/second.out")" 'could not preserve its evidence'
+        assert_eq second "$(cat "$PROJ/.worktrees/$second_id/$rel")" 'refused worktree keeps its copy'
+    else
+        assert_eq 0 "$rc" "identical copies both succeed: $(cat "$sync/second.out")"
+        run test ! -e "$PROJ/.worktrees/$second_id"; assert_eq 0 "$STATUS" 'second worktree retired'
+    fi
+    assert_eq first "$(cat "$PROJ/$rel")" 'winner was not replaced'
+    assert_eq '' "$(find "$PROJ/${rel%/*}" -name '.prdkit-evidence.*')" 'no staging directories left behind'
+done
+
 # --- --closed: sweep every closed change's worktree ----------------------------------------------
 # Closed means the record specs/changes/<id>.md is gone from, and the log (specs/log.md or the entry
 # file specs/log/<id>.md) has the line on, the trusted integration branch (origin/HEAD), never the

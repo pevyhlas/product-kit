@@ -5,7 +5,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 source "$TESTS_DIR/review-package-fixtures.sh"
 BUILD="${PACKAGE_TEST_BUILDER:-$PK_ROOT/scripts/build-review-package.sh}"
 STATUS=0; OUTPUT=""
-for kind in legacy empty unterminated malformed multiline nul; do
+for kind in legacy earlier empty unterminated malformed multiline nul; do
     it "Unusable $kind completion preserves evidence and numbering"
     P="$(mktemp -d)"; track_tmp "$P"; cd "$P" || exit 1
     git init -q; git config user.name test; git config user.email test@example.invalid
@@ -18,14 +18,15 @@ for kind in legacy empty unterminated malformed multiline nul; do
     ROOT="$P/.prdkit/cache/evidence/$ID/reviews"
     mkdir -p "$ROOT/round-3"
     printf 'interrupted evidence\n' > "$ROOT/round-3/report.txt"
-    binding="package2"$'\t'"$ID"$'\t'"$HEAD_SHA"$'\t'"$REF"$'\t'"$BASE"$'\t'"$BASE"$'\tknown'
+    binding="package3"$'\t'"$ID"$'\t'"$HEAD_SHA"$'\t'"$REF"$'\t'"$BASE"$'\t'"$BASE"$'\tknown\tfull'
     case "$kind" in
-        legacy) printf '%s\n' "${binding/package2/package1}" > "$ROOT/round-3/completed.tsv" ;;
+        legacy) printf '%s\n' "${binding/package3/package1}" > "$ROOT/round-3/completed.tsv" ;;
+        earlier) printf '%s\n' "${binding%$'\t'full}" | sed 's/^package3/package2/' > "$ROOT/round-3/completed.tsv" ;;
         empty) : > "$ROOT/round-3/completed.tsv" ;;
         unterminated) printf '%s' "$binding" > "$ROOT/round-3/completed.tsv" ;;
         malformed) printf '%s\textra\n' "$binding" > "$ROOT/round-3/completed.tsv" ;;
         multiline) printf '%s\nextra\n' "$binding" > "$ROOT/round-3/completed.tsv" ;;
-        nul) printf 'package2\t%s\t%s\000%s\t%s\t%s\t%s\tknown\n' "$ID" "${HEAD_SHA:0:20}" "${HEAD_SHA:20}" "$REF" "$BASE" "$BASE" > "$ROOT/round-3/completed.tsv" ;;
+        nul) printf 'package3\t%s\t%s\000%s\t%s\t%s\t%s\tknown\tfull\n' "$ID" "${HEAD_SHA:0:20}" "${HEAD_SHA:20}" "$REF" "$BASE" "$BASE" > "$ROOT/round-3/completed.tsv" ;;
     esac
     before="$(package_snapshot "$ROOT/round-3")"
     run bash "$BUILD" "$ID" "$BASE"

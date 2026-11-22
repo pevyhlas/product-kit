@@ -218,7 +218,7 @@ highest_tier() { grep -x 'T[0-3]' | sort | tail -n 1; } # tiers on stdin -> the 
 tier_floor_of() { # rev -> the highest tier the record names there, if any
     { git -C "$root" show "$1:$path" 2>/dev/null || true; } | floor_tiers | highest_tier || true
 }
-# T0 is docs only: every changed path outside the record and the log must be a regular,
+# T0 is docs only: every changed path outside the record and closing metadata must be a regular,
 # non-executable file under a path the trusted config lists in review-t0-paths (literal paths;
 # a trailing / names a directory), and never the kit's policy, another change record or the L0/L1
 # spec. Prints the paths that do not qualify; fails when the diff cannot be read.
@@ -244,10 +244,10 @@ t0_violations() { # from to
     allowed="$(t0_paths "$policy_at")"
     raw="$(LC_ALL=C GIT_NO_REPLACE_OBJECTS=1 git -C "$root" -c core.quotepath=true diff --raw --no-abbrev \
         --no-renames --no-ext-diff --no-textconv --no-color --no-relative --ignore-submodules=none "$1" "$2" -- . \
-        ":(top,literal,exclude)$path" ":(top,literal,exclude)specs/log.md" \
-        ":(top,literal,exclude)specs/log/$id.md")" || return 1
+        ":(top,literal,exclude)$path" ":(top,literal,exclude)specs/log/$id.md")" || return 1
     while IFS="$(printf '\t')" read -r meta file; do
         [ -n "$meta" ] || continue
+        if [ "$file" = specs/log.md ] && [ -z "$shared_log_delta" ]; then continue; fi
         old="${meta%% *}"; old="${old#:}"; new="${meta#* }"; new="${new%% *}"
         ok=false
         case "$old:$new" in 000000:100644|100644:100644|100644:000000) ok=true ;; esac
@@ -271,7 +271,7 @@ t0_violations() { # from to
 eligible() { [ "$(review_eligibility "$registry" "$1")" = reviewer ]; }
 path="specs/changes/$id.md"
 spec_l01=(specs/product.md specs/product specs/architecture.md specs/architecture specs/SPEC.md specs/decisions)
-changed_since() { # sha [pathspec...] -> paths changed from sha to head, outside the record and the log
+changed_since() { # sha [pathspec...] -> paths changed from sha to head; check the shared log separately
     local sha="$1"; shift
     [ "$#" -gt 0 ] || set -- . ":(exclude)$path" ":(exclude)specs/log.md" ":(exclude)specs/log/$id.md"
     git -C "$root" diff --name-only --no-renames --ignore-submodules=none "$sha" "$head" -- "$@" | tr '\n' ' ' | sed 's/ $//'
@@ -298,8 +298,7 @@ else
     elif ! grep -q "^- [0-9-]* $id:" <<< "$log"; then
         problems+=("$id is closed (its record is deleted) but the log at $head has no '- <date> $id: <what changed>' entry (specs/log/$id.md, as close-change.sh writes it, or a line in specs/log.md)")
     fi
-    # The log paths leave review coverage, so each must be a plain file at the head: a pathspec
-    # also excludes whatever lies under a directory of that name. The entry is its own one line.
+    # Closing metadata must be plain files. The per-change entry is its own one line.
     while read -r log_mode log_type log_sha log_path; do
         case "$log_mode $log_type" in
             "100644 blob"|"100755 blob")
@@ -366,7 +365,7 @@ else
         problems+=("The record claims $tier, but its floor is $floor, from $floor_at: a branch may raise its tier, never lower it; claim **Tier**: $floor")
         tier="$floor"
     fi
-    # The record and the log are exempt from coverage only as regular, non-executable files, where
+    # The record and closing metadata are exempt only as regular, non-executable files, where
     # the change starts and at its head: a directory there would exempt everything inside it, and
     # converting or deleting an unsafe entry would hide that transition.
     metadata_ends=("$head"); [ -z "$start" ] || [ "$start" = "$head" ] || metadata_ends=("$start" "$head")
@@ -380,7 +379,14 @@ else
             problems+=("$(printf '%s' "$odd" | tr '\n' ' ' | sed 's/ $//') is not a regular, non-executable file at $where, so changing it cannot be exempt from review; fix it on the base first")
         fi
     done
-    if $base_trusted && [ -n "$start" ] && [ "$start" != "$head" ] && [ -z "$(changed_since "$start")" ]; then
+    shared_log_delta=""
+    if [ -n "$start" ] &&
+        ! shared_log_delta="$(review_delta_stream "$root" "$id" "$start" "$head" ':(top,literal)specs/log.md')"; then
+        shared_log_delta=unreadable
+        problems+=("The shared log's diff from ${start:0:12} to $head cannot be checked")
+    fi
+    if $base_trusted && [ -n "$start" ] && [ "$start" != "$head" ] &&
+        [ -z "$shared_log_delta" ] && [ -z "$(changed_since "$start")" ]; then
         record_only=true
     fi
     # All verdicts come from the validated host/snapshot list, in host order.
