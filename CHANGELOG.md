@@ -18,6 +18,12 @@ change by change.
   and line-oriented verifier evidence require LF line endings and a final newline;
   `read-spec.sh --raw` still returns the original bytes.
 
+### Documentation
+
+- Document safety invariants and threat models in the worktree, close, publication, adoption,
+  review and upgrade scripts. Contributor and review checklists now ask for those contracts
+  to be checked when the scripts change. Script behavior is unchanged.
+
 ## [2.0.3] — 2026-11-22 — review bindings and concurrent evidence preservation
 
 ### Fixed

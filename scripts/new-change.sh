@@ -4,9 +4,19 @@
 #
 # Usage: new-change.sh [--json] [--short-name <name>] [--number N] [--no-worktree|--no-branch] <intent>
 #
-# Never overwrites an existing change record. Automatic fallback refuses tracked or
-# non-ignored untracked work. --no-worktree (or an already linked worktree) branches
-# in place, carrying existing local edits onto the new branch.
+# --no-worktree (or an already linked worktree) branches in place, carrying
+# existing local edits onto the new branch.
+#
+# Invariants:
+# Refuse to overwrite an existing change record. In Git, serialize number selection
+# and record creation across kit runs; an explicit number can override some reservations.
+# Prefer an isolated worktree. Warn before automatic fallback and refuse if the status
+# check reports tracked or non-ignored untracked work. Never prune stale registrations.
+#
+# Threat model:
+# Include competing kit invocations and stale locks from ended runs. Branch/worktree
+# creation and record creation are not transactional: interruption can leave partial
+# state. A hostile writer modifying the checkout or Git directory is out of scope.
 set -e
 
 # shellcheck source=/dev/null
