@@ -7,6 +7,10 @@ Only the review evidence changes. Keep the **2.x tier minimums**: no approval
 for T0; at least one independent `review-publishers` approval for T1–T3; and
 also a `review-owner` approval for T3. An ID in both lists is an owner only.
 The PR author counts for neither role. Even T0 requires a successful live gate.
+As in 2.x, a new commit does not clear an objection. An eligible reviewer’s
+`CHANGES_REQUESTED` on any commit of the PR blocks until that reviewer approves
+the exact current head in a later submission, or an owner/maintainer dismisses
+the objecting review itself on GitHub. A comment is not clearance.
 
 **Before installing:** identify the protected branch's actual rule. This guide
 uses a source-bound **required workflow**, not a required status-check name. Confirm
@@ -94,7 +98,7 @@ After the pilot, confirm the 3.0 requirement is active on every intended target.
 Only then remove the 2.0 requirement, retire or repurpose the old publisher, remove
 `review-publisher-isolation` from trusted policy, and drop receipt replay and
 `--review-plan` steps. Keep `review-publishers` and `review-owner`. For each account,
-only its latest submitted review on the exact PR head counts. A pending review
+only its latest submitted review on the exact PR head counts toward approval. A pending review
 does not count; a later submitted comment, dismissal or changes request on that
 head supersedes its approval. Commit authorship is irrelevant. Obtain the tier’s required approvals for
 each open PR’s current SHA, including any new SHA created by `close-change.sh`.

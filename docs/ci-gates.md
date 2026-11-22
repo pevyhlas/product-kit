@@ -112,20 +112,23 @@ checking trusted policy, the tier floor and T0 paths. It enforces these minimums
 | T3 | At least one independent `review-publishers` account **and** one `review-owner` account. |
 
 The PR author counts for neither role. An account listed in both keys counts **only as owner**;
-commit authorship is irrelevant. The gate reads every review page. Only the latest submitted
-review per eligible account on that head counts. If any such review is `CHANGES_REQUESTED`,
-the gate fails at **every tier, including T0**, even when other accounts meet the approval
-minimum. A later `APPROVED` from the same account on that head clears its objection and
-counts as approval. A latest `DISMISSED` or `COMMENTED` neither blocks nor approves;
-`PENDING` is ignored. On a new SHA, neither objections nor approvals carry over, including
-after a rebase, empty commit or record-only closing commit.
+commit authorship is irrelevant. For approval, only the account’s latest submitted review
+on the exact current head counts. A new SHA needs fresh approvals.
+
+**As in 2.x, a push does not clear an objection.** An eligible account’s `CHANGES_REQUESTED`
+on **any commit of this PR** blocks every tier, including T0. The gate reads all review pages
+in submission order. The objector must submit a later `APPROVED` on the exact current head,
+or an owner/maintainer must dismiss the **objecting review itself** on GitHub. A comment,
+approval from another account, or dismissal of a different review cannot clear it.
+Pending reviews have no effect.
 
 The checked head must match the open PR and its base must match the trusted target. Incomplete
 or inconsistent pages, missing `gh`/`jq`, or an API error fail the check. With `--json`, only
 `result: pass`, `authority: host` and exit 0 mean success. A structural preview without `--pr`
 needs no host tools; it exits 3 if it would otherwise pass, 1 on problems. `reviews` lists
 qualifying approvals; `blocking` lists outstanding objections. Both identify the account,
-review ID and policy role. Project review obligations and required checks still apply.
+review ID and policy role; each blocker also records the SHA on which it was submitted
+in `commit`. Project review obligations and required checks still apply.
 
 Policy comes from the current `origin/HEAD`, never the candidate or its merge base. Configure
 `review-host: github`, numeric `review-publishers` and `review-owner` on the default branch.

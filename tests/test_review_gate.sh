@@ -37,6 +37,10 @@ online() { run bash "$CHECK" --json --pr "$PR" 001-reviewed; }
 publisher_review() { # state commit [override object]
     fx_review 7 'Independent review.' "$(jq -cn --arg state "$1" --arg head "$2" --argjson extra "${3:-null}" '{state:$state,commit:{oid:$head}} * ($extra // {})')"
 }
+dismiss_review() { # GitHub updates the original review, not a separate timeline entry.
+    local f="$GH_STUB_DIR/reviews/7.json"
+    jq --arg id "$1" 'map(if (.fullDatabaseId|tostring)==$id then .state="DISMISSED" else . end)' "$f" > "$f.new" && mv "$f.new" "$f"
+}
 it 'only native approvals from an allowed non-author account count'
 fx_review 7 'Verdict: PASS'
 online; assert_eq 1 "$STATUS" 'review body is not approval'
@@ -53,7 +57,9 @@ it 'only the latest submitted review by that account on the exact head decides'
 for state in CHANGES_REQUESTED DISMISSED COMMENTED; do
     printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
     publisher_review APPROVED "$HEAD_SHA"; online; assert_eq 0 "$STATUS" 'publisher qualifies at T1'
-    publisher_review "$state" "$BASE"; online; assert_eq 0 "$STATUS" 'other commits never revoke'
+    publisher_review "$state" "$BASE"; online
+    if [ "$state" = CHANGES_REQUESTED ]; then assert_eq 1 "$STATUS" 'later objection on another SHA blocks'
+    else assert_eq 0 "$STATUS" 'other commits cannot revoke a positive approval'; fi
     publisher_review "$state" "$HEAD_SHA" '{"submittedAt":"2026-02-01T00:00:00Z"}'
     publisher_review APPROVED "$HEAD_SHA" # earlier submission time, despite appearing last
     online; assert_eq 1 "$STATUS" "$state overrides earlier approval"
@@ -68,7 +74,7 @@ GH_STUB_PAGE_SIZE=1 online; assert_eq 1 "$STATUS" 'T1 objection blocks despite a
 assert_contains "$OUTPUT" '"blocking":[{"reviewer":1004,'
 run bash "$CHECK" --pr "$PR" 001-reviewed
 block_id="$(jq -r 'last.fullDatabaseId' "$GH_STUB_DIR/reviews/7.json")"
-assert_contains "$OUTPUT" "publisher 1004 (review $block_id)"
+assert_contains "$OUTPUT" "publisher 1004 (review $block_id on $HEAD_SHA)"
 publisher_review APPROVED "$HEAD_SHA" "$second"; online; assert_eq 0 "$STATUS" 'objector later approves'
 assert_contains "$OUTPUT" '"blocking":[]'
 
@@ -156,13 +162,13 @@ for level in T0 T1 T2 T3; do
         assert_eq 0 "$STATUS" 'T0 needs no positive approval'
         assert_contains "$OUTPUT" '"reviews":[]'
         GH_STUB_FAIL=graphql:PrdkitReviews online; assert_eq 1 "$STATUS" 'T0 still requires a complete host read'
-        publisher_review CHANGES_REQUESTED "$BASE"
         publisher_review CHANGES_REQUESTED "$h" '{"author":{"databaseId":1002}}'
         publisher_review CHANGES_REQUESTED "$h" '{"author":{"databaseId":1009}}'
-        online; assert_eq 0 "$STATUS" 'stale, author and unlisted objections do not block T0'
+        online; assert_eq 0 "$STATUS" 'author and unlisted objections do not block T0'
         publisher_review CHANGES_REQUESTED "$h"; online; assert_eq 1 "$STATUS" 'eligible objection blocks T0'
         assert_contains "$OUTPUT" '"blocking":[{"reviewer":1001,'
-        publisher_review DISMISSED "$h"; online; assert_eq 0 "$STATUS" 'dismissed objection no longer blocks T0'
+        dismiss_review "$(jq -r 'last.fullDatabaseId' "$GH_STUB_DIR/reviews/7.json")"
+        online; assert_eq 0 "$STATUS" 'dismissed objection no longer blocks T0'
         assert_contains "$OUTPUT" '"reviews":[]'
         assert_contains "$OUTPUT" '"blocking":[]'
         echo 'unrelated rewrite' > specs/log.md; git commit -qam 'shared log is not automatically exempt'
@@ -184,11 +190,36 @@ for level in T0 T1 T2 T3; do
     fx_owner_review 7 CHANGES_REQUESTED "$h" '{"author":{"databaseId":1005}}'
     online; assert_eq 1 "$STATUS" 'another owner objects despite both T3 approvals'
     assert_contains "$OUTPUT" '"blocking":[{"reviewer":1005,'
-    fx_owner_review 7 DISMISSED "$h" '{"author":{"databaseId":1005}}'
+    dismiss_review "$(jq -r 'last.fullDatabaseId' "$GH_STUB_DIR/reviews/7.json")"
     fx_pr 7 "$h" '{"author":{"databaseId":1003}}'; online; assert_eq 1 "$STATUS" 'PR author cannot approve as owner'
     fx_pr 7 "$h"
     fx_owner_review 7 DISMISSED "$h"; online; assert_eq 1 "$STATUS" 'dismissal removes the owner approval'
     fx_owner_review 7 APPROVED "$h"; publisher_review CHANGES_REQUESTED "$h"
     online; assert_eq 1 "$STATUS" 'owner cannot compensate for publisher revocation'
+done
+it 'objections survive a push until their own dismissal or the objector approves the new head'
+for level in T0 T1; do
+    git checkout -q --detach "$BASE"
+    mkdir -p specs/changes
+    printf '# Change\n**Tier**: %s\n## State\n' "$level" > specs/changes/001-reviewed.md
+    git add -A; git commit -qm "$level record"
+    old="$(git rev-parse HEAD)"; fx_pr 7 "$old"
+    f="$GH_STUB_DIR/reviews/7.json"; printf '[]\n' > "$f"
+    publisher_review CHANGES_REQUESTED "$old"; objection="$(jq -r 'last.fullDatabaseId' "$f")"
+    git commit -q --allow-empty -m 'new PR head'; h="$(git rev-parse HEAD)"; fx_pr 7 "$h"
+    online; assert_eq 1 "$STATUS" "$level push alone cannot clear an objection"
+    assert_contains "$OUTPUT" "\"blocking\":[{\"reviewer\":1001,\"review\":\"$objection\",\"role\":\"publisher\",\"commit\":\"$old\"}]"
+    publisher_review APPROVED "$h" "$second"; online; assert_eq 1 "$STATUS" "$level another publisher cannot clear it"
+    publisher_review APPROVED "$old"; publisher_review COMMENTED "$h"; online
+    assert_eq 1 "$STATUS" "$level old-head approval and new-head comment cannot clear it"
+    publisher_review DISMISSED "$h"; online; assert_eq 1 "$STATUS" "$level unrelated dismissal cannot clear it"
+    publisher_review CHANGES_REQUESTED "$h"; newer="$(jq -r 'last.fullDatabaseId' "$f")"
+    dismiss_review "$newer"; online; assert_eq 1 "$STATUS" "$level dismissing only the newer objection leaves the original"
+    cp "$f" "$f.before"
+    dismiss_review "$objection"; online; assert_eq 0 "$STATUS" "$level dismissal of the objection itself clears it"
+    mv "$f.before" "$f"
+    publisher_review APPROVED "$h"; GH_STUB_PAGE_SIZE=1 online
+    assert_eq 0 "$STATUS" "$level later exact-head approval by the objector clears it across pages"
+    assert_contains "$OUTPUT" '"blocking":[]'
 done
 finish

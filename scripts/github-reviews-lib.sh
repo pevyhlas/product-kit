@@ -2,7 +2,8 @@
 # Read a single GitHub PR's reviews. No review bodies, commit authors or credentials are inputs.
 #
 # Invariants:
-# Only the latest submitted review per eligible non-author account on the exact head counts.
+# Only the latest exact-head submission per eligible non-author account can grant approval.
+# Its undismissed objections on any PR commit require a later exact-head approval by that account.
 # Report open objections separately from approvals after complete, consistent pagination.
 #
 # Threat model:
@@ -96,16 +97,24 @@ github_review_fetch() { # URL private-work expected-head expected-base
     pr_head="$(jq -r '.headRefOid' "$work/validated")" || return 1
     RC_ERROR='The PR head or target differs from the checked head and trusted base'
     [ "$pr_head" = "$expected" ] && [ "$(jq -r .baseRefName "$work/validated")" = "$base" ] || return 1
-    # Latest submission per eligible numeric account, in host order for equal timestamps.
-    local latest
-    latest="$(jq -sc --arg publishers "$REVIEW_PUBLISHERS" --arg owners "$REVIEW_OWNERS" --arg head "$expected" '
+    # Replay each account's submissions in time order (host order breaks timestamp ties).
+    # GitHub marks the original review DISMISSED, so only still-live requests open blockers.
+    local decisions
+    decisions="$(jq -sc --arg publishers "$REVIEW_PUBLISHERS" --arg owners "$REVIEW_OWNERS" --arg head "$expected" '
         .[0].author.databaseId as $maker | ($publishers|split(",")) as $pub | ($owners|split(",")) as $own |
-        [.[].reviews.nodes[] | select(.state!="PENDING" and .commit.oid==$head and .author.databaseId!=$maker) |
+        [.[].reviews.nodes[] | select(.state!="PENDING" and .author.databaseId!=$maker) |
          (.author.databaseId|tostring) as $id |
          .role = (if $own|index($id)!=null then "owner" elif $pub|index($id)!=null then "publisher" else empty end)] |
-        sort_by(.submittedAt) | group_by(.author.databaseId) | map(last |
-        {reviewer:.author.databaseId,review:(.fullDatabaseId|tostring),role,state})' "$work/pages")" || return 1
-    approvals="$(jq -c 'map(select(.state=="APPROVED") | del(.state))' <<< "$latest")" || return 1
-    blocking="$(jq -c 'map(select(.state=="CHANGES_REQUESTED") | del(.state))' <<< "$latest")" || return 1
+        group_by(.author.databaseId) | map(reduce (sort_by(.submittedAt)[]) as $r
+          ({approval:null,blocking:[]};
+           ($r | {reviewer:.author.databaseId,review:(.fullDatabaseId|tostring),role}) as $entry |
+           if $r.commit.oid==$head and $r.state=="APPROVED" then
+               .approval=$entry | .blocking=[]
+           else
+               (if $r.commit.oid==$head then .approval=null else . end) |
+               if $r.state=="CHANGES_REQUESTED" then .blocking += [$entry + {commit:$r.commit.oid}] else . end
+           end))' "$work/pages")" || return 1
+    approvals="$(jq -c '[.[].approval | select(.!=null)]' <<< "$decisions")" || return 1
+    blocking="$(jq -c '[.[].blocking[]]' <<< "$decisions")" || return 1
     RC_ERROR=""
 }

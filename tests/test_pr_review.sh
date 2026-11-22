@@ -122,11 +122,11 @@ assert_eq host "$(printf '%s' "$OUTPUT" | jq -r .native.authority)"
 assert_eq "$HEAD_SHA" "$(printf '%s' "$OUTPUT" | jq -r .native.diagnostics.head)"
 assert_eq "$BASE" "$(printf '%s' "$OUTPUT" | jq -r .native.diagnostics.policy_at)"
 assert_eq '[]' "$(jq -c .native.reviews "$FIX/stdout")" 'complete T0 check accepts an empty review list'
-fx_review 7 'Needs a correction.' '{"state":"CHANGES_REQUESTED"}'
+fx_review 7 'Needs a correction.' "$(jq -cn --arg old "$BASE" '{state:"CHANGES_REQUESTED",commit:{oid:$old}}')"
 launch
 assert_eq 1 "$STATUS" 'an eligible objection fails the native T0 check'
 assert_eq complete "$(jq -r .launcher "$FIX/stdout")"
-assert_eq '[[1001,"1001"]]' "$(jq -c '[.native.blocking[] | [.reviewer,.review]]' "$FIX/stdout")"
+assert_eq "[[1001,\"1001\",\"$BASE\"]]" "$(jq -c '[.native.blocking[] | [.reviewer,.review,.commit]]' "$FIX/stdout")"
 
 it 'review events re-evaluate live approvals without a push or a top-level PR number'
 git checkout -q --detach "$HEAD_SHA"

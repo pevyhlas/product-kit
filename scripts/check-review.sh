@@ -363,7 +363,7 @@ fi
 # Apply the minimum to the effective tier, after trusted floor and path validation.
 if [ "$authority" = host ]; then
     if [ "$blocking" != '[]' ]; then
-        problems+=("CHANGES_REQUESTED on the exact PR head $head: $(jq -r 'map("\(.role) \(.reviewer) (review \(.review))") | join(", ")' <<< "$blocking")")
+        problems+=("Outstanding CHANGES_REQUESTED: $(jq -r 'map("\(.role) \(.reviewer) (review \(.review) on \(.commit))") | join(", ")' <<< "$blocking")")
     fi
     case "$tier" in T1|T2|T3)
         jq -e 'any(.[]; .role=="publisher")' <<< "$approvals" >/dev/null ||

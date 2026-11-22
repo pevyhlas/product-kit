@@ -14,7 +14,8 @@ change by change.
   The 2.x tier minimums are unchanged: T0 needs no approval, T1–T3 need an independent
   publisher, and T3 also needs an owner. An ID listed in both roles counts only as
   owner. The PR author never counts. An eligible account’s outstanding `CHANGES_REQUESTED`
-  blocks every tier, including T0. Both objections and approvals bind to the exact head.
+  blocks every tier, including T0, across pushes. Only that reviewer’s later approval
+  on the exact current head or dismissal of the objection itself clears it.
   Receipt publication, snapshots, carry-forward and reconciliation are removed (#138).
   **Adoption:** keep the 2.0 publisher and `review-publisher-isolation` until the new
   required check enforces approvals on the protected branch. See [Migrating to 3.0](docs/migrating-to-3.0.md).
@@ -23,7 +24,7 @@ change by change.
 
 ### Documentation
 
-- Document safety invariants and threat models in the worktree, close, publication, adoption,
+- Document safety invariants and threat models in the worktree, close, review collection, adoption,
   review and upgrade scripts. Contributor and review checklists now ask for those contracts
   to be checked when the scripts change. Script behavior is unchanged.
 

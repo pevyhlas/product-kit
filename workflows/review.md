@@ -50,11 +50,12 @@ the live gate must still pass. At T1–T3 obtain an `APPROVED` review from at le
 independent `review-publishers` account. At T3 also obtain `APPROVED` from a `review-owner`.
 An account in both lists counts only as owner, and the PR author counts for neither role.
 These are minimums; cover every applicable concern in the review. Only the latest submitted
-review by that account on the current SHA counts. If any eligible account’s latest review
-is `CHANGES_REQUESTED`, stop at every tier, including T0: another account’s approval cannot
-clear it. Address the finding and ask the objecting reviewer to recheck. On the same head,
-their later approval clears the objection; a latest dismissal or comment neither blocks nor
-approves. Pending reviews are ignored. On a new SHA the gate evaluates reviews afresh.
+review by that account on the current SHA counts toward approval. As in 2.x, a push does
+not clear objections: stop at every tier for an outstanding `CHANGES_REQUESTED` on any
+commit of this PR. Address the finding and ask the same reviewer to approve the current
+head. A comment or someone else’s approval cannot clear it. If an owner/maintainer
+dismisses the objection on GitHub, they must dismiss that specific review. Use `blocking`
+to find its review ID and commit.
 
 Run `.prdkit/scripts/bash/check-review.sh --pr <url> --head <sha> <change-id>` and the
 required checks. With merge authority, merge only the checked SHA (`--match-head-commit`).
