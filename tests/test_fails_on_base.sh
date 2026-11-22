@@ -14,7 +14,7 @@ mkdir -p "$FIXTURE"/{scripts,templates,commands,workflows,tests/helpers} || exit
 g() { git -C "$FIXTURE" "$@"; }
 commit() { g add -A && g commit -qm "$1" && g rev-parse HEAD; }
 replay() ( cd "$FIXTURE" && bash "$CHECK" "$@" )
-compare() { GITHUB_STEP_SUMMARY= run replay "$@"; }
+compare() { GITHUB_STEP_SUMMARY='' run replay "$@"; }
 
 g init -q && g config user.name test && g config user.email test@example.invalid || exit 1
 for dir in scripts templates commands workflows; do
@@ -66,6 +66,7 @@ if [ ! -f templates/new-input ]; then
 fi
 TEST
 printf 'exit 2\n' > "$FIXTURE/tests/test_broken.sh"
+# shellcheck disable=SC2016 # The fixture reads the snapshot when it runs.
 printf 'test "$(cat scripts/value)" = old\n' > "$FIXTURE/tests/test_head_only_failure.sh"
 HEAD_TIP="$(commit 'regression cases')" || exit 1
 

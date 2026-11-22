@@ -58,7 +58,7 @@ reproduced=0
 report="$scratch/summary"
 {
     printf '### Fails before the fix (%s)\n\n' "$mode"
-    printf 'Base (merge base): `%s` · Head: `%s`\n\n' "$base" "$head"
+    printf 'Base (merge base): %s · Head: %s\n\n' "\`$base\`" "\`$head\`"
     if [ -s "$scratch/changed" ]; then
         snapshot base "$base"
         snapshot head "$head"
