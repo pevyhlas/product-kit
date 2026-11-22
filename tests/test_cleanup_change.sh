@@ -168,7 +168,7 @@ case "$1:$2" in
 esac
 interrupt() { echo "$1" > "$MARK"; kill -TERM "$PPID"; exit 1; }
 [ "$POINT" != "before-$boundary" ] || interrupt "$POINT"
-if [ "$POINT:$boundary" = after-holding:holding ]; then
+if [ "$POINT:$boundary" = after-holding:holding ] && [ -n "${CUT:-}" ]; then
     # The initial transaction is already durable. Neither new OID existed
     # when those refs were written; only the holding registration can root it.
     live() { git --git-dir="$admin" --work-tree="$CUT" "$@"; }
@@ -237,6 +237,36 @@ for point in after-checkout before-holding after-holding before-archive after-ar
     esac
 done
 
+it "recovers an interrupted stale prune through the locked admin alone"
+id=126-stale-recovery; path="$cut/.worktrees/$id"
+git -C "$cut" worktree add -q --detach "$path"
+tip="$(git -C "$path" rev-parse HEAD)"
+echo 'staged before checkout disappeared' > "$path/file"; git -C "$path" add file
+staged="$(git -C "$path" rev-parse :file)"
+original="$(git -C "$path" rev-parse --absolute-git-dir)"
+rm -rf "$path"
+run env REAL_MV="$(command -v mv)" CUT= POINT=after-holding MARK="$cut/stale-mark" PATH="$cut/shim:$PATH" \
+    bash "$cut/.prdkit/scripts/bash/cleanup-change.sh" --prune
+assert_eq 1 "$STATUS"; assert_eq after-holding "$(cat "$cut/stale-mark")"
+slot="$(slot_for "$cut" "$id")"; holding="$cut/.git/worktrees/${slot##*/}.retiring"
+assert_file "$holding/locked"
+for absent in "$path" "$slot/checkout"; do
+    run test ! -e "$absent"; assert_eq 0 "$STATUS"; run test ! -L "$absent"; assert_eq 0 "$STATUS"
+done
+test ! -e "$original" && test ! -L "$original" && mv "$holding" "$original"
+assert_eq 0 "$?" 'only the admin restored'
+run git --git-dir="$original" rev-parse --verify 'HEAD^{commit}'
+assert_eq 0 "$STATUS"; assert_eq "$tip" "$OUTPUT"
+run git --git-dir="$original" ls-files --stage
+assert_eq 0 "$STATUS"; assert_contains "$OUTPUT" "$staged"
+run git --git-dir="$original" show :file
+assert_eq 0 "$STATUS"; assert_eq 'staged before checkout disappeared' "$OUTPUT"
+assert_file "$original/locked"
+run rmdir "$original/prdkit-cleanup.lock"; assert_eq 0 "$STATUS" 'only the empty cleanup lock removed'
+run git -C "$cut" worktree unlock "$path"; assert_eq 0 "$STATUS"
+run bash "$cut/.prdkit/scripts/bash/cleanup-change.sh" --prune
+assert_eq 0 "$STATUS"; assert_not_contains "$(git -C "$cut" worktree list --porcelain)" "$path"
+
 it "forced retirement preserves an intent-to-add placeholder and its different working bytes"
 for format in sha1 sha256; do
     repo="$(mktemp -d)"; track_tmp "$repo"
@@ -254,7 +284,8 @@ for format in sha1 sha256; do
     run bash "$repo/.prdkit/scripts/bash/cleanup-change.sh" --force 125-intent
     assert_eq 0 "$STATUS" "$format intent-to-add retirement succeeds: $OUTPUT"
     slot="$(slot_for "$repo" 125-intent)"; ns="refs/prdkit-retired/${slot##*/}"
-    git -C "$repo" gc --prune=now -q
+    run git -C "$repo" gc --prune=now -q
+    assert_eq 0 "$STATUS" "$format immediate GC succeeded"
     for namespace in "$ns/before" "$ns"; do
         assert_eq "$empty" "$(git -C "$repo" rev-parse --verify "$namespace/objects/$empty^{blob}")" "each phase roots the exact empty blob"
     done
