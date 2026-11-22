@@ -345,6 +345,9 @@ retain_refs() (
     # ls-files quotes unusual filenames, leaving the mode and OID fields intact.
     archived ls-files --resolve-undo | awk '$1!="160000" {print $2}' > "$slot/undo" || return 1
     cat "$slot/undo" >> "$slot/oids" || return 1
+    # Protect every object Git marks from the index but omits from its tree
+    # (e.g. add -N's empty blob), without creating a ref per normal entry.
+    archived rev-list --single-worktree --objects --no-object-names --indexed-objects "^$tree" >> "$slot/oids" || return 1
     LC_ALL=C sort -u "$slot/oids" > "$slot/unique" || return 1
     {
         printf 'create %s/HEAD %s\ncreate %s/index %s\n' "$ns" "$head" "$ns" "$index"

@@ -42,7 +42,8 @@ change by change.
   stale registrations alone. Cleanup checks recovery objects before reporting success and
   refuses linked evidence paths in either checkout. Retirement keeps objects reachable across
   interruption, including conflict-undo blobs and private reftable reflog entries, without
-  retaining unrelated branch history. Unborn checkouts stay in place. Explicit pruning targets only stale
+  retaining unrelated branch history. Forced cleanup preserves intent-to-add entries and
+  their unstaged file contents. Unborn checkouts stay in place. Explicit pruning targets only stale
   registrations; removing one change leaves unrelated registrations alone.
 - Cleanup refuses unsupported layouts, including embedded submodule stores, dependent
   linked checkouts and cross-filesystem moves. Plain paths still work on older Git;

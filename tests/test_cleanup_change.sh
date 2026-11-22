@@ -132,7 +132,7 @@ assert_contains "$(git -C "$path" ls-files --resolve-undo)" "$prior"
 # disposable copy. Presence in the object database must not count as retention.
 mutant="${CLEAN%/*}/omit-undo.sh"
 # shellcheck disable=SC2016 # Match literal source in the disposable copy.
-sed '/cat "\$slot\/undo" >> "\$slot\/oids"/d' "$CLEAN" > "$mutant"
+sed '/cat "\$slot\/undo" >> "\$slot\/oids"/d; /--indexed-objects "\^\$tree" >> "\$slot\/oids"/d' "$CLEAN" > "$mutant"
 run bash "$mutant" --force 121-undo
 assert_eq 1 "$STATUS" "missing undo reachability refuses retirement"
 failed_slot="$(slot_for "$PROJ" 121-undo)"
@@ -168,6 +168,20 @@ case "$1:$2" in
 esac
 interrupt() { echo "$1" > "$MARK"; kill -TERM "$PPID"; exit 1; }
 [ "$POINT" != "before-$boundary" ] || interrupt "$POINT"
+if [ "$POINT:$boundary" = after-holding:holding ]; then
+    # The initial transaction is already durable. Neither new OID existed
+    # when those refs were written; only the holding registration can root it.
+    live() { git --git-dir="$admin" --work-tree="$CUT" "$@"; }
+    admin="$1"
+    late_tip=$(live commit-tree 'HEAD^{tree}' -p HEAD -m 'late detached commit') &&
+        live update-ref HEAD "$late_tip" &&
+        late_blob=$(echo 'late staged bytes' | live hash-object -w --stdin) &&
+        live update-index --cacheinfo "100644,$late_blob,file" || exit 1
+    for oid in "$late_tip" "$late_blob"; do
+        pre=$(printf '%.2s' "$oid"); touch -t 200001010000 "$CUT/.git/objects/$pre/${oid#"$pre"}" || exit 1
+    done
+    printf '%s\n%s\n' "$late_tip" "$late_blob" > "$CUT/late-oids"
+fi
 "$REAL_MV" "$@" || exit 1
 [ "$POINT" != "after-$boundary" ] || interrupt "$POINT"
 SH
@@ -183,13 +197,69 @@ for point in after-checkout before-holding after-holding before-archive after-ar
     for oid in "$tip" "$staged" "$control"; do
         touch -t 200001010000 "$cut/.git/objects/${oid:0:2}/${oid:2}"
     done
-    run env REAL_MV="$(command -v mv)" POINT="$point" MARK="$cut/mark" PATH="$cut/shim:$PATH" \
+    run env REAL_MV="$(command -v mv)" CUT="$cut" POINT="$point" MARK="$cut/mark" PATH="$cut/shim:$PATH" \
         bash "$cut/.prdkit/scripts/bash/cleanup-change.sh" --force "$id"
     assert_eq 1 "$STATUS"; assert_eq "$point" "$(cat "$cut/mark")" "retirement interrupted at $point"
+    slot="$(slot_for "$cut" "$id")"; ns="refs/prdkit-retired/${slot##*/}"
+    if [ "$point" = after-holding ]; then
+        late_tip="$(sed -n '1p' "$cut/late-oids")"; late_blob="$(sed -n '2p' "$cut/late-oids")"
+        run git -C "$cut" rev-list --objects --no-object-names --glob="$ns/before/*"
+        assert_eq 0 "$STATUS"; assert_contains "$OUTPUT" "$tip"; assert_contains "$OUTPUT" "$staged"
+        assert_not_contains "$OUTPUT" "$late_tip"; assert_not_contains "$OUTPUT" "$late_blob"
+    fi
     run git -C "$cut" gc -q; assert_eq 0 "$STATUS" "default GC ran"
     run git -C "$cut" cat-file -e "$control"; assert_eq 1 "$STATUS" "unrooted old control collected"
     assert_eq "$tip" "$(git -C "$cut" rev-parse --verify "$tip^{commit}")"
     assert_eq "$point staged" "$(git -C "$cut" cat-file blob "$staged")"
+    case "$point" in
+        after-holding)
+            assert_eq 'late detached commit' "$(git -C "$cut" log -1 --format=%s "$late_tip")"
+            assert_eq 'late staged bytes' "$(git -C "$cut" cat-file blob "$late_blob")"
+            holding="$cut/.git/worktrees/${slot##*/}.retiring"; original="$cut/.git/worktrees/$id"
+            assert_file "$holding/locked"
+            if [ ! -e "$original" ] && [ ! -L "$original" ] && [ ! -e "$path" ] && [ ! -L "$path" ]; then
+                mv "$holding" "$original" && mv "$slot/checkout" "$path"
+            fi
+            run git -C "$path" status --short
+            assert_eq 0 "$STATUS"; assert_contains "$OUTPUT" 'AM file'
+            assert_eq 'late staged bytes' "$(git -C "$path" show :file)"
+            assert_eq different "$(cat "$path/file")"
+            if [ -d "$original/prdkit-cleanup.lock" ]; then rmdir "$original/prdkit-cleanup.lock"; fi
+            run git -C "$cut" worktree unlock "$path"; assert_eq 0 "$STATUS" ;;
+        after-archive)
+            assert_file "$slot/admin/index"
+            assert_not_contains "$(git -C "$cut" worktree list --porcelain)" "$path"
+            run git -C "$cut" rev-parse --verify "$ns/HEAD^{commit}"
+            assert_eq 0 "$STATUS"; assert_eq "$tip" "$OUTPUT"
+            run git -C "$cut" rev-parse --verify "$ns/index^{tree}"
+            assert_eq 0 "$STATUS"; assert_eq "$point staged" "$(git -C "$cut" show "$ns/index:file")"
+            run test ! -e "$path"; assert_eq 0 "$STATUS" "completed slot left retired" ;;
+    esac
+done
+
+it "forced retirement preserves an intent-to-add placeholder and its different working bytes"
+for format in sha1 sha256; do
+    repo="$(mktemp -d)"; track_tmp "$repo"
+    if [ "$format" = sha256 ]; then git init -q --object-format=sha256 "$repo" 2>/dev/null || continue
+    else git init -q "$repo"; fi
+    git -C "$repo" -c user.email=t@example.invalid -c user.name=test commit -qm init --allow-empty
+    mkdir -p "$repo/.prdkit/scripts"; cp -R "${CLEAN%/*}" "$repo/.prdkit/scripts/bash"
+    empty="$(git -C "$repo" hash-object --stdin </dev/null)"
+    assert_not_contains "$(git -C "$repo" rev-list --objects --no-object-names --all)" "$empty" "history does not protect an empty blob"
+    path="$repo/.worktrees/125-intent"; git -C "$repo" worktree add -q --detach "$path"
+    printf 'not staged yet\n' > "$repo/expected"; cp "$repo/expected" "$path/pending"
+    git -C "$path" add -N pending
+    admin="$(git -C "$path" rev-parse --absolute-git-dir)"
+    cp "$admin/index" "$repo/index-before"
+    run bash "$repo/.prdkit/scripts/bash/cleanup-change.sh" --force 125-intent
+    assert_eq 0 "$STATUS" "$format intent-to-add retirement succeeds: $OUTPUT"
+    slot="$(slot_for "$repo" 125-intent)"; ns="refs/prdkit-retired/${slot##*/}"
+    git -C "$repo" gc --prune=now -q
+    for namespace in "$ns/before" "$ns"; do
+        assert_eq "$empty" "$(git -C "$repo" rev-parse --verify "$namespace/objects/$empty^{blob}")" "each phase roots the exact empty blob"
+    done
+    run cmp "$repo/index-before" "$slot/admin/index"; assert_eq 0 "$STATUS" "archived index is byte-identical"
+    run cmp "$repo/expected" "$slot/checkout/pending"; assert_eq 0 "$STATUS" "working bytes intact"
 done
 
 it "removing an already-deleted worktree by id just prunes it"
