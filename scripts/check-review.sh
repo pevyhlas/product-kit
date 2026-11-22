@@ -52,7 +52,7 @@ policy_at=""
 $base_trusted || import_base=""
 
 problems=(); tier=""; record_at=""; record_only=false; start=""
-authority=none; pr_head=""; approvals='[]'; head_is_pr_head=false
+authority=none; pr_head=""; approvals='[]'; blocking='[]'; head_is_pr_head=false
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 if [ -z "$policy_at" ]; then
     problems+=("No trusted integration base: origin/HEAD does not resolve here, so there is no policy to check against; establish it (git remote set-head origin --auto) with its history fetched")
@@ -351,6 +351,9 @@ else
 fi
 # Apply the minimum to the effective tier, after trusted floor and path validation.
 if [ "$authority" = host ]; then
+    if [ "$blocking" != '[]' ]; then
+        problems+=("CHANGES_REQUESTED on the exact PR head $head: $(jq -r 'map("\(.role) \(.reviewer) (review \(.review))") | join(", ")' <<< "$blocking")")
+    fi
     case "$tier" in T1|T2|T3)
         jq -e 'any(.[]; .role=="publisher")' <<< "$approvals" >/dev/null ||
             problems+=("$tier requires an independent review-publishers APPROVED review on the exact PR head $head")
@@ -370,8 +373,8 @@ if $json; then
     json_result="$result"; [ "$authority" = host ] || json_result=preview
     printf '{"result":"%s","change":"%s","head":"%s","base":"%s","base_trusted":%s,"policy_at":"%s","record_only":%s,"record_open":%s,"tier":"%s","rigor":"%s","record_at":"%s","reviews":%s,' \
         "$json_result" "$id" "$head" "$(json_escape "$base_ref")" "$base_trusted" "$policy_at" "$record_only" "$record_open" "$tier" "$rigor" "$(json_escape "$record_at")" "$approvals"
-    printf '"authority":"%s","pr":"%s","pr_head":"%s","head_is_pr_head":%s,"problems":%s' \
-        "$authority" "$(json_escape "$pr_url")" "$pr_head" "$head_is_pr_head" "$(json_array ${problems[@]+"${problems[@]}"})"
+    printf '"blocking":%s,"authority":"%s","pr":"%s","pr_head":"%s","head_is_pr_head":%s,"problems":%s' \
+        "$blocking" "$authority" "$(json_escape "$pr_url")" "$pr_head" "$head_is_pr_head" "$(json_array ${problems[@]+"${problems[@]}"})"
     if $diagnostics; then
         printf ',"diagnostics":{"base_ref":"%s","base_at":"%s","policy_at":"%s","head":"%s"}' \
             "$(json_escape "$base_canonical")" "$import_base" "$policy_at" "$head"

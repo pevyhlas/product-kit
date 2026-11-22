@@ -489,7 +489,7 @@ if [ "$native_exit" -eq 0 ]; then
         .pr == $pr and .head == $h and .pr_head == $h and .head_is_pr_head == true and
         .base == $ref and .base_trusted == true and .policy_at == $p and
         .diagnostics.head == $h and .diagnostics.base_ref == $ref and .diagnostics.base_at == $t and
-        .diagnostics.policy_at == $p and (.reviews | type == "array") and
+        .diagnostics.policy_at == $p and .blocking == [] and (.reviews | type == "array") and
         all(.reviews[]; (.reviewer|type=="number" and .>0 and floor==.) and (.role|IN("publisher","owner"))) and
         ([.reviews[].reviewer] | length == (unique|length)) and
         (.tier == "T0" or

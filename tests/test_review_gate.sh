@@ -11,8 +11,8 @@ cat >> .prdkit/memory/config.md <<'EOF'
 
 ## Configuration
 - review-host: github
-- review-publishers: bot:1001, user:1002, user:1003
-- review-owner: user:1003
+- review-publishers: bot:1001, user:1002, user:1003, user:1004
+- review-owner: user:1003, user:1005
 - review-publisher-isolation: shared
 - review-t0-paths: docs/
 EOF
@@ -60,6 +60,17 @@ for state in CHANGES_REQUESTED DISMISSED COMMENTED; do
 done
 publisher_review APPROVED "$HEAD_SHA" '{"submittedAt":"2026-02-02T00:00:00Z"}'; online; assert_eq 0 "$STATUS" 'independent approved publisher still counts'
 fx_review 7 draft '{"state":"PENDING","submittedAt":null}'; online; assert_eq 0 "$STATUS" 'draft is not submitted'
+
+it 'one publisher cannot outvote another publisher on the same head'
+second='{"author":{"databaseId":1004}}'
+publisher_review CHANGES_REQUESTED "$HEAD_SHA" "$second"
+GH_STUB_PAGE_SIZE=1 online; assert_eq 1 "$STATUS" 'T1 objection blocks despite an independent approval'
+assert_contains "$OUTPUT" '"blocking":[{"reviewer":1004,'
+run bash "$CHECK" --pr "$PR" 001-reviewed
+block_id="$(jq -r 'last.fullDatabaseId' "$GH_STUB_DIR/reviews/7.json")"
+assert_contains "$OUTPUT" "publisher 1004 (review $block_id)"
+publisher_review APPROVED "$HEAD_SHA" "$second"; online; assert_eq 0 "$STATUS" 'objector later approves'
+assert_contains "$OUTPUT" '"blocking":[]'
 
 it 'pushing even a metadata-only commit requires fresh approval'
 git commit -q --allow-empty -m 'new exact head'; online; assert_eq 1 "$STATUS" 'unpublished descendant cannot pass'
@@ -145,6 +156,15 @@ for level in T0 T1 T2 T3; do
         assert_eq 0 "$STATUS" 'T0 needs no positive approval'
         assert_contains "$OUTPUT" '"reviews":[]'
         GH_STUB_FAIL=graphql:PrdkitReviews online; assert_eq 1 "$STATUS" 'T0 still requires a complete host read'
+        publisher_review CHANGES_REQUESTED "$BASE"
+        publisher_review CHANGES_REQUESTED "$h" '{"author":{"databaseId":1002}}'
+        publisher_review CHANGES_REQUESTED "$h" '{"author":{"databaseId":1009}}'
+        online; assert_eq 0 "$STATUS" 'stale, author and unlisted objections do not block T0'
+        publisher_review CHANGES_REQUESTED "$h"; online; assert_eq 1 "$STATUS" 'eligible objection blocks T0'
+        assert_contains "$OUTPUT" '"blocking":[{"reviewer":1001,'
+        publisher_review DISMISSED "$h"; online; assert_eq 0 "$STATUS" 'dismissed objection no longer blocks T0'
+        assert_contains "$OUTPUT" '"reviews":[]'
+        assert_contains "$OUTPUT" '"blocking":[]'
         echo 'unrelated rewrite' > specs/log.md; git commit -qam 'shared log is not automatically exempt'
         fx_pr 7 "$(git rev-parse HEAD)"; online; assert_eq 1 "$STATUS" 'T0 must qualify structurally'
         assert_contains "$OUTPUT" 'T0 is docs only'
@@ -161,6 +181,10 @@ for level in T0 T1 T2 T3; do
     assert_contains "$OUTPUT" 'also requires a review-owner'
     fx_owner_review 7 APPROVED "$BASE"; online; assert_eq 1 "$STATUS" 'older owner approval cannot qualify'
     fx_owner_review 7 APPROVED "$h"; online; assert_eq 0 "$STATUS" 'distinct publisher and owner approve T3'
+    fx_owner_review 7 CHANGES_REQUESTED "$h" '{"author":{"databaseId":1005}}'
+    online; assert_eq 1 "$STATUS" 'another owner objects despite both T3 approvals'
+    assert_contains "$OUTPUT" '"blocking":[{"reviewer":1005,'
+    fx_owner_review 7 DISMISSED "$h" '{"author":{"databaseId":1005}}'
     fx_pr 7 "$h" '{"author":{"databaseId":1003}}'; online; assert_eq 1 "$STATUS" 'PR author cannot approve as owner'
     fx_pr 7 "$h"
     fx_owner_review 7 DISMISSED "$h"; online; assert_eq 1 "$STATUS" 'dismissal removes the owner approval'

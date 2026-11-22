@@ -122,6 +122,11 @@ assert_eq host "$(printf '%s' "$OUTPUT" | jq -r .native.authority)"
 assert_eq "$HEAD_SHA" "$(printf '%s' "$OUTPUT" | jq -r .native.diagnostics.head)"
 assert_eq "$BASE" "$(printf '%s' "$OUTPUT" | jq -r .native.diagnostics.policy_at)"
 assert_eq '[]' "$(jq -c .native.reviews "$FIX/stdout")" 'complete T0 check accepts an empty review list'
+fx_review 7 'Needs a correction.' '{"state":"CHANGES_REQUESTED"}'
+launch
+assert_eq 1 "$STATUS" 'an eligible objection fails the native T0 check'
+assert_eq complete "$(jq -r .launcher "$FIX/stdout")"
+assert_eq '[[1001,"1001"]]' "$(jq -c '[.native.blocking[] | [.reviewer,.review]]' "$FIX/stdout")"
 
 it 'review events re-evaluate live approvals without a push or a top-level PR number'
 git checkout -q --detach "$HEAD_SHA"
@@ -322,7 +327,7 @@ assert_eq 0 "$STATUS" "$OUTPUT"
 assert_eq '[null,17,true]' "$(printf '%s' "$OUTPUT" | jq -c .native.extension.keep)"
 NATIVE="$(printf '%s' "$OUTPUT" | jq -c .native)"
 # Synthetic NEGATIVE output-contract tests, not replacements for the real-native positive control.
-for fault in multiple malformed nul binding preview wrong-type missing-publisher missing-owner same-account exit-result overflow timeout; do
+for fault in multiple malformed nul binding preview wrong-type missing-publisher missing-owner same-account outstanding-objection exit-result overflow timeout; do
     git checkout -q --detach "$BASE"
     case "$fault" in
         multiple) printf '#!/bin/bash\nprintf '\''{}\\n{}\\n'\''\n' > "$FIX/gate" ;;
@@ -339,6 +344,7 @@ for fault in multiple malformed nul binding preview wrong-type missing-publisher
                 missing-publisher) filter='.tier="T1"|.reviews[0].role="owner"' ;;
                 missing-owner) filter='.tier="T3"|.reviews[0].role="publisher"' ;;
                 same-account) filter='.tier="T3"|.reviews=[(.reviews[0]+{role:"publisher"}),(.reviews[0]+{role:"owner"})]' ;;
+                outstanding-objection) filter='.blocking=[{reviewer:1003,review:"42",role:"owner"}]' ;;
                 exit-result) rc=1 ;;
             esac
             {

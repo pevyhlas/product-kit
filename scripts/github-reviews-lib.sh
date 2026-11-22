@@ -89,12 +89,15 @@ github_review_fetch() { # URL private-work expected-head expected-base
     RC_ERROR='The PR head or target differs from the checked head and trusted base'
     [ "$pr_head" = "$expected" ] && [ "$(jq -r .baseRefName "$work/validated")" = "$base" ] || return 1
     # Latest submission per eligible numeric account, in host order for equal timestamps.
-    approvals="$(jq -sc --arg publishers "$REVIEW_PUBLISHERS" --arg owners "$REVIEW_OWNERS" --arg head "$expected" '
+    local latest
+    latest="$(jq -sc --arg publishers "$REVIEW_PUBLISHERS" --arg owners "$REVIEW_OWNERS" --arg head "$expected" '
         .[0].author.databaseId as $maker | ($publishers|split(",")) as $pub | ($owners|split(",")) as $own |
         [.[].reviews.nodes[] | select(.state!="PENDING" and .commit.oid==$head and .author.databaseId!=$maker) |
          (.author.databaseId|tostring) as $id |
          .role = (if $own|index($id)!=null then "owner" elif $pub|index($id)!=null then "publisher" else empty end)] |
-        sort_by(.submittedAt) | group_by(.author.databaseId) | map(last | select(.state=="APPROVED") |
-        {reviewer:.author.databaseId,review:(.fullDatabaseId|tostring),role})' "$work/pages")" || return 1
+        sort_by(.submittedAt) | group_by(.author.databaseId) | map(last |
+        {reviewer:.author.databaseId,review:(.fullDatabaseId|tostring),role,state})' "$work/pages")" || return 1
+    approvals="$(jq -c 'map(select(.state=="APPROVED") | del(.state))' <<< "$latest")" || return 1
+    blocking="$(jq -c 'map(select(.state=="CHANGES_REQUESTED") | del(.state))' <<< "$latest")" || return 1
     RC_ERROR=""
 }

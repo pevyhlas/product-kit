@@ -113,15 +113,19 @@ checking trusted policy, the tier floor and T0 paths. It enforces these minimums
 
 The PR author counts for neither role. An account listed in both keys counts **only as owner**;
 commit authorship is irrelevant. The gate reads every review page. Only the latest submitted
-review per account on that head counts: a later comment, dismissal or changes request replaces
-that account’s approval; a pending review does not. Required approvals must be renewed after
-any SHA change, including a rebase, empty commit or record-only closing commit.
+review per eligible account on that head counts. If any such review is `CHANGES_REQUESTED`,
+the gate fails at **every tier, including T0**, even when other accounts meet the approval
+minimum. A later `APPROVED` from the same account on that head clears its objection and
+counts as approval. A latest `DISMISSED` or `COMMENTED` neither blocks nor approves;
+`PENDING` is ignored. On a new SHA, neither objections nor approvals carry over, including
+after a rebase, empty commit or record-only closing commit.
 
 The checked head must match the open PR and its base must match the trusted target. Incomplete
 or inconsistent pages, missing `gh`/`jq`, or an API error fail the check. With `--json`, only
 `result: pass`, `authority: host` and exit 0 mean success. A structural preview without `--pr`
-needs no host tools; it exits 3 if it would otherwise pass, 1 on problems. `reviews` lists the
-qualifying account and review IDs and their policy roles. Project review obligations and required checks still apply.
+needs no host tools; it exits 3 if it would otherwise pass, 1 on problems. `reviews` lists
+qualifying approvals; `blocking` lists outstanding objections. Both identify the account,
+review ID and policy role. Project review obligations and required checks still apply.
 
 Policy comes from the current `origin/HEAD`, never the candidate or its merge base. Configure
 `review-host: github`, numeric `review-publishers` and `review-owner` on the default branch.

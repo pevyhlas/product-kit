@@ -50,8 +50,11 @@ the live gate must still pass. At T1–T3 obtain an `APPROVED` review from at le
 independent `review-publishers` account. At T3 also obtain `APPROVED` from a `review-owner`.
 An account in both lists counts only as owner, and the PR author counts for neither role.
 These are minimums; cover every applicable concern in the review. Only the latest submitted
-review by that account on the current SHA counts. A comment, dismissal or changes request
-supersedes its approval; a pending review does not. Commit authorship is irrelevant.
+review by that account on the current SHA counts. If any eligible account’s latest review
+is `CHANGES_REQUESTED`, stop at every tier, including T0: another account’s approval cannot
+clear it. Address the finding and ask the objecting reviewer to recheck. On the same head,
+their later approval clears the objection; a latest dismissal or comment neither blocks nor
+approves. Pending reviews are ignored. On a new SHA the gate evaluates reviews afresh.
 
 Run `.prdkit/scripts/bash/check-review.sh --pr <url> --head <sha> <change-id>` and the
 required checks. With merge authority, merge only the checked SHA (`--match-head-commit`).
