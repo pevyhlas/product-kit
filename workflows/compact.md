@@ -90,9 +90,30 @@ still a plausible proposal; it prevents re-proposals. `specs/archive.md` grows i
 instead: condense its older entries harder; their details stay at the base. First fold each
 `specs/log/<id>.md` into `specs/log.md` at its newest end (on top, unless the log lists the
 oldest change first), ordered like the log by date, then change number, and delete the entry
-files. `specs/log.md` past its budget keeps its newest entries; the older ones, up to a number below every open or planned
-change, become archive entries for notable outcomes and lessons, and the archive's **Log condensed
-through** line names that number and the log at the commit before. A first `specs/archive.md`
-starts from `archive-template.md` (`Last 0.x feature: none`), so numbering works. End each pass
-with `- <date> compaction: <what changed>` as the newest entry in `specs/log.md` (on top, unless
-the log lists the oldest change first).
+files. `specs/log.md` past its budget keeps its newest entries. Condense older entries under
+a cutoff below every open or planned change and every retained live entry. Above that
+cutoff, condense any older closed entries as an exact sparse set. Keep archive summaries
+for notable outcomes and lessons. For example:
+
+> **Log condensed through**: 002; also 004-061, 063; those entries: `git show <sha>:specs/log.md`.
+
+The optional `; also …;` field lists change numbers and inclusive ranges in ascending order.
+Use `none` when there is no cutoff. Do not overlap ranges, include the cutoff, or span a gap:
+open or planned numbers (like 003 or 062 here) must not be covered. An archived number cannot
+be reused. Once indexed, remove its entry from both `specs/log.md` and `specs/log/`; doctor
+rejects duplicates in the resulting live log, even if the text is identical. A stale copy of
+an open record in another worktree does not reopen an archived change.
+
+Before removal, commit a folded log that contains the entries being indexed, and use its SHA in
+the pointer. The snapshot must remain reachable from a shared Git ref: if merges are squashed,
+land the fold before the removal or preserve the snapshot on a durable ref. To retrieve an
+entry, look up its number in the index and find its full ID in the log at that SHA. On later
+passes, keep earlier numbers reserved and verify that their entries are still retrievable. If
+the new pointer would lose earlier entries, carry them forward from the previous snapshot
+into the new Git snapshot only. Keep earlier cutoff-only pointers for any older history that
+predates the snapshot.
+
+A first `specs/archive.md` starts from `archive-template.md` (`Last 0.x feature: none`), so
+numbering works. End each pass with `- <date> compaction: <what changed>` as the newest entry
+in `specs/log.md` (on top, unless the log lists the oldest change first). Archived entries are
+from completed compactions; they do not count toward the next ten closes.

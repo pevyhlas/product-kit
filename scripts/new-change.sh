@@ -110,22 +110,23 @@ generate_slug() {
 # Every checkout whose specs/ can hold a claimed number: this one, worktrees under
 # .worktrees/, and every worktree git knows about. Paths may repeat or not exist.
 list_checkouts() {
-    local wt line
+    local wt line worktrees
     echo "$REPO_ROOT"
     for wt in "$REPO_ROOT/.worktrees"/*; do [ -d "$wt" ] && echo "$wt"; done
     if [ "$HAS_GIT" = true ]; then
-        git worktree list --porcelain 2>/dev/null | while IFS= read -r line; do
+        worktrees="$(spec_worktrees "$REPO_ROOT")" || return 1
+        while IFS= read -r line; do
             case "$line" in "worktree "*) echo "${line#worktree }" ;; esac
-        done
+        done <<< "$worktrees"
     fi
     return 0
 }
 
 # Numbered identities already claimed: open change records, closed changes in the log, 0.x
 # feature folders (on disk before the cutover; in git after it: at the base commit
-# specs/archive.md records, and removed in recent history), the last 0.x feature and the number
-# the log is condensed through that specs/archive.md names, changes the spec's `planned:` markers
-# name, and local and remote branches. The highest of them all wins.
+# specs/archive.md records, and removed in recent history), the last 0.x feature, changes the
+# spec's `planned:` markers name, and local and remote branches. The archive's closed-number
+# index is loaded separately under the lock, because it also forbids explicit reuse.
 list_claimed() {
     list_spec_claims
     if [ "$HAS_GIT" = true ]; then
@@ -149,8 +150,6 @@ list_spec_claims() {
         if [ -f "$checkout/specs/archive.md" ]; then
             last="$(spec_archive_last "$checkout")"
             case "$last" in ''|0) ;; *) printf 'specs/archive.md, 0.x features through %03d-\n' "$last" ;; esac
-            last="$(spec_archive_log_through "$checkout")"
-            case "$last" in ''|0) ;; *) printf 'specs/archive.md, closed changes through %03d-\n' "$last" ;; esac
             if [ "$HAS_GIT" = true ]; then
                 while IFS= read -r token; do
                     base="$(git -C "$checkout" rev-parse --verify --quiet "$token^{commit}" 2>/dev/null)" || continue
@@ -187,6 +186,26 @@ archive_unreadable() {
     return 0
 }
 
+list_archive_indexes() {
+    local checkouts checkout rev head="" default
+    checkouts="$(set -o pipefail; list_checkouts | sort -u)" || return 1
+    while IFS= read -r checkout; do
+        spec_archive_log_index "$checkout" "$checkout/specs/archive.md" || return 1
+    done <<< "$checkouts"
+    [ "$HAS_GIT" = true ] || return 0
+    if rev="$(git rev-parse --verify --quiet HEAD)"; then
+        head="$rev"
+        spec_archive_log_index_at "$REPO_ROOT" "$head" || return 1
+    elif [ "$?" -ne 1 ]; then return 1
+    fi
+    # A branch cut before compaction may have no index in any working copy, even
+    # though the default branch known to local Git has reserved those numbers.
+    default="$(spec_default_branch "$REPO_ROOT")" || return 1
+    [ -n "$default" ] || return 0
+    rev="$(git rev-parse --verify --quiet "$default^{commit}")" || return 1
+    [ "$rev" = "$head" ] || spec_archive_log_index_at "$REPO_ROOT" "$rev"
+}
+
 claimed_numbers() {
     list_claimed | while IFS= read -r line; do
         case "${line##* }" in [0-9][0-9][0-9]*-*) echo "$line" ;; esac
@@ -195,6 +214,10 @@ claimed_numbers() {
 
 next_number() {
     local highest=0 line name number
+    while IFS= read -r line; do
+        name="${line##* }"; number="${name##*-}"
+        [ "$number" -gt "$highest" ] && highest="$number"
+    done <<< "$ARCHIVE_INDEXES"
     while IFS= read -r line; do
         name="${line##* }"; number=$((10#${name%%-*}))
         [ "$number" -gt "$highest" ] && highest=$number
@@ -277,6 +300,10 @@ SLUG="$(printf '%s' "$SLUG" | cut -c1-60 | sed 's/-$//')"
 if [ -z "$SLUG" ]; then echo "Error: could not derive a short name; pass --short-name" >&2; exit 1; fi
 
 AUTO_NUMBER=false
+# Both automatic and explicit allocation must see a complete, valid archive index from
+# every checkout. Keep the lock through record creation; a malformed index cannot be overridden.
+acquire_number_lock
+ARCHIVE_INDEXES="$(list_archive_indexes)"
 if [ -z "$CHANGE_NUMBER" ]; then
     # Never reuse a 0.x feature number silently. With no feature folder anywhere to read, stop on
     # a specs/archive.md that yields no number, and warn in a shallow clone without one: its
@@ -292,12 +319,7 @@ if [ -z "$CHANGE_NUMBER" ]; then
             echo "[prdkit] Warning: shallow clone: 0.x feature folders removed from main are not in its history, so their numbers are not reserved; fetch the full history or pass --number." >&2
         fi
     fi
-    acquire_number_lock
     CHANGE_NUMBER="$(next_number)"; AUTO_NUMBER=true
-else
-    # Every explicit-ID creator shares the lock too: branch creation cannot arbitrate a
-    # race against a record-only creator, especially across registered checkouts.
-    acquire_number_lock
 fi
 NUM="$(printf '%03d' "$((10#$CHANGE_NUMBER))")"
 if [ "$AUTO_NUMBER" = true ]; then
@@ -308,17 +330,23 @@ if [ "$AUTO_NUMBER" = true ]; then
         NUM="$NEXT"
     done
 else
-    # An explicit --number overrides every reservation; it names what else holds the number. Its
-    # own planned: marker does not count.
+    while IFS= read -r index; do
+        spec_archive_log_covers "$index" "$NUM" || continue
+        cutoff="${index%% *}"
+        if [ "$((10#$NUM))" -le "$cutoff" ]; then
+            printf '[prdkit] Error: change number %s is reserved: specs/archive.md condenses the log through %03d; pick a higher number.\n' "$NUM" "$cutoff" >&2
+        else
+            printf '[prdkit] Error: change number %s is reserved by the condensed log index in specs/archive.md; pick an unused number.\n' "$NUM" >&2
+        fi
+        exit 1
+    done <<< "$ARCHIVE_INDEXES"
+    # Other reservations can be overridden; name what else holds the number. Its own planned:
+    # marker does not count.
     HOLDERS=""
     while IFS= read -r held_line; do
         held="${held_line##* }"
         case "$held_line" in
             "planned in the spec $NUM-$SLUG"|"planned in the spec $NUM-") continue ;;
-            "specs/archive.md, closed changes through "*)
-                [ "$((10#$NUM))" -le "$((10#${held%-}))" ] || continue
-                echo "[prdkit] Error: change number $NUM is reserved: specs/archive.md condenses the log through ${held%-}; pick a higher number." >&2
-                exit 1 ;;
             "specs/archive.md, 0.x features through "*) [ "$((10#$NUM))" -le "$((10#${held%-}))" ] || continue ;;
             *) [ "$((10#${held%%-*}))" -eq "$((10#$NUM))" ] || continue ;;
         esac

@@ -4,7 +4,11 @@
 What still binds lives in the spec, never here. Agents read this file on demand (a history
 question, before re-trying a direction), never by default. Each entry is a few lines; its
 details stay in git at the base. Past the budget, condense older entries harder.
-new-change.sh reads the Base, Last and Log lines to never reuse an old number. -->
+new-change.sh reads the Base, Last and Log lines to never reuse an old number.
+Optional sparse closes above the cutoff: insert `; also 004-061, 063` before
+`; those entries:`. Only closed numbers, in ascending, non-overlapping ranges
+or as single numbers. Every indexed close stays retrievable at a Git pointer;
+none remains in the live log or an open or planned change. See compact.md. -->
 
 **Base**: `<full commit sha>`, main before the cutover (<YYYY-MM-DD>). Details:
 `git show <sha>:<path>`; history: `git log -- <path>`.

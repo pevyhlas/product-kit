@@ -190,7 +190,7 @@ spec_leftover_features() { # root
 }
 
 # --- specs/archive.md (archive-template.md): the cutover's base commit, its last 0.x feature, ---
-# and the change number specs/log.md is condensed through.
+# followed by the closed change numbers condensed out of specs/log.md.
 # A label is read loosely: bold or plain, in a heading, list item, quote or table row, its value
 # after a colon or a dash, or alone on the next line. Bash string matching only, no awk: the
 # file may hold any character.
@@ -221,8 +221,6 @@ _spec_archive_value() { # file base|last|log -> the value of the first line with
             last:[Ll][Aa][Ss][Tt]' '0.[Xx]' '[Ff][Ee][Aa][Tt][Uu][Rr][Ee]*)
                 v="${_spec_t#????????????????}"; _spec_trim "${v#[Ss]}"
                 case "$_spec_t" in [Nn][Uu][Mm][Bb][Ee][Rr]*) v="${_spec_t#??????}"; _spec_trim "${v#[Ss]}" ;; esac ;;
-            log:[Ll][Oo][Gg]' '[Cc][Oo][Nn][Dd][Ee][Nn][Ss][Ee][Dd]' '[Tt][Hh][Rr][Oo][Uu][Gg][Hh]*)
-                _spec_trim "${_spec_t#?????????????????????}" ;;
             *) continue ;;
         esac
         [ -z "$_spec_t" ] || { printf '%s\n' "$_spec_t"; return 0; }
@@ -250,16 +248,116 @@ spec_archive_last() { # root
     [ -z "$max" ] || echo "$max"
     return 0
 }
-# The change number specs/log.md is condensed through: the number its value starts with (a sha
-# or date after it never counts), 0 for none, nothing otherwise.
-spec_archive_log_through() { # root
-    local v d
-    v="$(_spec_archive_value "$1/specs/archive.md" log)"
-    case "$v" in
-        [Nn][Oo][Nn][Ee]*) echo 0 ;;
-        [0-9]*) d="${v%%[!0-9]*}"; [ "${#d}" -gt 9 ] || echo "$((10#$d))" ;;
-    esac
-    return 0
+# One normalized row: cutoff (0 for none), then sparse lo-hi pairs, without expanding ranges.
+# Cutoff-only archives keep their loose syntax: only the leading number ever counts. The
+# opt-in `; also ...;` field is strict; return no index on an error, not even the cutoff.
+spec_archive_log_index() { _spec_archive_log_file "$1/specs/archive.md" "${2:-specs/archive.md}"; }
+
+_spec_archive_log_file() { # file diagnostic-path
+    local parsed expected
+    if [ ! -e "$1" ] && [ ! -L "$1" ]; then echo 0; return 0; fi
+    if [ ! -f "$1" ] || ! verify_lf_file "$1" allow-empty; then
+        printf '%s: cannot read condensed log index (expected LF text)\n' "$2" >&2
+        return 1
+    fi
+    expected="$(wc -l < "$1")" || return 1
+    parsed="$(LC_ALL=C awk -v expected="$expected" "$SPEC_METADATA_SKIP_AWK"'
+        function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+        function number(s) { return s ~ /^[0-9]+$/ && length(s) <= 9 }
+        function fail(why) { print NR ": " why; bad = 1; exit 1 }
+        function value(s,    low, lead, rest, semi, list, fields, n, i, bounds, pair, lo, hi, prev) {
+            low = tolower(s)
+            if (!match(low, /;[[:space:]]*also([^a-z]|$)/)) {
+                if (low ~ /^([0-9]+|none)[[:space:]]+also([^a-z]|$)/) fail("expected ; before also")
+                gsub(/[*_`#|>]/, "", s)
+                sub(/^([-[:space:]:=]|—|–)+/, "", s)
+                if (match(s, /^[0-9]+/) && RLENGTH <= 9) cutoff = substr(s, 1, RLENGTH) + 0
+                return
+            }
+            lead = trim(substr(s, 1, RSTART - 1))
+            if (tolower(lead) != "none" && !number(lead)) fail("expected a cutoff number or none before also")
+            cutoff = lead + 0; prev = cutoff
+            rest = substr(s, RSTART); sub(/^;[[:space:]]*/, "", rest)
+            semi = index(rest, ";")
+            if (tolower(rest) !~ /^also[[:space:]]/ || !semi) fail("expected ; also <IDs and ranges>;")
+            if (tolower(substr(rest, semi)) ~ /;[[:space:]]*also([^a-z]|$)/) fail("duplicate also field")
+            list = trim(substr(rest, 5, semi - 5))
+            if (list == "" || list ~ /,$/) fail("empty ID or range")
+            n = split(list, fields, ",")
+            for (i = 1; i <= n; i++) {
+                pair = split(trim(fields[i]), bounds, "-")
+                if (pair < 1 || pair > 2 || !number(trim(bounds[1])) || (pair == 2 && !number(trim(bounds[2]))))
+                    fail("expected a numeric ID or closed range")
+                lo = trim(bounds[1]) + 0; hi = pair == 2 ? trim(bounds[2]) + 0 : lo
+                if (hi < lo) fail("descending range")
+                if (lo <= prev) fail("IDs and ranges must be above the cutoff, ascending and non-overlapping")
+                ranges = ranges " " lo "-" hi; prev = hi
+            }
+        }
+        {
+            if (metadata_skip($0)) next
+            s = $0
+            if (value_line == NR - 1 && value_line &&
+                (tolower(s) ~ /^[[:space:]]*;[[:space:]]*also([^a-z]|$)/ ||
+                 (continued && tolower(s) ~ /^[[:space:]]*also([^a-z]|$)/)))
+                fail("keep the also field on the cutoff line")
+            sub(/^([-[:space:]*_`#|>:=]|—|–)+/, "", s)
+            if (tolower(s) ~ /^log condensed through([-[:space:]*_`#|>:=]|—|–|$)/) {
+                if (seen++) fail("duplicate Log condensed through field")
+                s = substr(s, 22)
+                if (!sub(/^[[:space:]*_`#|>]*:[[:space:]]*/, "", s))
+                    sub(/^([-[:space:]*_`#|>:=]|—|–)+/, "", s)
+                pending = 1
+            }
+            if (pending && trim(s) != "") {
+                value(s); value_line = NR; continued = (s ~ /;[[:space:]]*$/); pending = 0
+            }
+        }
+        END {
+            if (bad) exit 1
+            if (NR != expected) fail("incomplete archive read (expected " expected + 0 " lines, checked " NR ")")
+            print cutoff + 0 ranges
+        }
+    ' "$1")" || {
+        printf '%s:%s\n' "$2" "${parsed:- cannot read condensed log index}" >&2
+        return 1
+    }
+    if ! [[ "$parsed" =~ ^[0-9]+(\ [0-9]+-[0-9]+)*$ ]]; then
+        printf '%s: incomplete condensed log index\n' "$2" >&2
+        return 1
+    fi
+    printf '%s\n' "$parsed"
+}
+
+# A close must not miss a committed index when the checkout is sparse or stale.
+spec_archive_log_index_at() ( # root rev
+    local path=specs/archive.md row meta tmp
+    export GIT_NO_LAZY_FETCH=1
+    row="$(verify_lines git -C "$1" ls-tree "$2" -- ":(literal)$path")" || return 1
+    if [ -z "$row" ]; then echo 0; return 0; fi
+    spec_objects_local "$1" || { printf 'Cannot read %s at %s without risking a lazy fetch\n' "$path" "$2" >&2; return 1; }
+    meta="${row%%$'\t'*}"
+    if ! [[ "${row#*$'\t'}" = "$path" && "$meta" =~ ^100(644|755)\ blob\ [0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+        printf '%s at %s: expected a regular archive file\n' "$path" "$2" >&2
+        return 1
+    fi
+    tmp="$(mktemp)" || return 1
+    trap 'rm -f "$tmp"' EXIT
+    git -C "$1" cat-file blob "${meta##* }" > "$tmp" || return 1
+    _spec_archive_log_file "$tmp" "$path"
+)
+
+spec_archive_log_covers() { # normalized index, change ID (or just its number)
+    local cutoff="${1%% *}" n="${2%%-*}" range
+    n="${n#"${n%%[!0]*}"}"
+    case "$n" in ''|*[!0-9]*) return 1 ;; esac
+    [ "${#n}" -le 9 ] || return 1
+    [ "$n" -gt "$cutoff" ] || return 0
+    for range in ${1#"$cutoff"}; do
+        [ "$n" -ge "${range%-*}" ] || return 1
+        [ "$n" -gt "${range#*-}" ] || return 0
+    done
+    return 1
 }
 
 # The closed-change log: the lines of specs/log.md, then each entry file specs/log/<id>.md, one
@@ -1264,9 +1362,10 @@ spec_checkouts() { # root
 # Open changes across checkouts: the spec_changes columns, then the record's location. An id
 # found in several checkouts is listed once: the copy on the branch named after the change wins,
 # else the first found.
-spec_open_changes() { # root
+spec_open_changes() { # root, validated archive log index
     local root="$1" path branch loc row closed checkouts changes
-    # A worktree branched before a close still carries the record: the root's log has the final word.
+    # A worktree branched before a close may still carry the record: the current log and
+    # archive have the final word. Doctor checks for a conflicting record in the current checkout.
     closed=" $(spec_log_entries "$root" | sed -n 's/^- [0-9-]* \([^ :]*\):.*/\1/p' | tr '\n' ' ')" || return 1
     checkouts="$(verify_lines spec_checkouts "$root")" || return 1
     [ -n "$checkouts" ] || return 1
@@ -1275,6 +1374,7 @@ spec_open_changes() { # root
         changes="$(verify_lines spec_changes "$path")" || return 1
         while IFS= read -r row; do
             [ -n "$row" ] || continue
+            if spec_archive_log_covers "$2" "${row%%"$SPEC_SEP"*}"; then continue; fi
             printf '%s\037%s\037%s\n' "$row" "$loc" "$([ "${row%%"$SPEC_SEP"*}" = "$branch" ] && echo 1 || echo 0)"
         done <<< "$changes"
     done <<< "$checkouts" | awk -F '\037' -v closed="$closed" 'NF {

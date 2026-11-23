@@ -418,6 +418,45 @@ for value in '040 — entries at `git show 9f81234:specs/log.md`' '040 as of 202
 done
 rm -f "$PROJ2/specs/archive.md"
 
+it "sparse archive bounds automatic numbering and forbids explicit reuse, but leaves gaps"
+sparse_project="$(make_inited_project)" || exit 1
+track_tmp "$sparse_project"
+cd "$sparse_project" || exit 1
+sparse_new="$sparse_project/.prdkit/scripts/bash/new-change.sh"
+mkdir -p specs
+# shellcheck disable=SC2016 # Markdown code span
+printf '**Last 0.x feature**: none\n**Log condensed through**: none; also 030-033, 035; those entries: `git show abc1234:specs/log.md`.\n' > specs/archive.md
+run bash "$sparse_new" --json --no-branch --short-name sparse-next "desc"
+assert_eq 0 "$STATUS" "valid sparse index without a cutoff"
+assert_contains "$OUTPUT" '"CHANGE_ID":"036-sparse-next"' "highest sparse member sets the next number"
+for num in 30 31 33 35; do
+    run bash "$sparse_new" --no-branch --number "$num" --short-name never-reuse "desc"
+    assert_eq 1 "$STATUS" "cannot reuse sparse number $num"
+    assert_contains "$OUTPUT" 'reserved by the condensed log index' 'the archive refusal is explicit'
+done
+run bash "$sparse_new" --json --no-branch --number 34 --short-name spare-gap "desc"
+assert_eq 0 "$STATUS" 'a gap above the cutoff is not reserved'
+assert_contains "$OUTPUT" '"CHANGE_ID":"034-spare-gap"'
+archive_ref=refs/remotes/origin/main
+git update-ref "$archive_ref" HEAD
+git symbolic-ref refs/remotes/origin/HEAD "$archive_ref"
+archive_text="$(cat specs/archive.md)"
+trusted_edit "$archive_ref" specs/archive.md <<< "$archive_text" || exit 1
+rm specs/archive.md
+run bash "$sparse_new" --no-branch --number 31 --short-name stale "desc"
+assert_eq 1 "$STATUS" "a branch without an archive still honors the default branch's index"
+assert_contains "$OUTPUT" 'reserved by the condensed log index'
+git symbolic-ref --delete refs/remotes/origin/HEAD
+git update-ref -d "$archive_ref"
+printf '**Last 0.x feature**: none\n**Log condensed through**: 002; also 030-033, 032;\n' > specs/archive.md
+for num in auto explicit; do
+    if [ "$num" = auto ]; then run bash "$sparse_new" --no-branch "desc"
+    else run bash "$sparse_new" --number 34 --no-branch "desc"; fi
+    assert_eq 1 "$STATUS" "$num numbering cannot fall back to the cutoff"
+    assert_contains "$OUTPUT" 'specs/archive.md:2:' 'line-numbered error'
+done
+cd "$PROJ2" || exit 1
+
 it "changes the spec's planned: markers name stay reserved; comments and code blocks do not count"
 mkdir -p "$PROJ2/specs/product" "$PROJ2/specs/parts"
 cat > "$PROJ2/specs/product/requirements.md" <<'EOF'

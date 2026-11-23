@@ -538,6 +538,89 @@ for value in '002 — entries at `git show 9f81234:specs/log.md`' '002 as of 202
 done
 rm specs/archive.md; git reset -q --hard HEAD~2
 
+it "sparse compaction preserves exact history past open and planned changes, in either log order"
+before_sparse="$(git rev-parse HEAD)"
+mkdir -p specs/changes
+for id in 001-first 002-second 003-outcome 004-fourth 005-fifth 006-sixth 008-planned 009-gap 010-tenth; do
+    printf '# %s\n\n## State\n\nWaiting on: nothing\nNext: continue\n' "$id" > "specs/changes/$id.md"
+done
+printf -- '\n- **R-03 An open outcome** (hypothesis, planned: 003-outcome): record the outcome.\n- **R-04 Another plan** (hypothesis, planned: 008): record the result.\n' >> specs/product.md
+git add specs; git commit -qm 'open changes'
+stale="$(mktemp -d)"; track_tmp "$stale"
+git worktree add -q --detach "$stale" HEAD
+for id in 001-first 002-second 004-fourth 005-fifth 006-sixth 009-gap 010-tenth; do
+    git rm -q "specs/changes/$id.md"
+    printf -- '- 2026-10-10 %s: historical evidence for %s\n' "$id" "$id" >> specs/log.md
+done
+git add specs/log.md; git commit -qm 'close changes and snapshot the folded log'
+folded_sha="$(git rev-parse HEAD)"
+# shellcheck disable=SC2016 # Markdown code span
+printf '# Archive\n\n**Last 0.x feature**: none\n\n**Log condensed through**: 002; also 004-006, 010; those entries: `git show %s:specs/log.md`.\n' "$folded_sha" > specs/archive.md
+archive_sha="$(sed -n 's/.*git show \([0-9a-f]*\):specs\/log.md.*/\1/p' specs/archive.md)"
+assert_contains "$(git show "$archive_sha:specs/log.md")" '005-fifth: historical evidence for 005-fifth' "a member in the middle of a range is retrievable by ID"
+pass='- 2026-10-12 compaction: condensed older closes'
+# The live 009 is in a gap and must not be treated as archived. Ten later closes are due.
+before_pass='- 2026-10-10 009-gap: keep the entry in this gap'
+after_pass="$(i=20; while [ "$i" -lt 30 ]; do printf -- '- 2026-10-13 %03d-new: a later close\n' "$i"; i=$((i + 1)); done)"
+for order in oldest newest; do
+    if [ "$order" = oldest ]; then printf '%s\n' "$before_pass" "$pass" "$after_pass"
+    else printf '%s\n' "$after_pass" "$pass" "$before_pass"; fi > specs/log.md
+    run bash "$DOCTOR"
+    assert_eq 0 "$STATUS" "$order: doctor accepts the sparse archive"
+    assert_not_contains "$OUTPUT" "Planned for a closed change" "$order: planned gaps stay open"
+    assert_contains "$OUTPUT" "Compaction due: 10 changes closed since the last pass" "$order: no archived history is recounted"
+    run bash .prdkit/scripts/bash/status.sh --json
+    assert_eq 0 "$STATUS" "$order: status accepts the same archive"
+    assert_eq "003-outcome 008-planned" "$(jq -r '[.changes[].id] | sort | join(" ")' <<< "$OUTPUT")" "$order: neither cutoff nor sparse history is resurrected by a stale worktree"
+    assert_eq 10 "$(jq '.compaction.closed_since_last' <<< "$OUTPUT")" "$order: status also counts only new closes"
+done
+sed -i.bak '/ 009-gap:/d' specs/log.md; rm specs/log.md.bak
+run bash "$DOCTOR"
+assert_contains "$OUTPUT" 'Closed without a log entry: 009-gap;' "a missing ID in a gap is still a finding"
+printf '%s\n' "$before_pass" >> specs/log.md
+
+it "doctor rejects archived numbers still open, planned, or in either form of live log"
+printf '# Open again\n' > specs/changes/001-reused.md
+printf '# Open another\n' > specs/changes/005-reused.md
+printf -- '\n- **R-05 Old plan** (hypothesis, planned: 001): no longer planned.\n- **R-06 Sparse plan** (hypothesis, planned: 005-reused): also no longer planned.\n' >> specs/product.md
+printf -- '- 2026-10-10 004-fourth: historical evidence for 004-fourth\n' >> specs/log.md
+mkdir -p specs/log
+printf -- '- 2026-10-10 006-sixth: historical evidence for 006-sixth\n' > specs/log/006-sixth.md
+printf '%s\n' "$before_pass" > specs/log/009-gap.md
+run bash "$DOCTOR"
+assert_eq 1 "$STATUS" "archive conflicts fail without --strict"
+for id in 001-reused 005-reused; do
+    assert_contains "$OUTPUT" "specs/changes/$id.md is open but its number is condensed" "doctor names conflicting open record $id"
+done
+assert_contains "$OUTPUT" 'Planned for a closed change: 001 at specs/product.md:' 'doctor rejects a planned cutoff number'
+assert_contains "$OUTPUT" 'Planned for a closed change: 005-reused at specs/product.md:' 'an open record cannot hide a conflicting planned marker'
+for id in 004-fourth 006-sixth; do
+    assert_contains "$OUTPUT" "Live log entry for $id is also condensed" "even identical archived and live text is an error for $id"
+done
+assert_contains "$OUTPUT" 'Duplicate live log entry for 009-gap' 'folded and per-entry copies cannot both remain live'
+git worktree remove "$stale"
+rm -f specs/changes/{001,005}-reused.md specs/archive.md specs/log/{006-sixth,009-gap}.md
+git reset -q --hard "$before_sparse"
+
+it "malformed sparse archive fields fail at their line in doctor and status"
+for value in '002; also 006-004;' '002; also 004-006, 006-008;' '002; also 008, 004;' \
+             '002; also 001-004;' '002; also four;' '002; also 004-;' '002; also -004;' \
+             '002; also 004,;' '002; also ;' '002; also 004' '002 also 004;'; do
+    printf '# Archive\n\n**Last 0.x feature**: none\n\n**Log condensed through**: %s\n' "$value" > specs/archive.md
+    run bash "$DOCTOR" --json
+    assert_eq 1 "$STATUS" "doctor rejects: $value"
+    assert_contains "$(jq -r '.findings[]' <<< "$OUTPUT")" 'specs/archive.md:5:' 'doctor reports the source line'
+    run bash .prdkit/scripts/bash/status.sh --json
+    assert_eq 1 "$STATUS" "status rejects: $value"
+    assert_contains "$OUTPUT" 'specs/archive.md:5:' 'status reports the same line, not cutoff-only JSON'
+    assert_not_contains "$OUTPUT" '"compaction":' 'status does not report partial state'
+done
+printf '**Log condensed through**: 002;\n  also 004-006;\n' > specs/archive.md
+run bash "$DOCTOR"
+assert_eq 1 "$STATUS" 'a split sparse field does not silently fall back to the cutoff'
+assert_contains "$OUTPUT" 'specs/archive.md:2:' 'the continuation line is named'
+rm specs/archive.md
+
 it "a renamed change record is not a closed one"
 mkdir -p specs/changes; printf '# 004-y\n\nIntent: export the weekly report as a file.\n' > specs/changes/004-y.md
 git add specs/changes; git commit -qm open >/dev/null
