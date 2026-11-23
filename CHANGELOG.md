@@ -35,6 +35,8 @@ change by change.
   and line-oriented verifier evidence require LF line endings and a final newline;
   `read-spec.sh --raw` still returns the original bytes.
 - Docs-only review passes report the path and blocker checks without claiming receipt coverage.
+- Test suites can no longer consume the runner's pending suite list via stdin. The runner
+  fails if the number of suites run differs from the plan.
 
 ### Documentation
 

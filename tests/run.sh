@@ -99,6 +99,7 @@ if [ -t 1 ]; then G=$'\033[32m'; R=$'\033[31m'; B=$'\033[1m'; Z=$'\033[0m'; else
 
 suite_bash=bash
 if "$native"; then suite_bash="$BASH"; fi
+planned_files="$(printf '%s\n' "$suites" | awk 'length($0) { count++ } END { print count+0 }')" || exit 1
 total_files=0; failed_files=0
 echo "${B}Product-Kit test suite${shard:+ — shard $shard/$shards}${Z}"
 echo
@@ -108,7 +109,8 @@ while IFS= read -r name; do
     total_files=$((total_files+1))
     echo "${B}▶ $name${Z}"
     started=$SECONDS
-    if "$suite_bash" "$TESTS_DIR/$name" ${VFLAG:+"$VFLAG"}; then
+    # The loop's stdin is the suite plan, not input for suites or their children.
+    if "$suite_bash" "$TESTS_DIR/$name" ${VFLAG:+"$VFLAG"} </dev/null; then
         :
     else
         failed_files=$((failed_files+1))
@@ -118,6 +120,10 @@ while IFS= read -r name; do
 done <<< "$suites"
 
 echo "────────────────────────────────────────"
+if [ "$total_files" -ne "$planned_files" ]; then
+    echo "Suite count mismatch: ran $total_files of $planned_files planned test files" >&2
+    exit 1
+fi
 if [ "$failed_files" -eq 0 ]; then
     echo "${G}ALL GREEN${Z} — $total_files test file(s) passed"
     exit 0
