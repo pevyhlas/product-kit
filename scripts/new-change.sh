@@ -220,9 +220,17 @@ number_owner() { # zero-padded number; prints the claiming source
 # minute) is removed by one reaper at a time, which re-checks it first. PRDKIT_NUMBER_LOCK_WAIT
 # bounds the wait in seconds (default 120).
 NUMBER_LOCK=""
+RECORD_TMP=""
 HOST_NAME="$(uname -n)"
 create_exclusive() { ( set -C; printf '%s %s\n' "$$" "$HOST_NAME" > "$1" ) 2>/dev/null; }
 release_number_lock() { [ -z "$NUMBER_LOCK" ] || rm -f "$NUMBER_LOCK"; NUMBER_LOCK=""; }
+cleanup_open() {
+    release_number_lock
+    if [ -n "$RECORD_TMP" ]; then
+        rm -f "$RECORD_TMP"/{template,scaffold,record}
+        rmdir "$RECORD_TMP"
+    fi
+}
 number_lock_stale() { # lock file -> 0 when its holder is gone
     local owner pid
     owner="$(cat "$1" 2>/dev/null)" || owner=""
@@ -260,7 +268,7 @@ acquire_number_lock() {
         waited=$((waited + 1))
     done
     NUMBER_LOCK="$lock"
-    trap release_number_lock EXIT
+    trap cleanup_open EXIT
     trap 'exit 1' INT TERM HUP
 }
 
@@ -332,84 +340,29 @@ done < <(list_checkouts)
 
 WORKTREE_PATH="$REPO_ROOT"
 CREATED_WORKTREE=false
-if $NO_BRANCH; then
-    BRANCH_NAME=""
-    if $HAS_GIT; then BRANCH_NAME="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"; fi
-elif [ "$HAS_GIT" = true ]; then
-    if git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
-        echo "[prdkit] Error: Branch '$BRANCH_NAME' already exists." >&2
-        echo "[prdkit] To continue that change, run: git checkout $BRANCH_NAME" >&2
-        echo "[prdkit] To open a different change, choose a unique short name." >&2
-        exit 1
-    fi
-    # A linked worktree has a per-checkout git dir that differs from the common dir.
-    IN_LINKED_WORKTREE=false
-    GIT_DIR_ABS="$(CDPATH="" cd "$(git rev-parse --git-dir)" 2>/dev/null && pwd -P)" || GIT_DIR_ABS=""
-    GIT_COMMON_ABS="$(CDPATH="" cd "$(git rev-parse --git-common-dir)" 2>/dev/null && pwd -P)" || GIT_COMMON_ABS=""
-    if [ -n "$GIT_DIR_ABS" ] && [ -n "$GIT_COMMON_ABS" ] && [ "$GIT_DIR_ABS" != "$GIT_COMMON_ABS" ]; then
-        IN_LINKED_WORKTREE=true
-    fi
-    if [ "$NO_WORKTREE" = true ] || [ "$IN_LINKED_WORKTREE" = true ]; then
-        # Explicit opt-out, or already isolated: create the branch in place (no nesting).
-        git checkout -q -b "$BRANCH_NAME"
-    else
-        WORKTREE_DIR="$REPO_ROOT/.worktrees/$BRANCH_NAME"
-        mkdir -p "$REPO_ROOT/.worktrees"
-        if ! git check-ignore -q .worktrees 2>/dev/null; then
-            if [ -s "$REPO_ROOT/.gitignore" ] && [ -n "$(tail -c 1 "$REPO_ROOT/.gitignore")" ]; then
-                echo >> "$REPO_ROOT/.gitignore"
-            fi
-            echo ".worktrees/" >> "$REPO_ROOT/.gitignore"
-            echo "[prdkit] Added '.worktrees/' to .gitignore so isolated worktrees stay untracked." >&2
-        fi
-        if WT_ERR="$(git worktree add "$WORKTREE_DIR" -b "$BRANCH_NAME" 2>&1 >/dev/null)"; then
-            WORKTREE_PATH="$WORKTREE_DIR"
-            CREATED_WORKTREE=true
-        else
-            echo "[prdkit] Warning: Could not create a worktree at $WORKTREE_DIR:" >&2
-            echo "[prdkit]   ${WT_ERR:-unknown git error}" >&2
-            if git worktree list --porcelain | grep '^prunable' >/dev/null; then
-                echo "[prdkit] Inspect stale registrations with cleanup-change.sh --prune before retrying." >&2
-                exit 1
-            fi
-            # Falling back switches the MAIN checkout onto the new branch; never do that
-            # on top of uncommitted work.
-            if [ -n "$(git status --porcelain --untracked-files=all 2>/dev/null)" ]; then
-                echo "[prdkit] ERROR: The current checkout has uncommitted changes (tracked or untracked); refusing to fall back to 'git checkout -b' (it would carry your work onto the new branch)." >&2
-                echo "[prdkit] Fix the worktree failure above, commit or stash first, or pass --no-worktree explicitly." >&2
-                exit 1
-            fi
-            echo "[prdkit] Falling back to 'git checkout -b' in the current checkout." >&2
-            # A failed `worktree add -b` can leave the new branch behind; reuse it then.
-            if git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
-                git checkout -q "$BRANCH_NAME"
-            else
-                git checkout -q -b "$BRANCH_NAME"
-            fi
-        fi
-    fi
-else
-    echo "[prdkit] Warning: Git repository not detected; skipped branch creation for $BRANCH_NAME" >&2
-fi
-
-CHANGES_DIR="$WORKTREE_PATH/specs/changes"
-CHANGE_FILE="$CHANGES_DIR/$CHANGE_ID.md"
-mkdir -p "$CHANGES_DIR"
-TEMPLATE="$WORKTREE_PATH/.prdkit/templates/change-template.md"
-[ -f "$TEMPLATE" ] || TEMPLATE="$REPO_ROOT/.prdkit/templates/change-template.md"
-SCAFFOLD="$WORKTREE_PATH/.prdkit/scripts/bash/outcome-checkpoint.md"
-[ -f "$SCAFFOLD" ] || SCAFFOLD="$REPO_ROOT/.prdkit/scripts/bash/outcome-checkpoint.md"
+TEMPLATE=.prdkit/templates/change-template.md
+SCAFFOLD=.prdkit/scripts/bash/outcome-checkpoint.md
 POINTER='<!-- Outcome checkpoint format: .prdkit/scripts/bash/outcome-checkpoint.md -->'
-if [ -e "$CHANGE_FILE" ] || [ -L "$CHANGE_FILE" ]; then
-    echo "[prdkit] Error: $CHANGE_FILE already exists; it is never overwritten." >&2
-    exit 1
-fi
 TODAY="${PRDKIT_TODAY:-$(date +%Y-%m-%d)}"
+RECORD_TMP="$(mktemp -d)"
+RENDERED_RECORD="$RECORD_TMP/record"
+record_input() { # project-relative path, temp path, optional pinned start commit
+    local path="$1" staged="$2" entry oid type
+    if [ -n "${3:-}" ]; then
+        entry="$(printf '%s\n' "$3:$path" | git cat-file --batch-check --follow-symlinks)" || return 1
+        read -r oid type _ <<< "$entry"
+        if [ "$type" = blob ]; then
+            git cat-file blob "$oid" > "$staged" || return 1
+            path="$staged"
+        fi
+    fi
+    printf '%s\n' "$path"
+}
 render_record() {
-    local snippet=""
-    if $PROGRAMME && [ -f "$SCAFFOLD" ] && verify_lf_file "$SCAFFOLD"; then snippet="$SCAFFOLD"; fi
-    if [ -f "$TEMPLATE" ]; then
-        review_file_without_nul "$TEMPLATE" || return 1
+    local template="$1" scaffold="$2" snippet=""
+    if $PROGRAMME && [ -f "$scaffold" ] && verify_lf_file "$scaffold"; then snippet="$scaffold"; fi
+    if [ -f "$template" ]; then
+        review_file_without_nul "$template" || return 1
         LC_ALL=C PK_INTENT="$INTENT" PK_TODAY="$TODAY" PK_SCAFFOLD="$snippet" PK_POINTER="$POINTER" \
             awk -v programme="$PROGRAMME" "$SPEC_SKIP_AWK"'
             function scaffold(    row, rc, n, file) {
@@ -476,20 +429,109 @@ render_record() {
                     print text
                 }
             }
-        ' "$TEMPLATE"
+        ' "$template"
     else
         printf '# Change: %s\n\n**Opened**: %s\n' "$INTENT" "$TODAY" || return 1
         if $PROGRAMME; then [ -n "$snippet" ] && printf '\n## State\n\n' && cat "$snippet"; fi
     fi
 }
-# Render before opening the record: a missing or unreadable input must not leave a partial record.
-# The sentinel protects any trailing newlines from command substitution.
-if ! RECORD="$(render_record && printf .)" || [[ "$RECORD" != *$'\n.' || "$RECORD" == *$'\r'* ]]; then
-    echo "[prdkit] Error: could not render the change record; check the change template and the installed outcome checkpoint snippet." >&2
+prepare_record() ( # optional pinned start commit for a fresh worktree
+    set -o pipefail
+    local template scaffold="" tag_row line issue
+    template="$(record_input "$TEMPLATE" "$RECORD_TMP/template" "${1:-}")" || exit 1
+    if $PROGRAMME; then
+        scaffold="$(record_input "$SCAFFOLD" "$RECORD_TMP/scaffold" "${1:-}")" || exit 1
+    fi
+    if ! render_record "$template" "$scaffold" > "$RENDERED_RECORD" || ! verify_lf_file "$RENDERED_RECORD"; then
+        echo "[prdkit] Error: could not render the change record; check the change template and the installed outcome checkpoint snippet." >&2
+        exit 1
+    fi
+    tag_row="$(spec_change_metadata "$RENDERED_RECORD" create)" || {
+        echo "[prdkit] Error: could not validate Tags in the rendered record from $TEMPLATE." >&2
+        exit 1
+    }
+    IFS="$SPEC_SEP" read -r _ _ line issue <<< "$tag_row"
+    if [ -n "$issue" ]; then
+        echo "[prdkit] Error: $TEMPLATE:$line: $issue." >&2
+        exit 1
+    fi
+)
+if $NO_BRANCH; then
+    prepare_record
+    BRANCH_NAME=""
+    if $HAS_GIT; then BRANCH_NAME="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"; fi
+elif [ "$HAS_GIT" = true ]; then
+    if git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
+        echo "[prdkit] Error: Branch '$BRANCH_NAME' already exists." >&2
+        echo "[prdkit] To continue that change, run: git checkout $BRANCH_NAME" >&2
+        echo "[prdkit] To open a different change, choose a unique short name." >&2
+        exit 1
+    fi
+    # A linked worktree has a per-checkout git dir that differs from the common dir.
+    IN_LINKED_WORKTREE=false
+    GIT_DIR_ABS="$(CDPATH="" cd "$(git rev-parse --git-dir)" 2>/dev/null && pwd -P)" || GIT_DIR_ABS=""
+    GIT_COMMON_ABS="$(CDPATH="" cd "$(git rev-parse --git-common-dir)" 2>/dev/null && pwd -P)" || GIT_COMMON_ABS=""
+    if [ -n "$GIT_DIR_ABS" ] && [ -n "$GIT_COMMON_ABS" ] && [ "$GIT_DIR_ABS" != "$GIT_COMMON_ABS" ]; then
+        IN_LINKED_WORKTREE=true
+    fi
+    if [ "$NO_WORKTREE" = true ] || [ "$IN_LINKED_WORKTREE" = true ]; then
+        # Explicit opt-out, or already isolated: create the branch in place (no nesting).
+        prepare_record
+        git checkout -q -b "$BRANCH_NAME"
+    else
+        # Stage the record from the same committed template the new checkout will inherit.
+        worktree_base="$(git rev-parse --verify HEAD)"
+        prepare_record "$worktree_base"
+        WORKTREE_DIR="$REPO_ROOT/.worktrees/$BRANCH_NAME"
+        mkdir -p "$REPO_ROOT/.worktrees"
+        if ! git check-ignore -q .worktrees 2>/dev/null; then
+            if [ -s "$REPO_ROOT/.gitignore" ] && [ -n "$(tail -c 1 "$REPO_ROOT/.gitignore")" ]; then
+                echo >> "$REPO_ROOT/.gitignore"
+            fi
+            echo ".worktrees/" >> "$REPO_ROOT/.gitignore"
+            echo "[prdkit] Added '.worktrees/' to .gitignore so isolated worktrees stay untracked." >&2
+        fi
+        if WT_ERR="$(git worktree add "$WORKTREE_DIR" -b "$BRANCH_NAME" "$worktree_base" 2>&1 >/dev/null)"; then
+            WORKTREE_PATH="$WORKTREE_DIR"
+            CREATED_WORKTREE=true
+        else
+            echo "[prdkit] Warning: Could not create a worktree at $WORKTREE_DIR:" >&2
+            echo "[prdkit]   ${WT_ERR:-unknown git error}" >&2
+            if git worktree list --porcelain | grep '^prunable' >/dev/null; then
+                echo "[prdkit] Inspect stale registrations with cleanup-change.sh --prune before retrying." >&2
+                exit 1
+            fi
+            # Falling back switches the MAIN checkout onto the new branch; never do that
+            # on top of uncommitted work.
+            if [ -n "$(git status --porcelain --untracked-files=all 2>/dev/null)" ]; then
+                echo "[prdkit] ERROR: The current checkout has uncommitted changes (tracked or untracked); refusing to fall back to 'git checkout -b' (it would carry your work onto the new branch)." >&2
+                echo "[prdkit] Fix the worktree failure above, commit or stash first, or pass --no-worktree explicitly." >&2
+                exit 1
+            fi
+            echo "[prdkit] Falling back to 'git checkout -b' in the current checkout." >&2
+            prepare_record
+            # A failed `worktree add -b` can leave the new branch behind; reuse it then.
+            if git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
+                git checkout -q "$BRANCH_NAME"
+            else
+                git checkout -q -b "$BRANCH_NAME"
+            fi
+        fi
+    fi
+else
+    prepare_record
+    echo "[prdkit] Warning: Git repository not detected; skipped branch creation for $BRANCH_NAME" >&2
+fi
+
+CHANGES_DIR="$WORKTREE_PATH/specs/changes"
+CHANGE_FILE="$CHANGES_DIR/$CHANGE_ID.md"
+mkdir -p "$CHANGES_DIR"
+if [ -e "$CHANGE_FILE" ] || [ -L "$CHANGE_FILE" ]; then
+    echo "[prdkit] Error: $CHANGE_FILE already exists; it is never overwritten." >&2
     exit 1
 fi
 # Refuse a file/symlink created after the existence check, including by an external writer.
-if ! (set -C; printf '%s' "${RECORD%.}" > "$CHANGE_FILE"); then
+if ! (set -C; cat "$RENDERED_RECORD" > "$CHANGE_FILE"); then
     echo "[prdkit] Error: could not create $CHANGE_FILE; existing records are never overwritten." >&2
     exit 1
 fi
