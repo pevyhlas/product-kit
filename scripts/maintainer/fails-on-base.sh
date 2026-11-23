@@ -36,7 +36,10 @@ if [ "$1" = run ]; then
             END { printf "%s", s }' "$scratch/log" > "$scratch/summary"
         : > "$scratch/excerpt"
         if [ "$status" -ne 0 ]; then
-            tail -c 4096 "$scratch/log" | tail -n 12 | LC_ALL=C tr -d '\000-\010\013-\037\177' > "$scratch/excerpt"
+            # Read one UTF-8 character of lookbehind, then trim whole characters
+            # after decoding. A partial character at the start cannot reach the result.
+            tail -c 4100 "$scratch/log" | jq -Rsj 'until(utf8bytelength <= 4096; .[1:])' |
+                tail -n 12 | LC_ALL=C tr -d '\000-\010\013-\037\177' > "$scratch/excerpt"
         fi
         jq -cn --arg suite "$path" --argjson status "$status" --rawfile summary "$scratch/summary" \
             --rawfile excerpt "$scratch/excerpt" '{suite:$suite,status:$status,summary:$summary,excerpt:$excerpt}' >> "$scratch/rows"
@@ -54,7 +57,8 @@ validate() {
             all(.[]; keys == ["excerpt","status","suite","summary"] and
                 (.status | type == "number" and floor == . and . >= 0 and . <= 255)
                 and (.summary | type == "string" and length <= 120)
-                and (.excerpt | type == "string" and length <= 4096 and
+                and (.status != 0 or .excerpt == "")
+                and (.excerpt | type == "string" and utf8bytelength <= 4096 and
                     (rtrimstr("\n") | split("\n") | length) <= 12))) |
         map(.status += 0)' "$1" > "$2" ||
         inconclusive 'missing, malformed or incomplete snapshot results'
@@ -71,13 +75,17 @@ echo "### Fails before the fix ($mode)"
 jq -a '.[] | .suite' "$scratch/base" > "$scratch/names"
 jq -nr --slurpfile b "$scratch/base" --slurpfile h "$scratch/head" --rawfile names "$scratch/names" '
     def outcome: if .status == 0 then "PASS" else "FAIL (exit \(.status))" end;
+    def code_span:
+        ("`" * ([0, (scan("`+") | length)] | max + 1)) as $delimiter |
+        (if startswith("`") or endswith("`") then " " else "" end) as $pad |
+        $delimiter + $pad + . + $pad + $delimiter;
     def details($side): select(.summary != "" or .excerpt != "") |
         ([.summary,.excerpt] | map(select(length > 0)) | join("\n") | rtrimstr("\n")) as $text |
         ([2, ($text | scan("`+") | length)] | max + 1) as $width |
         ("`" * $width) as $fence |
         "\n\($side) output:\n\n\($fence)\n\($text)\n\($fence)\n";
     range(0; $b[0]|length) as $i | $b[0][$i] as $base | $h[0][$i] as $head |
-        "\n- <code>\(($names | split("\n"))[$i][1:-1]|@html)</code> — Base: \($base|outcome); Head: \($head|outcome).",
+        "\n- \(($names | split("\n"))[$i][1:-1]|code_span) — Base: \($base|outcome); Head: \($head|outcome).",
         ($base|details("Base")), ($head|details("Head"))'
 count=$(jq -nr --slurpfile b "$scratch/base" --slurpfile h "$scratch/head" '
     [range(0; $b[0]|length) as $i | select($b[0][$i].status != 0 and $h[0][$i].status == 0)] | length')

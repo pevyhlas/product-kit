@@ -72,11 +72,28 @@ jq -cS '.[0].excerpt = ("x\n" * 13)' base.json > bad.json
 invalid bad.json head.json '13 terminated lines'
 jq -cS '.[0].excerpt |= rtrimstr("\n")' bad.json > extra.json
 invalid extra.json head.json '13 lines without trailing newline'
+jq -cS '.[0].status = 0' base.json > bad.json
+invalid base.json bad.json 'success cannot retain the failure excerpt'
+jq -cS '.[0].excerpt = ("é" * 2048)' base.json > limit.json
+run compare limit.json head.json 'fix: boundary'
+assert_eq 0 "$STATUS" '4096 UTF-8 bytes are valid'
+jq -cS '.[0].excerpt += "!"' limit.json > bad.json
+invalid bad.json head.json '4097 UTF-8 bytes on base'
+invalid base.json bad.json '4097 UTF-8 bytes on head'
 printf '%s' "$suite" > plan.z
 invalid base.json head.json 'truncated plan'
 
+it "producer keeps only complete characters at the byte boundary"
+printf '%s\0' "$suite" > plan.z
+cat > "base/$suite" <<'SUITE'
+printf 'é%04095d' 0
+exit 1
+SUITE
+snapshot base || exit 1
+assert_eq true "$(jq '.[0].excerpt == ("0" * 4095)' base.json)" 'no split character or replacement bytes'
+
 it "multiline names and embedded code fences remain literal Markdown"
-suite=$'tests/test_new\n\n# name heading\t.sh'
+suite=$'tests/test_[link](#a)``new`\n\n# name heading\t.sh'
 printf '%s\0' "$suite" > plan.z
 cat > "base/$suite" <<'SUITE'
 printf '```\n\n# excerpt heading\n\n```\n'
@@ -86,6 +103,7 @@ printf 'exit 0\n' > "head/$suite"
 for side in base head; do snapshot "$side" || exit 1; done
 run compare base.json head.json 'fix: summary'
 assert_eq 0 "$STATUS"
-assert_contains "$OUTPUT" '<code>tests/test_new\n\n# name heading\t.sh</code>'
+# shellcheck disable=SC2016 # Backticks are literal Markdown delimiters.
+assert_contains "$OUTPUT" '- ```tests/test_[link](#a)``new`\n\n# name heading\t.sh``` — Base:'
 assert_contains "$OUTPUT" $'\n````\n```\n\n# excerpt heading\n\n```\n````\n'
 finish
