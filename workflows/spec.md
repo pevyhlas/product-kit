@@ -182,6 +182,12 @@ Headings, diagrams and summary columns do not declare an order.
 - A part no journey needs is a question for the owner.
 - Components (API, storage, identity, sync) are sections of the part file. Each component's
   behaviors and invariants sit under it and keep the part's numbering (`P2.B-07`).
+- A separately tracked subpart has its own architecture parts-table row and main part file,
+  e.g. `# P2.1 Index`, with `**Parent**: P2` in the header before the first section (on its own
+  line or as a ` · ` field). The field, not the ID's spelling, declares the relationship.
+  The parent must be a known part with no parent of its own: only one level, no cycles.
+  Keep each obligation with the part or subpart that owns it (`P2.1.B-07`, `P2.1.I-01`);
+  the parent does not repeat its subparts' obligations.
 - External systems are not parts; the interfaces topic lists them.
 - Build and delivery tooling (CI, migrations, setup jobs, developer utilities) is not a part:
   the operations topic, one line each.
@@ -225,8 +231,9 @@ A line that only describes how the code currently does something is deleted: the
 
 ## Elements
 
-- **IDs**: `J-`, `R-`, `Q-`, `C-`, `N-` (L0); `P<n>` parts and `D-` decisions (L1); `P<n>.B-`
-  and `P<n>.I-` (L2), e.g. `P3.B-02`. Two or more digits. Never renumber; retire with
+- **IDs**: `J-`, `R-`, `Q-`, `C-`, `N-` (L0); `P<n>` or `P<n>.<n>` parts and `D-` decisions
+  (L1); `<part>.B-` and `<part>.I-` (L2), e.g. `P3.B-02`. Item numbers after `-` use two
+  or more digits. Never renumber; retire with
   `retired: <reason>` on the same line (a heading: `## D-12 <title> (retired: <reason>)`). An ID
   lives on one line: retired in place while its file stays; when its part or file goes, it is
   listed once under `## Retired` in `architecture/retired.md`, which `architecture.md` links:
@@ -253,6 +260,27 @@ A line that only describes how the code currently does something is deleted: the
 - **Left open**: each level ends with the details agents choose within existing bounds. An owner
   deferral is not one: it keeps its limit and revisit trigger in its home, and no agent overrides
   it. `product.md` has none.
+
+### Optional change metadata
+
+- In a change header before the first section, use `**Tags**: cleanup, small batch` for
+  grouping or filtering only. Tags are free-form lowercase plain text, separated by commas.
+  Omit the line or leave it blank if not stated. Tags do not affect scope, status signals,
+  review, or acceptance. On close, the dated log line ends with ` · **Tags**: cleanup, small batch`
+  when valid tags are present. The suffix is separate from the close helper's 300-character
+  description limit. Copy the suffix when writing a close entry by hand. Doctor advises on
+  malformed or duplicate tags; status and close do not project them.
+- In `## Tasks`, use `- [ ] (P2.1) Add a retry check` or `- [x] (P2.1) Verify recovery` to
+  assign a task. The part must exist and be explicitly named in the header, e.g.
+  `**Parts**: P2, P2.1`; listing a parent does not implicitly list its children. A task without
+  the prefix is unassigned. These are checklist counts, not acceptance results.
+- `status.sh --json` lists explicit relationships in `part_parents` (`id`, `parent`). For
+  each open change, `tags` is a list, `tasks_by_part` has `part`, `checked`, `total` for parts
+  with recorded assignments, and `unassigned_tasks` has `checked`, `total` for unassigned
+  tasks. An unstated list or tally is `null`, not zero. Counts stay with the named part;
+  readers can roll up by following `part_parents` without counting any task twice.
+- **No migration needed.** Existing changes, part files, and log lines remain valid without
+  these fields. Do not infer a tag, parent, or task assignment from prose.
 
 ## Resolve owner answers
 

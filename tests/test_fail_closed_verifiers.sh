@@ -90,6 +90,11 @@ cat > "$_SCRATCH_CWD/bin/awk" <<'SH'
 if [ "$VERIFY_FAULT" = version-reader ] && [ "${2:-}" = 'prefix=version: ' ]; then
     "$REAL_AWK" "$@"; exit 5
 fi
+if [ "$VERIFY_FAULT" = metadata-short ]; then
+    case "$*" in *'function metadata_header'*'specs/changes/001-example.md')
+        printf 'task\037P1\0370\0371\037\n'; exit 0 ;;
+    esac
+fi
 exec "$REAL_AWK" "$@"
 SH
 chmod +x "$_SCRATCH_CWD"/bin/*
@@ -318,10 +323,25 @@ it 'close preflight refuses an incomplete duplicate scan without changing HEAD, 
 printf '#!/usr/bin/env bash\nprintf "review passed\\n"\n' > "$B/check-review.sh"
 git add "$B/check-review.sh" && git commit -qm 'stub delegated review' || exit 1
 record=specs/changes/001-example.md
-printf '# Change: Example\n' > "$record"
+printf '# Change: Example\n\n**Tags**: sample\n' > "$record"
 git add "$record" && git commit -qm 'open record' || exit 1
 before_head="$(git rev-parse HEAD)"; before_index="$(git hash-object .git/index)"
 close_args=(--pr https://example.test/pull/1 001-example 'Update behavior — R-01 — complete — #1')
+it 'status, doctor and close reject a short optional metadata inventory'
+for verifier in status doctor; do
+    fault metadata-short bash "$B/$verifier.sh" --json
+    failed "$verifier: missing metadata footer"
+done
+fault metadata-short bash "$B/close-change.sh" "${close_args[@]}"
+failed 'close: missing metadata footer'
+assert_contains "$OUTPUT" 'cannot read tags'
+assert_eq "$before_head" "$(git rev-parse HEAD)" 'HEAD unchanged'
+assert_eq "$before_index" "$(git hash-object .git/index)" 'index bytes unchanged'
+assert_file "$record"
+[ ! -e specs/log/001-example.md ] || _no 'no entry written'
+if [ "$(git rev-parse HEAD)" != "$before_head" ]; then git checkout -qb retry-metadata "$before_head" || exit 1; fi
+
+it 'close preflight rejects invalid folded logs before writing an entry'
 for format in empty crlf eof; do
     case "$format" in
         empty) : > specs/log.md ;;

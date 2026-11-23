@@ -1,10 +1,20 @@
 # Change: <short name>
 
-**Opened**: <date> · **Parts**: <P-ids> · **Journeys**: <J-ids> · **Tier**: <T0–T3> · **Parent**: none
+**Opened**: <date>
+
+**Parts**: <P-ids>
+
+**Journeys**: <J-ids>
+
+**Tags**:
+
+**Tier**: <T0–T3>
+
+**Parent**: none
 
 ## Intent
 
-<Why now, for whom. Inbox lines addressed, one sentence of disposition each.>
+<Why now, for whom?>
 
 ## Spec edits
 
@@ -18,15 +28,11 @@
 
 ## Approach
 
-<Design references and spec/code baseline; real execution choices: options, pick, why.>
-
 ## Tasks
 
-- [ ] T001 <contribution/acceptance; paths; dependency outcome; check>
+<!-- Example (optional part ID): - [ ] (P2) Add a retry check -->
 
 ## Checks
-
-<Line test, consistency with L0/L1, enforcement for new Q/I. A few lines.>
 
 ## Acceptance
 

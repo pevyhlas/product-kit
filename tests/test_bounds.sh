@@ -171,6 +171,25 @@ assert_not_contains "$OUTPUT" "so not in scope: P9 P" "a part behavior cites a d
 run bash "$BOUNDS" 005-capture
 assert_not_contains "$OUTPUT" "Not in the parts table" "no note when every part is defined"
 
+it "a subpart in Parts is not reduced to its parent and Tags do not widen scope"
+cat >> specs/architecture.md <<'MD'
+
+| Part | Purpose | Maturity | Owns data | Serves | Spec |
+|------|---------|----------|-----------|--------|------|
+| P2.1 Index | indexes records | hypothesis | none | none | none |
+MD
+cat >> specs/product/constraints.md <<'MD'
+
+- **C-91 Recovery**: recover reads. Scope: every P2.1 read.
+- **C-92 Scheduling**: schedule retries. Scope: every P3 job.
+MD
+printf '# Change: index\n\n**Parts**: P2.1\n**Tags**: p3\n**Tier**: T1\n' > specs/changes/016-index.md
+run bash "$BOUNDS" 016-index
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" 'in scope: P2.1)'
+assert_contains "$OUTPUT" '- C-91 Recovery'
+assert_not_contains "$OUTPUT" 'C-92'
+
 it "no parts or journeys, or --all, lists every live item"
 run bash "$BOUNDS" 006-misc
 assert_contains "$OUTPUT" "- C-03 Server region" "everything in scope"

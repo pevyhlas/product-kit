@@ -27,15 +27,15 @@ if [ "$1" != "--all" ]; then
     record="$root/specs/changes/$1.md"
     [ -f "$record" ] || { echo "No change record at specs/changes/$1.md" >&2; exit 2; }
     # The header's Parts and Journeys fields, before the first section; their IDs are read below.
-    scope="$(awk '/^## /{exit} {
-        s = $0; while (match(s, /\*\*(Parts|Journeys)\*\*:[^*]*/)) { print substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH) }
-    }' "$record" | tr '\n' ' ')"
+    scope="$(spec_change_metadata "$record" scope)" || return 1
+    scope="${scope#*"$SPEC_SEP"}"; scope="${scope//"$SPEC_SEP"/ }"
 fi
 spec_lifecycle_require "$root" || return
 now="$SPEC_STAGE_NOW"
 
 files=()
-while IFS= read -r file; do files+=("$file"); done < <(spec_files "$root")
+listed="$(verify_lines spec_files "$root")" || return 1
+while IFS= read -r file; do [ -z "$file" ] || files+=("$file"); done <<< "$listed"
 [ "${#files[@]}" -gt 0 ] || { echo "No spec files under specs/" >&2; exit 2; }
 
 (cd "$root" && awk -v header="$scope" -v now="$now" -v what="${1/--all/every change}" \
@@ -48,16 +48,16 @@ while IFS= read -r file; do files+=("$file"); done < <(spec_files "$root")
     function wordch(c) { return c != "" && index("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_", c) > 0 }
     function ids(text,   out, tok, pre, post, end, k, lo, hi, id, rng, pad) {
         out = " "
-        while (match(text, /P[0-9]+|J-[0-9][0-9]+/)) {
+        while (match(text, /P[0-9]+(\.[0-9]+)*|J-[0-9][0-9]+/)) {
             tok = substr(text, RSTART, RLENGTH)
             pre = RSTART > 1 ? substr(text, RSTART - 1, 1) : ""
             post = substr(text, RSTART + RLENGTH, 1)
             text = substr(text, RSTART + RLENGTH)
             if (wordch(pre) || wordch(post)) continue
             rng = ""
-            if (match(text, /^[[:space:]]*(to|through|-|–|—|\.\.)[[:space:]]*(P[0-9]+|J-[0-9][0-9]+)/)) {
-                end = substr(text, RSTART, RLENGTH); match(end, /(P[0-9]+|J-[0-9][0-9]+)$/); end = substr(end, RSTART)
-                if (substr(end, 1, 1) == substr(tok, 1, 1)) {
+            if (match(text, /^[[:space:]]*(to|through|-|–|—|\.\.)[[:space:]]*(P[0-9]+(\.[0-9]+)*|J-[0-9][0-9]+)/)) {
+                end = substr(text, RSTART, RLENGTH); match(end, /(P[0-9]+(\.[0-9]+)*|J-[0-9][0-9]+)$/); end = substr(end, RSTART)
+                if (!index(tok, ".") && !index(end, ".") && substr(end, 1, 1) == substr(tok, 1, 1)) {
                     lo = tok; sub(/^[^0-9]*/, "", lo); hi = end; sub(/^[^0-9]*/, "", hi)
                     pad = length(lo); if (lo + 0 > hi + 0) { k = lo; lo = hi; hi = k }
                     for (k = lo + 1; k < hi + 0 && k <= lo + 99; k++) {
@@ -80,15 +80,16 @@ while IFS= read -r file; do files+=("$file"); done < <(spec_files "$root")
     }
     # A Scope binds everywhere when it makes an exception (`all parts but P3`) or uses all, every
     # or any without an ID right after it (`P4 and all journeys`, not `every P2 endpoint`).
-    function everywhere(s,   t, w, n, i, j) {
+    function everywhere(s,   t, w, n, i, j, part_token) {
         t = tolower(s)
         if (t ~ /(^|[^a-z])(except|excluding|other than|outside|but|apart from|besides)([^a-z]|$)/) return 1
-        gsub(/[^a-z0-9-]+/, " ", t); n = split(t, w, " ")
+        gsub(/\.+([[:space:]]|$)/, " ", t); gsub(/[^a-z0-9.-]+/, " ", t); n = split(t, w, " ")
         for (i = 1; i <= n; i++) {
             if (w[i] != "all" && w[i] != "every" && w[i] != "any") continue
             j = i + 1; if (w[j] == "of") j++; if (w[j] == "the") j++
             if ((w[j] == "it" || w[j] == "them") && i > 1 && (w[i-1] ~ /^j-[0-9][0-9]+$/ || (toupper(w[i-1]) in part))) continue
-            if (!(w[j] ~ /^j-[0-9][0-9]+$/ || (toupper(w[j]) in part))) return 1
+            part_token = toupper(w[j]); sub(/\.[BI]-[0-9]+$/, "", part_token)
+            if (!(w[j] ~ /^j-[0-9][0-9]+$/ || (part_token in part))) return 1
         }
         return 0
     }
@@ -102,7 +103,7 @@ while IFS= read -r file; do files+=("$file"); done < <(spec_files "$root")
     }
     FNR == 1 { fence = 0; comment = 0; cur = 0; gap = 0 }
     { if (spec_skip($0)) next }
-    /^\|[[:space:]]*P[0-9]+[[:space:]]/ { id = $0; sub(/^\|[[:space:]]*/, "", id); sub(/[[:space:]].*/, "", id); part[id] = 1; row[id] = $0 }
+    /^\|[[:space:]]*P[0-9]+(\.[0-9]+)?[[:space:]]/ { id = $0; sub(/^\|[[:space:]]*/, "", id); sub(/[[:space:]].*/, "", id); part[id] = 1; row[id] = $0 }
     # An item runs from its bullet to the next heading, table row, or bullet no deeper than its
     # own; after a blank line, a paragraph no deeper than its bullet ends it too.
     /^[[:space:]]*$/ { gap = 1; next }
@@ -127,7 +128,7 @@ while IFS= read -r file; do files+=("$file"); done < <(spec_files "$root")
         n = split(ids(header), t, " "); named = " "
         for (i = 1; i <= n; i++) if (!index(named, " " t[i] " ")) named = named t[i] " "
         h = header; unknown = ""
-        while (match(h, /P[0-9]+/)) {
+        while (match(h, /P[0-9]+(\.[0-9]+)*/)) {
             tok = substr(h, RSTART, RLENGTH); pre = RSTART > 1 ? substr(h, RSTART - 1, 1) : ""
             post = substr(h, RSTART + RLENGTH, 1); h = substr(h, RSTART + RLENGTH)
             if (!wordch(pre) && !wordch(post) && !(tok in part) && !index(unknown " ", " " tok " ")) unknown = unknown " " tok
@@ -160,7 +161,7 @@ while IFS= read -r file; do files+=("$file"); done < <(spec_files "$root")
         printf "Qualities:\n%s", (out["Q"] != "" ? out["Q"] : "- none\n")
         if (later != "") printf "Later stages (built only on owner direction; spec.md, Lifecycle):\n%s", later
     }
-' "${files[@]}")
+' "${files[@]}") || return 1
 echo "Mark each in the record's Bounds: holds (how), or conflict (to the owner inbox; never resolved by the agent)."
 }
 

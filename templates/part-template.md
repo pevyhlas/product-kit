@@ -1,6 +1,8 @@
 # P<n> <part name>
 
 **What it is**: <what runs or ships, and where> · **Maturity**: hypothesis · **Code**: <paths>
+<!-- Subpart only: use its own ID (e.g. P2.1) in the heading and add **Parent**: P2 here.
+One level only. Keep the subpart's obligations here, not in its parent. -->
 
 ## Why it exists
 

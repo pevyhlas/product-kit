@@ -18,6 +18,62 @@ assert_contains "$OUTPUT" "No open changes." "no changes"
 assert_contains "$OUTPUT" "No DEPLOY records — what is live is unknown." "live state unknown, not assumed"
 assert_contains "$OUTPUT" "None: no open changes, holds or owner questions." "no longest pole"
 
+it "optional change metadata reports assignments separately from acceptance"
+mkdir -p specs/changes specs/parts
+cat > specs/changes/001-metadata.md <<'MD'
+# Change: Metadata
+
+**Opened**: 2026-10-16
+**Parts**: P2, P2.1, P3
+**Tags**: cleanup,small batch, cli/v2
+**Tier**: T1
+**Parent**: none
+
+## Intent
+**Tags**: not the header
+- [x] (P2) Not in Tasks
+
+## Tasks
+- [x] (P2.1) First
+- [ ] (P2.1) Second
+  - [X] (P2) Third
+- [ ] Unassigned
+<!--
+- [x] (P2) Example
+-->
+~~~~
+~~~
+- [x] (P2) Another example
+~~~~
+
+## Acceptance
+| A1 | behavior | the check | 1 | PASS |
+MD
+printf '# P2 Core\n' > specs/parts/p2-core.md
+printf '# P2.1 Index\n\n**What it is**: a subpart · **Parent**: P2\n' > specs/parts/p2.1-index.md
+printf '# Change: Legacy\n\n## Tasks\n- [ ] Untagged\n' > specs/changes/002-legacy.md
+run bash "$STATUS_SH" --json
+assert_eq 0 "$STATUS"
+assert_eq '["cleanup","small batch","cli/v2"]' "$(jq -c '.changes[] | select(.id == "001-metadata") | .tags' <<< "$OUTPUT")"
+assert_eq '[{"part":"P2.1","checked":1,"total":2},{"part":"P2","checked":1,"total":1}]' \
+    "$(jq -c '.changes[] | select(.id == "001-metadata") | .tasks_by_part' <<< "$OUTPUT")"
+assert_eq '{"checked":0,"total":1}' "$(jq -c '.changes[] | select(.id == "001-metadata") | .unassigned_tasks' <<< "$OUTPUT")"
+assert_eq '1' "$(jq '.changes[] | select(.id == "001-metadata") | .acceptance.passed' <<< "$OUTPUT")"
+assert_eq '[null,null,{"checked":0,"total":1}]' \
+    "$(jq -c '.changes[] | select(.id == "002-legacy") | [.tags,.tasks_by_part,.unassigned_tasks]' <<< "$OUTPUT")"
+assert_eq '[{"id":"P2.1","parent":"P2"}]' "$(jq -c '.part_parents' <<< "$OUTPUT")"
+run bash "$STATUS_SH"
+assert_contains "$OUTPUT" "tags: cleanup, small batch, cli/v2"
+assert_contains "$OUTPUT" "tasks: P2.1 1/2 checked"
+assert_not_contains "$OUTPUT" "tasks: P3"
+assert_contains "$OUTPUT" "P2.1 (parent: P2)"
+run bash .prdkit/scripts/bash/read-spec.sh specs/changes/001-metadata.md
+assert_contains "$OUTPUT" "**Tags**: cleanup,small batch, cli/v2"
+assert_contains "$OUTPUT" "- [x] (P2.1) First"
+run bash .prdkit/scripts/bash/read-spec.sh specs/parts/p2.1-index.md
+assert_contains "$OUTPUT" "**Parent**: P2"
+rm specs/changes/{001-metadata,002-legacy}.md specs/parts/{p2-core,p2.1-index}.md
+
 mkdir -p specs/parts specs/changes specs/product
 it "a past-date hold still blocks until the owner lifts that specific hold"
 cat > specs/records.md <<'MD'

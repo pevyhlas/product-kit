@@ -9,7 +9,8 @@
 #
 # Usage: close-change.sh --pr <url> [--base <rev>] [--date YYYY-MM-DD] [-m <message>] <change-id> "<log text>"
 #   <log text> follows "- <date> <id>: " on the entry: "<intent> — <IDs> — <disposition> — <PR>",
-#   at most 300 characters. The entry is its own file, specs/log/<id>.md, so two branches that
+#   at most 300 characters. Valid header tags follow the description as an optional suffix.
+#   The entry is its own file, specs/log/<id>.md, so two branches that
 #   each close a change never conflict; compaction folds entries into specs/log.md (compact.md).
 #   Exit 0 closed and check-review.sh passes at the new head, 1 refused or failing, 2 usage.
 #
@@ -76,6 +77,11 @@ git -C "$root" diff --quiet HEAD -- "$path" ||
 verify_lf_file "$root/$path" || refuse "invalid record $path: expected non-empty LF-terminated text"
 record_oid="$(verify_lines git -C "$root" rev-parse --verify "HEAD:$path")" ||
     refuse "cannot identify record $path at HEAD"
+tag_row="$(verify_lines spec_change_metadata "$root/$path" tags)" ||
+    refuse "cannot read tags from $path"
+IFS="$SPEC_SEP" read -r tag_kind tags tag_line tag_issue <<< "$tag_row"
+[ "$tag_kind" = tags ] || refuse "incomplete tag metadata from $path"
+[ -z "$tag_issue" ] || printf 'close-change.sh: %s:%s: %s; no tags carried\n' "$path" "$tag_line" "$tag_issue" >&2
 record_hash="$(verify_lines git -C "$root" hash-object --no-filters -- "$root/$path")" ||
     refuse "cannot hash record $path"
 [[ "$record_oid" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ && "$record_hash" = "$record_oid" ]] ||
@@ -152,7 +158,7 @@ check_paths
         }
         trap cleanup_stage EXIT
         set -C
-        cat <<< "- $day $id: $text" > "./$id.md" || exit 1
+        cat <<< "- $day $id: $text${tags:+ · **Tags**: $tags}" > "./$id.md" || exit 1
         # Pin the publishing cwd separately. A moved stage can make its source
         # disappear, but can never redirect the destination to its new parent.
         (

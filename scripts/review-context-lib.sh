@@ -234,7 +234,7 @@ review_context_build() {
             awk "$SPEC_SKIP_AWK"'
                 { if (spec_skip($0)) next }
                 /\]\(https?:/ { print "external child link at line " NR " requires captured context" }
-                /-[0-9][0-9]+[[:space:]]*(to|through|–|—|\.\.)[[:space:]]*(P[0-9]+\.[BI]|[JRQCDN])?-[0-9]/ {
+                /-[0-9][0-9]+[[:space:]]*(to|through|–|—|\.\.)[[:space:]]*(P[0-9]+(\.[0-9]+)?\.[BI]|[JRQCDN])?-[0-9]/ {
                     print "ID range at child line " NR " requires explicit complete context"
                 }' "$CTX_TMP/material/$record")
         # spec_links supplies safely normalized paths. Anchored links require a unique heading;

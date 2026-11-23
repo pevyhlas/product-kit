@@ -400,6 +400,19 @@ git commit -qam "003-owner: verdicts" >/dev/null
 run bash "$B/close-change.sh" 003-owner "owner-shaped — R-01 — #4"
 assert_eq 0 "$STATUS" "owner approval of the reviewed head survives the closing commit: $OUTPUT"
 
+it "close carries header tags to the same one-line log entry"
+branch_with_code 019-tagged
+sed -i.bak 's/ · \*\*Tier\*\*/ · **Tags**: cleanup, small batch · **Tier**/' specs/changes/019-tagged.md
+rm specs/changes/019-tagged.md.bak
+git commit -qam "019-tagged: tags" >/dev/null
+pass_line code "$(git merge-base HEAD "$DEFAULT")" "$(git rev-parse HEAD)" >> specs/changes/019-tagged.md
+printf '\n## Notes\n**Tags**: not header metadata\n' >> specs/changes/019-tagged.md
+git commit -qam "019-tagged: review PASS" >/dev/null
+run bash "$B/close-change.sh" 019-tagged "tagged — R-01 — #19"
+assert_eq 0 "$STATUS" "tags do not change acceptance or review: $OUTPUT"
+assert_eq '- 2026-11-09 019-tagged: tagged — R-01 — #19 · **Tags**: cleanup, small batch' \
+    "$(git show HEAD:specs/log/019-tagged.md)" "only header tags are preserved"
+
 it "status and doctor flag merged-open records including T0 and unreviewed ones; parents stay quiet"
 branch_with_code 004-left; pass_line code "$(git merge-base HEAD "$DEFAULT")" "$(git rev-parse HEAD)" >> specs/changes/004-left.md
 git commit -qam "004-left: review PASS" >/dev/null
