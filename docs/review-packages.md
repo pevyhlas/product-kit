@@ -77,7 +77,7 @@ project policy; concern selection remains the lead's judgment, not mandatory gen
 Exactly one JSON object is accepted, and that same copied object is consumed. Prior current-PR
 identities include valid receipts for other changes, without granting those receipts coverage.
 Standing native or scope blockers exclude the identity from retained and
-prospective classifications; cleared historical rows do not become new blockers.
+prospective classifications.
 
 ```json
 {
