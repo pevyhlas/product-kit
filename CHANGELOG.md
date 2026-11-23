@@ -20,6 +20,13 @@ change by change.
 - `new-change.sh` emits only a one-line outcome checkpoint pointer by default. Use `--programme`
   to include the commented scaffold for a programme or continuing queue; existing records are untouched.
 
+### Fixed
+
+- Adoption (including pinned-source proof), delivery, doctor, status, and change-close
+  preflight fail rather than treating an incomplete inventory as clean. Parsed spec input
+  and line-oriented verifier evidence require LF line endings and a final newline;
+  `read-spec.sh --raw` still returns the original bytes.
+
 ### Documentation
 
 - Document safety invariants and threat models in the worktree, close, publication, adoption,
