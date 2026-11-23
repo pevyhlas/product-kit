@@ -12,9 +12,8 @@ change by change.
 
 - Pull request CI shows which changed test suites fail before the fix and pass on the PR head.
   Conventional `fix` titles require at least one such suite; other titles are advisory.
-  The comparison bounds each run, isolates temporary files, and writes results as suites finish.
-  Only the snapshot's own group receives signals. A leftover tagged worker or incomplete
-  process scan makes the comparison inconclusive and cannot count as regression evidence.
+  Base and head run on separate hosted runners, so a base worker cannot answer a head test.
+  The check compares one-day result artifacts; missing or incomplete evidence fails the check.
 - Cleanup and close tests now run against seeded combinations of local Git states and
   check that commits and working files survive. The generator is test-only.
 - Changes can group tasks by part and carry lowercase tags into the close log. Parts can

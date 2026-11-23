@@ -1,425 +1,68 @@
 #!/usr/bin/env bash
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+driver="$PK_ROOT/scripts/maintainer/fails-on-base.sh"
+[ -f "$driver" ] || { echo 'Cannot run: missing snapshot driver' >&2; exit 1; }
+root=$PWD
+mkdir -p base/tests head/tests || exit 1
+suite='tests/test_with space.sh'
+second=tests/test_always.sh
+printf '%s\0' "$suite" "$second" > plan.z
 
-CHECK="$PK_ROOT/scripts/maintainer/fails-on-base.sh"
-if [ ! -f "$CHECK" ]; then
-    echo 'Cannot run: scripts/maintainer/fails-on-base.sh is missing.' >&2
-    exit 1
-fi
-
-FIXTURE="$(mktemp -d)" || exit 1
-track_tmp "$FIXTURE"
-mkdir -p "$FIXTURE"/{scripts,templates,commands,workflows,tests/helpers} || exit 1
-
-g() { git -C "$FIXTURE" "$@"; }
-commit() { g add -A && g commit -qm "$1" && g rev-parse HEAD; }
-replay() ( cd "$FIXTURE" && bash "$CHECK" "$@" )
-compare() { GITHUB_STEP_SUMMARY='' run replay "$@"; }
-
-g init -q && g config user.name test && g config user.email test@example.invalid || exit 1
-for dir in scripts templates commands workflows; do
-    printf 'old\n' > "$FIXTURE/$dir/value"
+it "run records the actual exit status, harness summary and bounded failure excerpt"
+cat > "base/$suite" <<'SUITE'
+echo 'MUST NOT LEAK: start of long log'
+for ((i=0; i<30; i++)); do printf '%0500d\n' "$i"; done
+echo '<failure reason>'
+echo 'FAIL: 1 failed, 3 passed'
+exit 17
+SUITE
+printf "echo 'PASS: 4 assertion(s)'\n" > "head/$suite"
+# A suite reading stdin must not consume the remaining plan.
+printf 'cat >/dev/null\nexit 0\n' > "base/$second"
+cp "base/$second" "head/$second"
+snapshot() ( cd "$1" && bash "$driver" run "$root/plan.z" "$root/$1.json" )
+for side in base head; do
+    run snapshot "$side"; assert_eq 0 "$STATUS" "$side produced a complete result"
 done
-printf 'exit 99\n' > "$FIXTURE/tests/test_unchanged.sh"
-printf 'exit 99\n' > "$FIXTURE/tests/test_deleted.sh"
-printf 'obsolete\n' > "$FIXTURE/tests/obsolete-fixture"
-printf 'exit 0\n' > "$FIXTURE/tests/test_renamed.sh"
-printf 'exit 99\n' > "$FIXTURE/tests/test_changed.sh"
-BASE="$(commit 'common ancestor')" || exit 1
-printf 'base-only\n' > "$FIXTURE/scripts/value"
-printf 'exit 99\n' > "$FIXTURE/tests/test_base_only.sh"
-BASE_TIP="$(commit 'base advanced independently')" || exit 1
+assert_eq '[17,0]' "$(jq -c 'map(.status)' base.json)"
+assert_eq 'FAIL: 1 failed, 3 passed' "$(jq -r '.[0].summary' base.json)"
+assert_eq 'PASS: 4 assertion(s)' "$(jq -r '.[0].summary' head.json)"
+assert_eq true "$(jq '.[0].excerpt | utf8bytelength <= 4096 and (split("\n")|length) <= 13' base.json)"
+assert_not_contains "$(cat base.json)" 'MUST NOT LEAK'
+assert_eq '""' "$(jq '.[0].excerpt' head.json)"
 
-g checkout -q --detach "$BASE" || exit 1
-printf 'head fixture\n' > "$FIXTURE/tests/fixture"
-printf 'exit 99\n' > "$FIXTURE/tests/helpers/test_not_an_entry_point.sh"
-rm "$FIXTURE/tests/test_deleted.sh" "$FIXTURE/tests/obsolete-fixture" || exit 1
-mv "$FIXTURE/tests/test_renamed.sh" "$FIXTURE/tests/test_new_name.sh" || exit 1
-cat > "$FIXTURE/tests/test_changed.sh" <<'TEST'
-set -e
-test -z "${GITHUB_STEP_SUMMARY:-}"
-test ! -e tests/obsolete-fixture
-test "$(cat tests/fixture)" = 'head fixture'
-# Prove the snapshot is the common ancestor, not the moving base tip or a merged checkout.
-case "$(cat scripts/value)" in old|fixed) ;; *) exit 42 ;; esac
-TEST
-NO_REPRO="$(commit 'test changes that pass on both')" || exit 1
-
-for dir in scripts templates commands workflows; do
-    printf 'fixed\n' > "$FIXTURE/$dir/value"
+it "required and advisory titles use the same results but enforce different policies"
+compare() { bash "$driver" compare plan.z "$@"; }
+run compare base.json head.json 'fix(scope)!: ordinary retry'
+assert_eq 0 "$STATUS"; assert_contains "$OUTPUT" '1 of 2'
+assert_contains "$OUTPUT" 'Base: FAIL (exit 17); Head: PASS'
+assert_contains "$OUTPUT" '&lt;failure reason&gt;'
+for title in 'fix: no reproduction' 'fix!: no reproduction'; do
+    run compare head.json head.json "$title"
+    assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" '0 of 2'
 done
-cat > "$FIXTURE/tests/test_regression space.sh" <<'TEST'
-set -e
-for dir in scripts templates commands workflows; do
-    test "$(cat "$dir/value")" = "$(cat scripts/value)"
-done
-if [ "$(cat scripts/value)" != fixed ]; then
-    printf 'old behavior reproduced\n'
-    exit 1
-fi
-TEST
-printf 'present\n' > "$FIXTURE/templates/new-input"
-cat > "$FIXTURE/tests/test_missing.sh" <<'TEST'
-if [ ! -f templates/new-input ]; then
-    echo 'Cannot run: missing <templates/new-input> & required by test'
-    exit 127
-fi
-TEST
-printf 'exit 2\n' > "$FIXTURE/tests/test_broken.sh"
-# shellcheck disable=SC2016 # The fixture reads the snapshot when it runs.
-printf 'test "$(cat scripts/value)" = old\n' > "$FIXTURE/tests/test_head_only_failure.sh"
-HEAD_TIP="$(commit 'regression cases')" || exit 1
+run compare base.json base.json 'fix: fails on both'; assert_eq 1 "$STATUS"
+run compare head.json base.json 'feat: report only'; assert_eq 0 "$STATUS"; assert_contains "$OUTPUT" '0 of 2'
 
-it "head tests and fixtures run against the exact snapshots and only changed suites are selected"
-compare "$BASE_TIP" "$HEAD_TIP" 'fix(close)!: keep failed writes retryable'
-assert_eq 0 "$STATUS" "one or more reproductions pass the fix policy"
-assert_contains "$OUTPUT" "Base (merge base): \`$BASE\` · Head: \`$HEAD_TIP\`"
-assert_contains "$OUTPUT" '2 of 6 changed test suite(s) fail on base and pass on head.'
-assert_contains "$OUTPUT" '<code>tests/test_changed.sh</code> — Base: PASS; Head: PASS.'
-assert_contains "$OUTPUT" '<code>tests/test_new_name.sh</code> — Base: PASS; Head: PASS.'
-assert_contains "$OUTPUT" '<code>tests/test_regression\ space.sh</code> — Base: FAIL (exit 1); Head: PASS.'
-assert_contains "$OUTPUT" 'old behavior reproduced'
-assert_contains "$OUTPUT" '<code>tests/test_missing.sh</code> — Base: FAIL (exit 127); Head: PASS.'
-assert_contains "$OUTPUT" 'missing &lt;templates/new-input&gt; &amp; required by test'
-assert_contains "$OUTPUT" '<code>tests/test_broken.sh</code> — Base: FAIL (exit 2); Head: FAIL (exit 2).'
-assert_contains "$OUTPUT" '<code>tests/test_head_only_failure.sh</code> — Base: PASS; Head: FAIL (exit 1).'
-for excluded in test_not_an_entry_point.sh test_base_only.sh test_unchanged.sh test_deleted.sh test_renamed.sh; do
-    assert_not_contains "$OUTPUT" "$excluded"
-done
-assert_eq "$HEAD_TIP" "$(g rev-parse HEAD)" "source checkout stays at its original commit"
-assert_eq "" "$(g status --porcelain)" "source checkout stays clean"
-
-it "a conventional fix needs a base failure and a head pass; lookalike titles are advisory"
-for title in 'fix: patch' 'fix(close): patch' 'fix!: patch' 'fix(close)!: patch'; do
-    compare "$BASE_TIP" "$NO_REPRO" "$title"
-    assert_eq 1 "$STATUS" "$title requires a reproduction"
-    assert_contains "$OUTPUT" 'A fix PR must have at least one changed test suite'
-done
-for title in 'fixture: patch' 'fixing the docs' 'feat: a fix'; do
-    compare "$BASE_TIP" "$NO_REPRO" "$title"
-    assert_eq 0 "$STATUS" "$title is advisory"
-    assert_contains "$OUTPUT" '0 of 2 changed test suite(s)'
-done
-
-it "failures in both snapshots or on head only do not count, and are advisory for a feature"
-compare "$NO_REPRO" "$HEAD_TIP" 'feat: add behavior'
-assert_eq 0 "$STATUS" "head test failures are reported without enforcing fix policy"
-assert_contains "$OUTPUT" 'Head failure output'
-BROKEN_ONLY="$(g checkout -q --detach "$BASE" &&
-    printf 'exit 1\n' > "$FIXTURE/tests/test_broken.sh" &&
-    commit 'fails in both snapshots')" || exit 1
-compare "$BASE_TIP" "$BROKEN_ONLY" 'fix: no evidence'
-assert_eq 1 "$STATUS" "a base failure also failing on head is not evidence"
-assert_contains "$OUTPUT" '0 of 1 changed test suite(s)'
-
-it "zero changed suites fail a fix, and the workflow summary is appended even on failure"
-SUMMARY="$_SCRATCH_CWD/summary"
-printf 'earlier summary\n' > "$SUMMARY"
-GITHUB_STEP_SUMMARY="$SUMMARY" run replay "$BASE_TIP" "$BASE" 'fix: no tests'
-assert_eq 1 "$STATUS"
-assert_eq '' "$OUTPUT" "not duplicated on stdout when writing a job summary"
-assert_eq 'earlier summary' "$(head -n 1 "$SUMMARY")"
-assert_contains "$(cat "$SUMMARY")" 'No added or changed test suites.'
-compare "$BASE_TIP" "$BASE" 'docs: no tests'
-assert_eq 0 "$STATUS"
-assert_contains "$OUTPUT" '0 of 0 changed test suite(s)'
-
-it "a stalled base times out, its children stop, and head and later suites still run"
-g checkout -q --detach "$BASE" || exit 1
-printf 'fixed\n' > "$FIXTURE/scripts/value"
-cat > "$FIXTURE/tests/test_10_stalled.sh" <<'TEST'
-if [ "$(cat scripts/value)" = old ]; then
-    trap '' TERM
-    sleep 12 &
-    printf '%s\n' "$!" > "$REPLAY_TEST_CHILD"
-    echo 'old behavior stalled'
-    wait
-fi
-TEST
-printf 'exit 0\n' > "$FIXTURE/tests/test_20_finished.sh"
-STALLED="$(commit 'stalled base regression')" || exit 1
-export REPLAY_TEST_CHILD="$_SCRATCH_CWD/stalled-child"
-child_stopped() {
-    local pid proc_state until
-    [ -s "$REPLAY_TEST_CHILD" ] || return 1
-    read -r pid < "$REPLAY_TEST_CHILD" || return 1
-    until=$((SECONDS + 3))
-    while :; do
-        proc_state="$(ps -o stat= -p "$pid" 2>/dev/null)" || return 0
-        if [[ $proc_state =~ ^[[:space:]]*Z ]]; then return 0; fi # already stopped; not yet reaped
-        if [ "$SECONDS" -ge "$until" ]; then return 1; fi
-        sleep 1
-    done
+it "missing, malformed and incomplete evidence fails even for advisory titles"
+invalid() {
+    run compare "$1" "$2" 'docs: advisory'
+    assert_eq 2 "$STATUS" "$3"
+    assert_contains "$OUTPUT" 'INCONCLUSIVE'
 }
-for title in 'feat: advisory stall' 'fix: handle stall'; do
-    PRDKIT_REPLAY_SUITE_SECONDS=2 compare "$BASE" "$STALLED" "$title"
-    assert_eq 0 "$STATUS" "base timeout is valid evidence when head passes: $title"
-    assert_contains "$OUTPUT" '<code>tests/test_10_stalled.sh</code> — Base: FAIL (timed out after 2s); Head: PASS.'
-    assert_contains "$OUTPUT" 'old behavior stalled'
-    assert_contains "$OUTPUT" '<code>tests/test_20_finished.sh</code> — Base: PASS; Head: PASS.'
-    assert_contains "$OUTPUT" '1 of 2 changed test suite(s)'
-    if child_stopped; then _ok 'TERM-ignoring descendant stopped'; else _no 'descendant is still running'; fi
-done
-
-it "the head has its own timeout and a normal exit 124 is not labeled a timeout"
-cat > "$FIXTURE/tests/test_40_head_timeout.sh" <<'TEST'
-if [ "$(cat scripts/value)" = fixed ]; then sleep 12; else exit 124; fi
-TEST
-HEAD_STALL="$(commit 'head also stalls')" || exit 1
-PRDKIT_REPLAY_SUITE_SECONDS=2 compare "$BASE" "$HEAD_STALL" 'ci: report head timeout'
-assert_eq 0 "$STATUS"
-assert_contains "$OUTPUT" '<code>tests/test_40_head_timeout.sh</code> — Base: FAIL (exit 124); Head: FAIL (timed out after 2s).'
-assert_contains "$OUTPUT" '1 of 3 changed test suite(s)'
-
-it "the comparison budget marks unrun suites without treating them as evidence"
-PRDKIT_REPLAY_BUDGET_SECONDS=5 compare "$BASE" "$STALLED" 'fix: no time for evidence'
-assert_eq 1 "$STATUS"
-assert_contains "$OUTPUT" '<code>tests/test_10_stalled.sh</code> — Not run on base or head (comparison budget exhausted).'
-assert_contains "$OUTPUT" '2 suite(s) not run; skipped suites are not evidence.'
-assert_contains "$OUTPUT" '0 of 2 changed test suite(s)'
-
-it "a timed-out worker in another group keeps its lock and prevents the head run"
-g checkout -q --detach "$BASE" || exit 1
-printf 'fixed\n' > "$FIXTURE/scripts/value"
-export REPLAY_TEST_RESOURCE="$_SCRATCH_CWD/shared-resource"
-mkdir "$REPLAY_TEST_RESOURCE" "$_SCRATCH_CWD/shared-temp" "$FIXTURE/tests/helpers" || exit 1
-cat > "$FIXTURE/tests/helpers/replay-lock.sh" <<'TEST'
-set -e
-mkdir "$REPLAY_TEST_RESOURCE/lock"
-trap 'rmdir "$REPLAY_TEST_RESOURCE/lock"' EXIT
-trap 'exit 0' TERM
-printf '%s\n' "$$" > "$REPLAY_TEST_CHILD"
-end=$((SECONDS + 25))
-while [ ! -f "$REPLAY_TEST_RESOURCE/release" ] && [ "$SECONDS" -lt "$end" ]; do sleep 0.1; done
-TEST
-cat > "$FIXTURE/tests/test_50_shared_lock.sh" <<'TEST'
-set -e
-if [ "$(cat scripts/value)" = old ]; then
-    set -m
-    printf '%s\n' "$TMPDIR" > "$REPLAY_TEST_RESOURCE/base-tmp"
-    : > "$TMPDIR/base-fixture"
-    bash tests/helpers/replay-lock.sh &
-    wait
-else
-    if ! mkdir "$REPLAY_TEST_RESOURCE/lock"; then
-        echo 'base worker still holds the lock'
-        exit 1
-    fi
-    rmdir "$REPLAY_TEST_RESOURCE/lock"
-    test "$TMPDIR" != "$(cat "$REPLAY_TEST_RESOURCE/base-tmp")"
-    test ! -e "$TMPDIR/base-fixture"
-fi
-TEST
-LOCK_HEAD="$(commit 'job-controlled lock holder on base only')" || exit 1
-rm -f "$REPLAY_TEST_CHILD"
-cat > "$_SCRATCH_CWD/audit-signals" <<'STUB'
-kill() {
-    case "$*:$0" in
-        "-TERM -- -$$:"*/replay-group.sh|"-KILL -- -$$:"*/replay-group.sh)
-            printf '%s\n' "$1" >> "$REPLAY_TEST_RESOURCE/group-signals"
-            builtin kill "$@" ;;
-        *) printf 'unexpected %s\n' "$*" >> "$REPLAY_TEST_RESOURCE/other-signals"; return 1 ;;
-    esac
-}
-STUB
-BASH_ENV="$_SCRATCH_CWD/audit-signals" TMPDIR="$_SCRATCH_CWD/shared-temp" PRDKIT_REPLAY_SUITE_SECONDS=3 compare "$BASE" "$LOCK_HEAD" 'fix: release the lock'
-assert_eq 2 "$STATUS" "the comparator never signals the escaped lock holder"
-assert_contains "$OUTPUT" 'INCONCLUSIVE (base isolation)'
-assert_contains "$OUTPUT" "PID $(cat "$REPLAY_TEST_CHILD")"
-assert_not_contains "$OUTPUT" '1 of 1'
-assert_eq $'-TERM\n-KILL' "$(cat "$REPLAY_TEST_RESOURCE/group-signals")" "only the live group leader signalled its group"
-if [ -e "$REPLAY_TEST_RESOURCE/other-signals" ]; then _no 'unexpected signal'; else _ok 'no scanned PID signalled'; fi
-: > "$REPLAY_TEST_RESOURCE/release"
-
-it "a completed row is already in the summary when a later suite is still running"
-g checkout -q --detach "$STALLED" || exit 1
-printf 'exit 0 # updated in the cancellation fixture\n' > "$FIXTURE/tests/test_20_finished.sh"
-cat > "$FIXTURE/tests/test_30_later.sh" <<'TEST'
-# Stay in the snapshot group for the cancellation control.
-trap '' TERM
-sleep 12 &
-printf '%s\n' "$!" > "$REPLAY_TEST_CHILD"
-: > "$REPLAY_TEST_STARTED"
-wait
-TEST
-CANCEL_HEAD="$(commit 'later suite stalls on cancellation')" || exit 1
-export REPLAY_TEST_STARTED="$_SCRATCH_CWD/started"
-: > "$SUMMARY"
-(
-    cd "$FIXTURE" || exit 1
-    export GITHUB_STEP_SUMMARY="$SUMMARY" PRDKIT_REPLAY_SUITE_SECONDS=10
-    exec bash "$CHECK" "$STALLED" "$CANCEL_HEAD" 'ci: cancellation fixture'
-) >"$_SCRATCH_CWD/cancel-log" 2>&1 &
-replay_pid=$!
-stop_wait_at=$((SECONDS + 8))
-while [ ! -f "$REPLAY_TEST_STARTED" ] && [ "$SECONDS" -lt "$stop_wait_at" ]; do sleep 1; done
-assert_file "$REPLAY_TEST_STARTED" "later base suite reached its stall"
-assert_contains "$(cat "$SUMMARY")" '<code>tests/test_20_finished.sh</code> — Base: PASS; Head: PASS.' \
-    "completed row is visible before cancellation"
-kill -TERM "$replay_pid" 2>/dev/null
-cancel_status=0
-wait "$replay_pid" || cancel_status=$?
-assert_eq 143 "$cancel_status" "comparator stopped on TERM"
-assert_contains "$(cat "$SUMMARY")" '<code>tests/test_20_finished.sh</code> — Base: PASS; Head: PASS.' \
-    "completed row survives the comparator's cleanup"
-assert_not_contains "$(cat "$SUMMARY")" 'tests/test_30_later.sh' "interrupted suite never reports a result"
-if child_stopped; then _ok 'cancellation stopped the worker in the owned group'; else _no 'worker still running'; fi
-
-it "escaped base services cannot answer a head health check"
-g checkout -q --detach "$BASE" || exit 1
-mkdir -p "$FIXTURE/tests/helpers" || exit 1
-printf 'exit 78\n' > "$FIXTURE/scripts/start"
-cat > "$FIXTURE/tests/helpers/health.py" <<'PY'
-import os
-import socket
-import sys
-from pathlib import Path
-
-os.chdir(os.environ["REPLAY_TEST_RESOURCE"])
-with socket.socket(socket.AF_UNIX) as sock:
-    sock.settimeout(0.2)
-    if sys.argv[1] == "serve":
-        sock.bind("endpoint")
-        sock.listen()
-        if os.environ["REPLAY_STALE_MODE"] == "handoff":
-            # The successor inherits both the listener and the run tag.
-            if os.fork():
-                os._exit(0)
-        Path("ready").write_text(str(os.getpid()))
-        for _ in range(150):
-            if Path("release-service").exists():
-                break
-            try:
-                client, _ = sock.accept()
-            except TimeoutError:
-                continue
-            with client:
-                client.sendall(b"ok")
-            break
-        Path("service-done").touch()
-    else:
-        sock.connect("endpoint")
-        assert sock.recv(2) == b"ok"
-PY
-cat > "$FIXTURE/tests/helpers/launch.sh" <<'TEST'
-set -m
-python3 -I tests/helpers/health.py serve </dev/null >/dev/null 2>&1 &
-TEST
-cat > "$FIXTURE/tests/test_health.sh" <<'TEST'
-if [ "$(cat scripts/value)" = old ]; then
-    bash tests/helpers/launch.sh || exit 1
-    while [ ! -f "$REPLAY_TEST_RESOURCE/ready" ]; do sleep 0.1; done
-    case "$REPLAY_STALE_MODE" in
-        timeout) sleep 12 ;;
-        failure|handoff) exit 17 ;;
-        success) exit 0 ;;
-    esac
-else
-    : > "$REPLAY_TEST_RESOURCE/head-started"
-    bash scripts/start || :
-    python3 -I tests/helpers/health.py probe
-fi
-TEST
-printf 'fixed\n' > "$FIXTURE/scripts/value"
-HEALTH_HEAD="$(commit 'stale service cannot stand in for failed head startup')" || exit 1
-for mode in timeout failure success handoff; do
-    rm -f "$REPLAY_TEST_RESOURCE"/{endpoint,ready,release-service,service-done}
-    REPLAY_STALE_MODE="$mode" PRDKIT_REPLAY_SUITE_SECONDS=3 compare "$BASE" "$HEALTH_HEAD" 'fix: verify service startup'
-    assert_eq 2 "$STATUS" "$mode: leftover service blocks the comparison"
-    assert_contains "$OUTPUT" 'INCONCLUSIVE (base isolation)'
-    assert_contains "$OUTPUT" "PID $(cat "$REPLAY_TEST_RESOURCE/ready")"
-    assert_not_contains "$OUTPUT" '1 of 1' "$mode: not evidence"
-    if [ -e "$REPLAY_TEST_RESOURCE/head-started" ]; then _no 'head started'; else _ok 'head did not start'; fi
-    assert_file "$REPLAY_TEST_RESOURCE/ready" "$mode: base listener actually started"
-    : > "$REPLAY_TEST_RESOURCE/release-service"
-    end=$((SECONDS + 3))
-    while [ ! -f "$REPLAY_TEST_RESOURCE/service-done" ] && [ "$SECONDS" -lt "$end" ]; do sleep 0.1; done
-    assert_file "$REPLAY_TEST_RESOURCE/service-done" "$mode: fixture released its own listener"
-done
-
-it "membership readers distinguish missing data, other tokens and zombies"
-if [ -f "$PK_ROOT/scripts/maintainer/replay-workers.sh" ]; then
-    source "$PK_ROOT/scripts/maintainer/replay-workers.sh"
-    mkdir -p "$FIXTURE/proc/42"
-    printf 'OTHER=tag\nTAG=1\0TAG=10\0' > "$FIXTURE/proc/42/environ"
-    run replay_membership Linux 42 TAG=1 "$FIXTURE/proc"; assert_eq 1 "$STATUS"
-    printf 'TAG=1\0' >> "$FIXTURE/proc/42/environ"
-    run replay_membership Linux 42 TAG=1 "$FIXTURE/proc"; assert_eq 0 "$STATUS"
-    run replay_membership Linux 43 TAG=1 "$FIXTURE/proc"; assert_eq 2 "$STATUS"
-    # shellcheck disable=SC2329 # Called through the sourced platform reader.
-    ps() {
-        case "$1" in
-            -ww) echo 'command --arg TAG=1' ;;
-            -Eww) echo "command --arg TAG=1${env_suffix:-}" ;;
-            *) printf ' %s  42  Z+ Sat Nov 21 10:00:00 2026\n %s  %s S Sat Nov 21 10:00:01 2026\n' "$EUID" "$EUID" "$$" ;;
-        esac
-    }
-    env_suffix=' OTHER=1 TAG=1' run replay_membership Darwin 42 TAG=1 ''; assert_eq 0 "$STATUS"
-    env_suffix=' OTHER=1 TAG=10' run replay_membership Darwin 42 TAG=1 ''; assert_eq 1 "$STATUS"
-    env_suffix=' MESSAGE=text TAG=1 here' run replay_membership Darwin 42 TAG=1 ''; assert_eq 0 "$STATUS" "ambiguous match blocks evidence"
-    run replay_membership Darwin 42 TAG=1 ''; assert_eq 2 "$STATUS"
-    scratch="$FIXTURE"
-    run replay_census "$FIXTURE/live"; assert_eq 0 "$STATUS"
-    assert_eq "$$ Sat Nov 21 10:00:01 2026" "$(cat "$FIXTURE/live")"
-    unset -f ps
-
-    it "handoff during lookup invalidates the scan; a replacement PID is detection-only"
-    # Represent the race with a process table: the first two listed workers exit
-    # before lookup, passing the listener to their successor. Its PID is then
-    # reused by an unrelated process after the tag read. No real PID is targeted.
-    handoff() (
-        scratch="$_SCRATCH_CWD"; run_tag='TAG=1'; platform=Linux; scan_limit=2
-        # shellcheck disable=SC2329 # Indirect calls from the detection loop.
-        replay_candidates() {
-            turn=$((turn + 1))
-            case "$turn" in 1) echo '401 first' ;; 2) echo '402 second' ;; *) echo '403 successor' ;; esac > "$1"
-        }
-        # shellcheck disable=SC2329
-        replay_membership() {
-            echo "$2" >> "$scratch/lookups"
-            if [ "$2" = 403 ]; then return 0; else return 2; fi
-        }
-        # shellcheck disable=SC2329
-        kill() { echo "$*" >> "$scratch/signal-to-replacement"; }
-        turn=0
-        verify_no_workers
-    )
-    run handoff
-    assert_eq 1 "$STATUS" "two incomplete censuses never admit head"
-    assert_contains "$OUTPUT" 'PID 403'
-    assert_contains "$(cat "$_SCRATCH_CWD/lookups")" $'401\n402\n403'
-    if [ -e "$_SCRATCH_CWD/signal-to-replacement" ]; then _no 'signal to replacement'; else _ok 'no signal to replacement'; fi
-
-    it "an unreadable live candidate prevents head execution and cannot count"
-    mkdir "$FIXTURE/ps-stub"
-    real_ps=$(command -v ps)
-    export REPLAY_REAL_PS="$real_ps" REPLAY_PID_MARKER="$_SCRATCH_CWD/candidate"
-    cat > "$FIXTURE/ps-stub/ps" <<'STUB'
-#!/usr/bin/env bash
-case "$*" in
-    '-A -o uid=,pid=,stat=,lstart=')
-        "$REPLAY_REAL_PS" "$@" || exit 1
-        if [ -f "$REPLAY_PID_MARKER" ]; then
-            printf '%s 99999999 S Sat Nov 21 10:00:01 2026\n' "$EUID"
-        fi ;;
-    *' -p 99999999 '*) exit 1 ;;
-    *) exec "$REPLAY_REAL_PS" "$@" ;;
-esac
-STUB
-    chmod +x "$FIXTURE/ps-stub/ps"
-    g checkout -q --detach "$BASE" || exit 1
-    printf 'fixed\n' > "$FIXTURE/scripts/value"
-    cat > "$FIXTURE/tests/test_visibility.sh" <<'TEST'
-if [ "$(cat scripts/value)" = old ]; then : > "$REPLAY_PID_MARKER"; exit 1; fi
-: > "$REPLAY_PID_MARKER.head"
-TEST
-    VISIBILITY="$(commit 'unavailable process environment')" || exit 1
-    PATH="$FIXTURE/ps-stub:$PATH" compare "$BASE" "$VISIBILITY" 'fix: require isolation'
-    assert_eq 2 "$STATUS"
-    assert_contains "$OUTPUT" 'INCONCLUSIVE (base isolation)'
-    assert_contains "$OUTPUT" 'PID 99999999'
-    assert_not_contains "$OUTPUT" '1 of 1'
-    if [ -e "$REPLAY_PID_MARKER.head" ]; then _no 'head ran without isolation'; else _ok 'head never ran'; fi
-fi
-
+invalid missing head.json 'missing base'
+printf '[' > bad.json
+invalid base.json bad.json 'malformed head'
+jq '.[0:1]' base.json > bad.json
+invalid bad.json bad.json 'same omitted suite on both sides'
+jq '.[1] = .[0]' base.json > bad.json
+invalid bad.json head.json 'duplicate rows'
+jq '.[1].status = "0"' head.json > bad.json
+invalid base.json bad.json 'wrong exit type'
+jq 'del(.[1].excerpt)' head.json > bad.json
+invalid base.json bad.json 'missing diagnostic field'
+cat head.json head.json > bad.json
+invalid base.json bad.json 'multiple documents'
+printf '%s' "$suite" > plan.z
+invalid base.json head.json 'truncated plan'
 finish
