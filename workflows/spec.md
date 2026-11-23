@@ -264,12 +264,15 @@ A line that only describes how the code currently does something is deleted: the
 ### Optional change metadata
 
 - In a change header before the first section, use `**Tags**: cleanup, small batch` for
-  grouping or filtering only. Tags are free-form lowercase plain text, separated by commas.
+  grouping or filtering only. Separate tags by commas; each tag uses only ASCII lowercase
+  letters, digits, spaces, `-`, `_`, and `.`.
   Omit the line or leave it blank if not stated. Tags do not affect scope, status signals,
   review, or acceptance. On close, the dated log line ends with ` · **Tags**: cleanup, small batch`
-  when valid tags are present. The suffix is separate from the close helper's 300-character
-  description limit. Copy the suffix when writing a close entry by hand. Doctor advises on
-  malformed or duplicate tags; status and close do not project them.
+  when valid tags are present. Omit `**Tags**` from the close helper's description argument;
+  the helper adds the suffix outside the 300-character description limit and escapes `_` and
+  `www.` to keep them literal in Markdown. Do the same when writing a close entry by hand.
+  Doctor advises on malformed tags; status omits them and close refuses them. Duplicate `Parts`,
+  `Journeys`, or `Tags` fields are errors in doctor, status, bounds, and close.
 - In `## Tasks`, use `- [ ] (P2.1) Add a retry check` or `- [x] (P2.1) Verify recovery` to
   assign a task. The part must exist and be explicitly named in the header, e.g.
   `**Parts**: P2, P2.1`; listing a parent does not implicitly list its children. A task without
@@ -277,7 +280,10 @@ A line that only describes how the code currently does something is deleted: the
 - `status.sh --json` lists explicit relationships in `part_parents` (`id`, `parent`). For
   each open change, `tags` is a list, `tasks_by_part` has `part`, `checked`, `total` for parts
   with recorded assignments, and `unassigned_tasks` has `checked`, `total` for unassigned
-  tasks. An unstated list or tally is `null`, not zero. Counts stay with the named part;
+  tasks. Invalid assignments are reported separately in `invalid_task_parts` (`part`, `line`,
+  `reason`: `unknown`, `outside`, or `malformed`) and do not count toward task progress.
+  Part IDs are resolved in the checkout supplying the change record. An unstated list or tally
+  is `null`, not zero. Counts stay with the named part;
   readers can roll up by following `part_parents` without counting any task twice.
 - **No migration needed.** Existing changes, part files, and log lines remain valid without
   these fields. Do not infer a tag, parent, or task assignment from prose.

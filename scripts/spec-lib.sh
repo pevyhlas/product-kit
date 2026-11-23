@@ -29,8 +29,10 @@ SPEC_ID_AWK='function spec_ids(s, where,   pre, post, tok, w) {
 }'
 
 # Metadata readers ignore both kinds of Markdown fences, including shorter inner fences.
-SPEC_METADATA_SKIP_AWK='function metadata_skip(line,    marker, ending) {
-    marker = line; sub(/^ ? ? ?/, "", marker)
+SPEC_METADATA_SKIP_AWK='function metadata_skip(line, indented,    marker, ending) {
+    marker = line
+    if (indented) sub(/^[[:space:]]*/, "", marker)
+    else sub(/^ ? ? ?/, "", marker)
     if (code != "") {
         ending = marker; sub(/[[:space:]]+$/, "", ending)
         if (length(ending) >= length(code) && (ending ~ /^`+$/ || ending ~ /^~+$/) &&
@@ -43,19 +45,26 @@ SPEC_METADATA_SKIP_AWK='function metadata_skip(line,    marker, ending) {
 }'
 
 # Bold header fields on their own line or the legacy middle-dot-delimited line. Do not match
-# labels inside prose. Populates header[], fields[], and field_line[] for callers.
+# labels inside prose. Populates header[], fields[], and field_line[] and returns the line
+# without Tags for legacy readers that deliberately scan for claims elsewhere in the record.
 SPEC_HEADER_AWK='function metadata_trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
-function metadata_header(s,   label, value, rest) {
+function metadata_header(s,   label, value, rest, field, kept, original, has_tags) {
+    original = s
+    sub(/^ ? ? ?/, "", s)
     while (match(s, /^\*\*[^*]+\*\*:/)) {
-        label = substr(s, 3, RLENGTH - 5); s = substr(s, RLENGTH + 1)
+        field = substr(s, 1, RLENGTH); label = substr(s, 3, RLENGTH - 5); s = substr(s, RLENGTH + 1)
         value = s; rest = ""
         if (match(s, /[[:space:]]+·[[:space:]]+\*\*[^*]+\*\*:/)) {
             value = substr(s, 1, RSTART - 1); rest = substr(s, RSTART)
             sub(/^[[:space:]]+·[[:space:]]+/, "", rest)
         }
         header[label] = metadata_trim(value); fields[label]++; field_line[label] = NR
+        if (label != "Tags") kept = kept (kept != "" ? " · " : "") field value
+        else has_tags = 1
         s = rest
     }
+    if (has_tags) return kept
+    return original
 }'
 
 # Lines inside HTML comments and code fences are format notes, never content.
@@ -458,7 +467,7 @@ spec_items() { # root [file...]: the spec files when none are given
             # A bullet item runs on to the next bullet, heading, table row or blank line; its deeper
             # sub-bullets (not items themselves; each starts a line of subs) count only for enforcement.
             function flush() { if (pend != "") print pend_id "\037" pend_title "\037" flags(pend, pend_id, pend " " subs) "\037" file ":" pend_nr; pend = ""; subs = ""; insub = 0 }
-            { gsub(/\037/, " "); if (metadata_skip($0)) { flush(); next } }
+            { gsub(/\037/, " "); if (metadata_skip($0, 1)) { flush(); next } }
             pend != "" && $0 !~ /^[[:space:]]*$/ && $0 !~ /^[[:space:]]*([-*+]|[0-9]+\.)[[:space:]]/ && $0 !~ /^(#|\|)/ { if (insub) subs = subs " " $0; else pend = pend " " $0; next }
             pend != "" && /^[[:space:]]*([-*+]|[0-9]+\.)[[:space:]]/ && !/^[[:space:]]*[-*][[:space:]]+\*\*(P[0-9]+(\.[0-9]+)?\.[BI]|[JRQCDN])-[0-9]/ && indent($0) > pend_ind { insub = 1; subs = subs "\n" $0; next }
             { flush() }
@@ -732,7 +741,9 @@ spec_stages() { # root
 # Part file headers: file, ID (blank if none), Parent, Parent line, and any field error.
 # Component files repeat the part ID but do not declare a Parent.
 spec_part_headings() { # root
-    local root="$1" path file expected component row
+    local root="$1" path file expected component row part parent line issue
+    local id='P[0-9]+(\.[0-9]+)?' shape
+    shape="^($id)?$SPEC_SEP($id)?$SPEC_SEP([1-9][0-9]*)?${SPEC_SEP}[^[:cntrl:]]*$"
     for path in "$root"/specs/parts/*.md "$root"/specs/parts/*/*.md; do
         [ -f "$path" ] || continue
         file="${path#"$root"/}"
@@ -753,9 +764,16 @@ spec_part_headings() { # root
                 else if (fields["Parent"] && (!part || component)) error = "Parent belongs in a main part file header"
                 else if (parent != "" && parent !~ /^P[0-9]+(\.[0-9]+)?$/) error = "Malformed part Parent (expected a part ID)"
                 print FILENAME "\037" part "\037" (error == "" ? parent : "") "\037" field_line["Parent"] "\037" error
-            }' "$file")" || return 1
-        case "$row" in "$file$SPEC_SEP"*) ;; *) return 1 ;; esac
-        [[ "$row" != *$'\n'* ]] || return 1
+            }' "$file" && printf x)" || return 1
+        row="${row%$'\n'x}"
+        if [[ "$row" != "$file$SPEC_SEP"* || ! "${row#*"$SPEC_SEP"}" =~ $shape ]]; then
+            printf 'Invalid part metadata row: %s\n' "$file" >&2; return 1
+        fi
+        IFS="$SPEC_SEP" read -r _ part parent line issue <<< "$row"
+        if { [ -n "$parent$issue" ] && [ -z "$line" ]; } ||
+           { [ -n "$parent" ] && { [ -z "$part" ] || [ -n "$issue" ]; }; }; then
+            printf 'Invalid part metadata row: %s\n' "$file" >&2; return 1
+        fi
         printf '%s\n' "$row" || return 1
     done
     return 0
@@ -1003,7 +1021,7 @@ spec_changes() { # root
         [ -f "$path" ] || continue
         verify_lf_file "$path" || { printf 'Invalid change record text: %s\n' "$path" >&2; return 1; }
         expected="$(wc -l < "$path")" || return 1
-        awk -v expected="$expected" -v id="$(spec_field "$(basename "$path" .md)")" "$SPEC_METADATA_SKIP_AWK"'
+        awk -v expected="$expected" -v id="$(spec_field "$(basename "$path" .md)")" "$SPEC_METADATA_SKIP_AWK $SPEC_HEADER_AWK"'
             BEGIN { gsub(/[\037\r\n]/, " ", id) }
             function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
             function field(line, name,   v) {
@@ -1015,8 +1033,8 @@ spec_changes() { # root
                 if (metadata_skip($0)) next
             }
             FNR == 1 && /^# / { title = $0; sub(/^#[[:space:]]+(Change:[[:space:]]*)?/, "", title) }
-            /\*\*Opened\*\*:/ { opened = field($0, "Opened") }
-            /\*\*Parent\*\*:/ { parent = field($0, "Parent") }
+            /^##+[[:space:]]/ { section = 1 }
+            !section { metadata_header($0) }
             /^\*\*Step\*\*:/ { step = field($0, "Step") }
             sec == "State" && /^\*\*Waiting on\*\*:/ { nw++; waiting = field($0, "Waiting on") }
             sec == "State" && /^\*\*Next\*\*:/ { nn++; nxt = field($0, "Next") }
@@ -1035,17 +1053,18 @@ spec_changes() { # root
             END {
                 if (NR != expected) exit 1
                 gsub(/\t/, " ", title); gsub(/\t/, " ", waiting); gsub(/\t/, " ", nxt)
-                print id "\037" title "\037" opened "\037" step "\037" (nw==1 ? waiting : "") "\037" (nn==1 ? nxt : "") "\037" parent "\037" total + 0 "\037" passed + 0 "\037" failed + 0 "\037" maxatt + 0 "\037" stalled "\037" presence(nw,waiting) "\037" presence(nn,nxt)
+                print id "\037" title "\037" header["Opened"] "\037" step "\037" (nw==1 ? waiting : "") "\037" (nn==1 ? nxt : "") "\037" header["Parent"] "\037" total + 0 "\037" passed + 0 "\037" failed + 0 "\037" maxatt + 0 "\037" stalled "\037" presence(nw,waiting) "\037" presence(nn,nxt)
             }' "$path" || { printf 'Change record reader failed: %s (expected %s lines)\n' "$path" "$expected" >&2; return 1; }
     done
     return 0
 }
 
-# Optional change metadata. Scope mode emits only Parts and Journeys (for bounds). Otherwise:
+# Optional change metadata. Only doctor receives duplicate-field diagnostics as rows.
+# Scope mode emits Parts and Journeys (for bounds). Otherwise:
 # task, part (empty for unassigned), checked (0/1), source line, issue (malformed/outside);
 # tags, normalized value, source line, issue. No semantic dependency on tags.
-spec_change_metadata() { # file [scope|tags]
-    local file="$1" expected rows mode="${2:-}"
+spec_change_metadata() { # file [scope|tags|status]
+    local file="$1" expected rows mode="${2:-}" kind label line
     verify_lf_file "$file" || return 1
     expected="$(wc -l < "$file")" || return 1
     # shellcheck disable=SC2016 # the single-quoted program uses awk fields
@@ -1054,7 +1073,7 @@ spec_change_metadata() { # file [scope|tags]
             n = split(value, a, ",")
             for (i = 1; i <= n; i++) {
                 tag = metadata_trim(a[i])
-                if (tag == "" || tag ~ /[[:upper:][:cntrl:]]/ || index(tag, "**")) return ""
+                if (tag !~ /^[abcdefghijklmnopqrstuvwxyz0123456789 _.-]+$/) return ""
                 out = out (i > 1 ? ", " : "") tag
             }
             return out
@@ -1068,11 +1087,11 @@ spec_change_metadata() { # file [scope|tags]
                     for (i = 1; i <= n; i++) scoped[ids[i]] = 1
                 }
             }
-            if ($0 ~ /^##[[:space:]]/) tasks = (metadata_trim($0) == "## Tasks")
+            if ($0 ~ /^##[[:space:]]/) tasks = (metadata_trim(substr($0, 3)) == "Tasks")
             next
         }
         !section { metadata_header($0); next }
-        mode == "" && tasks && /^[[:space:]]*[-*+][[:blank:]]+\[[ xX]\][[:blank:]]+[^[:blank:]]/ {
+        mode != "scope" && mode != "tags" && tasks && /^[[:space:]]*[-*+][[:blank:]]+\[[ xX]\][[:blank:]]+[^[:blank:]]/ {
             s = $0
             sub(/^[[:space:]]*[-*+][[:blank:]]+\[/, "", s)
             checked = (substr(s, 1, 1) != " ")
@@ -1092,14 +1111,26 @@ spec_change_metadata() { # file [scope|tags]
         }
         END {
             if (NR != expected) exit 1
+            n = split("Parts Journeys Tags", labels, " ")
+            for (i = 1; i <= n; i++) {
+                label = labels[i]
+                if (fields[label] > 1) print "duplicate\037" label "\037" field_line[label]
+            }
             if (mode == "scope") {
                 gsub(/\037/, " ", header["Parts"]); gsub(/\037/, " ", header["Journeys"])
                 print "scope\037" header["Parts"] "\037" header["Journeys"]; exit
             }
             value = header["Tags"]; tags = tag_list(value)
-            issue = fields["Tags"] > 1 ? "Duplicate Tags field" : value != "" && tags == "" ? "Malformed Tags (use comma-separated lowercase plain text)" : ""
+            issue = value != "" && tags == "" ? "Malformed Tags (use comma-separated lowercase letters, digits, spaces, hyphens, underscores or periods)" : ""
             print "tags\037" (issue == "" ? tags : "") "\037" field_line["Tags"] "\037" issue
         }' "$file")" || return 1
+    if [ -n "$mode" ]; then
+        while IFS="$SPEC_SEP" read -r kind label line; do
+            if [ "$kind" = duplicate ]; then
+                printf '%s:%s: Duplicate %s field\n' "$file" "$line" "$label" >&2; return 1
+            fi
+        done <<< "$rows"
+    fi
     if [ "$mode" = scope ]; then
         case "$rows" in *$'\n'*) return 1 ;; "scope$SPEC_SEP"*"$SPEC_SEP"*) ;; *) return 1 ;; esac
     else
@@ -1331,13 +1362,10 @@ spec_unclosed_changes() { # root rev
         record_text="$(GIT_NO_LAZY_FETCH=1 verify_lines git -C "$root" cat-file blob "$rev:$path")" || return 1
         [ -n "$record_text" ] || { printf 'Empty committed change record: %s\n' "$path" >&2; return 1; }
         printf '%s\n' "$record_text" |
-            awk -v id="$(spec_field "$(basename "$path" .md)")" "$SPEC_SKIP_AWK"'
-            function trim(s) { gsub(/`/, "", s); gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
-            { gsub(/\037/, " "); if (spec_skip($0)) next }
-            /\*\*Parent\*\*:/ && !seen_parent {
-                seen_parent = 1; v = $0; sub(/^.*\*\*Parent\*\*:[[:space:]]*[[`]?/, "", v)
-                if (match(v, /^[0-9][0-9][0-9]+-[a-z0-9]+(-[a-z0-9]+)*/)) parent = substr(v, 1, RLENGTH)
-            }
+            awk -v id="$(spec_field "$(basename "$path" .md)")" "$SPEC_METADATA_SKIP_AWK $SPEC_HEADER_AWK"'
+            { gsub(/\037/, " "); if (metadata_skip($0)) next }
+            /^##+[[:space:]]/ { section = 1 }
+            !section && !fields["Parent"] { metadata_header($0) }
             /^## / { sec = $0; next }
             sec != "## State" { next }
             /^### Outcome checkpoint[[:space:]]*$/ { checkpoint = 1 }
@@ -1345,6 +1373,8 @@ spec_unclosed_changes() { # root rev
                 key = $0; sub(/^\*\*/, "", key); sub(/\*\*:.*/, "", key); keys[key] = 1
             }
             END {
+                v = header["Parent"]; sub(/^[[`]/, "", v)
+                if (match(v, /^[0-9][0-9][0-9]+-[a-z0-9]+(-[a-z0-9]+)*/)) parent = substr(v, 1, RLENGTH)
                 # The checkpoint shapes spec_change_progress reads, the legacy 1.3.1 one included.
                 if (keys["No-progress changes"] || keys["Progress limit"] || (keys["Outcome"] && keys["Milestone"] &&
                     (keys["Critical path"] || keys["Allocation"] || keys["Progress"] || keys["Selection"]))) checkpoint = 1

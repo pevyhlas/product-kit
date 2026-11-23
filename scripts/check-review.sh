@@ -205,11 +205,20 @@ if [ -n "$fp_base" ]; then
     problems+=(${LL_PROBLEMS[@]+"${LL_PROBLEMS[@]}"})
 fi
 diagnostic_capture legacy
+# Preserve conservative tier scanning even in comments and body text, but not inside the
+# value of a real Tags field in the header.
+TIER_INPUT_AWK="$SPEC_METADATA_SKIP_AWK $SPEC_HEADER_AWK"'function tier_input(line) {
+    if (!section && !metadata_skip(line)) {
+        if (line ~ /^##+[[:space:]]/) section = 1
+        else return metadata_header(line)
+    }
+    return line
+}'
 # Every **Tier** field in a record on stdin, one per line: T0-T3, or ? when its whole value (up to
 # the next · or the end of the line, in optional backticks) is not exactly one tier: T1/T3, T1-T3,
 # T1x, "T1, T3" and "T1 T3" are not tiers.
 record_tiers() {
-    awk '{ s = $0; sub(/\r$/, "", s)
+    awk "$TIER_INPUT_AWK"'{ s = tier_input($0); sub(/\r$/, "", s)
         while ((i = index(s, "**Tier**:")) > 0) {
             s = substr(s, i + 9); v = s; j = index(v, "·"); if (j) v = substr(v, 1, j - 1)
             gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
@@ -220,7 +229,7 @@ record_tiers() {
 # For a floor, every T0-T3 named in any **Tier** field value (up to the next ·), so that a
 # malformed earlier value such as T1/T3 still counts at its highest.
 floor_tiers() {
-    awk '{ s = $0
+    awk "$TIER_INPUT_AWK"'{ s = tier_input($0)
         while ((i = index(s, "**Tier**:")) > 0) {
             s = substr(s, i + 9); v = s; j = index(v, "·"); if (j) v = substr(v, 1, j - 1)
             while (match(v, /T[0-3]/)) { print substr(v, RSTART, 2); v = substr(v, RSTART + 2) }

@@ -190,6 +190,17 @@ assert_contains "$OUTPUT" 'in scope: P2.1)'
 assert_contains "$OUTPUT" '- C-91 Recovery'
 assert_not_contains "$OUTPUT" 'C-92'
 
+it "ambiguous scope cannot produce a partial set of bounds"
+printf '# Change: ambiguous\n\n**Parts**: P1 · **Parts**: P2\n' > specs/changes/017-ambiguous.md
+run bash "$BOUNDS" 017-ambiguous
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'Duplicate Parts field'
+assert_not_contains "$OUTPUT" 'Bounds for'
+printf '# Change: ambiguous\n\n**Parts**: P1\n**Tags**: cleanup\n**Tags**: another\n' > specs/changes/017-ambiguous.md
+run bash "$BOUNDS" 017-ambiguous
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'Duplicate Tags field'
+
 it "no parts or journeys, or --all, lists every live item"
 run bash "$BOUNDS" 006-misc
 assert_contains "$OUTPUT" "- C-03 Server region" "everything in scope"

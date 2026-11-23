@@ -402,16 +402,38 @@ assert_eq 0 "$STATUS" "owner approval of the reviewed head survives the closing 
 
 it "close carries header tags to the same one-line log entry"
 branch_with_code 019-tagged
-sed -i.bak 's/ · \*\*Tier\*\*/ · **Tags**: cleanup, small batch · **Tier**/' specs/changes/019-tagged.md
+sed -i.bak 's/ · \*\*Tier\*\*/ · **Tags**: cleanup, small batch, _literal_, www.example.test · **Tier**/' specs/changes/019-tagged.md
 rm specs/changes/019-tagged.md.bak
 git commit -qam "019-tagged: tags" >/dev/null
 pass_line code "$(git merge-base HEAD "$DEFAULT")" "$(git rev-parse HEAD)" >> specs/changes/019-tagged.md
 printf '\n## Notes\n**Tags**: not header metadata\n' >> specs/changes/019-tagged.md
 git commit -qam "019-tagged: review PASS" >/dev/null
+run bash "$B/close-change.sh" 019-tagged "tagged — R-01 — #19 · **Tags**: caller text"
+assert_eq 1 "$STATUS" "the description cannot supply a tag suffix"
+assert_contains "$OUTPUT" "omit **Tags** from the description"
+# Continue independently if the old implementation accepted the caller's suffix.
+if [ ! -f specs/changes/019-tagged.md ]; then git checkout -qb 019-retry HEAD~1 || exit 1; fi
 run bash "$B/close-change.sh" 019-tagged "tagged — R-01 — #19"
 assert_eq 0 "$STATUS" "tags do not change acceptance or review: $OUTPUT"
-assert_eq '- 2026-11-09 019-tagged: tagged — R-01 — #19 · **Tags**: cleanup, small batch' \
+assert_eq '- 2026-11-09 019-tagged: tagged — R-01 — #19 · **Tags**: cleanup, small batch, \_literal\_, www\.example.test' \
     "$(git show HEAD:specs/log/019-tagged.md)" "only header tags are preserved"
+
+it "close refuses tags containing Markdown or HTML before writing"
+branch_with_code 020-markup
+awk 'NR == 2 { print "**Tags**: [runbook](https://example.test/docs), <br>, <!-- note -->" } { print }' \
+    specs/changes/020-markup.md > specs/changes/020.tmp
+mv specs/changes/020.tmp specs/changes/020-markup.md
+git commit -qam "020-markup: tags" >/dev/null
+pass_line code "$(git merge-base HEAD "$DEFAULT")" "$(git rev-parse HEAD)" >> specs/changes/020-markup.md
+git commit -qam "020-markup: review PASS" >/dev/null
+TAG_HEAD="$(git rev-parse HEAD)"
+run bash "$B/close-change.sh" 020-markup "markup — R-01 — #20"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "Malformed Tags"
+assert_eq "$TAG_HEAD" "$(git rev-parse HEAD)" "refusal leaves HEAD unchanged"
+assert_file specs/changes/020-markup.md
+run test ! -e specs/log/020-markup.md
+assert_eq 0 "$STATUS" "no log entry written"
 
 it "status and doctor flag merged-open records including T0 and unreviewed ones; parents stay quiet"
 branch_with_code 004-left; pass_line code "$(git merge-base HEAD "$DEFAULT")" "$(git rev-parse HEAD)" >> specs/changes/004-left.md

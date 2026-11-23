@@ -95,6 +95,12 @@ if [ "$VERIFY_FAULT" = metadata-short ]; then
         printf 'task\037P1\0370\0371\037\n'; exit 0 ;;
     esac
 fi
+case "$VERIFY_FAULT:$*" in
+    part-short:*'function metadata_header'*'specs/parts/p1.1-truncated.md')
+        printf 'specs/parts/p1.1-truncated.md\037P1.1\n'; exit 0 ;;
+    part-extra:*'function metadata_header'*'specs/parts/p1.1-truncated.md')
+        printf 'specs/parts/p1.1-truncated.md\037P1.1\037\037\037\037extra\n'; exit 0 ;;
+esac
 exec "$REAL_AWK" "$@"
 SH
 chmod +x "$_SCRATCH_CWD"/bin/*
@@ -251,6 +257,18 @@ for format in empty crlf eof truncated; do
     assert_eq 0 "$STATUS" "raw preserves $format bytes"
 done
 printf '# Example\n- **R-01 First**: example.\n' > specs/SPEC.md
+
+it 'status and doctor reject incomplete or overlong part metadata rows'
+mkdir -p specs/parts
+printf '# P1.1 Truncated\n\n**Parent**: P9\n' > specs/parts/p1.1-truncated.md
+for mode in part-short part-extra; do
+    for verifier in status doctor; do
+        fault "$mode" bash "$B/$verifier.sh" --json
+        failed "$verifier: $mode"
+        assert_contains "$OUTPUT" 'Invalid part metadata row'
+    done
+done
+rm specs/parts/p1.1-truncated.md
 
 it 'target lookup refuses damaged text even when the navigation target itself is intact'
 target_file=specs/navigation.md

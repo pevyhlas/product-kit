@@ -616,6 +616,7 @@ if [ "${#change_files[@]}" -gt 0 ]; then
         rows="$(verify_lines spec_change_metadata "$root/$file")"
         while IFS="$SEP" read -r kind name a b problem; do
             case "$kind" in
+                duplicate) findings+=("$file:$a: Duplicate $name field") ;;
                 tags) [ -z "$b" ] || advisories+=("$file:$a: $b") ;;
                 task)
                     case "$problem" in

@@ -76,7 +76,7 @@ cat >> specs/architecture.md <<'MD'
 MD
 cat >> specs/changes/001-parts.md <<'MD'
 
-## Tasks
+##   Tasks
 - [ ] (P1.1.1) Malformed ID
 - [ ] (p1.1) Malformed lowercase ID
 - [ ] (P9) Unknown part, even though listed
@@ -112,6 +112,20 @@ assert_eq 1 "$STATUS"
 assert_contains "$OUTPUT" 'Part nesting exceeds one level'
 rm specs/parts/{p1.1-index,p2-other}.md
 git restore -- specs/architecture.md
+
+it "an ordered-list code fence is not a second definition"
+cat >> specs/product.md <<'MD'
+
+1. Example:
+
+    ```markdown
+    - **R-01 Sample definition** (validated): example only.
+    ```
+MD
+run bash "$DOCTOR" --json
+assert_eq 0 "$STATUS"
+assert_not_contains "$OUTPUT" 'Duplicate ID R-01'
+git restore -- specs/product.md
 
 it "malformed, duplicate and misplaced IDs are failing findings"
 printf -- '- **R-1 Short id** (validated): x.\n- **R-01 Again** (validated): y.\n' >> specs/product.md
