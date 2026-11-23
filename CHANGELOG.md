@@ -15,6 +15,12 @@ change by change.
   Base and head run on separate hosted runners, so a base worker cannot answer a head test.
   The check compares one-day result artifacts; missing or incomplete evidence fails the check.
 
+### Changed
+
+- Spec-only reviews judge edits at their spec level and defer test procedures to the
+  implementing PR. Acceptance names observable outcomes; review gates are unchanged.
+  No migration needed.
+
 ## [2.1.0] — 2026-11-23 — task parts, change tags and fail-closed verifiers
 
 ### Added
