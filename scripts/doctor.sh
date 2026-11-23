@@ -141,7 +141,7 @@ else
 fi
 
 # --- IDs ---------------------------------------------------------------------------------------
-items="$(verify_lines spec_items "$root")"
+items="$(verify_lines spec_items "$root" --skip-invalid-journey-ids)"
 rows="$(printf '%s\n' "$items" | awk -F "$SEP" 'NF { if ($1 in at) print "Duplicate ID " $1 ": defined at " at[$1] " and " $7; else at[$1] = $7 }')"
 while IFS= read -r problem; do [ -z "$problem" ] || findings+=("$problem"); done <<< "$rows"
 parts="$(verify_lines spec_part_headings "$root")"
@@ -616,8 +616,13 @@ while IFS="$SEP" read -r line type name who _ _ _ date until _ reason; do
     esac
 done <<< "$rows"
 open_count=0; oldest=""; undisposed=0; unparsed=""; resolved=0; processing=0
-if ! rows="$(verify_lines spec_inbox "$root" 2>/dev/null)"; then
-    findings+=("Invalid specs/inbox.md: expected headed items with a date, actor and disposition, and structured **Answer** fields (inbox-template.md)")
+if ! rows="$(verify_lines spec_inbox "$root" 2>&1)"; then
+    inbox_error="${rows%%$'\n'*}"
+    case "$inbox_error" in
+        'Unsupported inbox entry at '*) ;;
+        *) inbox_error="Invalid specs/inbox.md" ;;
+    esac
+    findings+=("$inbox_error: expected headed items with a date, actor and disposition, and structured **Answer** fields (inbox-template.md)")
     rows=""
 fi
 while IFS="$SEP" read -r line date who state _ _ _ _ _ _ problems; do

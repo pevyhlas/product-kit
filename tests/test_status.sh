@@ -20,6 +20,15 @@ assert_contains "$OUTPUT" "None: no open changes, holds or owner questions." "no
 run bash "$STATUS_SH" --json
 assert_eq 'null' "$(jq -c '.part_parents' <<< "$OUTPUT")" "unstated parents are null"
 
+it "the retired one-digit journey bullet is not a live spec item"
+mkdir -p specs
+printf '# Product\n\n- **J-1 Search** (hypothesis): Locate a result.\n' > specs/product.md
+run bash "$STATUS_SH" --json
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'specs/product.md:3'
+assert_contains "$OUTPUT" 'J-01'
+rm -f specs/product.md
+
 it "optional change metadata reports assignments separately from acceptance"
 mkdir -p specs/changes specs/parts
 cat > specs/changes/001-metadata.md <<'MD'

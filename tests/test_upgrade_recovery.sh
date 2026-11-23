@@ -124,12 +124,90 @@ for fault in copy interrupt kill agents manifest storage; do
     assert_eq "$stable" "$(install_hash_stream < "$PROJ/.prdkit/.manifest")" 'second retry keeps manifest bytes'
 done
 
+refusal_snapshot() ( # consumer bytes, path types, modes, and staged state (including ignored markers)
+    set -o pipefail
+    cd "$1" || return 1
+    {
+        git ls-files --stage || return 1
+        tar --format ustar --exclude=./.git --exclude=./.product-kit -cf - .
+    } | git hash-object --stdin
+)
+
+refuses_unchanged() { # label diagnostic
+    local before after
+    before="$(refusal_snapshot "$PROJ")" || exit 1
+    run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade
+    assert_eq 1 "$STATUS" "$1 refuses"
+    assert_contains "$OUTPUT" "$2" "$1 diagnosis"
+    after="$(refusal_snapshot "$PROJ")" || exit 1
+    assert_eq "$before" "$after" "$1 leaves target, index and marker unchanged"
+}
+
+it 'plain upgrade refuses dirty checkouts and invalid retry states without changing them'
+BASE="$(make_inited_project)"; track_tmp "$BASE"
+printf '\nNew command bytes.\n' >> "$BASE/.product-kit/commands/prdkit.md"
+# Exercise marker validation even if the runtime marker is visible to Git.
+grep -vxF '.prdkit/.install-state' "$BASE/.gitignore" > "$BASE/.git/ignore"
+mv "$BASE/.git/ignore" "$BASE/.gitignore"
+snapshot_upgrade_fixture "$BASE" || exit 1
+version="$(cat "$BASE/.product-kit/VERSION")"
+for kind in staged unstaged untracked wrong-source unrelated edited retry-staged outside \
+    bytes type mode missing duplicate extra wrong-path executable; do
+    PROJ="$(mktemp -d)" || exit 1; track_tmp "$PROJ"
+    cp -pR "$BASE/." "$PROJ/" || exit 1
+    marker="$PROJ/.prdkit/.install-state"
+    conffile="$PROJ/.prdkit/templates/change-template.md"
+    command_path=.claude/commands/prdkit.md
+    diagnosis='checkout must be clean'
+    case "$kind" in
+        staged|unstaged|untracked) ;;
+        *)
+            cp "$PROJ/.product-kit/commands/prdkit.md" "$PROJ/$command_path"
+            printf 'phase: file\npath: %s\nsource-version: %s\n' "$command_path" "$version" > "$marker"
+            diagnosis='not a valid installer marker' ;;
+    esac
+    case "$kind" in
+        staged|unstaged)
+            printf '\nUser edit.\n' >> "$PROJ/AGENTS.md"
+            if [ "$kind" = staged ]; then git -C "$PROJ" add AGENTS.md || exit 1; fi ;;
+        untracked) printf 'User work.\n' > "$PROJ/unrelated" ;;
+        wrong-source)
+            printf 'phase: file\npath: %s\nsource-version: 0.0.0\n' "$command_path" > "$marker"
+            diagnosis='checkout must be clean' ;;
+        unrelated)
+            printf 'User work.\n' > "$PROJ/unrelated"
+            diagnosis='not a validated installer-owned intermediate state: unrelated' ;;
+        edited)
+            printf '\nUser edit.\n' >> "$PROJ/.claude/commands/prdkit-inbox.md"
+            diagnosis='not a validated intermediate state (bytes, type or mode): .claude/commands/prdkit-inbox.md' ;;
+        retry-staged)
+            git -C "$PROJ" add "$command_path" || exit 1
+            diagnosis='checkout must be clean' ;;
+        outside)
+            printf '\nUser edit.\n' >> "$PROJ/AGENTS.md"
+            diagnosis='AGENTS.md changed outside the managed section' ;;
+        bytes|type|mode)
+            case "$kind" in
+                bytes) printf '\nUser edit.\n' >> "$conffile" ;;
+                type) rm "$conffile" && ln -s product-template.md "$conffile" || exit 1 ;;
+                mode) chmod +x "$conffile" || exit 1 ;;
+            esac
+            diagnosis='not a validated intermediate state (bytes, type or mode): .prdkit/templates/change-template.md' ;;
+        missing) printf 'source-version: %s\n' "$version" > "$marker" ;;
+        duplicate) printf 'phase: file\n' >> "$marker" ;;
+        extra) printf 'unrelated: data\n' >> "$marker" ;;
+        wrong-path) printf 'phase: file\npath: unrelated\nsource-version: %s\n' "$version" > "$marker" ;;
+        executable) chmod +x "$marker" || exit 1 ;;
+    esac
+    refuses_unchanged "$kind" "$diagnosis"
+done
+
 it "deselecting an option can resume after manifest publication"
 PROJ="$(make_inited_project --with agent-tiers)"; track_tmp "$PROJ"
 PROJ="$(CDPATH='' cd "$PROJ" && pwd -P)"
 snapshot_upgrade_fixture "$PROJ" || exit 1
 run env PATH="$SHIMS:$PATH" FAULT=published FAULT_ROOT="$PROJ" bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --without agent-tiers
-assert_eq 76 "$STATUS"
+assert_eq 76 "$STATUS" "$OUTPUT"
 assert_contains "$(cat "$PROJ/.prdkit/.manifest")" 'options: none'
 assert_file "$PROJ/.prdkit/.install-state"
 run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --without agent-tiers

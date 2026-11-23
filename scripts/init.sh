@@ -576,6 +576,20 @@ if $UPGRADE; then
     upgrade_destinations_safe || exit 1
     upgrade_checkout_clean || exit 1
     upgrade_no_overwrite || exit 1
+    if [ -n "$REMOVE_OPTIONS_FILES" ]; then
+        # Search tracked project text for the files this option would remove, not the
+        # installed kit or pinned source, both of which describe the option themselves.
+        if references="$(git -C "$TARGET" grep -n -I -F -e render-agents.sh -e agent-definition-template.md -- \
+            . ':(exclude).prdkit/scripts/bash' ':(exclude).prdkit/templates' \
+            ':(exclude).prdkit/workflows' ':(exclude).prdkit/memory/agents.md' ':(exclude).prdkit/.manifest' \
+            ':(exclude).product-kit')"; then
+            printf 'Error: --without agent-tiers would remove files still referenced by tracked project files. Update these references or keep the subsystem:\n%s\n' "$references" >&2
+            exit 1
+        elif [ "$?" -ne 1 ]; then
+            echo 'Cannot check tracked references before removing agent-tiers; nothing was written.' >&2
+            exit 1
+        fi
+    fi
 fi
 
 # Serialize writes, with a retained phase marker rather than pretending the whole install is

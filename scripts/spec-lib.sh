@@ -151,16 +151,23 @@ _spec_dir_used() {
 _spec_has_canon() { [ -f "$1/specs/product.md" ] || [ -f "$1/specs/architecture.md" ] || [ -f "$1/specs/SPEC.md" ]; }
 
 spec_require_layout() { # root
-    local name
+    local name line nr=0
     for name in product-spec targets features archive; do
         if _spec_dir_used "$1/specs/$name"; then
             printf 'Unsupported specs/%s/ layout: expected specs/SPEC.md or split specs/product.md and specs/architecture.md, specs/changes/<id>.md records and specs/archive.md history.\n' "$name" >&2
             return 1
         fi
     done
-    if [ -f "$1/specs/archive.md" ] && grep -iE '^[[:space:]#*>|_-]*last[[:space:]]+0\.x[[:space:]]+feature' "$1/specs/archive.md" >/dev/null; then
-        printf 'Unsupported feature counter in specs/archive.md: current archives reserve change numbers with **Log condensed through**: <number>.\n' >&2
-        return 1
+    if [ -f "$1/specs/archive.md" ]; then
+        while IFS= read -r line || [ -n "$line" ]; do
+            nr=$((nr + 1))
+            _spec_trim "${line//[*_\`#|>]/}"
+            case "$_spec_t" in
+                [Ll][Aa][Ss][Tt]' '0.[Xx]' '[Ff][Ee][Aa][Tt][Uu][Rr][Ee]*)
+                    printf 'Unsupported feature counter in specs/archive.md:%s: current archives reserve change numbers with **Log condensed through**: <number>.\n' "$nr" >&2
+                    return 1 ;;
+            esac
+        done < "$1/specs/archive.md" || return 1
     fi
 }
 
@@ -395,8 +402,10 @@ spec_links() { # root [file...]
 # as a section of architecture/decisions.md). An `Enforced by:` label anywhere in an item's block,
 # sub-bullets included, decides by its own value, which runs to the end of its bullet; without
 # one, a live Q or I is unenforced, and any item that says `unenforced` is.
-spec_items() { # root [file...]: the spec files when none are given
-    local root="$1" files=() file listed expected; shift
+spec_items() { # root [--skip-invalid-journey-ids] [file...]: the spec files when none are given
+    local root="$1" files=() file listed expected strict_journeys=1; shift
+    # Doctor reports malformed IDs in a separate pass. Never emit them as items.
+    if [ "${1:-}" = --skip-invalid-journey-ids ]; then strict_journeys=0; shift; fi
     if [ "$#" -gt 0 ]; then files=("$@")
     else
         listed="$(verify_lines spec_files "$root")" || return 1
@@ -405,7 +414,7 @@ spec_items() { # root [file...]: the spec files when none are given
     for file in ${files[@]+"${files[@]}"}; do
         verify_lf_file "$root/$file" || { printf 'Invalid spec text: %s (expected non-empty LF-terminated text)\n' "$file" >&2; return 1; }
         expected="$(wc -l < "$root/$file")" || return 1
-        awk -v expected="$expected" -v file="$(spec_field "$file")" "$SPEC_SKIP_AWK"'
+        awk -v expected="$expected" -v file="$(spec_field "$file")" -v strict_journeys="$strict_journeys" "$SPEC_SKIP_AWK"'
             BEGIN { gsub(/[\037\r\n]/, " ", file) }
             function indent(s) { sub(/[^[:space:]].*/, "", s); return length(s) }
             function flags(line, id, block,   m, p, t, b, v, i, u) {
@@ -463,6 +472,11 @@ spec_items() { # root [file...]: the spec files when none are given
             /^[[:space:]]*[-*][[:space:]]+\*\*(P[0-9]+(\.[0-9]+)?\.[BI]|[JRQCDN])-[0-9]/ {
                 body = $0; sub(/^[[:space:]]*[-*][[:space:]]+\*\*/, "", body)
                 id = body; sub(/[[:space:]*].*/, "", id)
+                if (id ~ /^J-[0-9]$/) {
+                    if (!strict_journeys) next
+                    print "Unsupported journey ID at " file ":" NR ": use a journey ID with two or more digits, e.g. J-01." > "/dev/stderr"
+                    exit 1
+                }
                 title = body; sub(/^[^[:space:]*]+[[:space:]]*/, "", title); sub(/\*\*.*/, "", title)
                 pend = $0; pend_id = id; pend_title = title; pend_nr = NR; pend_ind = indent($0)
             }
@@ -849,6 +863,16 @@ spec_inbox() { # root
         }
         /^#[[:space:]]/ || /^##[[:space:]]/ { flush(); next }
         /^[[:space:]]*$/ { next }
+        {
+            line = $0; sub(/^[[:space:]]*[-*][[:space:]]+/, "", line)
+            # In a headed item the old reader required the words to start with a quote.
+            # A date and actor alone can be plain prose in a structured Answer.
+            if (line ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9](T[0-9][0-9]:[0-9][0-9](:[0-9][0-9])?Z?)?[[:space:]]+(owner|agent)[[:space:]]+/ &&
+                (!item || line ~ /^[^[:space:]]+[[:space:]]+(owner|agent)[[:space:]]+"/)) {
+                unsupported = NR; exit 1
+            }
+            if ($0 ~ /^(\*\*Owner answer\*\*:|Owner answer[,:])/) { unsupported = NR; exit 1 }
+        }
         want {
             want = 0; meta = $0
             sub(/^[[:space:]]*[*_]+/, "", meta); sub(/[*_]+[[:space:]]*$/, "", meta)
@@ -861,14 +885,9 @@ spec_inbox() { # root
         }
         /^#/ { next }
         {
-            line = $0; sub(/^[[:space:]]*[-*][[:space:]]+/, "", line)
-            if (line ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9](T[0-9][0-9]:[0-9][0-9](:[0-9][0-9])?Z?)?[[:space:]]+(owner|agent)[[:space:]]/) {
-                unsupported = 1; next
-            }
             if (item) {
                 if (match($0, /^\*\*[^*]+\*\*:/)) {
                     label = substr($0, 3, RLENGTH - 5); value = trim(substr($0, RLENGTH + 1)); answering = 0
-                    if (label == "Owner answer") { unsupported = 1; next }
                     if (label ~ /^(ID|Revision|Kind|Tags|Answer|Answer date|Answer source|Answer revision)$/ && fields[label]++) problem("duplicate field " label)
                     if (label == "ID") id = value
                     else if (label == "Revision") revision = value
@@ -878,8 +897,7 @@ spec_inbox() { # root
                     else if (label == "Answer date") answer_date = value
                     else if (label == "Answer source") answer_source = value
                     else if (label == "Answer revision") answer_revision = value
-                } else if ($0 ~ /^Owner answer[,:]/) { unsupported = 1; next }
-                else if (answering) add_answer($0)
+                } else if (answering) add_answer($0)
                 if ($0 ~ /^[0-9]+\.[[:space:]]+\*\*/) {
                     options++; key = $0; sub(/^[0-9]+\.[[:space:]]+\*\*/, "", key)
                     if (key ~ /^[a-z][a-z0-9-]* — /) {
@@ -893,7 +911,11 @@ spec_inbox() { # root
             if (headed && line !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/) next
             gsub(/\t/, " ", line); print NR "\037\037\037unparsed\037" line "\037\037\037\037\037\037"
         }
-        END { if (NR != expected || unsupported) exit 1; flush() }' "$file" || {
+        END {
+            if (unsupported) print "Unsupported inbox entry at specs/inbox.md:" unsupported > "/dev/stderr"
+            if (NR != expected || unsupported) exit 1
+            flush()
+        }' "$file" || {
             echo 'Invalid specs/inbox.md: expected headed items with *<date> · <owner|agent> · <disposition>* and structured **Answer** fields (inbox-template.md).' >&2
             return 1
         }

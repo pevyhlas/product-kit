@@ -129,6 +129,19 @@ assert_contains "$(cat "$PROJ/.prdkit/templates/agent-definition-template.md")" 
 assert_contains "$OUTPUT" 'Kept customized optional template'
 if [ -e "$PROJ/.prdkit/scripts/bash/render-agents.sh" ]; then _no "renderer removed"; else _ok "renderer removed"; fi
 
+it "dropping agent tiers refuses a tracked CI reference before changing the install"
+PROJ="$(make_inited_project --with agent-tiers)"; track_tmp "$PROJ"
+mkdir -p "$PROJ/.github/workflows"
+printf '      - run: bash .prdkit/scripts/bash/render-agents.sh --check\n' > "$PROJ/.github/workflows/agents.yml"
+snapshot_upgrade_fixture "$PROJ" || exit 1
+run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --without agent-tiers
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" '.github/workflows/agents.yml:1:'
+assert_contains "$OUTPUT" 'Update these references or keep the subsystem'
+assert_file "$PROJ/.prdkit/scripts/bash/render-agents.sh"
+assert_contains "$(cat "$PROJ/.prdkit/.manifest")" 'options: agent-tiers'
+assert_eq '' "$(git -C "$PROJ" status --porcelain)" 'no tracked or untracked changes'
+
 it "a manifest without options is refused rather than inferring a selection"
 PROJ="$(make_inited_project --with agent-tiers)"; track_tmp "$PROJ"
 sed '/^options: /d' "$PROJ/.prdkit/.manifest" > "$PROJ/.git/manifest"

@@ -204,9 +204,17 @@ def build_cleanup(root, scripts, features, token):
         git(repo, "worktree", "add", "-qb", target.name, target)
         args = [target.name]
         if "closed" in features:
-            log = repo / "specs/log.md"
-            log.parent.mkdir()
-            log.write_text(f"- 2026-01-01 {ID}: closed\n- 2026-01-01 {target.name}: closed\n")
+            records = repo / "specs/changes"
+            entries = repo / "specs/log"
+            records.mkdir(parents=True)
+            entries.mkdir()
+            for change_id in (ID, target.name):
+                (records / f"{change_id}.md").write_text(f"# {change_id}\n")
+            git(repo, "add", "specs")
+            git(repo, "commit", "-qm", "open changes")
+            for change_id in (ID, target.name):
+                git(repo, "rm", "-q", f"specs/changes/{change_id}.md")
+                (entries / f"{change_id}.md").write_text(f"- 2026-01-01 {change_id}: closed\n")
             git(repo, "add", "specs")
             git(repo, "commit", "-qm", "close changes")
             git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")

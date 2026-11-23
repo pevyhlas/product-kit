@@ -4,18 +4,15 @@
 # Sourced by render-agents.sh, doctor.sh and check-adoption.sh (install-lib.sh must be
 # sourced first). Bash 3.2 + POSIX awk; no jq, no network, no kit source checkout.
 #
-# The tier map lives in .prdkit/memory/agents.md and has two shapes:
+# The optional tier map lives in .prdkit/memory/agents.md and uses a pinned, vendored
+# shared baseline with explicit local tier mappings:
 #
-#   Shared (opt-in) — resolve from a vendored shared tier baseline:
 #     Tier baseline: agent-library tiers.json@<commit>
 #     Baseline snapshot: .prdkit/agent-library/tiers.json        (optional; this is the default)
 #     | Local tier | Library tier |        local tier name -> baseline tier name
 #     | Scope | Harness | Model | Variant | Reason |            deviations, each with a reason
 #     Banned models: <id>, <id>        (optional; exact ids, so each harness's form is listed)
 #     Hand-owned agents: <name>, <name>   (optional; projections kept without a neutral source)
-#
-#   A literal table of model IDs is not supported; use baseline and reasoned overrides.
-#     Still resolves; the overrides table and banned list work on top of it.
 #
 # The kit names no models: every id comes from the project's tier map or its vendored
 # baseline snapshot. Fenced code blocks and HTML comments in agents.md are never parsed, so

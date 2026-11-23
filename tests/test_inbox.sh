@@ -54,6 +54,7 @@ cat > specs/inbox.md <<'MD'
 **Answer**:
 > hello — "Hello", in English.
 > Record it now, implement later.
+2026-10-30 owner requested that we hold checkout.
 **Answer date**: 2026-10-30
 **Answer source**: owner-message-1
 **Answer revision**: 3
@@ -87,7 +88,7 @@ run jq -e '[.inbox[] | select(.state == "processing")] | length == 2' <<< "$json
 assert_eq 0 "$STATUS" "recorded answers and owner direction await processing"
 run jq -e '.inbox[0] | .revision == "2" and .tags == "copy, ux" and .kind == "decision"' <<< "$json"
 assert_eq 0 "$STATUS" "metadata is projected without deriving identity from title"
-run jq -e '.inbox[1].answer == "hello — \"Hello\", in English. Record it now, implement later."' <<< "$json"
+run jq -e '.inbox[1].answer == "hello — \"Hello\", in English. Record it now, implement later. 2026-10-30 owner requested that we hold checkout."' <<< "$json"
 assert_eq 0 "$STATUS" "multiline quoted answer preserves qualifications and JSON escaping"
 run jq -e '.longest_pole.item | contains("Which punctuation?")' <<< "$json"
 assert_eq 0 "$STATUS" "the actual unanswered question is the owner blocker"
@@ -223,5 +224,19 @@ assert_contains "$OUTPUT" "**Answer**"
 run bash "$STATUS_SH" --json
 assert_eq 1 "$STATUS"
 assert_contains "$OUTPUT" "**Answer**"
+
+it "a one-line owner item directly below a heading is not mistaken for metadata"
+cat > specs/inbox.md <<'MD'
+# Owner inbox
+
+### Release hold
+- 2026-10-30 owner "Do not release." → open
+MD
+for reader in "$DOCTOR" "$STATUS_SH"; do
+    run bash "$reader" --json
+    assert_eq 1 "$STATUS"
+    assert_contains "$OUTPUT" 'specs/inbox.md:4'
+    assert_contains "$OUTPUT" 'structured **Answer** fields'
+done
 
 finish

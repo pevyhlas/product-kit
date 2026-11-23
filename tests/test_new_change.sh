@@ -470,10 +470,19 @@ git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; rm -rf "$PROJ2/specs/changes"
 run bash "$SCRIPT2" --json --no-worktree --number 60 --short-name other "desc"
 assert_contains "$OUTPUT" "Notice: change number 060 is also held by planned in the spec 060-export" "another planned slug"
 git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; rm -rf "$PROJ2/specs/changes"
-printf '**Last 0.x feature**: 036\n' > "$PROJ2/specs/archive.md"
-run bash "$SCRIPT2" --json --no-worktree --number 20 --short-name other "desc"
-assert_eq 1 "$STATUS" "unsupported archive counter is refused"
-assert_contains "$OUTPUT" "Log condensed through"
+it "retired counters in bold, inline code and table cells all block allocation"
+# shellcheck disable=SC2016 # The backticks are literal Markdown.
+for counter in '**Last 0.x feature**: 036' '- **`Last 0.x feature`**: 036' '| Last 0.x feature | 036 |'; do
+    printf '# Archive\n\n%s\n' "$counter" > "$PROJ2/specs/archive.md"
+    branch_before="$(git -C "$PROJ2" for-each-ref refs/heads)"
+    run bash "$SCRIPT2" --json --no-worktree --short-name reserved "desc"
+    assert_eq 1 "$STATUS" "unsupported archive counter is refused: $counter"
+    assert_contains "$OUTPUT" "specs/archive.md:3"
+    assert_contains "$OUTPUT" "Log condensed through"
+    assert_eq "$branch_before" "$(git -C "$PROJ2" for-each-ref refs/heads)" 'no branch allocated'
+    run test ! -d "$PROJ2/specs/changes"
+    assert_eq 0 "$STATUS" 'no record allocated'
+done
 rm -rf "$PROJ2/specs/changes" "$PROJ2/specs/product" "$PROJ2/specs/archive.md"
 git -C "$PROJ2" branch -qD 060-export 012-other 060-other
 
