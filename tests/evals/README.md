@@ -24,7 +24,7 @@ limits each scenario; `EVAL_MAX_TURNS` applies where supported. No automatic ret
 | 04-close-blocked | Failed acceptance and pending review leave the canon, log and open change untouched |
 | 05-early-intake | Vague exploration asks consequential questions before a change or files exist |
 | 06-deferred-scope | Owner-deferred opportunities stay out of the requirements |
-| 08-resume-progress | Fresh worker resumes a change after checkbox-only progress |
+| 08-resume-progress | Fresh worker resumes after a delivered task line was deleted |
 | 09-spec-amendment | An owner retiring the requirement a change proves stops the worker |
 | 10-outcome-evidence | Technical acceptance without user observations stays a hypothesis; inconclusive inbox line |
 | 11-published-handover | Standing action policy produces a verified remote checkpoint without renewed permission |

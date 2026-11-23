@@ -39,9 +39,10 @@ edited in the same PR. Sections of one file; skip a section that has nothing rea
    later stage is built only on the owner's direction.
 4. **Approach**: approved design references and spec/code baseline, then only real execution choices:
    options, the pick, why; one that binds later work goes to its L1/L2 home.
-5. **Tasks**: a short checklist for resuming, or stable local tasks with contribution, dependencies
-   and checks per [implementation.md](implementation.md). Optionally prefix a task with a part
-   from the change header; see [spec.md](spec.md#optional-change-metadata). No extra plan for a tiny fix.
+5. **Tasks**: outcome, dependency and check name only; no paths, line ranges or commands. Use
+   `T###` keys unique within the change; never reuse or renumber them. Optionally prefix the key
+   with a part from the change header; see [spec.md](spec.md#optional-change-metadata).
+   Keep execution detail in the gitignored cache or the PR per [implementation.md](implementation.md).
 6. **Checks**: before building, a few lines: every edit passes the line test, touched IDs agree
    with L0 and L1, every new Q and I is enforced.
 7. **Acceptance**: the bounded PR obligations map to canonical R, Q, B or I and the check that proves
@@ -68,6 +69,10 @@ edited in the same PR. Sections of one file; skip a section that has nothing rea
   in the PR why the line still holds.
 - A behavior change without a spec edit says `Spec impact: none — <reason>`. Unaffected changes
   and parts get no note at all.
+- The PR that delivers a task deletes its line from the change record. No `[x]`, delivered note
+  or log entry for the task. A deleted line means delivered unless the PR description lists it
+  on a `Drops: <change-id> T004, T005` line. In a single-PR change, the closing PR delivers the
+  tasks with the change by deleting the record.
 - Acceptance links its evidence. The cache is local to one machine: link a CI run or PR comment
   for evidence anyone else needs. A green PR does not pass an acceptance item.
 - At verified increments and before a stop, commit only intended work, publish when authorized (a

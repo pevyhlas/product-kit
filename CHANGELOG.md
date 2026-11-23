@@ -8,6 +8,12 @@ change by change.
 
 ## [Unreleased]
 
+### Changed
+
+- Change tasks describe outcomes, dependencies and named checks. The delivering PR deletes their
+  lines without checking them off or logging them; an optional `Drops:` line distinguishes
+  dropped tasks. Keep execution details in the ignored plan or PR.
+
 ## [2.1.0] — 2026-11-23 — task parts, change tags and fail-closed verifiers
 
 ### Added

@@ -53,7 +53,7 @@ cat > "$CHANGE_FILE" <<'EOF'
 ## Intent
 Implement R-01 through the approved D-01 encoder. No new user restrictions.
 ## Tasks
-- [ ] T001 Implement writer using src/encoder.sh, check round-trip with accented UTF-8 input.
+- [ ] T001 Writer preserves accented text; none; Unicode round-trip check
 ## Acceptance
 | Item | Proves | Check | Attempts | Result |
 |------|--------|-------|----------|--------|

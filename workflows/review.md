@@ -11,6 +11,10 @@ the change; the tier is in [protocol.md](protocol.md).
 
 ## Review
 
+Check task deletions against the PR's delivery. A deleted task is delivered unless the PR
+description lists it on a `Drops: <change-id> T004, T005` line. Do not check off, annotate
+or log delivered tasks.
+
 The reviewer is a fresh context that did not implement the change. Reviews are run by the worker,
 not CI. Send `.prdkit/templates/review-prompt-template.md`, the change record, the spec sections
 it touches (plus a readable `specs/` at the head, to search), the PR's context and the full diff,
@@ -197,9 +201,10 @@ it has no policy to read, so establish the remote default first.
 ## Closing
 
 A PR-scoped change closes in that same PR when its required acceptance and review pass, or by
-explicit owner disposition. Whatever deletes a record, an owner-disposed cancellation included,
-adds its log entry in the same PR. Required live gates still block. Non-gating runtime
-observations need no cleanup PR, and no permanent task archive is required.
+explicit owner disposition. For a single-PR change, deleting the record delivers its tasks with
+the change, except tasks marked as dropped in the PR description. Whatever deletes a record,
+an owner-disposed cancellation included, adds its change-level log entry in the same PR.
+Required live gates still block. Non-gating runtime observations need no cleanup PR.
 
 Before final review: reconcile the approved spec delta with actual behavior. Remove only built
 `planned` markers; preserve unbuilt intent and hypotheses. Known unmet required work needs an
