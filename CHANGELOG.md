@@ -8,6 +8,8 @@ change by change.
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-11-23 — task parts, change tags and fail-closed verifiers
+
 ### Added
 
 - Changes can group tasks by part and carry lowercase tags into the close log. Parts can
