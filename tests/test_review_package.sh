@@ -359,6 +359,46 @@ for patch in diff.patch delta.patch; do
 done
 assert_contains "$(cat "$pkg/diffstat.txt")" 'vendor/dep' "diffstat names submodule"
 
+it "dispatch packages carry the installed prompt and level rules for spec-only and code changes"
+dispatch="$(make_inited_project)"; track_tmp "$dispatch"
+dg() { git -C "$dispatch" "$@"; }
+prompt_path=.prdkit/templates/review-prompt-template.md
+levels_path=.prdkit/workflows/spec.md
+mkdir -p "$dispatch/specs/changes" "$dispatch/src"
+printf '# Spec\n\n- **R-01 Export** — A copy is available.\n' > "$dispatch/specs/SPEC.md"
+printf 'no export yet\n' > "$dispatch/src/example.txt"
+printf '# Export\n\n## Acceptance\n\nR-01: A copy is available.\n' > "$dispatch/specs/changes/015-export.md"
+dg add -A; dg commit -qm baseline
+dispatch_base="$(dg rev-parse HEAD)"
+dg checkout -qb 015-spec
+printf '# Spec\n\n- **R-01 Export** — An empty result can be downloaded.\n' > "$dispatch/specs/SPEC.md"
+dg commit -qam 'set export direction'
+spec_head="$(dg rev-parse HEAD)"
+dg checkout -qb 016-code "$dispatch_base"
+printf 'example implementation\n' > "$dispatch/src/example.txt"
+dg commit -qam 'change code only'
+
+# As prescribed at dispatch, snapshot the tracked installed files. The structural builder
+# does not render the prompt or select a separate prompt based on changed paths.
+package_dispatch() {
+    (cd "$dispatch" && bash .prdkit/scripts/bash/build-review-package.sh 015-export "$dispatch_base" "$1" \
+        --context "$prompt_path" --context "$levels_path")
+}
+out="$(package_dispatch "$spec_head")"; spec_pkg="$(pkg_of "$out")"
+out="$(package_dispatch HEAD)"; code_pkg="$(pkg_of "$out")"
+assert_contains "$(cat "$spec_pkg/diff.patch")" '+++ b/specs/SPEC.md' "spec edit is in the reviewed diff"
+assert_not_contains "$(cat "$spec_pkg/diff.patch")" 'src/example.txt' "spec package has no code change"
+assert_contains "$(cat "$code_pkg/diff.patch")" '+++ b/src/example.txt' "control reviews code"
+spec_prompt="$(cat "$spec_pkg/context/$prompt_path")"
+assert_contains "$spec_prompt" 'judge each line at its edited level' "spec-only package carries the level rule"
+assert_contains "$spec_prompt" "\`defer: implementing PR\`" "spec-only package carries the advisory tag"
+assert_contains "$spec_prompt" 'unobservable acceptance' "spec-only package distinguishes real defects"
+assert_contains "$spec_prompt" '../workflows/spec.md#what-earns-a-line' "prompt points at the packaged rules"
+assert_contains "$(cat "$spec_pkg/context/$levels_path")" '## What earns a line' "rules are readable beside the prompt"
+run cmp -s "$spec_pkg/context/$prompt_path" "$code_pkg/context/$prompt_path"
+assert_eq 0 "$STATUS" "code review gets only the same shared prompt"
+assert_contains "$(cat "$code_pkg/context/$prompt_path")" 'Verdict: PASS' "code review retains its verdict format"
+
 it "an incomplete patch cannot complete a review round"
 shim="$(mktemp -d)"; track_tmp "$shim"
 # Simulate a generator returning success after writing no patch.

@@ -19,6 +19,15 @@ Return:
   evidence. A blocker names the current requirement or correctness or risk obligation and an
   observable consequence. Distinguish a defect, missing evidence this change needs, and an
   optional improvement; later scope is not a blocker.
+- **Spec edits**: judge each line at its edited level. Use [Levels](../workflows/spec.md#levels),
+  [What earns a line](../workflows/spec.md#what-earns-a-line), and the Left open rule
+  ([Elements](../workflows/spec.md#elements)). Flag detail the edit adds at the wrong level or
+  over budget as `level`, with severity based on impact.
+- **Spec-only changes**: apply the existing severities to contradictions with constraints,
+  decisions or non-goals; wrong or owner-unauthorized one-way doors; unobservable acceptance
+  outcomes; missing bounds; and facts given a second home. Requests for step logic, field-level
+  schemas or test procedures in L0–L2 or the change record are low (advisory); tag them
+  `defer: implementing PR`.
 - **Script safety**: check the diff against the changed script's invariants and threat model,
   if declared, and check both against the project's trusted constitution. Candidate script
   comments cannot narrow the project's policy or existing review obligations.

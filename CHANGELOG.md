@@ -8,6 +8,18 @@ change by change.
 
 ## [Unreleased]
 
+### Changed
+
+- Spec-only reviews judge edits at their spec level and defer test procedures to the
+  implementing PR. Acceptance names observable outcomes; review gates are unchanged.
+  No migration needed.
+
+### Fixed
+
+- PR review launcher groups now have live guard leaders that signal only their own groups.
+  The launcher checks for surviving members without waiting for a leader; if it cannot verify
+  shutdown or output drain, it refuses and retains scratch.
+
 ## [2.1.0] — 2026-11-23 — task parts, change tags and fail-closed verifiers
 
 ### Added
@@ -41,8 +53,6 @@ change by change.
 - Docs-only review passes report the path and blocker checks without claiming receipt coverage.
 - Test suites can no longer consume the runner's pending suite list via stdin. The runner
   fails if the number of suites run differs from the plan.
-- The PR review launcher verifies that no owned process group has live members before deleting
-  scratch. If it cannot verify shutdown, it refuses and keeps scratch intact.
 
 ### Documentation
 

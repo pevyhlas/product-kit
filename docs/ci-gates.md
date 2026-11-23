@@ -347,7 +347,7 @@ contained regular Git blob (100644 or 100755) from W; no symlink/gitlink or cand
 Exclude BASH_ENV, ENV, SHELLOPTS, BASHOPTS, exported BASH_FUNC_* functions, loader/language injection,
 caller proxies, credential helpers and **all** inherited GIT_* variables. Unsetting them in an
 already-started poisoned shell is too late. The launcher's later defensive sanitization is not
-this constructor. gh/jq/Git/core tools must be installed in trusted host tool locations, not the
+this constructor. Install gh, jq, Git and core tools in trusted host tool locations, not the
 workspace, caller bin directory, user configuration or gh extensions. Deliver the credential only
 ephemerally; never a publisher write token, persisted login or credential-bearing URL.
 
@@ -381,17 +381,23 @@ present at S. Git 2.31+ combined-diff capability is required; incomplete history
 or zero/multiple assignments refuse. The native gate owns record recovery, closure, tier,
 fingerprints, owner events, receipts, coverage and sibling-deletion checks.
 
-Bounds are 600 seconds overall, 120 per acquisition/selection/extraction and 180 for the native
-gate, with five seconds TERM-to-KILL grace for owned process groups. Dedicated FIFO readers cap
-stdout/stderr at 4 MiB each; reaching the ceiling refuses with `capture-limit`, never truncated
-success. Selector history streams are separately capped. These capture limits do **not** impose
-a file-size limit on Git packs/objects or native working files. Cancellation is deferred through
-each launch-to-ownership registration. Teardown stops the overall watchdog first, queues repeated
-catchable signals and allows up to five seconds for capture readers to drain after writers stop.
-Before deleting the invocation's scratch, the launcher verifies that no owned group has a live
-member and reaps its leaders. If group shutdown cannot be verified within the bounded cleanup
-window, it refuses with `cleanup-failed` and leaves scratch intact. Uncatchable runner termination
-can leave no complete result and is not PASS. stdout is one buffered JSON object, newline-terminated:
+The launcher checks a 600-second overall budget, with up to 120 seconds per acquisition,
+selection or extraction and 180 seconds for the native gate before cleanup. FIFO readers cap
+stdout and stderr at 4 MiB each; native output at the ceiling refuses with `capture-limit`, never
+truncated success. Selector history streams are separately capped. These limits do **not** cap
+Git objects or native working files.
+
+The launcher queues catchable cancellation, including during startup and cleanup. Only a group’s
+own guard leader may signal it; the launcher sends private FIFO requests, never signals to a
+remembered process-group ID. If required, the guard sends TERM, allows five seconds, and sends
+KILL at most once, ending the guard itself. After release or KILL, the launcher only observes.
+It polls the process table without calling `wait` on a leader, and treats ambiguous states
+(including Linux `Zl`) as live. It allows readers a separate five-second drain window. If
+shutdown or drain cannot be verified, it refuses with `cleanup-failed` and retains scratch.
+If KILL prevents reporting the native exit, `native_exit` is null. This checks supervised
+process groups; it does not contain processes that leave them. Uncatchable runner termination
+can leave no complete result and is not PASS. stdout is one buffered JSON object,
+newline-terminated:
 
 ```json
 {"launcher":"complete","error":null,"native_exit":0,"native":{}}

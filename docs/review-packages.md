@@ -25,6 +25,8 @@ Ambiguous IDs/headings, missing/unsafe objects, unsupported links and unverified
 are recorded in `context-gaps.txt`, not silently discarded. Whole-file explicit selections
 remain available. Selections are structural context, never proof of semantic completeness.
 The reviewer needs no shell or network when the package is inside its allowed read boundary.
+The builder does not render the review prompt. The dispatcher sends it and makes the
+[spec review rules](../workflows/review.md#review) readable when reviewing spec edits.
 
 Explicit whole-file snapshots remain under `context/<repo-relative-path>`; generated spans
 use the disjoint `context-sections/` namespace. Repeated exact spans share an artifact while
