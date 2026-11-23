@@ -17,6 +17,9 @@ change by change.
 
 ### Changed
 
+- Spec-only reviews judge edits at their spec level and defer test procedures to the
+  implementing PR. Acceptance names observable outcomes; review gates are unchanged.
+  No migration needed.
 - **Faster contributor CI.** Two Ubuntu shards run the complete shell suite alongside a
   separate checks job, and four macOS shards keep the existing native coverage. The runner
   balances suites by measured duration and logs per-suite seconds. Required check names and

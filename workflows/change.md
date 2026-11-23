@@ -44,11 +44,13 @@ edited in the same PR. Sections of one file; skip a section that has nothing rea
    from the change header; see [spec.md](spec.md#optional-change-metadata). No extra plan for a tiny fix.
 6. **Checks**: before building, a few lines: every edit passes the line test, touched IDs agree
    with L0 and L1, every new Q and I is enforced.
-7. **Acceptance**: the bounded PR obligations map to canonical R, Q, B or I and the check that proves
-   them (test, CI job, live run, owner trial). Keep the template's five columns, on a programme
-   parent too: status helpers read them. Result is exactly
-   `NOT_RUN`, `PASS`, `FAIL`, `BLOCKED` or `NOT_APPLICABLE`; put revision/environment and output links
-   in Check or below the table, not after the status token. A PASS needs that evidence.
+7. **Acceptance**: state bounded PR obligations as observable outcomes and map each to a canonical
+   R, Q, B or I and the check that proves it (test, CI job, live run, owner trial). For spec-only
+   changes, review whether the outcome can be observed. Proof design (oracles, fixtures, controls)
+   belongs in the implementing PR's tests and is reviewed there against real code.
+   Keep the template's five columns, on a programme parent too: status helpers read them.
+   Result is exactly `NOT_RUN`, `PASS`, `FAIL`, `BLOCKED` or `NOT_APPLICABLE`; put revision/environment
+   and output links in Check or below the table, not after the status token. A PASS needs that evidence.
    Distinguish required PR gates from later runtime observations before execution, using agreed
    scope/policy. Live-only claims need live proof; without it they stay unverified. Existing acceptance
    rows and policy-required checks remain gates unless the authorized owner explicitly changes them;

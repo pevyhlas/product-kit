@@ -79,6 +79,14 @@ assert_contains "$spec" 'binds later work in its L1/L2 home now' "binding decisi
 assert_contains "$(flat "$T/review-prompt-template.md")" '**One home**' "reviewer checks one home"
 assert_contains "$(flat "$T/review-prompt-template.md")" 'never a required input' "the spec search never stalls a review"
 
+it "spec-only reviews defer proof mechanics, not current spec defects"
+assert_contains "$review" '[Levels](spec.md#levels)' "review points to the canonical level rules"
+assert_contains "$review" 'Use the `level` category' "added excess detail is a level finding"
+assert_contains "$review" 'are low (advisory); tag them `defer: implementing PR`' "deferral cannot block under full rigor"
+assert_contains "$review" 'Critical and high findings block, medium blocks under `Rigor: full`, low is advisory.' "severity scale unchanged"
+assert_contains "$change" 'state bounded PR obligations as observable outcomes' "acceptance states an observable outcome"
+assert_contains "$change" 'Proof design (oracles, fixtures, controls) belongs in the implementing PR' "implementation review checks proof design"
+
 it "changes: spec edits with code, test edits touch IDs, Spec impact lines, no no-op notes"
 assert_contains "$change" 'Spec edits land in the PR whose code and tests realize them' "spec with code"
 assert_contains "$change" 'also edits that ID' "tests and IDs move together"
