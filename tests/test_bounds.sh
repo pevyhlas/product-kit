@@ -197,14 +197,15 @@ run bash "$BOUNDS" 017-compact
 assert_eq 0 "$STATUS"
 assert_contains "$OUTPUT" '- C-02 Phone storage cap'
 assert_contains "$OUTPUT" '- C-99 Journey constraint'
+compact_bounds="$OUTPUT"
 run env PRDKIT_TODAY=2026-10-17 bash .prdkit/scripts/bash/status.sh --json
 assert_eq '["2026-10-16",1,"none"]' "$(jq -c '.changes[] | select(.id == "017-compact") | [.opened,.age_days,.parent]' <<< "$OUTPUT")"
-printf '# Change: compact\n\n**Opened**: 2026-10-16 ·**Parts**: P1 · **Tags**: prose **Parts**: P2·**Journeys**: J-02 · **Tier**: T1\n' > specs/changes/017-compact.md
+printf '# Change: compact\n\n**Opened**: 2026-10-16 ·**Parts**: P1 · **Tags**: prose **Parts**: P3·**Journeys**: J-02 · **Tier**: T1\n' > specs/changes/017-compact.md
 run bash "$BOUNDS" 017-compact
 assert_eq 0 "$STATUS"
 assert_contains "$OUTPUT" '- C-02 Phone storage cap'
 assert_contains "$OUTPUT" '- C-99 Journey constraint'
-assert_not_contains "$OUTPUT" '- C-03 Server region' "tag prose cannot widen legacy bounds"
+assert_eq "$compact_bounds" "$OUTPUT" "tag prose cannot add the part that neither real field names"
 rm specs/changes/017-compact.md
 
 it "ambiguous scope cannot produce a partial set of bounds"
