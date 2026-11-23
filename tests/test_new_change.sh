@@ -238,28 +238,73 @@ if [ -f "$SNIPPET" ]; then
     assert_eq 0 "$STATUS" "the canonical snippet is inserted in State, before the next section"
 fi
 
-it "stripping the current and v1.3.2 checkpoint comments keeps the closing-line suffix and remaining bytes"
+it "a template missing only its final LF produces a record both verifiers can read"
+TEXT=$'# Change: Check record text\n\n**Opened**: 2026-10-17\n\n## State\n\n**Step**: intent\n**Waiting on**: nothing\n**Next**: Check the result  '
+printf '%s' "$TEXT" > "$TEMPLATE"
+printf '%s\n' "$TEXT" > .git/expected
+run bash .prdkit/scripts/bash/new-change.sh --no-branch --number 5 --short-name final-lf "Check record text"
+assert_eq 0 "$STATUS" "creation succeeds: $OUTPUT"
+run cmp -s .git/expected specs/changes/005-final-lf.md
+assert_eq 0 "$STATUS" "creation adds only the final LF"
+run bash .prdkit/scripts/bash/status.sh --json
+assert_eq 0 "$STATUS" "status reads the created record: $OUTPUT"
+run jq -e '.changes | any(.id == "005-final-lf")' <<< "$OUTPUT"
+assert_eq 0 "$STATUS" "status lists the created record"
+run bash .prdkit/scripts/bash/doctor.sh --json
+assert_eq 0 "$STATUS" "doctor reads the created record: $OUTPUT"
+run jq -e '.result == "pass"' <<< "$OUTPUT"
+assert_eq 0 "$STATUS" "doctor emits a passing JSON report"
+
+it "stripping the current and v1.3.2 checkpoint comments keeps the closing-line suffix and remaining content"
 NUM_SUFFIX=2
 for opener in \
     '<!-- A programme or continuing follow-up queue (workflows/planning.md, Protect the outcome):' \
     '<!-- For a programme/continuing follow-up queue, fill the outcome checkpoint here (change.md).'; do
     printf '## State\r\n%s\r\n### Outcome checkpoint\r\n-->  <p>Keep this instruction.</p> \t\r\n\r\n## Notes\r\nLast line without a newline  ' "$opener" > "$TEMPLATE"
-    printf '## State\r\n%s\r\n  <p>Keep this instruction.</p> \t\r\n\r\n## Notes\r\nLast line without a newline  ' "$POINTER" > .git/expected
+    printf '## State\n%s\n  <p>Keep this instruction.</p> \t\n\n## Notes\nLast line without a newline  \n' "$POINTER" > .git/expected
     run bash .prdkit/scripts/bash/new-change.sh --no-branch --number "$NUM_SUFFIX" --short-name suffix "Check closing text"
     assert_eq 0 "$STATUS" "ordinary creation succeeds for $opener"
     SUFFIX_RECORD="specs/changes/00$NUM_SUFFIX-suffix.md"
     assert_contains "$(cat "$SUFFIX_RECORD")" '<p>Keep this instruction.</p>' "closing-line text is not discarded"
     assert_not_contains "$(cat "$SUFFIX_RECORD")" '### Outcome checkpoint' "recognized scaffold is removed"
     run cmp -s .git/expected "$SUFFIX_RECORD"
-    assert_eq 0 "$STATUS" "the remaining template bytes, including CRLF and EOF, match"
+    assert_eq 0 "$STATUS" "the remaining content is byte-for-byte unchanged apart from LF normalization"
     NUM_SUFFIX=$((NUM_SUFFIX + 1))
 done
 
 it "--programme keeps a checkpoint already present in a custom change template"
+awk '{ sub(/\r$/, ""); print }' "$TEMPLATE" > .git/legacy-template
+cp .git/legacy-template "$TEMPLATE"
 run bash .prdkit/scripts/bash/new-change.sh --programme --no-branch --number 4 --short-name existing "Keep the existing scaffold"
 assert_eq 0 "$STATUS" "the custom template already has a checkpoint"
 run cmp -s "$TEMPLATE" specs/changes/004-existing.md
 assert_eq 0 "$STATUS" "no second scaffold or changes to the custom checkpoint"
+
+it "--programme ignores example headings and inserts before the next real section"
+N=6
+for heading in '### Outcome checkpoint' '## Example output' '### Outcome checkpoint'; do
+    case "$N" in
+        6|7) START='```markdown'; END='```' ;;
+        8) START='<!-- Example output'; END='-->' ;;
+    esac
+    {
+        sed '/^## Notes/,$d' .git/custom-template
+        printf '\n%s\n%s\n%s\n\n' "$START" "$heading" "$END"
+    } > .git/state
+    printf '## Notes\nKeep this section.\n' > .git/notes
+    cat .git/state .git/notes > "$TEMPLATE"
+    {
+        printf '# Change: Example headings\n**Opened**: 2026-10-17\n'
+        tail -n +3 .git/state
+        cat "$SNIPPET" .git/notes
+    } > .git/expected
+    run env PRDKIT_TODAY=2026-10-17 bash .prdkit/scripts/bash/new-change.sh --programme --no-branch \
+        --number "$N" --short-name example "Example headings"
+    assert_eq 0 "$STATUS" "creation succeeds for $START / $heading"
+    run cmp -s .git/expected "specs/changes/00$N-example.md"
+    assert_eq 0 "$STATUS" "the scaffold is in State outside $START / $heading"
+    N=$((N + 1))
+done
 
 # --- Numbering across every claimed identity -----------------------------------------------
 PROJ2="$(make_inited_project)"; track_tmp "$PROJ2"
