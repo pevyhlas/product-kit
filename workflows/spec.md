@@ -286,8 +286,7 @@ A line that only describes how the code currently does something is deleted: the
   Part IDs are resolved in the checkout supplying the change record. An unstated list or tally
   is `null`, not zero. Counts stay with the named part;
   readers can roll up by following `part_parents` without counting any task twice.
-- **No migration needed.** Existing changes, part files, and log lines remain valid without
-  these fields. Do not infer a tag, parent, or task assignment from prose.
+- These fields are optional. Do not infer a tag, parent, or task assignment from prose.
 
 ## Resolve owner answers
 
@@ -322,8 +321,8 @@ implementation or merge need not be complete before the answered item leaves the
    in the same edit.
    If folding is blocked, keep the answer under To incorporate as `processing`, with the blocker,
    next actor and destination; only an actual unanswered clarification belongs in Waiting for you.
-   Never delete solely because an old item says `folded`, `declined` or `deferred`; reconcile those
-   legacy items the same way. Acknowledge the decision, canonical path/ID, remaining work/holds and
+   Never delete solely because an item says `folded`, `declined` or `deferred`.
+   Acknowledge the decision, canonical path/ID, remaining work/holds and
    whether the inbox item was removed, narrowed or awaits processing. Never claim incorporated
    without that verification.
 

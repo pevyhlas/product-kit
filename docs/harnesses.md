@@ -80,9 +80,9 @@ unknown. Real runs use `tests/evals/run-evals.sh` and retain original transcript
 For a consumer's configuration, `doctor.sh --inventory --json` adds a versioned inventory.
 It distinguishes expected, tracked and checked-out source pins (a copied source directory has no
 checkout revision), recorded versus actual file hashes, kit versus project ownership, and resolved
-versus projected models with the winning rule. `null` is unknown; an absent legacy install mode
+versus projected models with the winning rule. `null` is unknown; an absent install mode
 is not silently asserted as observed. Project copies override template seeds. Model precedence
-uses the existing resolver: baseline/literal tier, tier override, then agent override; a specific
+uses the shared baseline, then tier override, then agent override; a specific
 harness overrides wildcard at each scope. Native metadata stays project-owned. Read findings
 alongside inventory: projected values are not proof of what an actual running model used.
 

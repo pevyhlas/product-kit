@@ -8,12 +8,22 @@ change by change.
 
 ## [Unreleased]
 
+### Removed (breaking)
+
+- Older kit layouts and formats are no longer accepted or converted. Removed the migration
+  guides and cutover/restructure instructions, installer retirement and review-migration flags,
+  historical State verdict and receipt clearance paths, reviewer registration via the
+  capabilities table, and compatibility readers for old
+  install manifests, feature counters, shared-log-only closes, programme checkpoints, inbox
+  entries and agent tier maps. Agents must migrate an older install manually; Product-Kit
+  provides no migration tooling. Ordinary upgrades and consumer data-migration guidance remain.
+
 ### Added
 
 - Changes can group tasks by part and carry lowercase tags into the close log. Parts can
   declare one level of subparts. Doctor checks task assignments and parent links, and status
   reports the optional data without treating it as acceptance. Opening a change checks tags
-  from customized templates before creating the record. No migration needed.
+  from customized templates before creating the record.
 
 ### Changed
 

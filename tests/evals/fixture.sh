@@ -211,6 +211,7 @@ Owner decision O-01: deliver R-01 on the D-02 replacement path, then validate it
 **Step**: choose next work
 **Waiting on**: provider provisioning for T002 only
 **Next**: previous worker suggested T003
+### Outcome checkpoint
 **Outcome**: O-01 first useful greeting through D-02 replacement; first release
 **Milestone**: M1 source foundation check, then A2 deployed greeting
 **Critical path**: T001 source -> provider provisioning -> T002 deployed validation

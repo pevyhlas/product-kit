@@ -72,15 +72,6 @@ tiers_absent() {
         ! grep -qF "  $rel" "$1/.prdkit/.manifest" || return 1
     done
 }
-# Rewrite a current manifest as a pre-2.0 one: no options line, agent-tier files recorded.
-make_legacy() {
-    local proj="$1" rel
-    ( cd "$proj" && bash .product-kit/scripts/init.sh --with agent-tiers ) >/dev/null 2>&1
-    grep -v '^options: ' "$proj/.prdkit/.manifest" | sed 's/^version: .*/version: 1.5.0/' > "$proj/.prdkit/.manifest.new" &&
-        mv "$proj/.prdkit/.manifest.new" "$proj/.prdkit/.manifest"
-    for rel in $TIER_FILES; do grep -qF "  $rel" "$proj/.prdkit/.manifest" || return 1; done
-}
-
 it "a fresh install leaves agent tiers out and records no options"
 PROJ="$(make_project)"; track_tmp "$PROJ"
 run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh"
@@ -115,7 +106,8 @@ if tiers_installed "$PROJ"; then _ok "nothing removed by the refusal"; else _no 
 rm -rf "$PROJ/.prdkit/agents"
 run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --upgrade --without agent-tiers"
 assert_eq 0 "$STATUS" "dropping an unused subsystem succeeds"
-assert_contains "$OUTPUT" "Removed 2 retired kit file(s) no longer shipped or installed" "removal reported"
+assert_contains "$OUTPUT" "Removed optional file: .prdkit/scripts/bash/render-agents.sh" "helper removal reported"
+assert_contains "$OUTPUT" "Removed optional file: .prdkit/templates/agent-definition-template.md" "template removal reported"
 if tiers_absent "$PROJ"; then _ok "agent-tier files removed"; else _no "agent-tier files removed"; fi
 assert_contains "$(cat "$PROJ/.prdkit/.manifest")" "options: none" "choice cleared"
 
@@ -127,60 +119,26 @@ run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --upgrade --with ag
 assert_eq 2 "$STATUS" "contradiction refused"
 if tiers_absent "$PROJ"; then _ok "refusals change nothing"; else _no "refusals change nothing"; fi
 
-it "a pre-2.0 install that never used agent tiers loses them on upgrade, with a note"
-PROJ="$(make_project)"; track_tmp "$PROJ"
-make_legacy "$PROJ" || _no "legacy manifest prepared"
-mkdir -p "$PROJ/.github/workflows" "$PROJ/scripts"
-printf 'jobs:\n  agents:\n    steps:\n      - run: bash .prdkit/scripts/bash/render-agents.sh --check\n' > "$PROJ/.github/workflows/agents.yml"
-# A tracked script that builds the renderer's path from its name.
-printf 'helper(root, "render-agents.sh")\n' > "$PROJ/scripts/tool.py"
-snapshot_upgrade_fixture "$PROJ" || exit 1
-run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --check"
-assert_contains "$OUTPUT" ".prdkit/scripts/bash/render-agents.sh" "check lists the renderer for removal"
-assert_contains "$OUTPUT" ".github/workflows/agents.yml: render-agents.sh" "check flags the CI call before the upgrade"
-assert_contains "$OUTPUT" "scripts/tool.py: render-agents.sh" "check flags a script that builds the renderer's path"
-run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --upgrade"
-assert_eq 0 "$STATUS" "upgrade succeeds"
-if tiers_absent "$PROJ"; then _ok "unused agent-tier files removed"; else _no "unused agent-tier files removed"; fi
-assert_contains "$OUTPUT" "install them" "upgrade says how to get them back"
-assert_contains "$OUTPUT" "again with --with agent-tiers" "names the option"
-assert_contains "$OUTPUT" ".github/workflows/agents.yml: render-agents.sh" "upgrade flags the CI call"
-assert_contains "$OUTPUT" "scripts/tool.py: render-agents.sh" "upgrade flags the constructed path"
-assert_contains "$OUTPUT" "install with --with agent-tiers" "CI warning names the option"
-run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --check"
-assert_contains "$OUTPUT" "scripts/tool.py: render-agents.sh" "check keeps flagging it after the upgrade"
-assert_contains "$(cat "$PROJ/.prdkit/.manifest")" "options: none" "choice recorded"
-
-it "an edited agent-definition template is kept when its subsystem is dropped"
-PROJ="$(make_project)"; track_tmp "$PROJ"
-make_legacy "$PROJ" || _no "legacy manifest prepared"
+it "dropping agent tiers keeps a customized project-owned template"
+PROJ="$(make_inited_project --with agent-tiers)"; track_tmp "$PROJ"
 printf '\nLocal note.\n' >> "$PROJ/.prdkit/templates/agent-definition-template.md"
 snapshot_upgrade_fixture "$PROJ" || exit 1
-run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --upgrade"
-assert_eq 0 "$STATUS" "upgrade succeeds"
-assert_file "$PROJ/.prdkit/templates/agent-definition-template.md" "edited template kept"
-assert_contains "$OUTPUT" "Kept 1 edited template or memory file(s)" "kept template named"
+run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --without agent-tiers
+assert_eq 0 "$STATUS" "upgrade succeeds: $OUTPUT"
+assert_contains "$(cat "$PROJ/.prdkit/templates/agent-definition-template.md")" 'Local note.'
+assert_contains "$OUTPUT" 'Kept customized optional template'
 if [ -e "$PROJ/.prdkit/scripts/bash/render-agents.sh" ]; then _no "renderer removed"; else _ok "renderer removed"; fi
 
-it "a pre-2.0 install that uses agent tiers keeps them and records the choice"
-for marker in definition baseline; do
-    PROJ="$(make_project)"; track_tmp "$PROJ"
-    make_legacy "$PROJ" || _no "legacy manifest prepared"
-    if [ "$marker" = definition ]; then
-        mkdir -p "$PROJ/.prdkit/agents"
-        printf -- '---\nname: reviewer\ntier: deep\n---\nReview.\n' > "$PROJ/.prdkit/agents/reviewer.md"
-    else
-        mkdir -p "$PROJ/.prdkit/agent-library"
-        printf '{}\n' > "$PROJ/.prdkit/agent-library/tiers.json"
-    fi
-    mkdir -p "$PROJ/scripts"
-    printf 'helper(root, "render-agents.sh")\n' > "$PROJ/scripts/tool.py"
-    snapshot_upgrade_fixture "$PROJ" || exit 1
-    run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --upgrade"
-    assert_eq 0 "$STATUS" "upgrade succeeds ($marker)"
-    if tiers_installed "$PROJ"; then _ok "agent tiers kept ($marker)"; else _no "agent tiers kept ($marker)"; fi
-    assert_contains "$(cat "$PROJ/.prdkit/.manifest")" "options: agent-tiers" "choice recorded ($marker)"
-    assert_not_contains "$OUTPUT" "scripts/tool.py: render-agents.sh" "a constructed path to an installed renderer is not flagged ($marker)"
+it "a manifest without options is refused rather than inferring a selection"
+PROJ="$(make_inited_project --with agent-tiers)"; track_tmp "$PROJ"
+sed '/^options: /d' "$PROJ/.prdkit/.manifest" > "$PROJ/.git/manifest"
+cp "$PROJ/.git/manifest" "$PROJ/.prdkit/.manifest"
+snapshot_upgrade_fixture "$PROJ" || exit 1
+for flag in --check --upgrade; do
+    run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" "$flag"
+    assert_eq 1 "$STATUS" "missing options rejects $flag"
+    assert_contains "$OUTPUT" 'options (none or agent-tiers)'
+    assert_eq '' "$(git -C "$PROJ" status --porcelain)" 'refusal performs no writes'
 done
 
 it "doctor reports agent definitions without the renderer"

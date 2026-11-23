@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Real publisher against the shared host stub, including read-back, log repair and legacy close.
+# Real publisher against the shared host stub, including read-back, log repair and close.
 # shellcheck disable=SC2016 # jq variables and Markdown markers are literal.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 source "$PK_ROOT/scripts/common.sh"
@@ -398,27 +398,11 @@ assert_eq 0 "$STATUS" "$OUTPUT"; saved="$(payload | jq -r .id)"
 assert_file "$LOG_ROOT/7/$saved.json"
 assert_eq file "$([ -f "$LINKED/.git" ] && printf file)" 'linked checkout uses a gitfile, not a separate publisher log'
 
-it 'real empty-content publishing clears a merged-open legacy FAIL with no artificial delta'
-git reset -q --hard "$BASE"; git update-ref refs/remotes/origin/main "$BASE"
-mkdir -p specs/changes
-printf '# Change\n**Tier**: T1\n## State\n**Review**: round 1 · ignored · code · FAIL · 0 critical, 0 high, 0 medium, 0 low · legacy\n' > specs/changes/001-reviewed.md
-git add -A; git commit -qm inherited; INHERITED="$(git rev-parse HEAD)"
-git update-ref refs/remotes/origin/main "$INHERITED"
-git rm -q specs/changes/001-reviewed.md; mkdir -p specs/log
-printf -- '- 2026-01-01 001-reviewed: closed\n' > specs/log/001-reviewed.md
-git add specs/log; git commit -qm close
-rm -rf "$LOG_ROOT"
-use_gh_stub; fx_pr 7 "$(git rev-parse HEAD)"
-gate; assert_eq 1 "$STATUS" 'closing waits for the reviewer full PASS'
+it 'publishing refuses an empty fingerprint delta'
+fresh
+git update-ref refs/remotes/origin/main HEAD
 post
-assert_eq 1 "$STATUS" 'empty content is refused without the explicit exception'
-post --clears-legacy --reviewer security
-assert_eq 1 "$STATUS" 'another reviewer has no matching legacy blocker'
-post --clears-legacy --since HEAD
-assert_eq 1 "$STATUS" 'empty --since remains refused'
-post --clears-legacy
-assert_eq 0 "$STATUS" "$OUTPUT"
-assert_eq "$REVIEW_FP_EMPTY" "$(payload | jq -r .to)"
-gate; assert_eq 0 "$STATUS" "$OUTPUT"
-assert_eq true "$(printf '%s' "$OUTPUT" | jq '.legacy_blockers[0].cleared')"
+assert_eq 1 "$STATUS" 'empty range is not publishable'
+assert_contains "$OUTPUT" 'nothing to review'
+assert_not_contains "$(cat "$GH_STUB_DIR/requests")" '--method POST'
 finish

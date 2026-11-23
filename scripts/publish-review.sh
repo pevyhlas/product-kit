@@ -24,11 +24,10 @@ source "$SCRIPT_DIR/spec-lib.sh"
 source "$SCRIPT_DIR/review-policy-lib.sh"
 source "$SCRIPT_DIR/review-fingerprint-lib.sh"
 source "$SCRIPT_DIR/review-receipts-lib.sh"
-source "$SCRIPT_DIR/review-legacy-lib.sh"
-usage='Usage: publish-review.sh <change-id> --pr <url> --reviewer <identity> --verdict PASS|FAIL --counts <c>,<h>,<m>,<l> --report <url> --head <rev> [--since <rev>] [--from-report <file>] [--clears-legacy] [--base <ref>] [--repo <dir>] [--dry-run]; or --pr <url> --restates <review-id> --receipt-id <32 hex> [--restates-pr <origin pr>] [--base <ref>] [--repo <dir>] [--dry-run]'
+usage='Usage: publish-review.sh <change-id> --pr <url> --reviewer <identity> --verdict PASS|FAIL --counts <c>,<h>,<m>,<l> --report <url> --head <rev> [--since <rev>] [--from-report <file>] [--base <ref>] [--repo <dir>] [--dry-run]; or --pr <url> --restates <review-id> --receipt-id <32 hex> [--restates-pr <origin pr>] [--base <ref>] [--repo <dir>] [--dry-run]'
 id=""; pr_url=""; reviewer=""; verdict=""; counts=""; report=""; head_ref=""; since_ref=""; from_report=""; base_ref=origin/HEAD; repo=.
 usage="$usage; or --pr <url> --resume <attempt filename> [--base <ref>] [--repo <dir>]"
-dry_run=false; clears_legacy=false; restates=""; restates_pr=""; receipt_id=""; resume=""
+dry_run=false; restates=""; restates_pr=""; receipt_id=""; resume=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --pr|--reviewer|--verdict|--counts|--report|--head|--since|--from-report|--base|--repo|--restates|--restates-pr|--receipt-id|--resume)
@@ -40,7 +39,7 @@ while [ "$#" -gt 0 ]; do
                 --resume) resume="$2" ;;
             esac
             shift ;;
-        --dry-run) dry_run=true ;; --clears-legacy) clears_legacy=true ;;
+        --dry-run) dry_run=true ;;
         --help|-h) echo "$usage"; exit 0 ;;
         -*) echo "Unknown option: $1" >&2; exit 2 ;;
         *) [ -z "$id" ] || { echo "$usage" >&2; exit 2; }; id="$1" ;;
@@ -90,7 +89,7 @@ check_log_path() { # path below prdkit/receipts; every component must be publish
 }
 if [ -n "$resume" ]; then
     [[ "$resume" =~ ^(repair2?-[1-9][0-9]*-[0-9a-f]{32}-)?[0-9a-f]{32}\.json$ ]] || refuse 'invalid attempt filename'
-    if [ -n "$id$restates$restates_pr$receipt_id$reviewer$verdict$counts$report$head_ref$since_ref$from_report" ] || $clears_legacy || $dry_run; then
+    if [ -n "$id$restates$restates_pr$receipt_id$reviewer$verdict$counts$report$head_ref$since_ref$from_report" ] || $dry_run; then
         refuse '--resume uses only the saved attempt'
     fi
     check_log_path "$number/$resume"
@@ -100,7 +99,7 @@ if [ -n "$resume" ]; then
     cp "$log" "$work/payload.json"
 elif [ -n "$restates" ]; then
     [[ "$restates" =~ ^[1-9][0-9]*$ && "$receipt_id" =~ ^[0-9a-f]{32}$ ]] || refuse 'restatement needs a numeric --restates review id and --receipt-id (32 hex)'
-    if [ -n "$reviewer$verdict$counts$report$head_ref$since_ref$from_report" ] || $clears_legacy; then
+    if [ -n "$reviewer$verdict$counts$report$head_ref$since_ref$from_report" ]; then
         refuse 'a restatement reads the full original verdict from the publish log; do not override its fields'
     fi
     origin="${restates_pr:-$number}"
@@ -160,15 +159,9 @@ else
         if [ "$from" = "$REVIEW_FP_EMPTY" ]; then from=start; since=""; fi
     fi
     from_fp="$from"; [ "$from" != start ] || from_fp="$REVIEW_FP_EMPTY"
-    if $clears_legacy; then
-        if [ "$to" != "$REVIEW_FP_EMPTY" ] || [ -n "$since_ref" ] || [ "$verdict" != PASS ] || _receipts_blocking "$verdict" "$c" "$h" "$m" "$rigor"; then
-            refuse '--clears-legacy requires empty content, no --since, and a clean full PASS'
-        fi
-        review_legacy_collect "$root" "$id" "$canonical" "$head" "$rigor" "$work/legacy" "$work/blockers" || refuse 'cannot scan the complete legacy history'
-        awk -F '\037' -v reviewer="$reviewer" '$3==reviewer { found=1 } END { exit !found }' "$work/blockers" || refuse '--clears-legacy requires a legacy blocker for this reviewer at --head'
-    elif [ "$from_fp" = "$to" ]; then
+    if [ "$from_fp" = "$to" ]; then
         [ -z "$since_ref" ] || refuse "nothing changed since --since $since_ref; no round needed"
-        refuse "the change has no content at $head_ref against $base_ref; nothing to review (use --clears-legacy only for a matching legacy blocker)"
+        refuse "the change has no content at $head_ref against $base_ref; nothing to review"
     fi
     receipt_id="$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')"
     [[ "$receipt_id" =~ ^[0-9a-f]{32}$ ]] || refuse 'could not generate a receipt id'

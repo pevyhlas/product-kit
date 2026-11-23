@@ -467,14 +467,11 @@ printf 'Verdict: PASS\n' > "$EV/evidence/016-evidence/reviews/round-1/report.md"
 printf 'diff\n' > "$EV/evidence/016-evidence/reviews/round-1/package.diff"
 printf 'lessons\n' > "$EV/retrospectives/016-evidence.md"
 # Usage-enrichment input is gitignored too, so it is not dirt; it must not vanish with the worktree.
-mkdir -p "$PROJ/.worktrees/016-evidence/.prdkit/retrospective"
-printf '{"tokens":{"total":1}}\n' > "$PROJ/.worktrees/016-evidence/.prdkit/retrospective/016-evidence.enrich.json"
 run bash "$CLEAN" --json 016-evidence
 assert_eq 0 "$STATUS" "worktree removed"
 assert_contains "$OUTPUT" "preserved 4 evidence file(s)" "preservation reported"
 assert_eq "Verdict: PASS" "$(cat "$PROJ/.prdkit/cache/evidence/016-evidence/reviews/round-1/report.md" 2>/dev/null)" "review report kept"
 assert_eq "lessons" "$(cat "$PROJ/.prdkit/cache/retrospectives/016-evidence.md" 2>/dev/null)" "retrospective kept"
-assert_eq '{"tokens":{"total":1}}' "$(cat "$PROJ/.prdkit/retrospective/016-evidence.enrich.json" 2>/dev/null)" "enrichment input kept"
 
 it "linked evidence roots are refused for committed and forced checkouts"
 outside_cache="$(mktemp -d)"; track_tmp "$outside_cache"
@@ -503,9 +500,9 @@ assert_eq 1 "$STATUS"; assert_file "$path/.git"
 run test ! -e "$outside_cache/report"; assert_eq 0 "$STATUS"
 rm "$PROJ/.prdkit/cache/evidence/nested"
 
-it "every change's evidence survives removal; a legacy spool needs explicit archival"
+it "every change's evidence survives removal; unsupported recovery paths block cleanup"
 # new-change.sh run inside a worktree opens the next change there, so one worktree can hold
-# several changes' evidence; the ledger spool is per checkout and gitignored too.
+# several changes' evidence, and cleanup must not discard unsupported recovery data.
 git -C "$PROJ" worktree add -qb 018-first "$PROJ/.worktrees/018-first" >/dev/null 2>&1
 EV="$PROJ/.worktrees/018-first/.prdkit"
 mkdir -p "$EV/cache/evidence/018-first" "$EV/cache/evidence/019-second" "$EV/ledger" "$PROJ/.prdkit/ledger"
@@ -515,20 +512,21 @@ printf '{"event":"a"}\n' > "$PROJ/.prdkit/ledger/events.jsonl"
 printf '{"event":"a"}\n{"event":"b"}\n{"event":"c"}\n' > "$EV/ledger/events.jsonl"
 run bash "$CLEAN" 019-second
 assert_eq 1 "$STATUS" "no worktree named for the second change"
-run bash "$CLEAN" 018-first
-assert_eq 1 "$STATUS" "legacy spool retained for manual archival"
-assert_contains "$OUTPUT" "archive the legacy ledger spool"
+run bash "$CLEAN" 018-first --force
+assert_eq 1 "$STATUS" "unsupported recovery data is not removed"
+assert_contains "$OUTPUT" 'cleanup expects recovery copies in .prdkit/cache/evidence/'
 assert_eq '{"event":"a"}' "$(cat "$PROJ/.prdkit/ledger/events.jsonl")" "main spool unchanged"
 mv "$EV/ledger/events.jsonl" "$PROJ/.prdkit/ledger/archived.jsonl"
+rmdir "$EV/ledger"
 run bash "$CLEAN" 018-first
 assert_eq 0 "$STATUS" "worktree removed"
 assert_eq "first" "$(cat "$PROJ/.prdkit/cache/evidence/018-first/report.md" 2>/dev/null)" "its own evidence kept"
 assert_eq "second" "$(cat "$PROJ/.prdkit/cache/evidence/019-second/report.md" 2>/dev/null)" "the other change's evidence kept"
-it "a linked legacy spool leaves the retained spool unchanged"
+it "an unsupported linked recovery path leaves the target unchanged"
 git -C "$PROJ" worktree add -qb 021-spool "$PROJ/.worktrees/021-spool" >/dev/null 2>&1
 mkdir -p "$PROJ/.worktrees/021-spool/.prdkit/ledger"
 ln -s "$PROJ/.prdkit/ledger/archived.jsonl" "$PROJ/.worktrees/021-spool/.prdkit/ledger/events.jsonl"
-run bash "$CLEAN" 021-spool
+run bash "$CLEAN" 021-spool --force
 assert_eq 1 "$STATUS" "cleanup refuses a linked spool"
 assert_eq '{"event":"a"}' "$(cat "$PROJ/.prdkit/ledger/events.jsonl")" "main spool unchanged"
 

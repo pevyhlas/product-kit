@@ -8,9 +8,7 @@
 #   1. Shared baseline — `Tier baseline: agent-library tiers.json@<commit>` plus the vendored
 #      snapshot (default .prdkit/agent-library/tiers.json). A tier resolves through an explicit
 #      `| Local tier | Library tier |` row, else by its own name when it is a library tier
-#      (verydeep/deep/standard/light), else through the compatibility aliases
-#      frontier->verydeep, high->deep, fast->light. Without a baseline line, a legacy literal
-#      `| Tier | <Harness> model | ... |` table is used instead.
+#      (verydeep/deep/standard/light).
 #   2. Overrides `| Scope | Harness | Model | Variant | Reason |`: `tier:<tier>` rows, then
 #      `agent:<name>` rows; a specific harness beats `*`. Every override needs a Reason.
 #

@@ -16,7 +16,7 @@
 # Include candidate-controlled content and review text, unavailable or partial host reads,
 # and revisions moving between runs. Trust the executing code and local Git context;
 # this script does not authenticate its own invocation or exclude a hostile checkout writer.
-# shellcheck disable=SC2034,SC2153 # Coverage/legacy inputs and normalized rows cross sourced interfaces.
+# shellcheck disable=SC2034,SC2153 # Coverage inputs and normalized rows cross sourced interfaces.
 set -euo pipefail
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
@@ -29,8 +29,6 @@ source "$SCRIPT_DIR/review-coverage-lib.sh"
 source "$SCRIPT_DIR/review-receipts-lib.sh"
 # shellcheck source=scripts/review-owner-lib.sh
 source "$SCRIPT_DIR/review-owner-lib.sh"
-# shellcheck source=scripts/review-legacy-lib.sh
-source "$SCRIPT_DIR/review-legacy-lib.sh"
 json=false; diagnostics=false; head_ref=HEAD; base_ref=""; repo=.; id=""
 pr_url=""; receipts_file=""; save_receipts=""
 usage='Usage: check-review.sh [--json [--diagnostics]] [--head <rev>] [--base <rev>] [--repo <dir>] [--pr <url> [--save-receipts <file>] | --receipts <file>] [<change-id>]'
@@ -89,7 +87,7 @@ diagnostic_capture() {
 }
 sep37="$(printf '\037')"; head_fp=""; fp_ready=false
 v_line=(); v_rev=(); v_round=(); v_from=(); v_to=(); v_verdict=(); v_c=(); v_h=(); v_m=(); v_l=(); v_link=()
-v_receipt=(); v_receipt_head=(); v_empty_clearance=()
+v_receipt=(); v_receipt_head=()
 authority=none; pr_head=""; head_is_pr_head=false; publisher_isolation=""
 host_content_bound=false
 [ -z "$receipts_file" ] || authority=snapshot
@@ -116,7 +114,9 @@ fi
 # Registration must precede use: a change cannot qualify its own maker or invented identity.
 registry_at="$policy_at"; registry=""
 if [ -n "$registry_at" ]; then
-    registry="$( { git -C "$root" show "$registry_at:.prdkit/memory/agents.md" 2>/dev/null || true; } | review_registry)"
+    if ! registry="$( { git -C "$root" show "$registry_at:.prdkit/memory/agents.md" 2>/dev/null || true; } | review_text_stream | review_registry)"; then
+        problems+=("Unreadable trusted reviewer policy: expected a ## Review registry table with Identity and Role (reviewer or maker)")
+    fi
 fi
 [ -n "$registry_at" ] || problems+=("No trusted integration-baseline registry: establish origin/HEAD and fetch its shared history before checking reviewer eligibility")
 # Rigor: exactly one Rigor line, an empty one included, whose value is light or full followed by
@@ -187,8 +187,6 @@ diagnostic_capture host
 if [ "$publisher_isolation" = shared ] && [ "$authority" != host ]; then
     notes+=("Publisher isolation is shared: authentication does not establish the reviewer's independence.")
 fi
-# Legacy history is local evidence in every mode and tier, even when the checked
-# record is absent or the host is unavailable. It never joins the coverage arrays.
 OWNER_VALID=false; OWNER_REVIEW=""; OWNER_STATE=""; OWNER_COMMIT=""; OWNER_HEAD_AT_SUBMISSION=""; OWNER_ERROR='the owner has no decisive native review on this PR'
 OWNER_ACTOR=""; OWNER_APPROVED_COMMIT=""; OWNER_BARRIERS=(); OWNER_PROBLEMS=()
 if $receipt_ready; then
@@ -197,14 +195,12 @@ if $receipt_ready; then
     problems+=(${OWNER_PROBLEMS[@]+"${OWNER_PROBLEMS[@]}"})
 fi
 diagnostic_capture owner
-legacy_receipts=""; LL_BLOCKERS=(); LL_EMPTY_VALID=(); LL_EMPTY_ALLOWED=()
-if $receipt_ready; then legacy_receipts="$RC_VERIFIED"; fi
 if [ -n "$fp_base" ]; then
-    review_legacy_resolve "$root" "$id" "$fp_base" "$head" "$rigor" "$registry" "$fp_cache/legacy" "$legacy_receipts" "$RC_PR" || true
-    [ "${LL_NUL_UNAVAILABLE:-false}" != true ] || authority=unavailable
-    problems+=(${LL_PROBLEMS[@]+"${LL_PROBLEMS[@]}"})
+    if ! record_problem="$(review_record_history "$root" "$id" "$fp_base" "$head" "$fp_cache")"; then
+        problems+=("Cannot validate the change record format: fetch the complete local history, trees and record blobs")
+    elif [ -n "$record_problem" ]; then problems+=("$record_problem"); fi
 fi
-diagnostic_capture legacy
+diagnostic_capture record-format
 # Every **Tier** field in a record on stdin, one per line: T0-T3, or ? when its whole value (up to
 # the next · or the end of the line, in optional backticks) is not exactly one tier: T1/T3, T1-T3,
 # T1x, "T1, T3" and "T1 T3" are not tiers.
@@ -289,26 +285,30 @@ changed_since() { # sha [pathspec...] -> paths changed from sha to head; check t
     git -C "$root" diff --name-only --no-renames --ignore-submodules=none "$sha" "$head" -- "$@" | tr '\n' ' ' | sed 's/ $//'
 }
 
-if [ "${LL_NUL_UNAVAILABLE:-false}" = true ]; then : # Do not decode a record the scan cannot read.
-elif git -C "$root" cat-file -e "$head:$path" 2>/dev/null; then
+if git -C "$root" cat-file -e "$head:$path" 2>/dev/null; then
     record_at="$head"
 elif last="$(git -C "$root" log -1 --format=%H "$head" -- "$path" 2>/dev/null)" && [ -n "$last" ] &&
     git -C "$root" cat-file -e "$last^:$path" 2>/dev/null; then
     record_at="$last^"
 fi
-if [ "${LL_NUL_UNAVAILABLE:-false}" = true ]; then :
-elif [ -z "$record_at" ]; then
+if [ -z "$record_at" ]; then
     hint=" (a shallow clone needs the branch history)"
-    ! git -C "$root" cat-file -e "$head:specs/features/$id" 2>/dev/null ||
-        hint=" (a 0.x feature the owner keeps open becomes a change record at the cutover or restructure; see .prdkit/workflows/compact.md)"
     problems+=("No change record $path at $head or in its history$hint")
+elif ! GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -C "$root" cat-file blob "$record_at:$path" > "$fp_cache/selected-record" ||
+    ! verify_lf_file "$fp_cache/selected-record"; then
+    problems+=("$path at $record_at must be readable LF-terminated Markdown")
 else
     # Closing a change deletes its record; the same history must add its log entry.
     if [ "$record_at" = "$head" ]; then :
     elif ! log="$(spec_log_entries_at "$root" "$head")"; then
         problems+=("$id is closed (its record is deleted), but the log at $head cannot be read without fetching from the promisor remote (a partial clone with Git older than 2.45): fetch the branch's blobs or use Git 2.45+")
     elif ! grep -q "^- [0-9-]* $id:" <<< "$log"; then
-        problems+=("$id is closed (its record is deleted) but the log at $head has no '- <date> $id: <what changed>' entry (specs/log/$id.md, as close-change.sh writes it, or a line in specs/log.md)")
+        problems+=("$id is closed (its record is deleted) but the log at $head has no '- <date> $id: <what changed>' entry (specs/log/$id.md, as close-change.sh writes it, or its compacted line in specs/log.md)")
+    elif ! log_mode="$(GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -C "$root" ls-tree "$last" -- "specs/log/$id.md")" ||
+        [[ "$log_mode" != '100644 blob '* ]] ||
+        ! GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -C "$root" cat-file blob "$last:specs/log/$id.md" > "$fp_cache/close-entry" ||
+        ! spec_log_entry_valid "$fp_cache/close-entry" "$id"; then
+        problems+=("$id was closed without specs/log/$id.md at the closing commit; use the current per-change entry format from close-change.sh, not a direct edit to specs/log.md")
     fi
     # Closing metadata must be plain files. The per-change entry is its own one line.
     while read -r log_mode log_type log_sha log_path; do
@@ -319,17 +319,14 @@ else
                     problems+=("$log_path at $head cannot be checked without fetching from the promisor remote (a partial clone with Git older than 2.45): fetch the branch's blobs or use Git 2.45+")
                     continue
                 fi
-                # Read to a sentinel, so trailing blank lines count; a missing object reads as empty.
-                entry_text="$(GIT_NO_LAZY_FETCH=1 git -C "$root" cat-file blob "$log_sha" 2>/dev/null; echo .)"
-                entry_text="${entry_text%.}"
-                if [ "$(printf '%s' "$entry_text" | awk 'END { print NR }')" != 1 ] ||
-                    ! grep -q "^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] $id: ." <<< "$entry_text"; then
-                    problems+=("$log_path at $head must hold one line, '- <date> $id: <what changed>'")
+                if ! GIT_NO_LAZY_FETCH=1 git -C "$root" cat-file blob "$log_sha" > "$fp_cache/head-close-entry" 2>/dev/null ||
+                    ! spec_log_entry_valid "$fp_cache/head-close-entry" "$id"; then
+                    problems+=("$log_path at $head must hold one line, '- <date> $id: <what changed>', ending in LF")
                 fi ;;
             *) problems+=("$log_path at $head is not a regular file; the log and the change's entry are plain files") ;;
         esac
     done < <(GIT_NO_LAZY_FETCH=1 git -C "$root" ls-tree "$head" -- specs/log.md "specs/log/$id.md" 2>/dev/null)
-    record="$(git -C "$root" show "$record_at:$path")"
+     record="$(cat "$fp_cache/selected-record")"
     # The tier is the record's single **Tier** field; a second one, even in a comment, is refused.
     claims="$(printf '%s\n' "$record" | record_tiers)"
     case "$claims" in
@@ -406,8 +403,6 @@ else
     if $receipt_ready; then
         while IFS="$sep37" read -r kind seq origin review submitted receipt_id change reviewer from to receipt_head since receipt_base base_at verdict critical high medium low link carried provenance; do
             [ "$kind" = R ] || continue
-            empty_clearance=false
-            for valid in ${LL_EMPTY_VALID[@]+"${LL_EMPTY_VALID[@]}"}; do [ "$seq" != "$valid" ] || empty_clearance=true; done
             ordinal=1
             for prior in ${v_rev[@]+"${v_rev[@]}"}; do [ "$prior" != "$reviewer" ] || ordinal=$((ordinal+1)); done
             v_line+=("$seq"); v_rev+=("$reviewer"); v_round+=("round $ordinal"); v_from+=("$from"); v_to+=("$to")
@@ -415,7 +410,6 @@ else
             v_receipt+=("https://github.com/$RC_REPO/pull/$origin#pullrequestreview-$review")
             v_receipt_head+=("$receipt_head")
             v_provenance+=("$provenance")
-            v_empty_clearance+=("$empty_clearance")
         done < "$RC_COVERAGE"
     fi
     # Each reviewer's latest line, in order of first appearance.
@@ -500,9 +494,9 @@ if $json; then
             "$(json_escape "$critical")" "$(json_escape "$high")" "$(json_escape "$medium")" "$(json_escape "$low")" "$(json_escape "$receipt_url")"
         sep=,
     done
-    printf '],"registry_at":"%s","authority":"%s","pr":"%s","pr_head":"%s","head_is_pr_head":%s,"publisher_isolation":"%s","legacy_blockers":%s,"receipts":%s,"ignored_receipts":%s,"invalid_receipts":%s,"carried_blockers":%s,"owner":%s,"problems":%s' \
+    printf '],"registry_at":"%s","authority":"%s","pr":"%s","pr_head":"%s","head_is_pr_head":%s,"publisher_isolation":"%s","receipts":%s,"ignored_receipts":%s,"invalid_receipts":%s,"carried_blockers":%s,"owner":%s,"problems":%s' \
         "$registry_at" "$authority" "$(json_escape "${pr_url:-${RC_PR:+https://github.com/$RC_REPO/pull/$RC_PR}}")" "$pr_head" "$head_is_pr_head" "$publisher_isolation" \
-        "$(review_legacy_json)" "$RC_RECEIPTS" "$RC_IGNORED" "$RC_INVALID" "$RC_CARRIED" "$(review_owner_json)" "$(json_array ${problems[@]+"${problems[@]}"})"
+        "$RC_RECEIPTS" "$RC_IGNORED" "$RC_INVALID" "$RC_CARRIED" "$(review_owner_json)" "$(json_array ${problems[@]+"${problems[@]}"})"
     if $diagnostics; then
         printf ',"diagnostics":{"base_ref":"%s","base_at":"%s","policy_at":"%s","head":"%s","host_content_bound":%s,"fetched":"%s","receipt_ready":%s,"start_covered":' \
             "$(json_escape "$base_canonical")" "$import_base" "$policy_at" "$head" "$host_content_bound" "$RC_FETCHED" "$receipt_ready"

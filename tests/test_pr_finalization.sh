@@ -39,7 +39,7 @@ Final child carries the programme's integrated outcome, review concerns and owne
 EOF
 git add -A; git commit -qm 'child with inherited scope'
 FAILED="$(git rev-parse HEAD)"
-printf '**Review**: round 1 · %s..%s · integration · FAIL · 0 critical, 1 high, 0 medium, 0 low · fixture:inherited-report\n' "$BASE" "$FAILED" >> specs/changes/002-final-child.md
+printf '**Receipt fixture**: round 1 · %s..%s · integration · FAIL · 0 critical, 1 high, 0 medium, 0 low · fixture:inherited-report\n' "$BASE" "$FAILED" >> specs/changes/002-final-child.md
 # Parent disposition/deletion is substantive reviewed content, before final review.
 git rm -q specs/changes/001-programme.md
 printf -- '- 2026-10-25 001-programme: integrated outcome — R-01 — delivered; runtime unverified — PR 1\n' > specs/log.md
@@ -51,14 +51,14 @@ run bash "$CHECK" --base origin/main 002-final-child
 assert_eq 1 "$STATUS" "unresolved parent concern blocks"
 assert_contains "$OUTPUT" 'integration (round 1): verdict FAIL' "inherited failure remains visible"
 
-printf '**Review**: round 2 · %s..%s · integration · PASS · 0 critical, 0 high, 0 medium, 0 low · fixture:combined-report\n' "$BASE" "$PREPARED" >> specs/changes/002-final-child.md
+printf '**Receipt fixture**: round 2 · %s..%s · integration · PASS · 0 critical, 0 high, 0 medium, 0 low · fixture:combined-report\n' "$BASE" "$PREPARED" >> specs/changes/002-final-child.md
 git add specs/changes/002-final-child.md; git commit -qm 'combined independent pass'
 it "the combined tier still requires owner approval"
 run bash "$CHECK" --base origin/main 002-final-child
 assert_eq 1 "$STATUS" "owner gate not lost with parent deletion"
 assert_contains "$OUTPUT" "T3 needs the owner's native approval" "owner missing"
 
-printf '**Review**: round 2 · %s..%s · owner · PASS · fixture:owner-words\n' "$BASE" "$PREPARED" >> specs/changes/002-final-child.md
+printf '**Receipt fixture**: round 2 · %s..%s · owner · PASS · fixture:owner-words\n' "$BASE" "$PREPARED" >> specs/changes/002-final-child.md
 git add specs/changes/002-final-child.md; git commit -qm 'owner verdict on combined scope'
 git rm -q specs/changes/002-final-child.md
 printf -- '- 2026-10-25 002-final-child: final implementation — R-01 — delivered; runtime unverified — PR 1\n' >> specs/log.md

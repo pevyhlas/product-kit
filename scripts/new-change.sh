@@ -110,87 +110,53 @@ generate_slug() {
 # Every checkout whose specs/ can hold a claimed number: this one, worktrees under
 # .worktrees/, and every worktree git knows about. Paths may repeat or not exist.
 list_checkouts() {
-    local wt line
+    local wt line registered
     echo "$REPO_ROOT"
     for wt in "$REPO_ROOT/.worktrees"/*; do [ -d "$wt" ] && echo "$wt"; done
     if [ "$HAS_GIT" = true ]; then
-        git worktree list --porcelain 2>/dev/null | while IFS= read -r line; do
+        registered="$(verify_lines git worktree list --porcelain)" || return 1
+        while IFS= read -r line; do
             case "$line" in "worktree "*) echo "${line#worktree }" ;; esac
-        done
+        done <<< "$registered"
     fi
     return 0
 }
 
-# Numbered identities already claimed: open change records, closed changes in the log, 0.x
-# feature folders (on disk before the cutover; in git after it: at the base commit
-# specs/archive.md records, and removed in recent history), the last 0.x feature and the number
-# the log is condensed through that specs/archive.md names, changes the spec's `planned:` markers
-# name, and local and remote branches. The highest of them all wins.
+# Claims: open and closed records, the archive's log counter, planned markers and branches.
 list_claimed() {
-    list_spec_claims
+    list_spec_claims || return 1
     if [ "$HAS_GIT" = true ]; then
-        git for-each-ref --format='local branch %(refname:strip=2)' refs/heads 2>/dev/null
-        git for-each-ref --format='remote branch %(refname:strip=3)' refs/remotes 2>/dev/null
+        git for-each-ref --format='local branch %(refname:strip=2)' refs/heads || return 1
+        git for-each-ref --format='remote branch %(refname:strip=3)' refs/remotes || return 1
     fi
     return 0
 }
 
 list_spec_claims() {
-    local checkout path name last token base
+    local checkout path name last entries planned
     while IFS= read -r checkout; do
+        spec_require_layout "$checkout" || return 1
         for path in "$checkout"/specs/changes/[0-9]*.md; do
             [ -f "$path" ] && { name="${path##*/}"; echo "change record ${name%.md}"; }
         done
-        # Number allocation must reserve old log IDs even when a verifier now rejects
-        # their formatting. Never treat a legacy CRLF log as an empty claim inventory.
-        spec_log_entries "$checkout" legacy-claims |
-            sed -n 's/^- [0-9-]* \([0-9][0-9][0-9]*-[a-z0-9-]*\):.*/closed change \1/p'
-        spec_planned_changes "$checkout" | sed 's/^/planned in the spec /'
+        entries="$(spec_log_entries "$checkout")" || return 1
+        sed -n 's/^- [0-9-]* \([0-9][0-9][0-9]*-[a-z0-9-]*\):.*/closed change \1/p' <<< "$entries"
+        planned="$(spec_planned_changes "$checkout")" || return 1
+        while IFS= read -r name; do
+            [ -z "$name" ] || printf 'planned in the spec %s\n' "$name"
+        done <<< "$planned"
         if [ -f "$checkout/specs/archive.md" ]; then
-            last="$(spec_archive_last "$checkout")"
-            case "$last" in ''|0) ;; *) printf 'specs/archive.md, 0.x features through %03d-\n' "$last" ;; esac
-            last="$(spec_archive_log_through "$checkout")"
+            last="$(spec_archive_log_through "$checkout")" || return 1
             case "$last" in ''|0) ;; *) printf 'specs/archive.md, closed changes through %03d-\n' "$last" ;; esac
-            if [ "$HAS_GIT" = true ]; then
-                while IFS= read -r token; do
-                    base="$(git -C "$checkout" rev-parse --verify --quiet "$token^{commit}" 2>/dev/null)" || continue
-                    spec_features_at "$checkout" "$base" | sed 's/^/feature folder at the archive base /'
-                    break
-                done < <(spec_archive_base_tokens "$checkout")
-            fi
         fi
-        for path in "$checkout"/specs/features/[0-9]* "$checkout"/specs/features/_archive/[0-9]* \
-                    "$checkout"/specs/archive/[0-9]* "$checkout"/specs/archive/*/[0-9]* \
-                    "$checkout"/specs/archive/*/_archive/[0-9]*; do
-            [ -d "$path" ] && echo "feature folder ${path##*/}"
-        done
-    done < <(list_checkouts)
-    if [ "$HAS_GIT" = true ]; then
-        spec_removed_features "$REPO_ROOT" | sed 's/^/feature folder removed from main /'
-    fi
-    return 0
-}
-
-# A specs/archive.md from which neither a base commit here nor a last 0.x feature can be read.
-archive_unreadable() {
-    local checkout token
-    while IFS= read -r checkout; do
-        [ -f "$checkout/specs/archive.md" ] || continue
-        [ -z "$(spec_archive_last "$checkout")" ] || continue
-        if [ "$HAS_GIT" = true ]; then
-            while IFS= read -r token; do
-                git -C "$checkout" rev-parse --verify --quiet "$token^{commit}" >/dev/null 2>&1 && continue 2
-            done < <(spec_archive_base_tokens "$checkout")
-        fi
-        echo "$checkout/specs/archive.md"
-    done < <(list_checkouts | sort -u)
+    done <<< "$CHECKOUTS"
     return 0
 }
 
 claimed_numbers() {
-    list_claimed | while IFS= read -r line; do
+    while IFS= read -r line; do
         case "${line##* }" in [0-9][0-9][0-9]*-*) echo "$line" ;; esac
-    done
+    done <<< "$CLAIMS"
 }
 
 next_number() {
@@ -277,31 +243,17 @@ SLUG="$(printf '%s' "$SLUG" | cut -c1-60 | sed 's/-$//')"
 if [ -z "$SLUG" ]; then echo "Error: could not derive a short name; pass --short-name" >&2; exit 1; fi
 
 AUTO_NUMBER=false
+# Both explicit and automatic creators must see a complete inventory under the lock.
+acquire_number_lock
+CHECKOUTS="$(list_checkouts)" || exit 1
+CLAIMS="$(list_claimed)" || exit 1
 if [ -z "$CHANGE_NUMBER" ]; then
-    # Never reuse a 0.x feature number silently. With no feature folder anywhere to read, stop on
-    # a specs/archive.md that yields no number, and warn in a shallow clone without one: its
-    # history is cut short.
-    if ! list_spec_claims | grep -q -e '^feature folder ' -e '^specs/archive.md, 0.x '; then
-        UNREADABLE="$(archive_unreadable | sed -n 1p)"
-        if [ -n "$UNREADABLE" ]; then
-            echo "[prdkit] Error: $UNREADABLE names no **Base** commit in this repository and no readable **Last 0.x feature** line (a number, or none), and git history shows no removed 0.x feature folder, so an old feature number could be reused. Fix it (.prdkit/templates/archive-template.md) or pass --number." >&2
-            exit 1
-        fi
-        if [ ! -f "$REPO_ROOT/specs/archive.md" ] && [ "$HAS_GIT" = true ] &&
-            [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = true ]; then
-            echo "[prdkit] Warning: shallow clone: 0.x feature folders removed from main are not in its history, so their numbers are not reserved; fetch the full history or pass --number." >&2
-        fi
-    fi
-    acquire_number_lock
     CHANGE_NUMBER="$(next_number)"; AUTO_NUMBER=true
-else
-    # Every explicit-ID creator shares the lock too: branch creation cannot arbitrate a
-    # race against a record-only creator, especially across registered checkouts.
-    acquire_number_lock
 fi
 NUM="$(printf '%03d' "$((10#$CHANGE_NUMBER))")"
 if [ "$AUTO_NUMBER" = true ]; then
-    # A concurrent run may have claimed the number since it was computed: bump past it.
+    # Refresh branch claims in case a branch was created outside the numbering lock.
+    CLAIMS="$(list_claimed)" || exit 1
     while OWNER="$(number_owner "$NUM")"; do
         NEXT="$(printf '%03d' "$((10#$NUM + 1))")"
         echo "[prdkit] Notice: change number $NUM taken by $OWNER, using $NEXT" >&2
@@ -319,7 +271,6 @@ else
                 [ "$((10#$NUM))" -le "$((10#${held%-}))" ] || continue
                 echo "[prdkit] Error: change number $NUM is reserved: specs/archive.md condenses the log through ${held%-}; pick a higher number." >&2
                 exit 1 ;;
-            "specs/archive.md, 0.x features through "*) [ "$((10#$NUM))" -le "$((10#${held%-}))" ] || continue ;;
             *) [ "$((10#${held%%-*}))" -eq "$((10#$NUM))" ] || continue ;;
         esac
         case "; $HOLDERS; " in *"; $held_line; "*) continue ;; esac
@@ -336,7 +287,7 @@ while IFS= read -r checkout; do
         echo "[prdkit] Error: $checkout/specs/changes/$CHANGE_ID.md already exists; it is never overwritten." >&2
         exit 1
     fi
-done < <(list_checkouts)
+done <<< "$CHECKOUTS"
 
 WORKTREE_PATH="$REPO_ROOT"
 CREATED_WORKTREE=false
@@ -381,17 +332,6 @@ render_record() {
                 hidden = spec_skip($0)
                 if (outside && $0 == ENVIRON["PK_POINTER"]) {
                     if (state && !slot) slot = NR
-                    wrote_pointer = 1
-                }
-                if (outside && /^<!-- (A programme or continuing follow-up queue \(|For a programme\/continuing follow-up queue,)/) {
-                    legacy = NR
-                    legacy_heading = 0
-                }
-                if (legacy && !fence && $0 == "### Outcome checkpoint") legacy_heading = 1
-                if (legacy && !comment) {
-                    legacy_end[legacy] = NR
-                    if (state && legacy_heading) has_block = 1
-                    legacy = 0
                 }
                 if (!hidden && /^## /) state = ($0 == "## State")
                 if (!hidden && state && $0 == "### Outcome checkpoint") has_block = 1
@@ -412,17 +352,6 @@ render_record() {
                         if (i == slot) continue
                     }
                     if (i > NR) break
-                    if (programme != "true" && (i in legacy_end)) {
-                        # Strip only the recognized comment, not bytes after its closing marker.
-                        i = legacy_end[i]
-                        text = substr(lines[i], index(lines[i], "-->") + 3)
-                        if (!wrote_pointer) {
-                            print ENVIRON["PK_POINTER"]
-                            wrote_pointer = 1
-                        }
-                        if (text != "") print text
-                        continue
-                    }
                     text = lines[i]
                     if (i == 1 && text ~ /^# Change:/) text = "# Change: " ENVIRON["PK_INTENT"]
                     if (text ~ /^\*\*Opened\*\*: <date>/) sub(/<date>/, ENVIRON["PK_TODAY"], text)

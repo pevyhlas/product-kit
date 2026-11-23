@@ -9,7 +9,7 @@ cat > .prdkit/memory/agents.md <<'EOF'
 # Capabilities
 | Role | Available agent or human | Notes |
 |---|---|---|
-| Independent review | legacy | eligible exact legacy identity |
+| Independent review | legacy | capability notes are not registrations |
 | Implementation | legacy-maker | never a reviewer |
 ## Review registry
 | Identity | Role |
@@ -44,20 +44,18 @@ LINK=https://example.invalid/report
 PR=https://github.com/owner/repo/pull/7
 record() { # identity [link] [head] [extra fixture review recipe]
     mkdir -p specs/changes
-    printf '# Change: Fixture\n**Tier**: T1\n## State\n**Review**: round 1 · %s..%s · %s · PASS · %s · %s\n%s\n' \
+    printf '# Change: Fixture\n**Tier**: T1\n## State\n**Receipt fixture**: round 1 · %s..%s · %s · PASS · %s · %s\n%s\n' \
         "$BASE" "${3:-$REVIEWED}" "$1" "$CLEAN" "${2:-$LINK}" "${4:-}" > "$RECORD"
     git add "$RECORD"; git commit -qm 'record review'
 }
 check() { run bash "$CHECK" --json 001-reviewed; }
 
 it 'registered exact identities pass; makers, unknown and ambiguous identities do not'
-for identity in code legacy; do
-    record "$identity"; check
-    assert_eq 0 "$STATUS" "$identity is eligible"
-    assert_contains "$OUTPUT" '"authority":"host"' 'host authority is explicit'
-    assert_contains "$OUTPUT" "\"registry_at\":\"$BASE\"" 'registry provenance pinned'
-done
-for identity in maker legacy-maker dual duplicate unclear unknown hidden fenced; do
+record code; check
+assert_eq 0 "$STATUS" 'code is eligible'
+assert_contains "$OUTPUT" '"authority":"host"' 'host authority is explicit'
+assert_contains "$OUTPUT" "\"registry_at\":\"$BASE\"" 'registry provenance pinned'
+for identity in maker legacy legacy-maker dual duplicate unclear unknown hidden fenced; do
     record "$identity"; check
     assert_eq 1 "$STATUS" "$identity cannot approve the change"
     assert_contains "$OUTPUT" "reviewer '$identity'" 'offending receipt identity identified'
@@ -92,7 +90,7 @@ git symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$DEFAULT"
 git reset -q --hard "$REVIEWED"
 
 it 'ineligible superseded receipts cannot contribute coverage or erase standing failures'
-record unknown "$LINK" "$REVIEWED" "**Review**: round 2 · $BASE..$REVIEWED · code · PASS · $CLEAN · $LINK"
+record unknown "$LINK" "$REVIEWED" "**Receipt fixture**: round 2 · $BASE..$REVIEWED · code · PASS · $CLEAN · $LINK"
 check
 assert_eq 1 "$STATUS" 'latest valid verdict cannot hide a fabricated earlier receipt'
 assert_contains "$OUTPUT" "reviewer 'unknown' is unregistered" 'superseded offending receipt retained'
@@ -112,7 +110,7 @@ assert_eq '' "$(cat "$GH_STUB_DIR/requests")" 'no GitHub invocation'
 assert_contains "$OUTPUT" PREVIEW 'human output has the same limitation'
 mkdir .git/no-network-tools
 sha_tool=sha256sum; command -v sha256sum >/dev/null 2>&1 || sha_tool=shasum
-for cmd in bash dirname git sed awk tr head tail grep cat mktemp rm mv mkdir wc sort "$sha_tool"; do
+for cmd in bash dirname git sed awk tr head tail grep cat mktemp rm mv mkdir wc sort od "$sha_tool"; do
     ln -s "$(command -v "$cmd")" ".git/no-network-tools/$cmd"
 done
 receipt_raw_run env PATH="$PROJ/.git/no-network-tools" bash "$CHECK" --json --receipts .git/receipts 001-reviewed
@@ -131,5 +129,5 @@ git checkout -q 001-reviewed
 git merge -q --no-edit "$DEFAULT"
 check
 assert_eq 1 "$STATUS" 'missing policy denies identities'
-assert_contains "$OUTPUT" "reviewer 'code' is unregistered" 'migration gap explained'
+assert_contains "$OUTPUT" "reviewer 'code' is unregistered" 'missing explicit registration explained'
 finish

@@ -9,8 +9,6 @@
 # review_coverage_require_start requires a prior review_coverage_evaluate call, which defines
 # the nested covered() and sets independent, owner and fp_ready.
 # Inputs: verdict arrays v_rev, v_round, v_from, v_to, v_verdict, v_c, v_h, v_m and latest;
-# optional v_empty_clearance marks validated empty-content full PASS receipts. Their
-# start-to-start range grants no edge, but its end participates in latest coverage.
 # context root, id, rigor, fp_base, head, start, record_only, tier, policy_at, base_ref,
 # fp_cache, registry and REVIEW_FP_EMPTY. The caller also
 # owns v_l, v_link, v_line and order; verdict arrays, rows and notes are not modified here.
@@ -43,7 +41,7 @@ content_of() { # commit full
     content_fp="$(cat "$file.fp")"
 }
 # Receipt ends are authenticated content tokens, never commit-range verdicts.
-resolve_token() { # token (extra legacy call-site kind arguments are ignored)
+resolve_token() { # token
     tok_fp=""; tok_err=""
     if [ "$1" = start ]; then tok_fp="$REVIEW_FP_EMPTY"; return 0; fi
     if review_is_fp "$1"; then tok_fp="$1"; return 0; fi
@@ -106,8 +104,8 @@ review_coverage_evaluate() {
             block=false
             [ "${v_verdict[i]}" = PASS ] && [ "${v_c[i]}" = 0 ] && [ "${v_h[i]}" = 0 ] && { [ "$rigor" = light ] || [ "${v_m[i]}" = 0 ]; } || block=true
             l_idx+=("$i"); l_block+=("$block")
-            if resolve_token "${v_from[i]}" full; then l_fromfp+=("$tok_fp"); else l_fromfp+=(""); fi
-            if resolve_token "${v_to[i]}" full; then l_tofp+=("$tok_fp"); else l_tofp+=(""); fi
+            if resolve_token "${v_from[i]}"; then l_fromfp+=("$tok_fp"); else l_fromfp+=(""); fi
+            if resolve_token "${v_to[i]}"; then l_tofp+=("$tok_fp"); else l_tofp+=(""); fi
         done
     fi
     for k in ${l_idx[@]+"${!l_idx[@]}"}; do
@@ -185,13 +183,13 @@ review_coverage_evaluate() {
         done
         ! $record_only || continue
         if ! $fp_ready; then
-            for end in "$from" "$to"; do resolve_token "$end" none || problems+=("$label: $tok_err"); done
+            for end in "$from" "$to"; do resolve_token "$end" || problems+=("$label: $tok_err"); done
             continue
         fi
         from_fp=""
-        if resolve_token "$from" full; then from_fp="$tok_fp"; else problems+=("$label: $tok_err"); fi
-        if ! resolve_token "$to" full; then problems+=("$label: $tok_err"); continue; fi
-        if [ "$from_fp" = "$tok_fp" ] && [ "${v_empty_clearance[i]:-false}" != true ]; then
+        if resolve_token "$from"; then from_fp="$tok_fp"; else problems+=("$label: $tok_err"); fi
+        if ! resolve_token "$to"; then problems+=("$label: $tok_err"); continue; fi
+        if [ "$from_fp" = "$tok_fp" ]; then
             problems+=("$label: the range $from..$to is empty"); continue
         fi
         if covered "$tok_fp"; then coverage_end[i]=true; continue; fi

@@ -4,12 +4,7 @@
 |---------|-------------|
 | Public commands unavailable | Run the installer for the selected harness; or ask the agent to read `.prdkit/workflows/protocol.md` |
 | Missing workflow or template | `/prdkit-doctor`, then inspect `init.sh --check` before reinstalling |
-| Doctor or init: "needs a cutover" / 0.x layout | Between changes, run `/prdkit-init`; see [migrating to 1.0](migrating-to-1.0.md) |
-| Doctor: two canons | Finish the cutover (`compact.md`, Cutover): condense `specs/product-spec/`, `specs/targets/` and `specs/features/` into the spec and `specs/archive.md`, turn a feature the owner keeps open into a change record, then `git rm` them |
-| Doctor: archive on main | Condense `specs/archive/` into `specs/archive.md` and remove it with `git rm` (`compact.md`, Restructure); git keeps the files |
-| Doctor: `specs/archive.md` has no readable Last line or Base commit; `new-change.sh` stops: "an old feature number could be reused" | Write `**Base**: <sha>` (the main commit the cutover started from) and `**Last 0.x feature**: <NNN, or none>` as in `archive-template.md`, or pass `--number` |
-| Doctor: agent context names removed 0.x paths | Point `CLAUDE.md`/`AGENTS.md` at the current spec, and history questions at `specs/archive.md`; qualify another repository's path as `owner/repo:path` |
-| CI fails: a kit helper such as `check-artifacts.sh` not found | 1.0 removed it: `init.sh --check` lists each call under RETIRED; replace it ([migrating](migrating-to-1.0.md)); a `check-signoff.sh` step becomes `check-review.sh` ([CI gates](ci-gates.md)) |
+| Doctor or init: unsupported spec layout or install manifest | Use the current layout and manifest format named in the error. The kit does not convert older installations. |
 | Doctor: undefined or retired ID cited | Fix the citation, or retire the test that still cites a retired line in the same PR |
 | Doctor: malformed record | Each `specs/records.md` line is `TYPE id key=value … — reason`; the template comment lists the keys |
 | Doctor: file over its reading budget | Tighten the wording or split the file ([spec.md](../workflows/spec.md), Layout); never drop an item to fit, never pad up to a budget |
@@ -43,7 +38,7 @@
 | `cleanup-change.sh` says git refused the removal | The message carries git's reason, such as a locked worktree (`git worktree unlock <path>`); uncommitted changes are reported as such. Submodules alone never block it |
 | `cleanup-change.sh --closed` leaves a closed change's worktree | It removes only the layout `new-change.sh` creates, `.worktrees/<id>` on branch `<id>`. Remove any other worktree by id |
 | Agent context file huge, slow costly turns | Keep `CLAUDE.md`/`AGENTS.md` to orientation and pointers within `context-budget-bytes` |
-| Old `/prdkit-*` commands or helpers still installed | Run `init.sh --upgrade`; it removes kit files no longer shipped (`--check` lists them as RETIRED) |
+| Unsupported installed command or helper | Check the current kit mapping and reconcile the installation manually; `--upgrade` does not retire old kit files |
 | Upgrade kept an edited retired template | Fold what you need into the constitution or a 1.0 template, then delete it |
 | A helper exits 2: resolved root has no `.prdkit/` | Run the installed copy under `<project>/.prdkit/scripts/bash/` from a project whose Git root holds `.prdkit/` |
 | `init.sh` exits 2: unknown harness, or the list would drop a recorded one | Separate names with commas or spaces and keep every recorded harness; see [removing a harness](harnesses.md#removing-a-harness) |

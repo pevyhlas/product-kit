@@ -90,7 +90,7 @@ make_inited_project() {
     echo "$d"
 }
 
-# A 2.0 upgrade reads a committed install and local trusted default history.
+# An upgrade reads a committed installation.
 # Only for disposable fixtures: stage the prepared state and point origin/HEAD at it.
 snapshot_upgrade_fixture() {
     local project="${1:-}"

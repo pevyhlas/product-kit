@@ -48,14 +48,14 @@ for file in "${maintainer[@]}"; do
     if [ -e "$PROJ/.prdkit/scripts/bash/$(basename "$file")" ]; then _no "$(basename "$file") leaked"; else _ok "$(basename "$file") not installed"; fi
 done
 if [ -e "$PROJ/.prdkit/scripts/bash/maintainer" ] || grep -q 'maintainer' "$PROJ/.prdkit/.manifest"; then _no 'maintainer tooling leaked'; else _ok 'maintainer tooling outside the install and manifest'; fi
-for entry in .prdkit/ledger/ .prdkit/cache/ .prdkit/retrospective/ .worktrees/; do
+for entry in .prdkit/cache/ .worktrees/; do
     if grep -qxF "$entry" "$PROJ/.gitignore"; then _ok "$entry ignored"; else _no "$entry ignored"; fi
 done
-mkdir -p "$PROJ/.prdkit/retrospective"
-printf '{}\n' > "$PROJ/.prdkit/retrospective/001-x.enrich.json"
-run git -C "$PROJ" check-ignore -q .prdkit/retrospective/001-x.enrich.json
+mkdir -p "$PROJ/.prdkit/cache"
+printf '{}\n' > "$PROJ/.prdkit/cache/001-x.enrich.json"
+run git -C "$PROJ" check-ignore -q .prdkit/cache/001-x.enrich.json
 assert_eq 0 "$STATUS" "usage-enrichment input ignored by Git"
-rm -rf "$PROJ/.prdkit/retrospective"
+rm "$PROJ/.prdkit/cache/001-x.enrich.json"
 it "execution scratch stays ignored while templates and neutral playbooks install"
 mkdir -p "$PROJ/.prdkit/cache/implementation"
 printf 'unfinished task details\n' > "$PROJ/.prdkit/cache/implementation/001-demo.md"
@@ -65,18 +65,18 @@ snapshot_upgrade_fixture "$PROJ" || exit 1
 run bash .product-kit/scripts/init.sh --upgrade
 assert_eq 0 "$STATUS" "upgrade with execution scratch succeeds"
 assert_eq 'unfinished task details' "$(cat "$PROJ/.prdkit/cache/implementation/001-demo.md")" "upgrade leaves consumer scratch untouched"
-it "an upgrade adds the enrichment ignore entry once to a project seeded before it"
-grep -vxF '.prdkit/retrospective/' "$PROJ/.gitignore" > "$PROJ/.gitignore.old" || true
+it "an upgrade adds the cache ignore entry once to a project seeded before it"
+grep -vxF '.prdkit/cache/' "$PROJ/.gitignore" > "$PROJ/.gitignore.old" || true
 mv "$PROJ/.gitignore.old" "$PROJ/.gitignore"
 snapshot_upgrade_fixture "$PROJ" || exit 1
 run bash .product-kit/scripts/init.sh --upgrade
 assert_eq 0 "$STATUS" "upgrade succeeds"
-assert_contains "$OUTPUT" "Added '.prdkit/retrospective/' to .gitignore" "entry added on upgrade"
+assert_contains "$OUTPUT" "Added '.prdkit/cache/' to .gitignore" "entry added on upgrade"
 snapshot_upgrade_fixture "$PROJ" || exit 1
 run bash .product-kit/scripts/init.sh --upgrade
 assert_eq 0 "$STATUS" "repeat upgrade succeeds"
-assert_not_contains "$OUTPUT" "Added '.prdkit/retrospective/'" "not added twice"
-assert_eq 1 "$(grep -cxF '.prdkit/retrospective/' "$PROJ/.gitignore")" "entry present exactly once"
+assert_not_contains "$OUTPUT" "Added '.prdkit/cache/'" "not added twice"
+assert_eq 1 "$(grep -cxF '.prdkit/cache/' "$PROJ/.gitignore")" "entry present exactly once"
 it "manifest covers every installed file and includes workflow hashes"
 assert_contains "$(cat "$PROJ/.prdkit/.manifest")" "version: $(cat "$PK_ROOT/VERSION")" "version recorded"
 expected=0
@@ -155,17 +155,13 @@ echo 'LOCAL COMMAND EDIT' >> "$PROJ2/.opencode/commands/prdkit.md"
 run bash .product-kit/scripts/init.sh --check
 assert_eq 1 "$STATUS" "drift reported"
 for bucket in MODIFIED OUTDATED NEW KIT-OWNED; do assert_contains "$OUTPUT" "$bucket" "$bucket reported"; done
-assert_contains "$OUTPUT" '--upgrade refuses to overwrite these customizations' "2.0 check tells consumers to reconcile before upgrading"
-assert_not_contains "$OUTPUT" 'will OVERWRITE' "2.0 check does not promise to overwrite"
-printf '1.5.0\n' > .product-kit/VERSION
-run bash .product-kit/scripts/init.sh --check
-assert_contains "$OUTPUT" 'older installer may overwrite' "older-version behavior is distinguished"
-cp "$PK_ROOT/VERSION" .product-kit/VERSION
+assert_contains "$OUTPUT" '--upgrade refuses to overwrite these customizations' "check tells consumers to reconcile before upgrading"
+assert_not_contains "$OUTPUT" 'will OVERWRITE' "check does not promise to overwrite"
 assert_not_contains "$(cat "$PROJ2/.prdkit/templates/product-template.md")" 'NEW KIT PRODUCT' "check does not update"
 it "upgrade refreshes kit-owned and untouched files, preserves project edits"
 snapshot_upgrade_fixture "$PROJ2" || exit 1
 run bash .product-kit/scripts/init.sh --upgrade --copy
-assert_eq 1 "$STATUS" "2.0 refuses committed customizations to kit-owned files"
+assert_eq 1 "$STATUS" "upgrade refuses committed customizations to kit-owned files"
 assert_contains "$OUTPUT" "Customized overwrite/delete destination: .prdkit/workflows/change.md" "workflow edit named"
 assert_contains "$OUTPUT" "Customized overwrite/delete destination: .opencode/commands/prdkit.md" "command edit named"
 assert_contains "$(cat "$PROJ2/.prdkit/workflows/change.md")" 'LOCAL WORKFLOW EDIT' "refusal keeps the workflow"
@@ -287,77 +283,18 @@ run bash -c 'cd "$1" && bash .product-kit/scripts/init.sh --upgrade' _ "$PROJ5"
 assert_eq 0 "$STATUS" "plain upgrade succeeds in symlink mode"
 assert_symlink "$PROJ5/.claude/commands/prdkit.md" "plain upgrade preserves symlink mode"
 assert_contains "$(cat "$PROJ5/.prdkit/.manifest")" 'mode: symlink' "symlink mode stays recorded"
-it "pre-0.10 installs are inferred from their command files"
-( cd "$PROJ5" && bash .product-kit/scripts/init.sh --upgrade --copy ) >/dev/null 2>&1
-grep -v '^mode: ' "$PROJ5/.prdkit/.manifest" > "$PROJ5/.prdkit/.manifest.tmp"
-mv "$PROJ5/.prdkit/.manifest.tmp" "$PROJ5/.prdkit/.manifest"
-snapshot_upgrade_fixture "$PROJ5" || exit 1
-( cd "$PROJ5" && bash .product-kit/scripts/init.sh --upgrade ) >/dev/null 2>&1
-if [ -L "$PROJ5/.claude/commands/prdkit.md" ]; then _no "mode inferred from installed copies" "flipped to symlink"; else _ok "mode inferred from installed copies"; fi
-assert_contains "$(cat "$PROJ5/.prdkit/.manifest")" 'mode: copy' "inferred mode re-recorded"
-snapshot_upgrade_fixture "$PROJ5" || exit 1
-( cd "$PROJ5" && bash .product-kit/scripts/init.sh --upgrade --symlink ) >/dev/null 2>&1
-grep -v '^mode: ' "$PROJ5/.prdkit/.manifest" > "$PROJ5/.prdkit/.manifest.tmp"
-mv "$PROJ5/.prdkit/.manifest.tmp" "$PROJ5/.prdkit/.manifest"
-snapshot_upgrade_fixture "$PROJ5" || exit 1
-( cd "$PROJ5" && bash .product-kit/scripts/init.sh --upgrade ) >/dev/null 2>&1
-assert_symlink "$PROJ5/.claude/commands/prdkit.md" "mode inferred from installed symlinks"
-assert_contains "$(cat "$PROJ5/.prdkit/.manifest")" 'mode: symlink' "inferred symlink mode re-recorded"
-it "upgrade removes kit-installed commands the kit no longer ships"
-PROJ6="$(make_project)"; track_tmp "$PROJ6"
-( cd "$PROJ6" && bash .product-kit/scripts/init.sh --copy --harness claude,opencode ) >/dev/null 2>&1
-# Simulate a retired entry point an older kit installed and recorded in its manifest,
-# a dangling symlink from an old symlink install, and an unrecorded hand-made file.
-printf 'retired\n' > "$PROJ6/.claude/commands/prdkit-merge.md"
-printf 'retired\n' > "$PROJ6/.opencode/commands/prdkit-merge.md"
-retired_hash="$( (sha256sum "$PROJ6/.claude/commands/prdkit-merge.md" 2>/dev/null || shasum -a 256 "$PROJ6/.claude/commands/prdkit-merge.md") | cut -d' ' -f1)"
-printf '%s  .claude/commands/prdkit-merge.md\n%s  .opencode/commands/prdkit-merge.md\n' "$retired_hash" "$retired_hash" >> "$PROJ6/.prdkit/.manifest"
-ln -s ../../.product-kit/commands/prdkit-taskstoissues.md "$PROJ6/.claude/commands/prdkit-taskstoissues.md"
-printf 'mine\n' > "$PROJ6/.claude/commands/prdkit-local.md"
-mkdir -p "$PROJ6/tools" && printf 'own\n' > "$PROJ6/tools/mycmd.md"
-ln -s ../../tools/mycmd.md "$PROJ6/.claude/commands/prdkit-mine.md"
-run bash -c "cd '$PROJ6' && bash .product-kit/scripts/init.sh --check"
-assert_contains "$OUTPUT" "RETIRED" "check reports retired commands"
-assert_contains "$OUTPUT" ".claude/commands/prdkit-merge.md" "recorded retired command listed"
-assert_contains "$OUTPUT" "prdkit-local.md (not recorded as kit-installed; kept" "unrecorded file flagged, not claimed"
-assert_file "$PROJ6/.claude/commands/prdkit-merge.md" "check is read-only"
+it "an installed file absent from the current mapping blocks upgrade without deletion"
+ZERO_HASH="$(printf '%064d' 0)"
+PROJ6="$(make_inited_project)"; track_tmp "$PROJ6"
+cp "$PROJ6/.prdkit/scripts/bash/common.sh" "$PROJ6/.prdkit/scripts/bash/earlier.sh"
+printf '%s  .prdkit/scripts/bash/earlier.sh\n' "$ZERO_HASH" >> "$PROJ6/.prdkit/.manifest"
 snapshot_upgrade_fixture "$PROJ6" || exit 1
-run bash -c "cd '$PROJ6' && bash .product-kit/scripts/init.sh --upgrade"
-assert_eq 0 "$STATUS" "upgrade with retired commands succeeds"
-assert_contains "$OUTPUT" "Removed 3 retired kit command(s)" "removal reported"
-if [ -e "$PROJ6/.claude/commands/prdkit-merge.md" ] || [ -e "$PROJ6/.opencode/commands/prdkit-merge.md" ]; then _no "recorded retired commands removed"; else _ok "recorded retired commands removed"; fi
-if [ -L "$PROJ6/.claude/commands/prdkit-taskstoissues.md" ]; then _no "dangling retired symlink removed"; else _ok "dangling retired symlink removed"; fi
-assert_file "$PROJ6/.claude/commands/prdkit-local.md" "unrecorded regular file preserved"
-assert_symlink "$PROJ6/.claude/commands/prdkit-mine.md" "user-made symlink outside the kit preserved"
-assert_contains "$OUTPUT" "prdkit-mine.md" "preserved user symlink named in a warning"
-assert_contains "$OUTPUT" "prdkit-local.md" "preserved file named in a warning"
-assert_not_contains "$(cat "$PROJ6/.prdkit/.manifest")" "prdkit-merge.md" "manifest no longer records the retired command"
-assert_file "$PROJ6/.claude/commands/prdkit.md" "current public commands remain installed"
-it "upgrade removes retired kit scripts and unmodified templates, keeps edited ones"
-PROJ7="$(make_project)"; track_tmp "$PROJ7"
-( cd "$PROJ7" && bash .product-kit/scripts/init.sh --copy ) >/dev/null 2>&1
-# Simulate files an older kit installed and recorded: a helper and two templates it no longer ships.
-printf '#!/usr/bin/env bash\n' > "$PROJ7/.prdkit/scripts/bash/record-analysis.sh"
-printf '# Handover\n' > "$PROJ7/.prdkit/templates/handover-template.md"
-printf '# Old\n' > "$PROJ7/.prdkit/templates/old-template.md"
-for rel in .prdkit/scripts/bash/record-analysis.sh .prdkit/templates/handover-template.md .prdkit/templates/old-template.md; do
-    printf '%s  %s\n' "$( (sha256sum "$PROJ7/$rel" 2>/dev/null || shasum -a 256 "$PROJ7/$rel") | cut -d' ' -f1)" "$rel" >> "$PROJ7/.prdkit/.manifest"
+for flag in --check --upgrade; do
+    run bash "$PROJ6/.product-kit/scripts/init.sh" --target "$PROJ6" "$flag"
+    assert_eq 1 "$STATUS" "unsupported install entry refuses $flag"
+    assert_contains "$OUTPUT" 'earlier.sh is not in the current kit mapping'
+    assert_eq '' "$(git -C "$PROJ6" status --porcelain)" 'refusal performs no writes'
 done
-printf 'Local edit.\n' >> "$PROJ7/.prdkit/templates/old-template.md"
-run bash -c "cd '$PROJ7' && bash .product-kit/scripts/init.sh --check"
-assert_contains "$OUTPUT" ".prdkit/scripts/bash/record-analysis.sh" "check lists the retired helper"
-assert_contains "$OUTPUT" "old-template.md (edited since install; kept" "edited retired template flagged"
-assert_file "$PROJ7/.prdkit/scripts/bash/record-analysis.sh" "check is read-only"
-snapshot_upgrade_fixture "$PROJ7" || exit 1
-run bash -c "cd '$PROJ7' && bash .product-kit/scripts/init.sh --upgrade"
-assert_eq 0 "$STATUS" "upgrade with retired kit files succeeds"
-assert_contains "$OUTPUT" "Removed 2 retired kit file(s)" "removal reported"
-if [ -e "$PROJ7/.prdkit/scripts/bash/record-analysis.sh" ] || [ -e "$PROJ7/.prdkit/templates/handover-template.md" ]; then
-    _no "retired helper and unmodified template removed"; else _ok "retired helper and unmodified template removed"; fi
-assert_file "$PROJ7/.prdkit/templates/old-template.md" "edited template preserved"
-assert_not_contains "$(cat "$PROJ7/.prdkit/.manifest")" "record-analysis.sh" "manifest no longer records the retired helper"
-run bash -c "cd '$PROJ7' && bash .prdkit/scripts/bash/doctor.sh --json"
-assert_not_contains "$OUTPUT" "Missing installed file" "doctor reports nothing missing after the upgrade"
 
 # Containment: each project below sits in its own base directory, so a sentinel next to it is
 # outside the target but inside the test's scratch space.
@@ -369,22 +306,18 @@ contained_project() { # echoes the project dir, inside a fresh tracked base dire
     mv "$proj" "$base/proj" && echo "$base/proj"
 }
 hash_of() { (sha256sum "$1" 2>/dev/null || shasum -a 256 "$1") | cut -d' ' -f1; }
-ZERO_HASH="$(printf '%064d' 0)"
 
-it "a manifest path outside the installed layout is ignored, never deleted"
+it "a manifest path outside the installed layout fails without writes"
 PROJ8="$(contained_project)"; track_tmp "${PROJ8%/proj}"
 ( cd "$PROJ8" && bash .product-kit/scripts/init.sh --copy ) >/dev/null 2>&1
 printf 'outside\n' > "${PROJ8%/proj}/victim.sh"
 printf '%s  .prdkit/scripts/bash/../../../../victim.sh\n' "$ZERO_HASH" >> "$PROJ8/.prdkit/.manifest"
-run bash -c "cd '$PROJ8' && bash .product-kit/scripts/init.sh --check"
-assert_not_contains "$OUTPUT" "RETIRED — installed kit files" "check does not list it as retired"
-assert_contains "$OUTPUT" "ignoring a .prdkit/.manifest entry outside the installed layout" "check warns"
 snapshot_upgrade_fixture "$PROJ8" || exit 1
-run bash -c "cd '$PROJ8' && bash .product-kit/scripts/init.sh --upgrade"
-assert_eq 0 "$STATUS" "upgrade succeeds"
-assert_file "${PROJ8%/proj}/victim.sh" "a file outside the project survives the upgrade"
-assert_contains "$OUTPUT" "ignoring a .prdkit/.manifest entry outside the installed layout" "upgrade warns"
-assert_not_contains "$(cat "$PROJ8/.prdkit/.manifest")" "victim.sh" "the rewritten manifest drops the entry"
+run bash "$PROJ8/.product-kit/scripts/init.sh" --target "$PROJ8" --upgrade
+assert_eq 1 "$STATUS" "format error blocks upgrade"
+assert_contains "$OUTPUT" "SHA-256 entries for installed kit paths"
+assert_file "${PROJ8%/proj}/victim.sh" "a file outside the project survives"
+assert_eq '' "$(git -C "$PROJ8" status --porcelain)" 'no writes'
 
 it "upgrade refuses a kit-owned symlink instead of writing through it"
 PROJ9="$(contained_project)"; track_tmp "${PROJ9%/proj}"
@@ -395,7 +328,7 @@ ln -s "${PROJ9%/proj}/sentinel" "$PROJ9/.prdkit/scripts/bash/status.sh"
 ln -s "${PROJ9%/proj}/sentinel" "$PROJ9/.prdkit/workflows/change.md"
 snapshot_upgrade_fixture "$PROJ9" || exit 1
 run bash -c "cd '$PROJ9' && bash .product-kit/scripts/init.sh --upgrade"
-assert_eq 1 "$STATUS" "2.0 does not overwrite either customization"
+assert_eq 1 "$STATUS" "upgrade does not overwrite either customization"
 assert_contains "$OUTPUT" "Customized overwrite/delete destination: .prdkit/scripts/bash/status.sh" "replaced helper named"
 assert_contains "$OUTPUT" "Customized overwrite/delete destination: .prdkit/workflows/change.md" "replaced workflow named"
 assert_eq "outside" "$(cat "${PROJ9%/proj}/sentinel")" "the link target outside the project is unchanged"

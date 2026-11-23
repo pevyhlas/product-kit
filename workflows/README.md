@@ -11,7 +11,7 @@ Read [protocol.md](protocol.md) first, then only the operation you need.
 | [review](review.md) | Review, merge and close a change; review carriers |
 | [status](status.md) | Generated status and answering from it |
 | [inbox](inbox.md) | Owner-input review, stable questions, answer processing and incorporation |
-| [compact](compact.md) | Cutover from 0.x, and compaction |
+| [compact](compact.md) | Spec and log compaction |
 | [init](init.md) | Adopt the kit |
 | [configure](configure.md) | Constitution, capabilities, settings |
 | [learn](learn.md) | Outcomes against thesis and hypotheses |

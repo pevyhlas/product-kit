@@ -105,7 +105,7 @@ positive owner approval. Future coverage exemptions must retain this pre-coverag
 
 Only a later valid APPROVED review by the issuer clears its barrier. Invalid or unwitnessed
 approval leaves the earlier negative standing. Positive approval is still required for
-substantive T3 and owner/unnamed legacy clearance, not for every tier. T3 uses the latest
+substantive T3, not for every tier. T3 uses the latest
 decisive native review, with no standing owner barrier. The approved commit's L0/L1 slice must
 match the checked head. A code fix or rebase can keep it; an L0/L1 edit needs approval again. The gate
 confirms the commit was the head strictly before submission using all activity types and the
@@ -114,14 +114,14 @@ a commit (record-only is enough), then approve again. Retention is not known. Ow
 receipts and record lines never approve; an owner-authored T3 PR needs a different PR author.
 Missing identities, duplicate review ids, unknown states and incomplete enumeration are
 unavailable authority, never an event-free exemption. Native barriers belong to the current
-repository/PR; they grant no cross-PR PASS authority or automatic legacy-history clearance.
+repository/PR; they grant no cross-PR PASS authority.
 
 ### Repairing an edited or invalid receipt
 
 Keep the publisher log outside every working tree, under the absolute Git common directory:
 `$(git -C <fetch-clone> rev-parse --git-common-dir)/prdkit/receipts/<pr>/<receipt-id>.json`.
 It must **never be maker-writable**; protect it with the publisher credential. Symlinked log
-components are refused. Old `.prdkit/cache/receipts/` logs are never read or migrated.
+components are refused.
 Online publishing syncs the payload and its directory entries before creating a pending
 review, then syncs its ID mapping before submitting it as a COMMENT. Pending reviews do not
 count. If the response or mapping write fails, use `publish-review.sh --pr <url> --resume
@@ -146,23 +146,16 @@ A repair keeps the original host position and PR scope; a repaired old PASS gran
 on the new PR. Repairs survive a closed or merged carrier. A lost log can leave a permanent
 blocker; preserve it outside the maker's reach along with the publisher credential.
 
-### PR scope and legacy blockers
+### PR scope
 
 Only this PR's checked-change receipts grant coverage. All blocking receipts on this PR count,
 even for a renamed, deleted or sibling change. Standing blockers carry from closed, unmerged
 PRs of the same head branch; merged PRs contribute only repairs. An unreadable source is
 unavailable, not empty. Renaming the branch to escape carry remains a residual risk.
 
-1.x PASS lines grant nothing and are never converted. The blocker-only Git history scan keeps
-FAIL, blocking-count and unreadable State lines, including lines removed with a carrier record.
-They clear only through the same reviewer's clean native full PASS on this PR for the origin
-or checked change, whose reviewed head/base_at history includes the blocker. Owner and unnamed
-blockers need the owner's valid native approval with the same historical-inclusion check.
-For genuinely empty content, `--clears-legacy` permits that reviewer's clean full PASS only
-when the scan finds its blocker; it creates no coverage edge. Added content expires that
-clearance, not the receipt: a later clean full PASS can clear normally. Rewriting pre-merge
-branch history to erase a newly introduced line remains a residual; inherited default-branch
-lines stay protected. The scan lasts through 2.x. The transition installs no converted PASS.
+A change record uses `## State` for workflow state, not review verdicts. An active
+`**Review**:` field in checked record history is rejected; use native `prdkit.review.v3`
+host receipts. Rewriting branch history before review remains a residual risk.
 
 ## Merge
 

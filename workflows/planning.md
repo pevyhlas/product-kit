@@ -64,8 +64,8 @@ timebox/investment boundary, whichever comes first.
 On adoption/resume, reconstruct missing fields from actual records and owner direction before
 selecting more work. If history or consumption cannot be reconciled, record `unknown`, not zero;
 do not invent a new baseline. Ordinary State prose such as an `**Outcome**:`
-result is not a programme goal; status still reads a legacy 1.3.1 checkpoint outside the block,
-and doctor advises moving its keys in. Count/reset/reassessment rules are in
+result is not a programme goal. Record programme checkpoint fields only under
+`### Outcome checkpoint` in State. Count/reset/reassessment rules are in
 [implementation.md](implementation.md). These fields report recorded claims, not machine-verified
 progress or action permission: the helper's count comparison cannot evaluate prose deadlines,
 effort, lane drift, evidence validity or criticality, so the operational lead checks those too.

@@ -35,7 +35,7 @@ assert_contains "$(cat "$PROJ/.gitignore")" ".worktrees/" ".worktrees/ is ignore
 
 it "numbering increments to 002 even when 001 lives only in a worktree"
 assert_contains "$OUTPUT" '"UNCARRIED_SPECS":[]' "nothing left behind on a clean checkout"
-mkdir -p specs; printf '2026-10-17 owner "make export async" → open\n' > specs/inbox.md
+mkdir -p specs; printf '### Make export async\n*2026-10-17 · owner · processing*\n' > specs/inbox.md
 run bash "$SCRIPT" --json --short-name "next-thing" "Another change entirely"
 assert_contains "$OUTPUT" '"CHANGE_ID":"002-next-thing"' "second change is 002"
 
@@ -279,26 +279,14 @@ assert_eq 0 "$STATUS" "doctor reads the created record: $OUTPUT"
 run jq -e '.result == "pass"' <<< "$OUTPUT"
 assert_eq 0 "$STATUS" "doctor emits a passing JSON report"
 
-it "stripping the current and v1.3.2 checkpoint comments keeps the closing-line suffix and remaining content"
-NUM_SUFFIX=2
-for opener in \
-    '<!-- A programme or continuing follow-up queue (workflows/planning.md, Protect the outcome):' \
-    '<!-- For a programme/continuing follow-up queue, fill the outcome checkpoint here (change.md).'; do
-    printf '## State\r\n%s\r\n### Outcome checkpoint\r\n-->  <p>Keep this instruction.</p> \t\r\n\r\n## Notes\r\nLast line without a newline  ' "$opener" > "$TEMPLATE"
-    printf '## State\n%s\n  <p>Keep this instruction.</p> \t\n\n## Notes\nLast line without a newline  \n' "$POINTER" > .git/expected
-    run bash .prdkit/scripts/bash/new-change.sh --no-branch --number "$NUM_SUFFIX" --short-name suffix "Check closing text"
-    assert_eq 0 "$STATUS" "ordinary creation succeeds for $opener"
-    SUFFIX_RECORD="specs/changes/00$NUM_SUFFIX-suffix.md"
-    assert_contains "$(cat "$SUFFIX_RECORD")" '<p>Keep this instruction.</p>' "closing-line text is not discarded"
-    assert_not_contains "$(cat "$SUFFIX_RECORD")" '### Outcome checkpoint' "recognized scaffold is removed"
-    run cmp -s .git/expected "$SUFFIX_RECORD"
-    assert_eq 0 "$STATUS" "the remaining content is byte-for-byte unchanged apart from LF normalization"
-    NUM_SUFFIX=$((NUM_SUFFIX + 1))
-done
+it "a retired checkpoint scaffold fails with the current template format"
+printf '%s\n' '## State' '<!-- A programme or continuing follow-up queue (workflows/planning.md):' '### Outcome checkpoint' '-->' > "$TEMPLATE"
+run bash .prdkit/scripts/bash/new-change.sh --no-branch --number 2 --short-name obsolete "Check an unsupported template"
+assert_eq 1 "$STATUS" 'unsupported stock scaffold rejected'
+assert_contains "$OUTPUT" 'current outcome checkpoint pointer'
+printf '%s\n' '## State' '### Outcome checkpoint' '**Outcome**: The result' > "$TEMPLATE"
 
 it "--programme keeps a checkpoint already present in a custom change template"
-awk '{ sub(/\r$/, ""); print }' "$TEMPLATE" > .git/legacy-template
-cp .git/legacy-template "$TEMPLATE"
 run bash .prdkit/scripts/bash/new-change.sh --programme --no-branch --number 4 --short-name existing "Keep the existing scaffold"
 assert_eq 0 "$STATUS" "the custom template already has a checkpoint"
 run cmp -s "$TEMPLATE" specs/changes/004-existing.md
@@ -387,21 +375,21 @@ assert_contains "$OUTPUT" '"CHANGE_ID":"021-after-entry"' "an entry file in spec
 git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; git -C "$PROJ2" branch -q -D 021-after-entry
 rm -rf "$PROJ2/specs/changes" "$PROJ2/specs/log"
 
-it "legacy CRLF logs still reserve closed change IDs for allocation"
-legacy="$(make_inited_project)" || exit 1
-track_tmp "$legacy"
-mkdir -p "$legacy/specs"
-printf -- '- 2026-10-01 001-repeat: already closed\r\n' > "$legacy/specs/log.md"
-git -C "$legacy" -c core.autocrlf=false add -A && git -C "$legacy" commit -qm installed || exit 1
-run bash -c 'cd "$1" && bash .prdkit/scripts/bash/new-change.sh --json Repeat' _ "$legacy"
-assert_eq 0 "$STATUS" "legacy log claims remain readable"
-assert_contains "$OUTPUT" '"CHANGE_ID":"002-repeat"' "the committed log alone reserves 001-repeat"
-assert_file "$legacy/.worktrees/002-repeat/specs/changes/002-repeat.md"
-[ ! -e "$legacy/.worktrees/001-repeat" ] || _no 'no worktree reuses the closed ID'
+it "invalid CRLF logs stop number allocation"
+badlog="$(make_inited_project)" || exit 1
+track_tmp "$badlog"
+mkdir -p "$badlog/specs"
+printf -- '- 2026-10-01 001-repeat: already closed\r\n' > "$badlog/specs/log.md"
+git -C "$badlog" -c core.autocrlf=false add -A && git -C "$badlog" commit -qm installed || exit 1
+run bash -c 'cd "$1" && bash .prdkit/scripts/bash/new-change.sh --json Repeat' _ "$badlog"
+assert_eq 1 "$STATUS" "unsupported text stops allocation"
+assert_contains "$OUTPUT" "expected LF-terminated Markdown"
+[ ! -e "$badlog/.worktrees/002-repeat" ] || _no "no worktree is created"
+[ ! -e "$badlog/.worktrees/001-repeat" ] || _no 'no worktree reuses the closed ID'
 
 it "a log condensed into specs/archive.md keeps its numbers reserved"
 # shellcheck disable=SC2016 # backticks are Markdown code spans, not command substitution
-printf '# Demo — archive\n\n**Last 0.x feature**: none\n\n**Log condensed through**: 040; those entries: `git show abc1234:specs/log.md`.\n' > "$PROJ2/specs/archive.md"
+printf '# Demo — archive\n\n**Log condensed through**: 040; those entries: `git show abc1234:specs/log.md`.\n' > "$PROJ2/specs/archive.md"
 run bash "$SCRIPT2" --json --no-worktree --short-name "after-condensed" "desc"
 assert_contains "$OUTPUT" '"CHANGE_ID":"041-after-condensed"' "condensed through 040 forces 041"
 git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; git -C "$PROJ2" branch -qD 041-after-condensed; rm -rf "$PROJ2/specs/changes"
@@ -411,7 +399,7 @@ assert_contains "$OUTPUT" 'change number 035 is reserved: specs/archive.md conde
 assert_eq absent "$([ -e "$PROJ2/specs/changes/035-explicit-old.md" ] && echo present || echo absent)" "no record is created"
 # shellcheck disable=SC2016 # backticks are Markdown code spans, not command substitution
 for value in '040 — entries at `git show 9f81234:specs/log.md`' '040 as of 2026-10-30'; do
-    printf '# Demo — archive\n\n**Last 0.x feature**: none\n\n**Log condensed through**: %s\n' "$value" > "$PROJ2/specs/archive.md"
+    printf '# Demo — archive\n\n**Log condensed through**: %s\n' "$value" > "$PROJ2/specs/archive.md"
     run bash "$SCRIPT2" --json --no-worktree --short-name "after-mark" "desc"
     assert_contains "$OUTPUT" '"CHANGE_ID":"041-after-mark"' "a sha or date after the number is no number: $value"
     git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; git -C "$PROJ2" branch -qD 041-after-mark; rm -rf "$PROJ2/specs/changes"
@@ -479,36 +467,19 @@ assert_contains "$OUTPUT" "Notice: change number 060 is also held by planned in 
 git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; rm -rf "$PROJ2/specs/changes"
 printf '**Last 0.x feature**: 036\n' > "$PROJ2/specs/archive.md"
 run bash "$SCRIPT2" --json --no-worktree --number 20 --short-name other "desc"
-assert_contains "$OUTPUT" "Notice: change number 020 is also held by specs/archive.md, 0.x features through 036-" "a number the archive's 0.x features cover"
-git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; rm -rf "$PROJ2/specs/changes" "$PROJ2/specs/product" "$PROJ2/specs/archive.md"
-git -C "$PROJ2" branch -qD 060-export 012-other 060-other 020-other
+assert_eq 1 "$STATUS" "unsupported archive counter is refused"
+assert_contains "$OUTPUT" "Log condensed through"
+rm -rf "$PROJ2/specs/changes" "$PROJ2/specs/product" "$PROJ2/specs/archive.md"
+git -C "$PROJ2" branch -qD 060-export 012-other 060-other
 
-it "0.x feature folders still on disk (before the cutover), live or archived, stay reserved"
-mkdir -p "$PROJ2/specs/features/_archive/020-old-feature"
-run bash "$SCRIPT2" --json --no-worktree --short-name "after-features" "desc"
-assert_contains "$OUTPUT" '"CHANGE_ID":"021-after-features"' "archived feature 020 forces 021"
-git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; rm -rf "$PROJ2/specs/changes"
-mkdir -p "$PROJ2/specs/archive/features/_archive/030-cut-over"
-run bash "$SCRIPT2" --json --no-worktree --short-name "after-cutover" "desc"
-assert_contains "$OUTPUT" '"CHANGE_ID":"031-after-cutover"' "archived canon 030 forces 031"
-git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; rm -rf "$PROJ2/specs/changes"
-
-it "an archive.md that yields no 0.x feature number stops auto-numbering instead of reusing one"
-rm -rf "$PROJ2/specs/features" "$PROJ2/specs/archive"
-cp "$PROJ2/.prdkit/templates/archive-template.md" "$PROJ2/specs/archive.md"
-run bash "$SCRIPT2" --json --no-worktree --short-name "from-template" "desc"
-assert_eq 1 "$STATUS" "the unfilled template fails closed"
-assert_contains "$OUTPUT" "names no **Base** commit in this repository and no readable **Last 0.x feature** line" "the cause is named"
-assert_contains "$OUTPUT" "or pass --number" "the way out is named"
-assert_eq "$MAIN_BRANCH" "$(git -C "$PROJ2" branch --show-current)" "no branch was created"
-run bash "$SCRIPT2" --json --no-worktree --number 32 --short-name "from-template" "desc"
-assert_contains "$OUTPUT" '"CHANGE_ID":"032-from-template"' "an explicit --number still works"
-git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; rm -rf "$PROJ2/specs/changes"
-# shellcheck disable=SC2016 # backticks are Markdown code spans, not command substitution
-printf '# Demo — archive\n\n**Base**: `abc1234`, main before the cutover.\n**Last 0.x feature**: 036; new changes number above it.\n' > "$PROJ2/specs/archive.md"
-run bash "$SCRIPT2" --json --no-worktree --short-name "after-archive" "desc"
-assert_contains "$OUTPUT" '"CHANGE_ID":"037-after-archive"' "the last 0.x feature 036 forces 037"
-git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; rm -rf "$PROJ2/specs/changes" "$PROJ2/specs/archive.md"
+it "unsupported feature folders block numbering before a record is written"
+mkdir -p "$PROJ2/specs/features/020-previous"
+printf '# Unsupported folder\n' > "$PROJ2/specs/features/020-previous/spec.md"
+run bash "$SCRIPT2" --json --no-worktree --short-name current "desc"
+assert_eq 1 "$STATUS" 'unsupported layout refused'
+assert_contains "$OUTPUT" 'specs/changes/<id>.md records'
+assert_eq "$MAIN_BRANCH" "$(git -C "$PROJ2" branch --show-current)" 'no branch was created'
+rm -rf "$PROJ2/specs/features"
 
 it "a sibling worktree's open change raises the next number"
 SIB_PARENT="$(mktemp -d)"; track_tmp "$SIB_PARENT"
@@ -560,57 +531,6 @@ run env PATH="$STUB_DIR:$PATH" bash "$PROJ3/.prdkit/scripts/bash/new-change.sh" 
 assert_eq 0 "$STATUS" "script exits 0 despite the collision"
 assert_contains "$OUTPUT" "change number 001 taken by local branch 001-raced, using 002" "notice names the source and the new number"
 assert_contains "$OUTPUT" '"CHANGE_ID":"002-raced"' "change lands on the bumped number"
-
-# --- After the cutover the folders are gone from main: git keeps their numbers --------------------
-PROJ4="$(make_inited_project)"; track_tmp "$PROJ4"
-PROJ4="$(cd "$PROJ4" && pwd -P)"
-cd "$PROJ4" || exit 1
-mkdir -p specs/features/012-mid specs/features/036-last
-echo '# x' > specs/features/012-mid/spec.md; echo '# y' > specs/features/036-last/spec.md
-git add -A >/dev/null 2>&1; git commit -qm "0.x" >/dev/null
-BASE4="$(git rev-parse HEAD)"
-git rm -rq specs/features; git commit -qm cutover >/dev/null
-MAIN4="$(git branch --show-current)"
-next4() { # dir archive.md-content ('' = no file): the change id new-change.sh picks there
-    mkdir -p "$1/specs"; rm -f "$1/specs/archive.md"; [ -z "$2" ] || printf '%s\n' "$2" > "$1/specs/archive.md"
-    run bash -c 'cd "$1" && bash .prdkit/scripts/bash/new-change.sh --json --no-worktree --short-name probe probe' _ "$1"
-    ID4="$(printf '%s' "$OUTPUT" | sed -n 's/.*"CHANGE_ID":"\([^"]*\)".*/\1/p')"
-    git -C "$1" checkout -q "$MAIN4"; [ -z "$ID4" ] || git -C "$1" branch -qD "$ID4"; rm -rf "$1/specs/changes"
-}
-# shellcheck disable=SC2016 # backticks are Markdown code spans, not command substitution
-VARIANTS=("" '**Last 0.x feature**: 036; new changes number above it.' '- **Last 0.x feature**: 036'
-    '**Last 0.x feature:** 036' '**Last 0.x feature** — 036' '**Last 0.x features**: 001–036'
-    '**Last 0.x feature number**: 036' '## Last 0.x feature: 036' "$(printf '**Last 0.x feature**:\n036')"
-    '**Last 0.X feature**: 036' '**Last 0.x feature**: `036-last`' '**Last 0.x feature**: 001-036 (036-last)'
-    '**Last 0.x feature**: none before 2026-10-20' '| Last 0.x feature | 036 |')
-
-it "removed 0.x feature numbers stay reserved from git history, whatever archive.md says"
-for variant in "${VARIANTS[@]}"; do
-    next4 "$PROJ4" "$variant"; assert_eq "037-probe" "$ID4" "archive.md: ${variant:-missing}"
-done
-
-it "the base commit archive.md records reserves the feature folders it held"
-git checkout -q -b side "$BASE4"; mkdir -p specs/features/050-side; echo '# z' > specs/features/050-side/spec.md
-git add -A >/dev/null 2>&1; git commit -qm side >/dev/null; SIDE4="$(git rev-parse HEAD)"; git checkout -q "$MAIN4"
-next4 "$PROJ4" "$(printf '# Demo — archive\n\n**Base**: %s, main before the cutover.' "$SIDE4")"
-assert_eq "051-probe" "$ID4" "050 at the base forces 051, though history on main never removed it"
-
-it "in a shallow clone, without that history, archive.md reserves the numbers or numbering stops"
-echo x > later.txt; git add later.txt; git commit -qm later >/dev/null
-SHALLOW="$(mktemp -d)"; track_tmp "$SHALLOW"; rmdir "$SHALLOW"
-git clone -q --depth 1 "file://$PROJ4" "$SHALLOW" 2>/dev/null; SHALLOW="$(cd "$SHALLOW" && pwd -P)"
-for variant in "${VARIANTS[@]:1:11}" "${VARIANTS[13]}"; do
-    next4 "$SHALLOW" "$variant"; assert_eq "037-probe" "$ID4" "shallow, archive.md: $variant"
-done
-next4 "$SHALLOW" '**Last 0.x feature**: none'
-assert_eq "001-probe" "$ID4" "none says there were no 0.x features"
-next4 "$SHALLOW" ""
-assert_eq "001-probe" "$ID4" "no archive.md: numbering goes on"
-assert_contains "$OUTPUT" "Warning: shallow clone" "with a warning that removed folders are not in its history"
-next4 "$SHALLOW" "$(printf '# Demo — archive\n\n**Base**: %s.' "$BASE4")"
-assert_eq "" "$ID4" "a base the clone lacks and no Last line: numbering stops"
-assert_contains "$OUTPUT" "an old feature number could be reused" "and says why"
-
 
 it "a submodule install keeps its slash commands in a new change worktree"
 # The documented install: the kit as a real submodule, the default installer, a committed install,

@@ -297,13 +297,21 @@ cat > specs/inbox.md <<'MD'
 <!-- <date> <owner|agent> "<words>" → open
 2020-01-01 owner "a format example, never parsed" → open -->
 
-2026-10-01 owner "Add CSV export" → folded: 004-export
-2026-10-05 agent "Managed export service or library? Recommend library; default library" → open
-2026-10-06 owner "Ship before the fair"
-2026-10-16T09:10Z owner "go ahead with the export" → open
 Notes that are not an inbox line
 
 ## Waiting for you
+
+### Add CSV export
+*2026-10-01 · owner · folded: 004-export*
+
+### Managed export service or library?
+*2026-10-05 · agent · open*
+
+### Ship before the fair
+*2026-10-06 · agent*
+
+### Go ahead with the export
+*2026-10-16T09:10Z · owner · processing*
 
 ### Keep the CSV header row?
 *2026-10-08 · agent · open*
@@ -381,7 +389,7 @@ assert_contains "$OUTPUT" "2026-10-05 agent, 12 days:" "open question with age"
 assert_contains "$OUTPUT" "(no disposition)" "line without a disposition surfaced"
 assert_not_contains "$OUTPUT" "Add CSV export" "folded line is not queued"
 assert_not_contains "$OUTPUT" "format example" "comment lines are never parsed"
-assert_contains "$OUTPUT" "2026-10-16 owner, 1 days: \"go ahead with the export\"" "a timestamped line is queued"
+assert_contains "$OUTPUT" "Go ahead with the export" "timestamped owner direction is visible"
 assert_contains "$OUTPUT" "2026-10-08 agent, 9 days: Keep the CSV header row?" "a headed item is queued by its title"
 assert_not_contains "$OUTPUT" "Notes that are not" "an unparsed line is not queued"
 
@@ -485,15 +493,12 @@ fi
 chmod 600 specs/log.md
 git rm -fq -- specs/log.md
 
-it "live 0.x canon beside the 1.0 spec is two canons; values with quotes stay valid JSON"
+it "unsupported spec layouts stop status"
 mkdir -p specs/targets/t1; : > specs/targets/t1/target.md
-printf '2026-10-07 owner "say \\"hi\\" \\\\ now" → open\n' >> specs/inbox.md
-run bash "$STATUS_SH"
-assert_contains "$OUTPUT" "Two canons" "both layouts flagged"
 run bash "$STATUS_SH" --json
-if command -v python3 >/dev/null 2>&1; then
-    if printf '%s' "$OUTPUT" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; then _ok "escaped JSON"; else _no "escaped JSON" "$OUTPUT"; fi
-fi
+assert_eq 1 "$STATUS" "status fails rather than reporting incomplete state"
+assert_contains "$OUTPUT" "specs/changes/<id>.md records" "current layout named"
+rm specs/targets/t1/target.md
 
 it "the parts table's Maturity column is found by its header"
 P11="$(make_inited_project)"; track_tmp "$P11"

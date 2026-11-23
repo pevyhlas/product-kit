@@ -412,7 +412,7 @@ bounded 120 "$root/fsck.out" "$root/fsck.err" git -C "$objects" fsck --full --no
 extract() {
     local file entry mode kind blob path
     for file in check-review.sh common.sh spec-lib.sh spec-navigation-lib.sh review-policy-lib.sh review-fingerprint-lib.sh \
-        review-coverage-lib.sh review-receipts-lib.sh review-owner-lib.sh review-legacy-lib.sh; do
+        review-coverage-lib.sh review-receipts-lib.sh review-owner-lib.sh; do
         path=".prdkit/scripts/bash/$file"
         entry="$(git -C "$objects" ls-tree "$policy" -- "$path")" || return 1
         read -r mode kind blob path <<< "$entry"

@@ -4,13 +4,12 @@
 **Writes**: none.
 **Result**: concrete findings and the smallest repair for each.
 
-Run `.prdkit/scripts/bash/doctor.sh` (`--json`, `--strict`): 0.x layout or two canons, a
-`specs/archive/` folder on main, a `specs/archive.md` whose base commit or last 0.x feature
-cannot be read, agent context naming removed 0.x paths, files over their reading budgets, cited
+Run `.prdkit/scripts/bash/doctor.sh` (`--json`, `--strict`): unsupported formats, competing spec forms,
+files over their reading budgets, cited
 IDs that are undefined or retired, malformed records, a closed change without its log entry,
 a malformed `specs/log/<id>.md`, a reviewed record merged without closing,
 past-due hold reminders and expired waivers, open inbox items by age, pending answers, retained resolved and
-one-line inbox items, missing inbox metadata/provenance, duplicate IDs/option keys and stale answer
+missing inbox metadata/provenance, duplicate IDs/option keys and stale answer
 revisions, local machine
 paths, links to missing files in the spec and `specs/archive.md`, spec files no summary links
 (1.1 layout), `observed/` pieces `observed.md` does not link, a lifecycle stage naming no
@@ -38,11 +37,7 @@ objects locally, not full history. CI checkouts should fetch full history (for e
 `fetch-depth: 0` with `actions/checkout`) for the separate history-based
 "Closed without a log entry" check.
 
-Ordinary text and JSON also separate installed kit version (manifest), observed spec layout and
-layout-derived migration state. `required` means legacy 0.x; `incomplete` means competing canons
-or spec forms; `not-indicated` means current layout only; `unknown` means no recognized spec.
-Neither a current installed version nor `not-indicated` verifies migration completion. Missing
-or ambiguous manifest version stays unknown; the source checkout is not a substitute.
+Ordinary text and JSON distinguish the recorded install version from observed spec layout.
 
 For configuration/provenance questions add `--inventory --json`. It reports installed hashes,
 project-owned customizations, source pins and resolved versus projected agent models with winning

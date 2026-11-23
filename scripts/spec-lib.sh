@@ -42,8 +42,8 @@ SPEC_METADATA_SKIP_AWK='function metadata_skip(line,    marker, ending) {
     return 0
 }'
 
-# Read new metadata only at the start of a field, never inside its prose. When a legacy
-# reader needs the same line, remove only Tags and leave other fields and delimiters intact.
+# Read metadata only at the start of a field, never inside its prose. For readers of the
+# other fields, remove only Tags and leave their delimiters intact.
 SPEC_HEADER_AWK='function metadata_trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
 function metadata_header(s,   label, value, rest, field, kept, original, has_tags, indent, sep, nextsep, gap) {
     original = s
@@ -58,7 +58,7 @@ function metadata_header(s,   label, value, rest, field, kept, original, has_tag
         }
         header[label] = metadata_trim(value); fields[label]++; field_line[label] = NR
         if (label != "Tags") {
-            # Only normalize newly joined boundaries: legacy readers split on a spaced dot.
+            # Only normalize newly joined boundaries: other readers split on a spaced dot.
             if (gap) sep = " · "
             kept = kept (kept != "" ? sep : indent) field value
             sep = nextsep; gap = 0
@@ -130,7 +130,7 @@ spec_days_between() {
         BEGIN { print days(b) - days(a) }'
 }
 
-# A directory counts as 0.x canon when it holds anything besides a .gitkeep. In a Git work tree
+# A retired spec directory is in use when it holds anything besides a .gitkeep. In a Git work tree
 # only files Git does not ignore count: an ignored leftover never reaches main.
 _spec_dir_used() {
     local entry listed
@@ -150,15 +150,23 @@ _spec_dir_used() {
 
 _spec_has_canon() { [ -f "$1/specs/product.md" ] || [ -f "$1/specs/architecture.md" ] || [ -f "$1/specs/SPEC.md" ]; }
 
-# Prints 1.0, 0.x, both or none. The cutover condenses and removes every 0.x folder, feature
-# folders included, so any of them beside a 1.0 spec is a cutover not finished.
+spec_require_layout() { # root
+    local name
+    for name in product-spec targets features archive; do
+        if _spec_dir_used "$1/specs/$name"; then
+            printf 'Unsupported specs/%s/ layout: expected specs/SPEC.md or split specs/product.md and specs/architecture.md, specs/changes/<id>.md records and specs/archive.md history.\n' "$name" >&2
+            return 1
+        fi
+    done
+    if [ -f "$1/specs/archive.md" ] && grep -iE '^[[:space:]#*>|_-]*last[[:space:]]+0\.x[[:space:]]+feature' "$1/specs/archive.md" >/dev/null; then
+        printf 'Unsupported feature counter in specs/archive.md: current archives reserve change numbers with **Log condensed through**: <number>.\n' >&2
+        return 1
+    fi
+}
+
+# Current spec files present, or none yet.
 spec_layout() { # root
-    local root="$1" old=false name
-    for name in product-spec targets features; do _spec_dir_used "$root/specs/$name" && old=true; done
-    if _spec_has_canon "$root"; then
-        if $old; then echo both; else echo 1.0; fi
-    elif $old; then echo 0.x
-    else echo none; fi
+    if _spec_has_canon "$1"; then echo 1.0; else echo none; fi
 }
 
 # The split spec files that sit beside a single-file specs/SPEC.md, space-separated relative
@@ -173,24 +181,7 @@ spec_mixed_forms() { # root
     printf '%s' "$found"
 }
 
-# 0.x feature folders still on main beside a 1.0 spec, which the cutover condenses and removes:
-# id, tasks checked, tasks total.
-spec_leftover_features() { # root
-    local root="$1" dir counts
-    _spec_has_canon "$root" || return 0
-    for dir in "$root"/specs/features/[0-9]*/; do
-        dir="${dir%/}"
-        _spec_dir_used "$dir" || continue
-        counts="0${SPEC_SEP}0"
-        [ ! -f "$dir/tasks.md" ] || counts="$(awk '/^[[:space:]]*[-*][[:space:]]+\[[ xXIRB]\]/ { n++; if ($0 ~ /^[[:space:]]*[-*][[:space:]]+\[[xX]\]/) d++ }
-            END { print d + 0 "\037" n + 0 }' "$dir/tasks.md")"
-        printf '%s\037%s\n' "$(spec_field "${dir##*/}")" "$counts"
-    done
-    return 0
-}
-
-# --- specs/archive.md (archive-template.md): the cutover's base commit, its last 0.x feature, ---
-# and the change number specs/log.md is condensed through.
+# Read the change number specs/log.md is condensed through.
 # A label is read loosely: bold or plain, in a heading, list item, quote or table row, its value
 # after a colon or a dash, or alone on the next line. Bash string matching only, no awk: the
 # file may hold any character.
@@ -205,8 +196,8 @@ _spec_trim() { # text -> $_spec_t without leading blanks, colons, equals signs a
         esac
     done
 }
-_spec_archive_value() { # file base|last|log -> the value of the first line with that label
-    local line v pending=false
+_spec_archive_value() { # file -> value of the Log condensed through field
+    local line pending=false
     [ -f "$1" ] || return 0
     while IFS= read -r line || [ -n "$line" ]; do
         line="${line%$'\r'}"; _spec_trim "${line//[*_\`#|>]/}"
@@ -214,14 +205,8 @@ _spec_archive_value() { # file base|last|log -> the value of the first line with
             [ -z "$_spec_t" ] || { printf '%s\n' "$_spec_t"; return 0; }
             continue
         fi
-        case "$2:$_spec_t" in
-            base:[Bb][Aa][Ss][Ee]|base:[Bb][Aa][Ss][Ee][!A-Za-z]*)
-                _spec_trim "${_spec_t#????}"
-                case "$_spec_t" in [Cc][Oo][Mm][Mm][Ii][Tt]*) _spec_trim "${_spec_t#??????}" ;; esac ;;
-            last:[Ll][Aa][Ss][Tt]' '0.[Xx]' '[Ff][Ee][Aa][Tt][Uu][Rr][Ee]*)
-                v="${_spec_t#????????????????}"; _spec_trim "${v#[Ss]}"
-                case "$_spec_t" in [Nn][Uu][Mm][Bb][Ee][Rr]*) v="${_spec_t#??????}"; _spec_trim "${v#[Ss]}" ;; esac ;;
-            log:[Ll][Oo][Gg]' '[Cc][Oo][Nn][Dd][Ee][Nn][Ss][Ee][Dd]' '[Tt][Hh][Rr][Oo][Uu][Gg][Hh]*)
+        case "$_spec_t" in
+            [Ll][Oo][Gg]' '[Cc][Oo][Nn][Dd][Ee][Nn][Ss][Ee][Dd]' '[Tt][Hh][Rr][Oo][Uu][Gg][Hh]*)
                 _spec_trim "${_spec_t#?????????????????????}" ;;
             *) continue ;;
         esac
@@ -230,31 +215,11 @@ _spec_archive_value() { # file base|last|log -> the value of the first line with
     done < "$1"
     return 0
 }
-# Hex words of 7 to 40 characters in the Base value: candidate commits, first as written.
-spec_archive_base_tokens() { # root
-    local v
-    v="$(_spec_archive_value "$1/specs/archive.md" base)"
-    [ -z "$v" ] || printf '%s\n' "$v" | tr -c '0-9a-fA-F' '\n' | sed -n '/^[0-9a-fA-F]\{7,40\}$/p'
-    return 0
-}
-# The last 0.x feature number: the highest number before any "(", ";" or ",", 0 for none,
-# nothing when the line is missing or holds no number.
-spec_archive_last() { # root
-    local v d max=""
-    v="$(_spec_archive_value "$1/specs/archive.md" last)"
-    case "$v" in [Nn][Oo][Nn][Ee]*) echo 0; return 0 ;; esac
-    for d in $(printf '%s' "${v%%[(;,]*}" | tr -c '0-9' ' '); do
-        [ "${#d}" -le 9 ] || continue
-        d=$((10#$d)); { [ -n "$max" ] && [ "$max" -ge "$d" ]; } || max="$d"
-    done
-    [ -z "$max" ] || echo "$max"
-    return 0
-}
 # The change number specs/log.md is condensed through: the number its value starts with (a sha
 # or date after it never counts), 0 for none, nothing otherwise.
 spec_archive_log_through() { # root
     local v d
-    v="$(_spec_archive_value "$1/specs/archive.md" log)"
+    v="$(_spec_archive_value "$1/specs/archive.md")"
     case "$v" in
         [Nn][Oo][Nn][Ee]*) echo 0 ;;
         [0-9]*) d="${v%%[!0-9]*}"; [ "${#d}" -gt 9 ] || echo "$((10#$d))" ;;
@@ -268,22 +233,18 @@ spec_archive_log_through() { # root
 # specs/log.md (compact.md). Callers match the dated lines they need; awk ends every line.
 spec_log_entries() { # root
     if [ -f "$1/specs/log.md" ]; then
-        if [ "${2:-}" != legacy-claims ]; then
-            verify_lf_file "$1/specs/log.md" || { echo 'Invalid text in specs/log.md' >&2; return 1; }
-        fi
+        verify_lf_file "$1/specs/log.md" || { echo 'Invalid text in specs/log.md: expected LF-terminated Markdown' >&2; return 1; }
         awk 1 "$1/specs/log.md" || return 1
     fi
     spec_log_files "$@"
 }
-spec_log_files() { # root [legacy-claims] -> the entry files' lines only
+spec_log_files() { # root -> the entry files' lines only
     local file id
     for file in "$1"/specs/log/[0-9]*.md; do
         [ -f "$file" ] && [ ! -L "$file" ] || continue
-        if [ "${2:-}" != legacy-claims ]; then
-            id="${file##*/}"; id="${id%.md}"
-            if ! spec_log_entry_valid "$file" "$id"; then
-                printf 'Malformed log entry: %s\n' "$file" >&2; return 1
-            fi
+        id="${file##*/}"; id="${id%.md}"
+        if ! spec_log_entry_valid "$file" "$id"; then
+            printf 'Malformed log entry: %s; expected one LF-terminated line: - <date> <id>: <what changed>\n' "$file" >&2; return 1
         fi
         awk 1 "$file" || return 1
     done
@@ -344,21 +305,6 @@ spec_compaction() { # root
     pending="$(spec_log_files "$root" | LC_ALL=C awk '/^- [0-9-]+ [0-9][0-9][0-9][0-9]*-[a-z0-9-]*:/ { c++ } END { print c + 0 }')" || return "$?"
     [[ "$closed_since" =~ ^[0-9]+$ && "$pending" =~ ^[0-9]+$ ]] || return 1
     printf '%s %s\n' "$((closed_since + pending))" "$last_pass"
-}
-
-# 0.x feature folder names (NNN-slug) in a commit's tree, or deleted in the last 20 commits that
-# deleted anything under specs/features or specs/archive: git keeps what the cutover removed.
-# No lazy fetch in a partial clone; a missing object reads as nothing.
-SPEC_FEATURE_SED='s#^specs/features/\(_archive/\)\{0,1\}\([0-9][0-9][0-9]*-[^/]*\)\(/.*\)\{0,1\}$#\2#p
-s#^specs/archive/\([^/]*/\)\{0,1\}\(_archive/\)\{0,1\}\([0-9][0-9][0-9]*-[^/]*\)\(/.*\)\{0,1\}$#\3#p'
-spec_features_at() { # root commit
-    { GIT_NO_LAZY_FETCH=1 git -C "$1" ls-tree -r -d --name-only "$2" -- specs/features specs/archive 2>/dev/null || true; } |
-        sed -n "$SPEC_FEATURE_SED" | sort -u
-}
-spec_removed_features() { # root
-    { GIT_NO_LAZY_FETCH=1 git -C "$1" log -n 20 --no-renames --diff-filter=D --name-only --format= \
-          -- specs/features specs/archive 2>/dev/null || true; } |
-        sed -n "$SPEC_FEATURE_SED" | sort -u
 }
 
 # Reading length: a line counts once per 100 characters, rounded up, and at least once, so a
@@ -845,10 +791,9 @@ spec_test_files() { # root
 
 # Owner inbox items: line, date, who, state, words, id, kind, tags, revision, answer, problems.
 # State: open|processing|folded|declined|deferred|unknown|unparsed. Processing is inferred from
-# owner direction or an answer field, never completion. Extra fields are empty for legacy rows.
+# owner direction or an answer field, never completion.
 # An item is a `### <title>` heading followed by its meta line `*<date> · <owner|agent> ·
-# <disposition>*` (words: the title; line: the heading), or a one-line
-# `<date> <owner|agent> "<words>" → <disposition>` outside any item. A heading without a meta
+# <disposition>*` (words: the title; line: the heading). A heading without a meta
 # line prints state "unparsed" with its title as words; so does prose outside an item, except in
 # an inbox of headed items, where it is ordinary text (such as "Nothing open.").
 spec_inbox() { # root
@@ -917,22 +862,23 @@ spec_inbox() { # root
         /^#/ { next }
         {
             line = $0; sub(/^[[:space:]]*[-*][[:space:]]+/, "", line)
-            # Inside an item, only a line in the one-line form counts, and it ends the item: owner
-            # direction appended under a headed item must not vanish into its body.
-            if (item && line !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9](T[0-9][0-9]:[0-9][0-9](:[0-9][0-9])?Z?)?[[:space:]]+(owner|agent)[[:space:]]+"/) {
+            if (line ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9](T[0-9][0-9]:[0-9][0-9](:[0-9][0-9])?Z?)?[[:space:]]+(owner|agent)[[:space:]]/) {
+                unsupported = 1; next
+            }
+            if (item) {
                 if (match($0, /^\*\*[^*]+\*\*:/)) {
                     label = substr($0, 3, RLENGTH - 5); value = trim(substr($0, RLENGTH + 1)); answering = 0
-                    if (label == "Owner answer") label = "Answer"
-                    if (label ~ /^(ID|Revision|Kind|Tags|Answer|Owner answer|Answer date|Answer source|Answer revision)$/ && fields[label]++) problem("duplicate field " label)
+                    if (label == "Owner answer") { unsupported = 1; next }
+                    if (label ~ /^(ID|Revision|Kind|Tags|Answer|Answer date|Answer source|Answer revision)$/ && fields[label]++) problem("duplicate field " label)
                     if (label == "ID") id = value
                     else if (label == "Revision") revision = value
                     else if (label == "Kind") kind = value
                     else if (label == "Tags") { tags = value; gsub(/[[:space:]]*,[[:space:]]*/, ", ", tags) }
-                    else if (label == "Answer" || label == "Owner answer") { add_answer(value); answering = 1 }
+                    else if (label == "Answer") { add_answer(value); answering = 1 }
                     else if (label == "Answer date") answer_date = value
                     else if (label == "Answer source") answer_source = value
                     else if (label == "Answer revision") answer_revision = value
-                } else if ($0 ~ /^Owner answer[,:]/) { add_answer($0); answering = 1 }
+                } else if ($0 ~ /^Owner answer[,:]/) { unsupported = 1; next }
                 else if (answering) add_answer($0)
                 if ($0 ~ /^[0-9]+\.[[:space:]]+\*\*/) {
                     options++; key = $0; sub(/^[0-9]+\.[[:space:]]+\*\*/, "", key)
@@ -944,34 +890,13 @@ spec_inbox() { # root
                 next
             }
             flush()
-            if (line !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9](T[0-9][0-9]:[0-9][0-9](:[0-9][0-9])?Z?)?[[:space:]]+(owner|agent)[[:space:]]/) {
-                if (headed && line !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/) next
-                gsub(/\t/, " ", line); print NR "\037\037\037unparsed\037" line "\037\037\037\037\037\037"; next
-            }
-            split(line, w, /[[:space:]]+/); w[1] = substr(w[1], 1, 10)
-            state = "unknown"; words = line; sub(/^[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+/, "", words)
-            # The disposition arrow follows a closing quote and names a disposition; quoted words
-            # and disposition notes may hold arrows too. Otherwise the first arrow.
-            arrow = 0
-            if (match(words, /"[[:space:]]*(→|->)[[:space:]]*(open|processing|folded|declined|deferred)([:[:space:]]|$)/)) {
-                # Skip the spaces by trimming the whole tail, not by testing one character at a
-                # time (see SPEC_ID_AWK): macOS awk aborts on the first byte of "→" alone.
-                arrow = RSTART + 1; gap = substr(words, arrow); glen = length(gap)
-                sub(/^[[:space:]]+/, "", gap); arrow += glen - length(gap)
-                alen = (substr(words, arrow, 2) == "->") ? 2 : length("→")
-            }
-            if (!arrow) { arrow = index(words, "→"); alen = length("→") }
-            if (!arrow) { arrow = index(words, "->"); alen = 2 }
-            if (arrow) {
-                rest = substr(words, arrow + alen); sub(/^[[:space:]]+/, "", rest); sub(/[:[:space:]].*/, "", rest)
-                if (rest ~ /^(open|processing|folded|declined|deferred)$/) state = rest
-                words = substr(words, 1, arrow - 1); sub(/[[:space:]]+$/, "", words)
-            }
-            gsub(/\t/, " ", words)
-            if (state == "open" && w[2] == "owner") state = "processing"
-            print NR "\037" w[1] "\037" w[2] "\037" state "\037" words "\037\037\037\037\037\037"
+            if (headed && line !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/) next
+            gsub(/\t/, " ", line); print NR "\037\037\037unparsed\037" line "\037\037\037\037\037\037"
         }
-        END { if (NR != expected) exit 1; flush() }' "$file"
+        END { if (NR != expected || unsupported) exit 1; flush() }' "$file" || {
+            echo 'Invalid specs/inbox.md: expected headed items with *<date> · <owner|agent> · <disposition>* and structured **Answer** fields (inbox-template.md).' >&2
+            return 1
+        }
 }
 
 # Records: line, type, name, owner, scope, env, rev, date, until, check, reason. A line that
@@ -1182,22 +1107,21 @@ spec_change_progress() { # file [required=true] [advisories] -> outcome, milesto
         }
         END {
             if (NR != expected) exit 1
-            # Accept the distinctive 1.3.1 checkpoint shape, never a lone generic Outcome.
-            legacy = counts[0, "No-progress changes"] || counts[0, "Progress limit"] ||
+            unscoped = counts[0, "No-progress changes"] || counts[0, "Progress limit"] ||
                 (counts[0, "Outcome"] && counts[0, "Milestone"] &&
                  (counts[0, "Critical path"] || counts[0, "Allocation"] || counts[0, "Progress"] || counts[0, "Selection"]))
             if (report == "advisories") {
                 if (outside) print "Checkpoint keys outside ### Outcome checkpoint in State; " \
-                    (blocks ? "unscoped keys are ignored" : legacy ? "legacy checkpoint is read for compatibility; move its keys into the block" : "ordinary State text is not a programme checkpoint")
+                    (blocks ? "unscoped keys are ignored" : "ordinary State text is not a programme checkpoint")
                 exit
             }
-            if (!blocks && !legacy && required != "true") exit
-            use = blocks ? 1 : 0
+            if (!blocks && unscoped) exit 2
+            if (!blocks && required != "true") exit
             n = split("Outcome|Milestone|Critical path|Allocation|Progress|Selection|No-progress changes|Progress limit", keys, "|")
             for (i = 1; i <= n; i++) {
-                key = keys[i]; seen[key] = (blocks || legacy) ? counts[use, key] : 0
+                key = keys[i]; seen[key] = counts[1, key]
                 # A referenced parent without a checkpoint remains unknown, not generic prose.
-                if (blocks || legacy) values[key] = data[use, key]
+                values[key] = data[1, key]
                 if (seen[key] > 1) invalid = 1
             }
             if (blocks > 1) invalid = 1
@@ -1210,7 +1134,10 @@ spec_change_progress() { # file [required=true] [advisories] -> outcome, milesto
             if (!uint(count) || seen["No-progress changes"] > 1) count = "null"
             if (!uint(limit) || limit == "0" || seen["Progress limit"] > 1) limit = "null"
             print values["Outcome"] "\037" values["Milestone"] "\037" values["Critical path"] "\037" values["Allocation"] "\037" values["Progress"] "\037" values["Selection"] "\037" count "\037" limit "\037" signal
-        }' "$file"
+        }' "$file" || {
+            printf '%s: expected programme checkpoint fields under ### Outcome checkpoint in ## State\n' "$file" >&2
+            return 1
+        }
 }
 
 # Checkouts that can hold open change records, as path, branch and location (relative to root,
@@ -1385,13 +1312,7 @@ spec_unclosed_changes() { # root rev
             /^## / { sec = $0; next }
             sec != "## State" { next }
             /^### Outcome checkpoint[[:space:]]*$/ { checkpoint = 1 }
-            /^\*\*(Outcome|Milestone|Critical path|Allocation|Progress|Selection|No-progress changes|Progress limit)\*\*:/ {
-                key = $0; sub(/^\*\*/, "", key); sub(/\*\*:.*/, "", key); keys[key] = 1
-            }
             END {
-                # The checkpoint shapes spec_change_progress reads, the legacy 1.3.1 one included.
-                if (keys["No-progress changes"] || keys["Progress limit"] || (keys["Outcome"] && keys["Milestone"] &&
-                    (keys["Critical path"] || keys["Allocation"] || keys["Progress"] || keys["Selection"]))) checkpoint = 1
                 print id "\037" parent "\037" (!checkpoint)
             }' || return 1
     done <<< "$paths" | awk -F '\037' '{ id[++n] = $1; flagged[n] = $3; if ($2 != "") named[$2] = 1 }

@@ -40,7 +40,7 @@ record() { # tier, then State review lines
     git add specs/changes/001-greet.md; git commit -qm "record" >/dev/null
 }
 verdict() { # reviewer verdict counts [range]
-    # Coverage recipes are not active legacy verdicts; dedicated scan tests combine both.
+    # Host receipt fixture recipes are not review authority.
     printf '**Receipt fixture**: round 1 · %s · %s · %s · %s · https://example.invalid/pr/1#c1' "${4:-$BASE..$REVIEWED}" "$1" "$2" "$3"
 }
 CLEAN='0 critical, 0 high, 0 medium, 0 low'
@@ -248,8 +248,8 @@ git commit -qm "record and a submodule" >/dev/null
 git update-ref "refs/remotes/origin/$DEFAULT" HEAD
 git checkout -q -b 005-close-branch
 git update-index --cacheinfo "160000,$(git rev-parse "$REVIEWED"),vendor"; git commit -qm "bump the ignored submodule" >/dev/null
-git rm -q specs/changes/005-close.md; mkdir -p specs; printf -- '- 2026-10-20 005-close: closed — #5\n' >> specs/log.md
-git add specs/log.md; git commit -qm close >/dev/null
+git rm -q specs/changes/005-close.md; mkdir -p specs/log; printf -- '- 2026-10-20 005-close: closed — #5\n' > specs/log/005-close.md
+git add specs/log; git commit -qm close >/dev/null
 run bash "$CHECK" --json 005-close
 assert_eq 1 "$STATUS" "an ignored gitlink bump is not a record-only close"
 assert_contains "$OUTPUT" '"record_only":false' "no exemption"
@@ -399,7 +399,7 @@ echo '# Product' > specs/product.md; git add specs/product.md; git commit -qm "L
 run bash "$CHECK" 003-docs
 assert_eq 1 "$STATUS" "an L0 spec edit is never T0"
 git reset -q --hard HEAD~1
-record_t0_fail="$(printf '**Review**: round 1 · %s..%s · docs · FAIL · 0 critical, 1 high, 0 medium, 0 low · https://example.invalid/pr/3#c1' "$(git rev-parse --short "$DEFAULT")" "$(git rev-parse --short HEAD)")"
+record_t0_fail="$(printf '**Receipt fixture**: round 1 · %s..%s · docs · FAIL · 0 critical, 1 high, 0 medium, 0 low · https://example.invalid/pr/3#c1' "$(git rev-parse --short "$DEFAULT")" "$(git rev-parse --short HEAD)")"
 printf '%s\n' "$record_t0_fail" >> specs/changes/003-docs.md; git commit -qam "record a FAIL" >/dev/null
 run bash "$CHECK" 003-docs
 assert_eq 1 "$STATUS" "a recorded FAIL fails T0 too"
@@ -446,12 +446,12 @@ record T3 "$(verdict design PASS "$CLEAN")"
 run bash "$CHECK"
 assert_contains "$OUTPUT" "T3 needs the owner's native approval too" "owner required"
 OWNED="$REVIEWED"
-record T3 "$(verdict design PASS "$CLEAN")" "**Review**: round 1 · $BASE..$OWNED · owner · PASS · https://example.invalid/pr/1#c2"
+record T3 "$(verdict design PASS "$CLEAN")" "**Receipt fixture**: round 1 · $BASE..$OWNED · owner · PASS · https://example.invalid/pr/1#c2"
 run bash "$CHECK"
 assert_eq 0 "$STATUS" "design review plus owner passes"
 mkdir -p specs; echo '# Product' > specs/product.md; git add specs/product.md; git commit -qm "L0 after the owner" >/dev/null
 REVIEWED="$(git rev-parse --short HEAD)"
-record T3 "$(verdict design PASS "$CLEAN")" "**Review**: round 1 · $BASE..$OWNED · owner · PASS · https://example.invalid/pr/1#c2"
+record T3 "$(verdict design PASS "$CLEAN")" "**Receipt fixture**: round 1 · $BASE..$OWNED · owner · PASS · https://example.invalid/pr/1#c2"
 run bash "$CHECK"
 assert_eq 1 "$STATUS" "an L0 edit after the owner's head fails"
 assert_contains "$OUTPUT" "the L0/L1 spec changed since the owner's native approval" "requires fresh approval of the spec edit"
@@ -459,7 +459,7 @@ git reset -q --hard "$OWNED"; REVIEWED="$OWNED"
 mkdir -p specs/product/journeys; echo '# J-01 Ask (hypothesis)' > specs/product/journeys/j-01-ask.md
 git add specs/product; git commit -qm "journey after the owner" >/dev/null
 REVIEWED="$(git rev-parse --short HEAD)"
-record T3 "$(verdict design PASS "$CLEAN")" "**Review**: round 1 · $BASE..$OWNED · owner · PASS · https://example.invalid/pr/1#c2"
+record T3 "$(verdict design PASS "$CLEAN")" "**Receipt fixture**: round 1 · $BASE..$OWNED · owner · PASS · https://example.invalid/pr/1#c2"
 run bash "$CHECK"
 assert_contains "$OUTPUT" "the L0/L1 spec changed since the owner's native approval" "a journey file is L0"
 git reset -q --hard "$OWNED"; REVIEWED="$OWNED"
@@ -525,10 +525,10 @@ assert_eq 1 "$STATUS" "a scoped PASS that starts after the first round's head le
 assert_contains "$OUTPUT" "the recorded ranges do not chain from the change's start" "names the gap"
 git reset -q --hard "$REVIEWED"
 
-it "the closing commit deletes the record and appends the log; the last record still decides"
+it "the closing commit deletes the record and adds its log entry; the last record still decides"
 record T1 "$(verdict code PASS "$CLEAN")"
-git rm -q specs/changes/001-greet.md; mkdir -p specs; printf -- '- 2026-10-18 001-greet: warmer greeting — R-01 — #1\n' >> specs/log.md
-git add specs/log.md; git commit -qm close >/dev/null
+git rm -q specs/changes/001-greet.md; mkdir -p specs/log; printf -- '- 2026-10-18 001-greet: warmer greeting — R-01 — #1\n' > specs/log/001-greet.md
+git add specs/log; git commit -qm close >/dev/null
 run bash "$CHECK" --json
 assert_eq 0 "$STATUS" "passes after the record is deleted"
 assert_contains "$OUTPUT" '"result":"pass","change":"001-greet"' "JSON result"
@@ -547,7 +547,7 @@ TRUNK="$(mktemp -d)"; track_tmp "$TRUNK"
   git checkout -q -b trunk && mkdir -p .prdkit/memory && printf '# Capabilities\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n' > .prdkit/memory/agents.md && printf -- '- **Rigor**: light\n' > .prdkit/memory/constitution.md && receipt_policy "$TRUNK" && echo base > base.txt && git add base.txt .prdkit && git commit -qm base &&
   git checkout -q -b 008-solo && mkdir -p src specs/changes && echo solo > src/solo.txt && git add src && git commit -qm code ) >/dev/null 2>&1
 SOLO_BASE="$(git -C "$TRUNK" rev-parse --short trunk)"; SOLO_HEAD="$(git -C "$TRUNK" rev-parse --short HEAD)"
-printf '# Change: Solo\n\n**Tier**: T1\n\n## State\n\n**Review**: round 1 · %s..%s · code · PASS · %s · https://example.invalid/pr/8#c1\n' \
+printf '# Change: Solo\n\n**Tier**: T1\n\n## State\n\n**Receipt fixture**: round 1 · %s..%s · code · PASS · %s · https://example.invalid/pr/8#c1\n' \
     "$SOLO_BASE" "$SOLO_HEAD" "$CLEAN" > "$TRUNK/specs/changes/008-solo.md"
 git -C "$TRUNK" add specs; git -C "$TRUNK" commit -qm record >/dev/null
 run bash "$CHECK" --repo "$TRUNK" 008-solo
@@ -595,8 +595,8 @@ it "a change closed after its code merged carries only the record and the log"
 git checkout -q 001-greet~1 -- src specs/changes; git commit -qm "001-greet (#1)" >/dev/null
 git update-ref "refs/remotes/origin/$DEFAULT" HEAD
 git checkout -q -b 001-close
-git rm -q specs/changes/001-greet.md; mkdir -p specs; printf -- '- 2026-10-19 001-greet: warmer greeting — R-01 — #2\n' >> specs/log.md
-git add specs/log.md; git commit -qm close >/dev/null
+git rm -q specs/changes/001-greet.md; mkdir -p specs/log; printf -- '- 2026-10-19 001-greet: warmer greeting — R-01 — #2\n' > specs/log/001-greet.md
+git add specs/log; git commit -qm close >/dev/null
 run bash "$CHECK" 001-greet
 assert_eq 0 "$STATUS" "passes"
 assert_contains "$OUTPUT" "carries only the record and the log" "says why"
@@ -608,7 +608,7 @@ run bash "$CHECK" 001-greet
 assert_eq 1 "$STATUS" "a recorded FAIL still fails"
 git checkout -q "$DEFAULT"; git branch -q -D 001-close
 git checkout -q -b 001-close
-sed -i.bak '/^\*\*Review\*\*:/d; /^\*\*Receipt fixture\*\*:/d' specs/changes/001-greet.md && rm -f specs/changes/001-greet.md.bak
+sed -i.bak '/^\*\*Receipt fixture\*\*:/d' specs/changes/001-greet.md && rm -f specs/changes/001-greet.md.bak
 git commit -qam "no verdicts" >/dev/null
 run bash "$CHECK" 001-greet
 assert_eq 0 "$STATUS" "a record-only close passes"
@@ -617,8 +617,8 @@ assert_contains "$OUTPUT" "no covering receipt needed on this PR" "earlier PR co
 git checkout -q -b develop "$DEFAULT"; echo d > dev.txt; git add dev.txt; git commit -qm develop >/dev/null
 git update-ref refs/remotes/origin/develop develop
 git checkout -q -b 001-close-dev develop
-git rm -q specs/changes/001-greet.md; mkdir -p specs; printf -- '- 2026-10-19 001-greet: warmer greeting — R-01 — #3\n' >> specs/log.md
-git add specs/log.md; git commit -qm close >/dev/null
+git rm -q specs/changes/001-greet.md; mkdir -p specs/log; printf -- '- 2026-10-19 001-greet: warmer greeting — R-01 — #3\n' > specs/log/001-greet.md
+git add specs/log; git commit -qm close >/dev/null
 run bash "$CHECK" --base origin/develop 001-greet
 assert_eq 0 "$STATUS" "a record-only close into develop passes"
 assert_contains "$OUTPUT" "since origin/develop it carries only the record and the log" "names the base"
@@ -626,9 +626,11 @@ git checkout -q "$DEFAULT"; git branch -q -D 001-close-dev develop; git update-r
 
 it "a close finds its log line in a large log"
 git checkout -q -b 001-close-biglog "$DEFAULT"
-git rm -q specs/changes/001-greet.md; mkdir -p specs
-{ printf -- '- 2026-10-19 001-greet: warmer greeting — R-01 — #4\n'; i=0; while [ "$i" -lt 4000 ]; do printf -- '- 2026-10-01 %03d-old-change: an older change with a long enough summary line — #%d\n' "$((i % 900 + 100))" "$i"; i=$((i + 1)); done; } >> specs/log.md
-git add specs/log.md; git commit -qm close >/dev/null
+git rm -q specs/changes/001-greet.md; mkdir -p specs/log
+printf -- '- 2026-10-19 001-greet: warmer greeting — R-01 — #4\n' > specs/log/001-greet.md
+git add specs/log; git commit -qm close >/dev/null
+{ cat specs/log/001-greet.md; i=0; while [ "$i" -lt 4000 ]; do printf -- '- 2026-10-01 %03d-old-change: an older change with a long enough summary line — #%d\n' "$((i % 900 + 100))" "$i"; i=$((i + 1)); done; } >> specs/log.md
+git rm -q specs/log/001-greet.md; git add specs/log.md; git commit -qm compact >/dev/null
 run bash "$CHECK" 001-greet
 assert_not_contains "$OUTPUT" "has no '- <date> 001-greet" "no SIGPIPE false alarm past 64 KiB"
 git checkout -q "$DEFAULT"; git branch -q -D 001-close-biglog
@@ -639,11 +641,13 @@ git rm -q specs/changes/001-greet.md; git commit -qm close >/dev/null
 run bash "$CHECK" 001-greet
 assert_eq 1 "$STATUS" "fails"
 assert_contains "$OUTPUT" "001-greet is closed (its record is deleted) but the log at" "names the missing log entry"
-assert_contains "$OUTPUT" "(specs/log/001-greet.md, as close-change.sh writes it, or a line in specs/log.md)" "and where it goes"
+assert_contains "$OUTPUT" "(specs/log/001-greet.md, as close-change.sh writes it, or its compacted line in specs/log.md)" "and where it goes"
 mkdir -p specs/log; printf -- '- 2026-10-19 001-greet: warmer greeting — R-01 — #5\n' > specs/log/001-greet.md
 git add specs/log; git commit -qm 'log entry' >/dev/null
 run bash "$CHECK" 001-greet
 assert_not_contains "$OUTPUT" "has no '- <date> 001-greet" "its entry file is the log entry"
+assert_eq 1 "$STATUS" "a later log entry does not validate the closing commit"
+assert_contains "$OUTPUT" 'current per-change entry format'
 git checkout -q "$DEFAULT"; git branch -q -D 001-close-nolog
 
 it "a reviewed head outside the history is read by its content, which is not this head's"
@@ -654,11 +658,11 @@ record T1 "$(verdict code PASS "$CLEAN")"
 run bash "$CHECK"
 assert_contains "$OUTPUT" "code: reviewed content differs at: other.txt" "foreign content refused"
 
-it "a 0.x feature without a record is told it becomes one at the cutover"
+it "a record outside specs/changes is not a review carrier"
 mkdir -p specs/features/002-legacy; echo '# Legacy' > specs/features/002-legacy/spec.md
 git add specs/features; git commit -qm legacy >/dev/null
 run bash "$CHECK" 002-legacy
 assert_eq 1 "$STATUS" "fails"
-assert_contains "$OUTPUT" "a 0.x feature the owner keeps open becomes a change record at the cutover or restructure" "names the remedy"
+assert_contains "$OUTPUT" "No change record specs/changes/002-legacy.md" "names the remedy"
 
 finish

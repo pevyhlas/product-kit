@@ -31,4 +31,4 @@ uncommitted context when creating a worktree, nor commits unrelated work to make
 
 Without slash commands, ask the agent to read `.prdkit/workflows/protocol.md` and treat your
 message as input. See [harnesses](harnesses.md), the [human workflow](human-workflow.md) and
-[adoption](adoption.md). A project on 0.x reads [migrating to 1.0](migrating-to-1.0.md) first.
+[adoption](adoption.md).

@@ -83,9 +83,8 @@ Run from the MAIN checkout, not from inside the worktree being removed.
 A worktree is removed non-forced by default: uncommitted or untracked changes
 refuse the removal until they are committed, stashed or discarded. Committed
 work is not checked for integration; the branch is never deleted. Ignored files
-move with the checkout. Evidence, retrospectives and usage-enrichment inputs
-are also copied to the main checkout. Archive and remove any legacy ledger
-spool yourself before cleanup.
+move with the checkout. Evidence and retrospectives in .prdkit/cache/ are
+also copied to the main checkout.
 
 Cleanup moves the entire registration (including index, reflogs and submodule
 stores) and any live checkout to the reported prdkit-retired directory. It
@@ -622,13 +621,18 @@ remove_worktree() { # path label locked
         esac
     fi
 
-    if [ -L "$WT/.prdkit" ] || [ -L "$WT/.prdkit/ledger" ] ||
-        [ -L "$WT/.prdkit/ledger/events.jsonl" ] || [ -e "$WT/.prdkit/ledger/events.jsonl" ]; then
-        refuse_with "legacy ledger spool or linked ledger path" \
-            "Refusing to remove $WT: archive the legacy ledger spool if needed, then remove it or the linked ledger path before retrying."
+    if [ -L "$WT/.prdkit" ]; then
+        refuse_with "linked .prdkit path" "Refusing to remove $WT: expected a local .prdkit/cache/ directory, not a linked .prdkit path."
         return 1
     fi
-    if ! preserve cache/evidence || ! preserve cache/retrospectives || ! preserve retrospective; then
+    # Refuse obsolete recovery paths rather than moving or converting their data.
+    if [ -L "$WT/.prdkit/ledger" ] || [ -e "$WT/.prdkit/ledger" ] ||
+        [ -L "$WT/.prdkit/retrospective" ] || [ -e "$WT/.prdkit/retrospective" ]; then
+        refuse_with "unsupported recovery path" \
+            "Refusing to remove $WT: unsupported ledger or retrospective path; cleanup expects recovery copies in .prdkit/cache/evidence/ and .prdkit/cache/retrospectives/."
+        return 1
+    fi
+    if ! preserve cache/evidence || ! preserve cache/retrospectives; then
         refuse_with "could not preserve its evidence at $CONFLICT" \
             "Refusing to remove $WT: could not preserve its evidence at $CONFLICT (a different file is already there, or the copy failed). Resolve it, then rerun."
         return 1
