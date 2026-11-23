@@ -274,10 +274,10 @@ A line that only describes how the code currently does something is deleted: the
   `www.` to keep them literal in Markdown. Do the same when writing a close entry by hand.
   Doctor advises on malformed tags; status omits them and close refuses them. Duplicate `Parts`,
   `Journeys`, or `Tags` fields are errors in doctor, status, bounds, and close.
-- In `## Tasks`, use `- [ ] (P2.1) Add a retry check` or `- [x] (P2.1) Verify recovery` to
-  assign a task. The part must exist and be explicitly named in the header, e.g.
+- In `## Tasks`, use `- [ ] (P2.1) T003 <outcome; dependency; check name>` to assign a task.
+  The part must exist and be explicitly named in the header, e.g.
   `**Parts**: P2, P2.1`; listing a parent does not implicitly list its children. A task without
-  the prefix is unassigned. These are checklist counts, not acceptance results.
+  the prefix is unassigned. Delete task lines on delivery per [change.md](change.md).
 - `status.sh --json` lists explicit relationships in `part_parents` (`id`, `parent`). For
   each open change, `tags` is a list, `tasks_by_part` has `part`, `checked`, `total` for parts
   with recorded assignments, and `unassigned_tasks` has `checked`, `total` for unassigned
@@ -302,9 +302,12 @@ implementation or merge need not be complete before the answered item leaves the
    answer durably before moving on if incorporation cannot finish immediately.
 2. Apply the decision to its canonical home: product intent in L0, design in L1/L2, authority in
    the constitution's Action policy, holds/waivers in `specs/records.md`. Record the disposition,
-   operative owner words verbatim, date and source (conversation reference, PR/comment URL or
-   recorded git revision/path). Relayed words keep their original source. A bare option number
-   also needs the selected option's meaning. The canonical entry is the record; do not duplicate a
+    operative owner words verbatim, date and source (conversation reference, PR/comment URL or
+    recorded git revision/path). For a long hold or waiver quote, use the checked authority
+    reference in [protocol.md](protocol.md), without shortening the operative row. The authority
+    file is exempt from reading budgets: it is verbatim evidence read only on demand.
+    Relayed words keep their original source. A bare option number also needs the selected
+    option's meaning. The canonical entry is the record; do not duplicate a
    transcript. Retain the inbox ID as plain provenance text or an
    immutable source link, not a live link back to an entry that will be removed. Update the actual
    governing requirement, design or policy, reconcile superseded contradictory text and affected

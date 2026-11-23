@@ -30,7 +30,8 @@
 
 ## Tasks
 
-<!-- Example (optional part ID): - [ ] (P2) Add a retry check -->
+<!-- Example (optional part ID): - [ ] (P2.1) T003 <outcome; dependency; check name>
+Delete the line in the PR that delivers it; do not check it off. -->
 
 ## Checks
 

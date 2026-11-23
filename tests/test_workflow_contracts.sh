@@ -101,6 +101,32 @@ assert_contains "$change" 'Unaffected changes' "no no-op notes"
 assert_contains "$change" 'one sentence of disposition' "parent dispositions stay one sentence"
 assert_contains "$change" '.prdkit/scripts/bash/check-delivery.sh --json' "remote checkpoint verified"
 
+it "change tasks are outcome-only and leave the record in their delivering PR"
+implementation="$(flat "$W/implementation.md")"
+change_template="$(flat "$T/change-template.md")"
+pr_template="$(cat "$T/pr-summary-template.md")"
+task_example='- [ ] (P2.1) T003 <outcome; dependency; check name>'
+drops='Drops: <change-id> T004, T005'
+assert_contains "$change_template" "$task_example" "template shows an outcome-level task"
+assert_contains "$spec" "$task_example" "part assignment uses the same format"
+assert_not_contains "$spec" '- [x] (P' "part metadata does not teach checked-off tasks"
+assert_contains "$change" 'no paths, line ranges or commands' "execution details stay out of the record"
+assert_contains "$implementation" 'in the cache or the PR, not the record' "planning keeps execution details elsewhere"
+assert_contains "$implementation" '- [ ] T001 <outcome; dependency; check name>' "execution uses unchecked outcome lines"
+for workflow in "$change" "$implementation"; do
+    assert_contains "$workflow" 'unique within the change; never reuse or renumber them' "task keys are local and permanent"
+done
+assert_contains "$change" 'The PR that delivers a task deletes its line' "delivery deletes the line"
+assert_contains "$change" 'No `[x]`, delivered note or log entry for the task' "no task archive"
+assert_contains "$implementation" 'Local verification is not delivery' "verified work is not yet delivered"
+assert_contains "$review" 'For a single-PR change, deleting the record delivers its tasks' "single-PR tasks are delivered at close"
+assert_eq 1 "$(grep -cxF "$drops" "$T/pr-summary-template.md" || true)" "standalone Drops line in the PR template"
+assert_contains "$pr_template" 'uncomment only for tasks dropped rather than delivered' "Drops is optional"
+for workflow in "$change" "$implementation" "$review" "$pr_template"; do
+    assert_contains "$workflow" "$drops" "one Drops syntax"
+    assert_not_contains "$workflow" 'Delivers:' "delivery needs no annotation"
+done
+
 it "dropped v4 rules stay dropped"
 all="$(flat "$W"/*.md "$T"/*.md "$PK_ROOT"/commands/*.md)"
 assert_not_contains "$all" 'kit version while a change is open' "no kit-version freeze"

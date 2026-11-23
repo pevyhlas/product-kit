@@ -199,6 +199,142 @@ assert_not_contains "$OUTPUT" "records.md:14" "a tab before the dash still start
 assert_not_contains "$OUTPUT" "records.md:15" "a dash at the end of the line is an empty reason"
 rm specs/records.md
 
+it "authority hashing preserves Unicode and nested content, normalizing only trailing LF"
+AUTH_REF=.prdkit/scripts/bash/authority-ref.sh
+STATUS_SH=.prdkit/scripts/bash/status.sh
+printf '## H-07\n\n**Source**: owner note\n**Date**: 2026-10-01\n\n> «Échec — 雪»  \n### Detail\n> encore' > specs/authority.md
+run bash "$AUTH_REF" H-07
+assert_eq 0 "$STATUS"
+assert_eq 'ref=specs/authority.md#H-07@6ac0061d5838' "$OUTPUT" 'golden digest, no LF at EOF'
+printf '\n\n\n' >> specs/authority.md
+cat >> specs/authority.md <<'MD'
+## Later
+
+```md
+## H-07
+```
+<!--
+## H-07
+-->
+MD
+run bash "$AUTH_REF" H-07
+assert_eq 0 "$STATUS"
+assert_eq 'ref=specs/authority.md#H-07@6ac0061d5838' "$OUTPUT" 'next peer heading ends entry; fenced and commented anchors are not duplicates'
+
+it "long quotes exceed the row budget inline, but checked references retain exact scope"
+scope='production promotions for the public service only, except rollbacks approved by the incident lead; internal preview is not held'
+hold_row="HOLD H-07 owner=owner scope=$scope since=2026-10-01 until=2026-10-05"
+words='«Ne pas promouvoir — 東京の確認が終わるまで。»'
+printf '%s — ' "$hold_row" > specs/records.md
+for ((i=0; i<520; i++)); do printf '%s ' "$words"; done >> specs/records.md
+printf '(owner note, 2026-10-01)\n' >> specs/records.md
+run bash "$DOCTOR" --json
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" 'Move long owner quotes to specs/authority.md with a checked ref='
+
+{
+    printf '# Owner authority\n\n## H-07\n\n**Source**: owner note\n**Date**: 2026-10-01\n\n'
+    for ((i=0; i<90; i++)); do printf '> %s %s %s %s %s %s\n' "$words" "$words" "$words" "$words" "$words" "$words"; done
+    cat <<'MD'
+
+## W-01
+**Source**: original approval
+**Date**: 2026-10-01
+
+> Skip the freshness check for the test environment through Friday.
+
+## W-02
+**Source**: renewal approval
+**Date**: 2026-10-17
+
+> Skip the freshness check for the isolated test environment only, through the end of the month.
+MD
+} > specs/authority.md
+hold_ref="$(bash "$AUTH_REF" H-07)" || exit 1
+old_waiver="$(bash "$AUTH_REF" W-01)" || exit 1
+new_waiver="$(bash "$AUTH_REF" W-02)" || exit 1
+cat > specs/records.md <<MD
+# Records
+
+WAIVER W-02 owner=owner check=artifact freshness scope=isolated test only expires=2026-10-31 — $new_waiver
+$hold_row — $hold_ref
+WAIVER W-01 owner=owner check=artifact freshness scope=test expires=2026-10-09 — $old_waiver
+MD
+run bash "$DOCTOR" --json
+assert_eq 0 "$STATUS"
+assert_eq 0 "$(jq '.budget_excess_reading_lines' <<< "$OUTPUT")" 'protected quotes have no reading budget'
+assert_contains "$OUTPUT" "HOLD H-07 on $scope by owner, until 2026-10-05"
+assert_contains "$OUTPUT" 'WAIVER W-02 on isolated test only (check artifact freshness) by owner, until 2026-10-31'
+assert_contains "$OUTPUT" 'Expired WAIVER W-01'
+assert_not_contains "$OUTPUT" "$words" 'doctor reports the row, not the quote'
+
+it "the hold still blocks after compaction, and the new waiver does not extend the old row"
+printf '# Change log\n\n- 2026-10-16 compaction: folded changes and moved the protected quote\n' > specs/log.md
+run bash "$STATUS_SH"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" "HOLD H-07 on $scope by owner, until 2026-10-05 — DUE, still applies"
+assert_contains "$OUTPUT" "HOLD H-07 on $scope — waits on owner lifting it"
+assert_not_contains "$OUTPUT" "$words" 'status reports the row, not the quote'
+run bash "$STATUS_SH" --json
+assert_eq 0 "$STATUS"
+assert_eq "$scope" "$(jq -r '.holds[] | select(.id == "H-07") | .scope' <<< "$OUTPUT")"
+assert_eq '["W-02:active","W-01:expired"]' "$(jq -c '[.holds[] | select(.type == "WAIVER") | .id + ":" + .state]' <<< "$OUTPUT")"
+rm specs/log.md
+
+it "both readers fail at the records line for broken authority references"
+printf '# Records\n\n%s — %s\n' "$hold_row" "$hold_ref" > specs/records.md
+mv specs/authority.md "$PROJ/authority.saved"
+for broken in missing-file missing-anchor duplicate-anchor edited bad-ref; do
+    case "$broken" in
+        missing-file) problem='missing authority file specs/authority.md' ;;
+        missing-anchor) printf '## H-08\n> Different owner words\n' > specs/authority.md; problem='missing authority anchor' ;;
+        duplicate-anchor)
+            cp "$PROJ/authority.saved" specs/authority.md
+            printf '\n## H-07\n> Duplicate entry\n' >> specs/authority.md
+            problem='duplicate authority anchor' ;;
+        edited)
+            sed 's/owner note/edited source/' "$PROJ/authority.saved" > specs/authority.md
+            problem='authority digest mismatch' ;;
+        bad-ref) printf '# Records\n\n%s — ref=../outside.md#H-07@000000000000\n' "$hold_row" > specs/records.md; problem='invalid authority reference' ;;
+    esac
+    for reader in "$STATUS_SH" "$DOCTOR"; do
+        run bash "$reader" --json
+        assert_eq 1 "$STATUS" "$broken fails in ${reader##*/}"
+        assert_contains "$OUTPUT" "Malformed record at specs/records.md:3: $problem"
+    done
+done
+rm "$PROJ/authority.saved" specs/authority.md specs/records.md
+
+it "HOLD and WAIVER references must follow the reason separator"
+for kind in HOLD WAIVER; do
+    case "$kind" in
+        HOLD) row='HOLD H-09 owner=owner scope=production since=2026-10-01 until=owner confirmation'; anchor=H-09 ;;
+        WAIVER) row='WAIVER W-09 owner=owner check=freshness scope=test expires=2026-10-31'; anchor=W-09 ;;
+    esac
+    printf '# Records\n\n%s ref=specs/authority.md#%s@000000000000\n' "$row" "$anchor" > specs/records.md
+    for reader in "$STATUS_SH" "$DOCTOR"; do
+        for mode in text json; do
+            if [ "$mode" = json ]; then run bash "$reader" --json; else run bash "$reader"; fi
+            assert_eq 1 "$STATUS" "$kind with missing separator fails in ${reader##*/} ($mode)"
+            assert_contains "$OUTPUT" "Malformed record at specs/records.md:3: $kind $anchor: put ref= after the reason separator ( — )"
+        done
+    done
+done
+
+it "reserving ref does not change inline reasons or unrelated record fields"
+cat > specs/records.md <<'MD'
+HOLD H-09 owner=owner scope=production since=2026-10-01 until=owner confirmation xref=legacy — "Leave ref=legacy alone" (owner note)
+WAIVER W-09 owner=owner check=freshness scope=test expires=2026-10-31 — "Also keep ref=legacy" (owner note)
+ATTEST A-09 by=owner what=reviewed env=test version=abc date=2026-10-17 ref=legacy
+MD
+run bash "$STATUS_SH" --json
+assert_eq 0 "$STATUS"
+assert_eq '["\"Leave ref=legacy alone\" (owner note)","\"Also keep ref=legacy\" (owner note)"]' \
+    "$(jq -c '[.holds[].reason]' <<< "$OUTPUT")"
+run bash "$DOCTOR" --json
+assert_eq 0 "$STATUS"
+rm specs/records.md
+
 it "the owner inbox: open lines with age, lines without a disposition"
 cat > specs/inbox.md <<'MD'
 # Owner inbox

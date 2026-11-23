@@ -974,14 +974,72 @@ spec_inbox() { # root
         END { if (NR != expected) exit 1; flush() }' "$file"
 }
 
+# Print the checked reference for one authority entry, or a diagnostic on stderr. Only ATX
+# headings outside comments and fences delimit entries; the bytes inside them are left alone.
+spec_authority_ref() { # root anchor
+    local file="$1/specs/authority.md" anchor="$2" entry digest="" target
+    target="specs/authority.md#$anchor"
+    if ! [[ "$anchor" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+        echo 'invalid authority anchor (expected a single ASCII ID)' >&2
+        return 1
+    fi
+    if [ -L "$1/specs" ] || [ -L "$file" ] || { [ -e "$file" ] && [ ! -f "$file" ]; }; then
+        echo 'specs/authority.md must be a regular file under specs/ (no symlinks)' >&2
+        return 1
+    fi
+    [ -f "$file" ] || { echo 'missing authority file specs/authority.md' >&2; return 1; }
+    review_file_without_nul "$file" 2>/dev/null ||
+        { echo 'cannot read specs/authority.md as LF text' >&2; return 1; }
+    if entry="$(LC_ALL=C awk -v anchor="$anchor" "$SPEC_METADATA_SKIP_AWK"'
+        index($0, "\r") { problem = 12; exit }
+        !metadata_skip($0) {
+            h = $0; sub(/^ ? ? ?/, "", h)
+            if (match(h, /^#+/) && RLENGTH <= 6 && substr(h, RLENGTH + 1) ~ /^([ \t]|$)/) {
+                depth = RLENGTH
+                if (level && depth <= level) level = 0
+                h = substr(h, depth + 1)
+                sub(/[ \t]+#+[ \t]*$/, "", h)
+                gsub(/^[ \t]+|[ \t]+$/, "", h)
+                if ("x" h == "x" anchor) {
+                    if (++found > 1) { problem = 11; exit }
+                    level = depth
+                }
+            }
+        }
+        level { print }
+        END { if (problem) exit problem; if (!found) exit 10 }
+    ' "$file" 2>/dev/null)"; then
+        # awk prints each line; substitution strips all trailing LF bytes. Put exactly one back.
+        if command -v sha256sum >/dev/null 2>&1; then
+            digest="$(printf '%s\n' "$entry" | sha256sum 2>/dev/null)" || digest=""
+        elif command -v shasum >/dev/null 2>&1; then
+            digest="$(printf '%s\n' "$entry" | shasum -a 256 2>/dev/null)" || digest=""
+        fi
+        digest="${digest%%[[:space:]]*}"
+        if [[ "$digest" =~ ^[0-9a-f]{64}$ ]]; then
+            printf 'ref=%s@%s\n' "$target" "${digest:0:12}"
+            return
+        fi
+        echo 'could not compute SHA-256 (requires sha256sum or shasum)' >&2
+    else
+        case "$?" in
+            10) printf 'missing authority anchor %s\n' "$target" >&2 ;;
+            11) printf 'duplicate authority anchor %s\n' "$target" >&2 ;;
+            *) echo 'cannot read specs/authority.md as LF text' >&2 ;;
+        esac
+    fi
+    return 1
+}
+
 # Records: line, type, name, owner, scope, env, rev, date, until, check, reason. A line that
 # is not a valid record prints type INVALID and the problem as its reason.
 spec_records() { # root
-    local file="$1/specs/records.md" expected
+    local root="$1" file="$1/specs/records.md" expected rows row line type reason checked error
+    local ref_format='^ref=specs/authority\.md#([A-Za-z0-9][A-Za-z0-9._-]*)@[0-9a-f]{12}$'
     [ -f "$file" ] || return 0
     verify_lf_file "$file" allow-empty || { echo 'Invalid text in specs/records.md' >&2; return 1; }
     expected="$(wc -l < "$file")" || return 1
-    awk -v expected="$expected" "$SPEC_SKIP_AWK"'
+    rows="$(awk -v expected="$expected" "$SPEC_SKIP_AWK"'
         function isdate(s) { return s ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ }
         function bad(why) { print NR "\037INVALID\037\037\037\037\037\037\037\037\037" why; }
         { gsub(/\037/, " "); if (spec_skip($0)) next }
@@ -1006,6 +1064,9 @@ spec_records() { # root
                 else if (f[i] != "" && stray == "") stray = f[i]
             if (type !~ /^(HOLD|WAIVER|ATTEST|DEPLOY)$/) { bad("not a HOLD, WAIVER, ATTEST or DEPLOY record"); next }
             if (name == "" || index(name, "=") || name !~ /^[A-Za-z0-9][A-Za-z0-9._-]*$/) { bad(type " needs an id or app name first"); next }
+            if ((type == "HOLD" || type == "WAIVER") && ("ref" in kv)) {
+                bad(type " " name ": put ref= after the reason separator ( — )"); next
+            }
             if (type == "HOLD") { need = "owner scope since until"; date = kv["since"]; until = kv["until"]; who = kv["owner"] }
             else if (type == "WAIVER") { need = "owner check scope expires"; date = ""; until = kv["expires"]; who = kv["owner"] }
             else if (type == "ATTEST") { need = "by what env version date"; date = kv["date"]; until = ""; who = kv["by"] }
@@ -1020,7 +1081,27 @@ spec_records() { # root
             check = (type == "ATTEST") ? kv["what"] : kv["check"]
             print NR "\037" type "\037" name "\037" who "\037" kv["scope"] "\037" kv["env"] "\037" rev "\037" date "\037" until "\037" check "\037" reason
         }
-        END { if (NR != expected) exit 1 }' "$file"
+        END { if (NR != expected) exit 1 }' "$file")" || return 1
+    while IFS= read -r row; do
+        [ -n "$row" ] || continue
+        IFS="$SPEC_SEP" read -r line type _ _ _ _ _ _ _ _ reason <<< "$row"
+        error=""
+        case "$type:$reason" in
+            HOLD:ref=*|WAIVER:ref=*)
+                if ! [[ "$reason" =~ $ref_format ]]; then
+                    error='invalid authority reference (expected ref=specs/authority.md#<anchor>@<12 lowercase hex digits>)'
+                elif ! checked="$(spec_authority_ref "$root" "${BASH_REMATCH[1]}" 2>&1)"; then
+                    error="${checked:-authority reference could not be verified}"
+                elif [ "$checked" != "$reason" ]; then
+                    error="authority digest mismatch for ${reason#ref=}"
+                fi ;;
+        esac
+        if [ -n "$error" ]; then
+            printf '%s\037INVALID\037\037\037\037\037\037\037\037\037%s\n' "$line" "$error" || return 1
+        else
+            printf '%s\n' "$row" || return 1
+        fi
+    done <<< "$rows"
 }
 
 # Open changes: id, title, opened, step, waiting on, next, parent, acceptance total, passed,

@@ -76,7 +76,7 @@ cat > "$CHANGE_FILE" <<'EOF'
 ## Intent
 Implement settled R-01/R-02 using D-01; no extra states or dependencies.
 ## Approach
-Use approved formatter/wrapper design. Verify with bash scripts/check-status.sh.
+Use approved formatter/wrapper design. Verify both surfaces with the status check.
 ## Tasks
 ## Acceptance
 | Item | Proves | Check | Attempts | Result |
