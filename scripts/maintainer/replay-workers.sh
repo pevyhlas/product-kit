@@ -38,6 +38,8 @@ replay_membership() {
             # Darwin ps appends the environment to argv with -E. Strip the
             # ordinary argv view first. No suffix (including ps's "(comm)"
             # fallback on read errors) means visibility was not established.
+            # Spaces inside values are ambiguous. A false match can only block
+            # evidence (Low); this information is never used to signal a PID.
             args=$(LC_ALL=C ps -ww -p "$pid" -o command= 2>/dev/null) || return 2
             full=$(LC_ALL=C ps -Eww -p "$pid" -o command= 2>/dev/null) || return 2
             [[ -n $args && $full == "$args "* ]] || return 2
@@ -49,46 +51,35 @@ replay_membership() {
     return 2
 }
 
-stop_tagged_workers() {
-    local until=$((SECONDS + grace + reap_limit)) signal=TERM row pid rc found last_tagged verified=0
+verify_no_workers() {
+    local until=$((SECONDS + scan_limit)) row pid rc verified=0
     [ -n "$run_tag" ] || return 0
     while :; do
-        replay_candidates "$scratch/before" || { echo 'Process census unavailable.' >&2; return 1; }
-        : > "$scratch/unknown"
-        found=false
+        replay_candidates "$scratch/live" || { echo 'Process census unavailable.' >&2; return 1; }
+        : > "$scratch/unverified"
         while IFS= read -r row; do
             pid=${row%% *}
             rc=0
             replay_membership "$platform" "$pid" "$run_tag" /proc || rc=$?
             case "$rc" in
-                0) kill "-$signal" -- "$pid" 2>/dev/null || :; found=true; last_tagged=$pid
-                   printf '%s\n' "$row" >> "$scratch/unknown" ;;
                 1) : ;; # positively untagged
-                *) printf '%s\n' "$row" >> "$scratch/unknown" ;;
+                0) printf 'Leftover tagged PID %s.\n' "$pid" >> "$scratch/unverified" ;;
+                *) printf 'Cannot inspect PID %s.\n' "$pid" >> "$scratch/unverified" ;;
             esac
-        done < "$scratch/before"
-        replay_candidates "$scratch/after" || { echo 'Process census unavailable.' >&2; return 1; }
-        # An unreadable identity that has disappeared or become a zombie is
-        # stopped. Do not require unrelated processes to stop forking. Repeat
-        # the *whole* inventory before accepting, including newly orphaned PIDs.
-        LC_ALL=C awk 'FILENAME == ARGV[1] { unknown[$0]; next } $0 in unknown { print $1 }' \
-            "$scratch/unknown" "$scratch/after" > "$scratch/unverified" || return 1
-        if [ ! -s "$scratch/unverified" ] && [ "$found" = false ]; then
-            if [ "$verified" = 1 ]; then run_tag=''; return 0; fi
-            verified=1
-            continue
+        done < "$scratch/live"
+        # Never credit a census with a missing lookup, even if that PID has
+        # since exited. Its successor must be inspected in a fresh census.
+        if [ ! -s "$scratch/unverified" ]; then
+            verified=$((verified + 1))
+            if [ "$verified" = 2 ]; then return 0; fi
+        else
+            verified=0
         fi
-        verified=0
         if [ "$SECONDS" -ge "$until" ]; then
-            while read -r pid; do echo "Cannot verify isolation for PID $pid." >&2; done < "$scratch/unverified"
-            if [ ! -s "$scratch/unverified" ]; then echo "Could not verify shutdown after signaling PID $last_tagged." >&2; fi
+            cat "$scratch/unverified" >&2
+            echo 'Two consecutive complete clean scans were not verified.' >&2
             return 1
         fi
-        if [ "$found" = true ] && [ "$signal" = TERM ]; then
-            sleep "$grace" || return 1
-            signal=KILL
-        else
-            sleep 1 || return 1
-        fi
+        if [ "$verified" = 0 ]; then sleep 0.2 || return 1; fi
     done
 }

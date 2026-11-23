@@ -116,10 +116,14 @@ merge base with the PR head's entire `tests/` directory. Everything outside `tes
 including scripts, templates, workflows and commands, stays at the merge base for the
 base run. The job summary shows both results and includes failure output; a missing
 base dependency counts as a base failure. Each base and head run gets its own temporary
-directory and up to five minutes. A timed-out base run counts as a failure; the head runs
-after the base's processes have stopped, including reparented workers that inherited its
-run tag. A surviving base service could otherwise answer a head health check. An unreadable
-candidate process or unverified stop makes the comparison inconclusive and stops the replay.
+directory and up to five minutes. A timed-out base run counts as a failure only if the
+head can be compared. The snapshot leader stops its own process group. Before moving on,
+the comparator requires two consecutive complete scans with no tagged workers. A leftover
+tagged worker or unreadable candidate at the deadline is reported by PID as `INCONCLUSIVE`;
+no head run follows an inconclusive base. The inventory never supplies signal targets.
+Darwin's `ps -Eww` flattens environment values, so an ambiguous match can also block
+a comparison. This check assumes trusted suites; it does not guarantee isolation under
+arbitrary process churn.
 Rows are written as suites finish. The comparison has a 40-minute budget; it labels suites
 it could not start in both snapshots as not run and does not count them as evidence.
 Titles such as `fix:`, `fix(scope):`, `fix!:` and `fix(scope)!:` need at least one suite that

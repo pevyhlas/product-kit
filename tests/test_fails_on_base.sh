@@ -178,7 +178,7 @@ assert_contains "$OUTPUT" '<code>tests/test_10_stalled.sh</code> — Not run on 
 assert_contains "$OUTPUT" '2 suite(s) not run; skipped suites are not evidence.'
 assert_contains "$OUTPUT" '0 of 2 changed test suite(s)'
 
-it "a timed-out job-controlled worker releases its lock before head runs in separate scratch"
+it "a timed-out worker in another group keeps its lock and prevents the head run"
 g checkout -q --detach "$BASE" || exit 1
 printf 'fixed\n' > "$FIXTURE/scripts/value"
 export REPLAY_TEST_RESOURCE="$_SCRATCH_CWD/shared-resource"
@@ -189,8 +189,8 @@ mkdir "$REPLAY_TEST_RESOURCE/lock"
 trap 'rmdir "$REPLAY_TEST_RESOURCE/lock"' EXIT
 trap 'exit 0' TERM
 printf '%s\n' "$$" > "$REPLAY_TEST_CHILD"
-sleep 15 &
-wait
+end=$((SECONDS + 25))
+while [ ! -f "$REPLAY_TEST_RESOURCE/release" ] && [ "$SECONDS" -lt "$end" ]; do sleep 0.1; done
 TEST
 cat > "$FIXTURE/tests/test_50_shared_lock.sh" <<'TEST'
 set -e
@@ -212,23 +212,30 @@ fi
 TEST
 LOCK_HEAD="$(commit 'job-controlled lock holder on base only')" || exit 1
 rm -f "$REPLAY_TEST_CHILD"
-TMPDIR="$_SCRATCH_CWD/shared-temp" PRDKIT_REPLAY_SUITE_SECONDS=3 compare "$BASE" "$LOCK_HEAD" 'fix: release the lock'
-assert_eq 0 "$STATUS" "head reacquires the resource and gets its own TMPDIR"
-assert_contains "$OUTPUT" '<code>tests/test_50_shared_lock.sh</code> — Base: FAIL (timed out after 3s); Head: PASS.'
-assert_contains "$OUTPUT" '1 of 1 changed test suite(s)'
-if child_stopped; then _ok 'job-controlled worker stopped'; else
-    _no 'job-controlled worker still running'
-    # Keep the negative control from leaving its fixture worker running.
-    if [ -s "$REPLAY_TEST_CHILD" ] && read -r worker < "$REPLAY_TEST_CHILD"; then
-        kill -TERM "$worker" 2>/dev/null
-    fi
-fi
+cat > "$_SCRATCH_CWD/audit-signals" <<'STUB'
+kill() {
+    case "$*:$0" in
+        "-TERM -- -$$:"*/replay-group.sh|"-KILL -- -$$:"*/replay-group.sh)
+            printf '%s\n' "$1" >> "$REPLAY_TEST_RESOURCE/group-signals"
+            builtin kill "$@" ;;
+        *) printf 'unexpected %s\n' "$*" >> "$REPLAY_TEST_RESOURCE/other-signals"; return 1 ;;
+    esac
+}
+STUB
+BASH_ENV="$_SCRATCH_CWD/audit-signals" TMPDIR="$_SCRATCH_CWD/shared-temp" PRDKIT_REPLAY_SUITE_SECONDS=3 compare "$BASE" "$LOCK_HEAD" 'fix: release the lock'
+assert_eq 2 "$STATUS" "the comparator never signals the escaped lock holder"
+assert_contains "$OUTPUT" 'INCONCLUSIVE (base isolation)'
+assert_contains "$OUTPUT" "PID $(cat "$REPLAY_TEST_CHILD")"
+assert_not_contains "$OUTPUT" '1 of 1'
+assert_eq $'-TERM\n-KILL' "$(cat "$REPLAY_TEST_RESOURCE/group-signals")" "only the live group leader signalled its group"
+if [ -e "$REPLAY_TEST_RESOURCE/other-signals" ]; then _no 'unexpected signal'; else _ok 'no scanned PID signalled'; fi
+: > "$REPLAY_TEST_RESOURCE/release"
 
 it "a completed row is already in the summary when a later suite is still running"
 g checkout -q --detach "$STALLED" || exit 1
 printf 'exit 0 # updated in the cancellation fixture\n' > "$FIXTURE/tests/test_20_finished.sh"
 cat > "$FIXTURE/tests/test_30_later.sh" <<'TEST'
-set -m
+# Stay in the snapshot group for the cancellation control.
 trap '' TERM
 sleep 12 &
 printf '%s\n' "$!" > "$REPLAY_TEST_CHILD"
@@ -256,12 +263,7 @@ assert_eq 143 "$cancel_status" "comparator stopped on TERM"
 assert_contains "$(cat "$SUMMARY")" '<code>tests/test_20_finished.sh</code> — Base: PASS; Head: PASS.' \
     "completed row survives the comparator's cleanup"
 assert_not_contains "$(cat "$SUMMARY")" 'tests/test_30_later.sh' "interrupted suite never reports a result"
-if child_stopped; then _ok 'cancellation stopped the later job-controlled worker'; else
-    _no 'cancelled job-controlled worker is still running'
-    if [ -s "$REPLAY_TEST_CHILD" ] && read -r worker < "$REPLAY_TEST_CHILD"; then
-        kill -KILL "$worker" 2>/dev/null
-    fi
-fi
+if child_stopped; then _ok 'cancellation stopped the worker in the owned group'; else _no 'worker still running'; fi
 
 it "escaped base services cannot answer a head health check"
 g checkout -q --detach "$BASE" || exit 1
@@ -275,14 +277,26 @@ from pathlib import Path
 
 os.chdir(os.environ["REPLAY_TEST_RESOURCE"])
 with socket.socket(socket.AF_UNIX) as sock:
-    sock.settimeout(15)
+    sock.settimeout(0.2)
     if sys.argv[1] == "serve":
         sock.bind("endpoint")
         sock.listen()
+        if os.environ["REPLAY_STALE_MODE"] == "handoff":
+            # The successor inherits both the listener and the run tag.
+            if os.fork():
+                os._exit(0)
         Path("ready").write_text(str(os.getpid()))
-        client, _ = sock.accept()
-        with client:
-            client.sendall(b"ok")
+        for _ in range(150):
+            if Path("release-service").exists():
+                break
+            try:
+                client, _ = sock.accept()
+            except TimeoutError:
+                continue
+            with client:
+                client.sendall(b"ok")
+            break
+        Path("service-done").touch()
     else:
         sock.connect("endpoint")
         assert sock.recv(2) == b"ok"
@@ -297,23 +311,30 @@ if [ "$(cat scripts/value)" = old ]; then
     while [ ! -f "$REPLAY_TEST_RESOURCE/ready" ]; do sleep 0.1; done
     case "$REPLAY_STALE_MODE" in
         timeout) sleep 12 ;;
-        failure) exit 17 ;;
+        failure|handoff) exit 17 ;;
         success) exit 0 ;;
     esac
 else
+    : > "$REPLAY_TEST_RESOURCE/head-started"
     bash scripts/start || :
     python3 -I tests/helpers/health.py probe
 fi
 TEST
 printf 'fixed\n' > "$FIXTURE/scripts/value"
 HEALTH_HEAD="$(commit 'stale service cannot stand in for failed head startup')" || exit 1
-for mode in timeout failure success; do
-    rm -f "$REPLAY_TEST_RESOURCE"/{endpoint,ready}
+for mode in timeout failure success handoff; do
+    rm -f "$REPLAY_TEST_RESOURCE"/{endpoint,ready,release-service,service-done}
     REPLAY_STALE_MODE="$mode" PRDKIT_REPLAY_SUITE_SECONDS=3 compare "$BASE" "$HEALTH_HEAD" 'fix: verify service startup'
-    assert_eq 1 "$STATUS" "$mode: head without its own service must fail"
-    assert_contains "$OUTPUT" 'Head: FAIL (exit 1).' "$mode: head never receives a stale reply"
-    assert_contains "$OUTPUT" '0 of 1 changed test suite(s)' "$mode: not evidence"
+    assert_eq 2 "$STATUS" "$mode: leftover service blocks the comparison"
+    assert_contains "$OUTPUT" 'INCONCLUSIVE (base isolation)'
+    assert_contains "$OUTPUT" "PID $(cat "$REPLAY_TEST_RESOURCE/ready")"
+    assert_not_contains "$OUTPUT" '1 of 1' "$mode: not evidence"
+    if [ -e "$REPLAY_TEST_RESOURCE/head-started" ]; then _no 'head started'; else _ok 'head did not start'; fi
     assert_file "$REPLAY_TEST_RESOURCE/ready" "$mode: base listener actually started"
+    : > "$REPLAY_TEST_RESOURCE/release-service"
+    end=$((SECONDS + 3))
+    while [ ! -f "$REPLAY_TEST_RESOURCE/service-done" ] && [ "$SECONDS" -lt "$end" ]; do sleep 0.1; done
+    assert_file "$REPLAY_TEST_RESOURCE/service-done" "$mode: fixture released its own listener"
 done
 
 it "membership readers distinguish missing data, other tokens and zombies"
@@ -335,11 +356,39 @@ if [ -f "$PK_ROOT/scripts/maintainer/replay-workers.sh" ]; then
     }
     env_suffix=' OTHER=1 TAG=1' run replay_membership Darwin 42 TAG=1 ''; assert_eq 0 "$STATUS"
     env_suffix=' OTHER=1 TAG=10' run replay_membership Darwin 42 TAG=1 ''; assert_eq 1 "$STATUS"
+    env_suffix=' MESSAGE=text TAG=1 here' run replay_membership Darwin 42 TAG=1 ''; assert_eq 0 "$STATUS" "ambiguous match blocks evidence"
     run replay_membership Darwin 42 TAG=1 ''; assert_eq 2 "$STATUS"
     scratch="$FIXTURE"
     run replay_census "$FIXTURE/live"; assert_eq 0 "$STATUS"
     assert_eq "$$ Sat Nov 21 10:00:01 2026" "$(cat "$FIXTURE/live")"
     unset -f ps
+
+    it "handoff during lookup invalidates the scan; a replacement PID is detection-only"
+    # Represent the race with a process table: the first two listed workers exit
+    # before lookup, passing the listener to their successor. Its PID is then
+    # reused by an unrelated process after the tag read. No real PID is targeted.
+    handoff() (
+        scratch="$_SCRATCH_CWD"; run_tag='TAG=1'; platform=Linux; scan_limit=2
+        # shellcheck disable=SC2329 # Indirect calls from the detection loop.
+        replay_candidates() {
+            turn=$((turn + 1))
+            case "$turn" in 1) echo '401 first' ;; 2) echo '402 second' ;; *) echo '403 successor' ;; esac > "$1"
+        }
+        # shellcheck disable=SC2329
+        replay_membership() {
+            echo "$2" >> "$scratch/lookups"
+            if [ "$2" = 403 ]; then return 0; else return 2; fi
+        }
+        # shellcheck disable=SC2329
+        kill() { echo "$*" >> "$scratch/signal-to-replacement"; }
+        turn=0
+        verify_no_workers
+    )
+    run handoff
+    assert_eq 1 "$STATUS" "two incomplete censuses never admit head"
+    assert_contains "$OUTPUT" 'PID 403'
+    assert_contains "$(cat "$_SCRATCH_CWD/lookups")" $'401\n402\n403'
+    if [ -e "$_SCRATCH_CWD/signal-to-replacement" ]; then _no 'signal to replacement'; else _ok 'no signal to replacement'; fi
 
     it "an unreadable live candidate prevents head execution and cannot count"
     mkdir "$FIXTURE/ps-stub"

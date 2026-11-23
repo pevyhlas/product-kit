@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Kit-only PR check. Run from a clone containing both refs and their common history.
 # Workers can outlive their launchers and answer another snapshot's health check.
-# Require verified cleanup of inherited run tags before accepting regression evidence.
+# Detect leftover inherited tags; never signal a PID discovered by a census.
 # A worker that deliberately clears its inherited environment is outside the threat model.
 set -euo pipefail
-source "$(dirname "${BASH_SOURCE[0]}")/replay-workers.sh"
+helpers="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+source "$helpers/replay-workers.sh"
 
 if [ "$#" -ne 3 ]; then
     echo "Usage: bash scripts/maintainer/fails-on-base.sh <base-ref> <head-ref> <pr-title>" >&2
@@ -28,82 +29,23 @@ limit_seconds() {
 }
 suite_limit="$(limit_seconds "${PRDKIT_REPLAY_SUITE_SECONDS:-300}" 300 PRDKIT_REPLAY_SUITE_SECONDS)"
 budget="$(limit_seconds "${PRDKIT_REPLAY_BUDGET_SECONDS:-2400}" 2400 PRDKIT_REPLAY_BUDGET_SECONDS)"
-grace=2
-reap_limit=5
-# Reserve time for both the tree stop and the independent token scan.
-pair_seconds=$((2 * (suite_limit + 2 * (grace + reap_limit) + 1)))
+scan_limit=5
+pair_seconds=$((2 * (suite_limit + 2 + scan_limit + 1)))
 deadline=$((SECONDS + budget))
 
 scratch="$(mktemp -d)"
 platform=$(uname -s)
 run_tag=''
-suite_pid='' timer_pid='' interrupted=0 changing_jobs=false owned_pids=''
-supervisor_pid=$$
-stop_group() {
-    [ -n "$1" ] || return 0
-    kill -KILL -- "-$1" 2>/dev/null || :
-    wait "$1" 2>/dev/null || :
-}
-suite_tree() {
-    # Seed by PID and follow PPIDs across job-control groups. A known group leader's
-    # group also identifies members reparented since a previous snapshot.
-    # BSD awk rejects literal newlines in -v assignments; read the PID list as data.
-    LC_ALL=C ps -A -o pid=,ppid=,pgid=,stat= | LC_ALL=C REPLAY_ROOTS="$*" awk '
-        BEGIN {
-            n = split(ENVIRON["REPLAY_ROOTS"], root, /[[:space:]]+/)
-            for (i = 1; i <= n; i++) if (root[i] != "") owned[root[i]] = 1
-        }
-        { parent[$1] = $2; group[$1] = $3; state[$1] = $4 }
-        END {
-            do {
-                added = 0
-                for (pid in parent)
-                    if (!(pid in owned) && ((parent[pid] in owned) || (group[pid] in owned))) {
-                        owned[pid] = 1
-                        added = 1
-                    }
-            } while (added)
-            for (pid in owned)
-                if (pid in state && state[pid] !~ /^Z/) print pid
-        }'
-}
-signal_pids() {
-    local signal="$1" pid
-    while IFS= read -r pid; do
-        [ -n "$pid" ] || continue
-        kill "-$signal" -- "$pid" 2>/dev/null || :
-    done <<< "$2"
-}
-stop_suite() {
-    local living stop_at
-    [ -n "$suite_pid" ] || return 0
-    # Discover before TERM can kill the leader and orphan a job-controlled worker.
-    living="$(suite_tree "$suite_pid" "$owned_pids")" || return 1
-    if [ -n "$living" ]; then
-        owned_pids="$owned_pids $living"
-        signal_pids TERM "$living"
-        sleep "$grace" || return 1
-    fi
-    stop_at=$((SECONDS + reap_limit))
-    while :; do
-        # Retain known PIDs even after they exit: they may still name a process group.
-        living="$(suite_tree "$suite_pid" "$owned_pids")" || return 1
-        if [ -z "$living" ]; then break; fi
-        signal_pids KILL "$living"
-        owned_pids="$owned_pids $living"
-        if [ "$SECONDS" -ge "$stop_at" ]; then return 1; fi
-        sleep 1 || return 1
-    done
-    wait "$suite_pid" 2>/dev/null || :
-    suite_pid='' owned_pids=''
-}
+suite_pid='' interrupted=0 changing_jobs=false control=''
 cleanup() {
     trap '' INT TERM HUP
-    stop_group "$timer_pid"
-    if ! stop_suite; then
-        printf 'Could not stop the suite process tree.\n' >&2
+    if [ -n "$suite_pid" ]; then
+        : > "$control/cancel"
+        wait "$suite_pid" 2>/dev/null || :
     fi
-    if ! stop_tagged_workers; then printf 'INCONCLUSIVE: run isolation unverified.\n' >&2; fi
+    if [ -n "$run_tag" ] && ! verify_no_workers 2>&3; then
+        printf 'INCONCLUSIVE: run isolation unverified.\n' >&3
+    fi
     rm -rf "$scratch"
 }
 interrupt() {
@@ -115,7 +57,6 @@ trap cleanup EXIT
 trap 'interrupt 130' INT
 trap 'interrupt 143' TERM
 trap 'interrupt 129' HUP
-trap ':' USR1 # wake wait on expiry; the parent owns all suite teardown
 set -m # Bash 3.2+: give each async job its own process group, including its descendants.
 scratch="$(cd "$scratch" && pwd -P)"
 
@@ -163,50 +104,37 @@ run_test() {
     nonce=$(openssl rand -hex 24)
     [[ $nonce =~ ^[0-9a-f]{48}$ ]] || exit 2
     run_tag="PRDKIT_REPLAY_${nonce}=1"
-    rm -f "$scratch/timed-out"
+    control=$(mktemp -d "$scratch/control.XXXXXX")
     changing_jobs=true
     (
         exec 3>&-
-        cd "$root"
         unset GITHUB_STEP_SUMMARY
         export TMPDIR="$tmp" TMP="$tmp" TEMP="$tmp"
-        export "${run_tag?}"
-        exec bash "$path"
+        exec bash "$helpers/replay-group.sh" "$control" "$root" "$path" "$run_tag" "$limit"
     ) </dev/null >"$log" 2>&1 &
     suite_pid=$!
-    (
-        exec 3>&-
-        sleep "$limit"
-        if kill -0 "$suite_pid" 2>/dev/null; then
-            : > "$scratch/timed-out"
-            # Repeat until stopped in case the first signal arrived just before wait.
-            while kill -USR1 "$supervisor_pid" 2>/dev/null; do sleep 1; done
-        fi
-    ) </dev/null >/dev/null 2>&1 &
-    timer_pid=$!
     changing_jobs=false
     if [ "$interrupted" -ne 0 ]; then exit "$interrupted"; fi
     wait "$suite_pid" 2>/dev/null || status=$?
-    changing_jobs=true
-    stop_group "$timer_pid"; timer_pid=''
-    if ! stop_suite; then
-        printf '\nINCONCLUSIVE: could not stop the process tree for PID %s.\n' "$suite_pid" >&3
+    suite_pid=''
+    if [ "$status" != 137 ] || ! read -r status < "$control/outcome"; then
+        printf '\nINCONCLUSIVE: snapshot group shutdown was not verified.\n' >&3
         exit 2
     fi
-    if [ -f "$scratch/timed-out" ]; then
-        result="FAIL (timed out after ${limit}s)"
-    else
-        if [ "$status" -ne 0 ]; then result="FAIL (exit $status)"; else result=PASS; fi
-    fi
+    case "$status" in
+        timeout) result="FAIL (timed out after ${limit}s)" ;;
+        0) result=PASS ;;
+        *) result="FAIL (exit $status)" ;;
+    esac
     # This also gates the transition from base to head after a normal base exit.
-    if ! stop_tagged_workers 2>"$scratch/isolation-error"; then
+    if ! verify_no_workers 2>"$scratch/isolation-error"; then
+        run_tag=''
         printf -- '- <code>%s</code> — INCONCLUSIVE (%s isolation); comparison stopped, not counted.\n' \
             "$label" "${root##*/}" >&3
         cat "$scratch/isolation-error" >&3
         exit 2
     fi
-    changing_jobs=false
-    if [ "$interrupted" -ne 0 ]; then exit "$interrupted"; fi
+    run_tag=''
     rm -rf "$tmp"
 }
 
