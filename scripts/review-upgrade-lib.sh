@@ -76,7 +76,7 @@ upgrade_plain_guard() (
     # A version edited on the upgrade branch cannot waive the legacy inventory.
     if git -C "$TARGET" show "$UP_POLICY_AT:.prdkit/.manifest" > "$work/prior-manifest" 2>/dev/null; then
         case "$(install_manifest_value "$work/prior-manifest" version):$(install_manifest_value "$MANIFEST" version)" in
-            2.0.*:2.0.*) return 0 ;;
+            2.*:2.*) return 0 ;;
         esac
     fi
     upgrade_record_lines "$TARGET" "$UP_POLICY_AT" "$work/trusted" "$work/a" || return 1

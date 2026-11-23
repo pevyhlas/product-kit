@@ -32,8 +32,8 @@ change by change.
 
 ### Fixed
 
-- `init.sh --upgrade` accepts any 2.x install. It previously refused installs newer than 2.0,
-  so a 2.1 install could not upgrade.
+- `init.sh --upgrade` accepts any 2.x install and skips the 1.x review transition for it. It
+  previously refused installs newer than 2.0, so a 2.1 install could not upgrade.
 - Adoption (including pinned-source proof), delivery, doctor, status, and change-close
   preflight fail rather than treating an incomplete inventory as clean. Parsed spec input
   and line-oriented verifier evidence require LF line endings and a final newline;
