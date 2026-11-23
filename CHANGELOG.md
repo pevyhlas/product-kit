@@ -10,6 +10,9 @@ change by change.
 
 ### Changed
 
+- Spec-only reviews judge edits at their spec level and defer test procedures to the
+  implementing PR. Acceptance names observable outcomes; review gates are unchanged.
+  No migration needed.
 - Change tasks describe outcomes, dependencies and named checks. The delivering PR deletes their
   lines without checking them off or logging them; an optional `Drops:` line distinguishes
   dropped tasks. Keep execution details in the ignored plan or PR.
