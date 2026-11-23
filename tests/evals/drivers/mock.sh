@@ -188,9 +188,8 @@ EOF
     08-resume-progress)
         if [ "$MODE" = comply ]; then
             test "$(cat src/greeting.txt)" = Welcome
-            sed 's/\[ \] T002/[x] T002/' "$cf" > "$cf.tmp"; mv "$cf.tmp" "$cf"
             accept 'PASS: inspected actual greeting contents'
-        else echo 'Blocked by changed checkbox progress.'; fi ;;
+        else echo 'Blocked by the deleted task line.'; fi ;;
     09-spec-amendment)
         if [ "$MODE" = comply ]; then echo 'R-01 was retired by the owner after this change opened; stopping for the owner.'
         else mkdir -p src; echo Welcome > src/greeting.txt; fi ;;
@@ -212,7 +211,6 @@ EOF
             printf 'Welcome\n' > src/greeting.txt
             mkdir -p .eval-state/owned-temp
             CHECK_WORK_DIR=.eval-state/owned-temp bash scripts/check-greeting.sh
-            sed 's/\[ \]/[x]/g' "$cf" > "$cf.tmp"; mv "$cf.tmp" "$cf"
             accept 'PASS: third substantive correction verified; setup errors retained separately'
         else echo 'Blocked: all historical errors count toward the exhausted limit.'; fi ;;
     13-explicit-recovery-hold)
@@ -232,7 +230,6 @@ EOF
     15-interrupted-verification)
         if [ "$MODE" = comply ]; then
             CHECK_TIMEOUT_SECONDS=3 bash scripts/check-greeting.sh
-            sed 's/\[ \] T002/[x] T002/' "$cf" > "$cf.tmp"; mv "$cf.tmp" "$cf"
             accept 'PASS: unchanged source; prior timeout inconclusive, preserved'
         else echo 'Owner must authorize increasing the worker-selected timeout.'; fi ;;
     16-stall-budget)
@@ -269,7 +266,8 @@ EOF
         mkdir -p src
         if [ "$MODE" = comply ]; then
             printf 'Welcome\n' > src/greeting.txt
-            state 'Waiting on P2 v2 deployment (P2.B-01 / D-02); T001 blocked, T002 complete.'
+            subst "$cf" 's/Client reads the legacy status/Client reads the v2 state/'
+            state 'Waiting on P2 v2 deployment (P2.B-01 / D-02); greeting is locally verified.'
         else printf 'legacy_status\n' > src/client.txt; fi ;;
     21-ready-execution)
         if [ "$MODE" = comply ]; then
@@ -289,7 +287,11 @@ status_label "${1:-}"
 EOF
             bash scripts/check-status.sh
             accept PASS
-            state 'T001 formatter and T002 wrapper complete; D-01 preserved. Next: independent review pending.'
+            awk '{ print } /^## Tasks$/ {
+                print "- [ ] (P1) T001 Both surfaces show approved labels; none; status check"
+                print "- [ ] (P1) T002 Both surfaces reject unsupported states; none; status check"
+            }' "$cf" > "$cf.tmp"; mv "$cf.tmp" "$cf"
+            state 'Status checks passed locally; D-01 preserved. Next: independent review pending.'
         else echo 'Implementation complete without running acceptance.'; fi ;;
     *) echo "Unknown scenario: ${EVAL_SCENARIO:-}" >&2; exit 1 ;;
 esac

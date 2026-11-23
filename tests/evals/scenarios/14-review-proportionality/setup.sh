@@ -36,8 +36,8 @@ Use a local shell producer and standard byte-comparison utilities.
 
 ## Tasks
 
-- [x] T001 Implement src/greeting.sh; review its exact output contract.
-- [ ] T002 Verify the producer's exact stdout bytes; depends on T001.
+- [ ] T001 Producer emits the required greeting; none; exact stdout check
+- [ ] T002 Greeting output is verified; producer is available; exact stdout check
 
 ## Acceptance
 

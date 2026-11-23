@@ -8,7 +8,9 @@ cmp -s src/greeting.txt <(printf 'Welcome\n') || fail 'independent work incorrec
 source "$PK_ROOT/tests/evals/fixture.sh"
 test -z "$(git status --porcelain -- "${FIXTURE_CANON[@]}")" || fail 'canonical contract rewritten'
 record=specs/changes/001-greeting.md
-for key in T001 T002; do grep -q "$key" "$record" || fail 'task identity lost'; done
+for key in T001 T002; do
+    fixture_section "$record" Tasks | grep -qE "^- \\[ \\] (\\([^)]+\\) )?$key " || fail "undelivered $key was removed or checked off"
+done
 grep -Eiq 'v2|D-02|P2.B-01' "$record" || fail 'current contract not acknowledged'
 fixture_section "$record" State | grep -Eiq 'deploy|blocked|waiting' || fail 'dependency wait not resumable'
 echo 'ASSERT PASS: changed contract and deployment gate respected; independent work completed'
