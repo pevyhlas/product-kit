@@ -15,8 +15,9 @@ orientation and pointers, never change narrative or evidence.
 
 [spec.md](../workflows/spec.md) defines the levels, the line test (a line stays only if it rules
 out meaningful wrong implementations and rejects no valid real input), the layout, IDs, markers
-and reading budgets. Spec edits
-land in the PR whose code and tests realize them; undecided intent stays in the change record.
+and reading budgets. Edits that claim built behavior ship with code and tests. Owner-approved,
+unbuilt intent can land in a spec-only PR under the [`planned:` rule](../workflows/spec.md#elements);
+undecided intent stays in the change record.
 L0 edits carry the owner's quote. One-way doors wait for the owner's answer.
 
 ## Changes
