@@ -30,6 +30,7 @@ change by change.
   preflight fail rather than treating an incomplete inventory as clean. Parsed spec input
   and line-oriented verifier evidence require LF line endings and a final newline;
   `read-spec.sh --raw` still returns the original bytes.
+- Docs-only review passes report the path and blocker checks without claiming receipt coverage.
 
 ### Documentation
 
