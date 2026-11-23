@@ -64,6 +64,14 @@ Preserve license and upstream attribution.
 
 ## Validation
 
+**Verifier threat model.** Git and `gh` are trusted producers: a successful command's
+output is taken as complete. Check its exit status before consuming the result, including
+in pipelines; a failed lookup is not evidence of absence. A verifier must not pass on
+missing or unreadable required input, malformed records, or truncated, unterminated or
+CRLF on-disk verification text. Sparse and partial checkouts are in scope: read committed
+evidence from the tree when required, and report unavailable objects rather than assuming
+they are absent. There is no need to reconstruct successful Git or `gh` inventories.
+
 ```bash
 bash tests/run.sh
 git diff --check 4b825dc642cb6eb9a060e54bf8d69288fbee4904 HEAD

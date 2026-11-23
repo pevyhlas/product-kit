@@ -24,6 +24,13 @@ change by change.
   release gating are unchanged; all expected jobs must succeed. New PR commits cancel
   superseded runs for that PR without cancelling main or manual runs.
 
+### Fixed
+
+- Adoption (including pinned-source proof), delivery, doctor, status, and change-close
+  preflight fail rather than treating an incomplete inventory as clean. Parsed spec input
+  and line-oriented verifier evidence require LF line endings and a final newline;
+  `read-spec.sh --raw` still returns the original bytes.
+
 ### Documentation
 
 - Document safety invariants and threat models in the worktree, close, publication, adoption,

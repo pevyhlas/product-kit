@@ -138,7 +138,9 @@ list_spec_claims() {
         for path in "$checkout"/specs/changes/[0-9]*.md; do
             [ -f "$path" ] && { name="${path##*/}"; echo "change record ${name%.md}"; }
         done
-        spec_log_entries "$checkout" |
+        # Number allocation must reserve old log IDs even when a verifier now rejects
+        # their formatting. Never treat a legacy CRLF log as an empty claim inventory.
+        spec_log_entries "$checkout" legacy-claims |
             sed -n 's/^- [0-9-]* \([0-9][0-9][0-9]*-[a-z0-9-]*\):.*/closed change \1/p'
         spec_planned_changes "$checkout" | sed 's/^/planned in the spec /'
         if [ -f "$checkout/specs/archive.md" ]; then

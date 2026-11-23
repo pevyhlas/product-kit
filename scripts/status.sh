@@ -35,22 +35,22 @@ js() { printf '"%s"' "$(json_escape "$1")"; }
 ju() { if [[ "$1" =~ ^(0|[1-9][0-9]*)$ ]]; then printf '%s' "$1"; else printf null; fi; }
 ji() { if [[ "$1" =~ ^(0|-?[1-9][0-9]*)$ ]]; then printf '%s' "$1"; else printf null; fi; }
 
-items="$(spec_items "$root")"
+items="$(verify_lines spec_items "$root")"
 spec_lifecycle_require "$root"
 stage_now="$SPEC_STAGE_NOW"; stage_next="$SPEC_STAGE_NEXT"
 # Live items marked for a stage after the current one: needed later, not now.
 later="$(if [ -n "$stage_now" ]; then
-    { printf '%s\n' "$items" | awk -F "$SEP" 'NF && $5 == "yes" { print "R" FS $1 }'
+    { printf '%s\n' "$items" | awk -F "$SEP" 'NF && $5 == "yes" { print "R" FS $1 }' || exit 1
       spec_stages "$root" | awk -F "$SEP" '{ print "S" FS $1 FS $2 }'; } |
     awk -F "$SEP" -v now="$stage_now" -v stage_order="$SPEC_STAGE_ORDER" -v stage_custom="$SPEC_STAGE_CUSTOM" "$SPEC_STAGE_AWK"'
         $1 == "R" { gone[$2] = 1; next }
         !($2 in gone) && stage_rank($3) > stage_rank(now) { out = out (out ? ", " : "") $2 " (" $3 ")" }
         END { print out }'
 fi)"
-changes="$(spec_open_changes "$root")"
-leftover="$(spec_leftover_features "$root")"
-inbox="$(spec_inbox "$root")"
-records="$(spec_records "$root")"
+changes="$(verify_lines spec_open_changes "$root")"
+leftover="$(verify_lines spec_leftover_features "$root")"
+inbox="$(verify_lines spec_inbox "$root")"
+records="$(verify_lines spec_records "$root")"
 
 # Use the same winning worktree record. Children reference the parent; ordinary standalone
 # changes have no outcome row. A referenced but missing/incomplete parent stays visibly unknown.
@@ -61,13 +61,16 @@ progress="$(while IFS="$SEP" read -r id title _ _ _ _ parent _ _ _ _ _ _ _ loc; 
     if printf '%s\n' "$parents" | grep -qxF "$id"; then required=true
     elif [ -n "$parent" ] && [ "$parent" != none ]; then continue; fi
     if [ "${loc#/}" != "$loc" ]; then change_root="$loc"; else change_root="$root/$loc"; fi
-    checkpoint="$(spec_change_progress "$change_root/specs/changes/$id.md" "$required")"
+    [ -f "$change_root/specs/changes/$id.md" ] || exit 1
+    checkpoint="$(verify_lines spec_change_progress "$change_root/specs/changes/$id.md" "$required")" || exit 1
     [ -z "$checkpoint" ] || printf '%s\037%s\037%s\037%s\n' "$id" "$title" "$loc" "$checkpoint"
 done <<< "$changes"
 while IFS= read -r parent; do
     is_change_id "$parent" || continue
     if ! printf '%s\n' "$changes" | cut -d "$SEP" -f1 | grep -qxF "$parent"; then
-        printf '%s\037\037\037%s\n' "$parent" "$(spec_change_progress /dev/null true)"
+        checkpoint="$(verify_lines spec_change_progress /dev/null true)" || exit 1
+        [ -n "$checkpoint" ] || exit 1
+        printf '%s\037\037\037%s\n' "$parent" "$checkpoint"
     fi
 done <<< "$parents")"
 
@@ -82,8 +85,8 @@ if git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     spec_objects_local "$root" || objects_local=false
     base="$(spec_default_branch "$root")"
     if [ -n "$base" ]; then
-        branches="$(git -C "$root" for-each-ref --no-merged="$base" --sort=committerdate \
-            --format="%(refname:short)$SEP%(committerdate:short)" refs/heads 2>/dev/null || true)"
+        branches="$(verify_lines git -C "$root" for-each-ref --no-merged="$base" --sort=committerdate \
+            --format="%(refname:short)$SEP%(committerdate:short)" refs/heads)"
         # Reviewed PR-scoped records still on the default branch; a child in any checkout keeps its parent open.
         if $objects_local; then
             unclosed=" $(spec_unclosed_changes "$root" "$base" |
@@ -95,23 +98,39 @@ fi
 # at a commit after the merge base, the branch's version of every file it changed, the branch is
 # possibly squash-merged. Later commits may have changed those files again.
 squashed() { # branch -> yes|no
-    local mb files=() file rc=0 commit
+    local mb files=() file rc=0 commit expected history
     $objects_local || { echo no; return 0; }
     mb="$(git -C "$root" merge-base "$base" "$1" 2>/dev/null)" || { echo no; return 0; }
     # A diff that cannot read its objects (a tree-filtered clone) is not evidence of a squash.
     git -C "$root" diff --quiet --no-renames "$mb" "$1" >/dev/null 2>&1 || rc=$?
     [ "$rc" -le 1 ] || { echo no; return 0; }
-    while IFS= read -r -d '' file; do files+=(":(literal)$file"); done < <(git -C "$root" diff --no-renames --name-only -z "$mb" "$1" 2>/dev/null)
-    if [ "${#files[@]}" -eq 0 ] || git -C "$root" diff --quiet "$base" "$1" -- "${files[@]}" 2>/dev/null; then echo yes; return 0; fi
+    git -C "$root" diff --no-renames --name-only -z "$mb" "$1" > "$work/paths" || return 1
+    expected="$(verify_nul_count "$work/paths")" || return 1
+    while IFS= read -r -d '' file; do
+        [ -n "$file" ] || return 1
+        files+=(":(literal)$file")
+    done < "$work/paths"
+    if [ "${#files[@]}" -ne "$expected" ] || { [ "$expected" -eq 0 ] && [ "$rc" -eq 1 ]; }; then
+        echo "Incomplete squash path inventory for $1: expected $expected paths from diff, checked ${#files[@]} (quiet diff status $rc)" >&2
+        return 1
+    fi
+    if [ "$expected" -eq 0 ] || git -C "$root" diff --quiet "$base" "$1" -- "${files[@]}" 2>/dev/null; then echo yes; return 0; fi
     # The squash commit is usually among the first after the merge base to touch those files.
+    history="$(verify_lines git -C "$root" log --reverse --format=%H "$mb..$base" -- "${files[@]}" | awk 'NR <= 20')" || return 1
     while IFS= read -r commit; do
+        [ -n "$commit" ] || continue
+        [[ "$commit" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] || return 1
         git -C "$root" diff --quiet "$commit" "$1" -- "${files[@]}" 2>/dev/null && { echo yes; return 0; }
-    done < <(git -C "$root" log --reverse --format=%H "$mb..$base" -- "${files[@]}" 2>/dev/null | head -n 20)
+    done <<< "$history"
     echo no
 }
 if [ -n "$branches" ]; then
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' EXIT
     branches="$(printf '%s\n' "$branches" | while IFS="$SEP" read -r branch date; do
-        [ -n "$branch" ] && printf '%s\037%s\037%s\n' "$branch" "$date" "$(squashed "$branch")"
+        [ -n "$branch" ] && { [ -z "$date" ] || spec_is_date "$date"; } || exit 1
+        squash="$(squashed "$branch")" || exit 1
+        printf '%s\037%s\037%s\n' "$branch" "$date" "$squash"
     done)"
 fi
 
@@ -120,6 +139,7 @@ holds=""; deploys=""
 while IFS="$SEP" read -r line type name who scope env rev date until check reason; do
     [ -n "$line" ] || continue
     case "$type" in
+        INVALID) printf 'Malformed record at specs/records.md:%s: %s\n' "$line" "$reason" >&2; exit 1 ;;
         HOLD|WAIVER)
             state=active
             if spec_is_date "$until" && [ "$(spec_days_between "$until" "$today")" -gt 0 ]; then
@@ -137,9 +157,11 @@ distance() { # rev -> "<commits on the default branch not deployed> <deployed co
     #             or "unknown" when the revision is not resolvable here
     local counts behind_n ahead_n
     if $objects_local && [ -n "$base" ] && [ -n "$1" ] && git -C "$root" cat-file -e "$1^{commit}" 2>/dev/null &&
-        counts="$(git -C "$root" rev-list --left-right --count "$base...$1" 2>/dev/null)"; then
+        counts="$(verify_lines git -C "$root" rev-list --left-right --count "$base...$1")"; then
         read -r behind_n ahead_n <<< "$counts"
-        printf '%s %s\n' "$behind_n" "$ahead_n"
+        if [[ "$behind_n" =~ ^[0-9]+$ && "$ahead_n" =~ ^[0-9]+$ && "$counts" != *$'\n'* ]]; then
+            printf '%s %s\n' "$behind_n" "$ahead_n"
+        else echo unknown; fi
     else
         echo unknown
     fi
