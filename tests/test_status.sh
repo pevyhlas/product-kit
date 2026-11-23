@@ -82,13 +82,15 @@ cat > specs/changes/003-boundaries.md <<'MD'
 **Opened**: 2026-10-16 · **Tier**: T1 · **Parent**: none
 **Tags**: cleanup **Parent**: 099-programme **Opened**: 2000-01-01
 ## Notes
-**Parent**: 098-notes
+Example note.
 MD
 run bash "$STATUS_SH" --json
 assert_eq 0 "$STATUS"
 assert_eq '["none","2026-10-16",null]' "$(jq -c '.changes[0] | [.parent,.opened,.tags]' <<< "$OUTPUT")"
 assert_not_contains "$OUTPUT" '099-programme'
-assert_not_contains "$OUTPUT" '098-notes'
+printf '**Parent**: 098-notes\n' >> specs/changes/003-boundaries.md
+run bash "$STATUS_SH" --json
+assert_eq '098-notes' "$(jq -r '.changes[0].parent' <<< "$OUTPUT")" "ordinary non-tag lines retain legacy behavior"
 rm specs/changes/003-boundaries.md
 
 it "duplicate header fields are errors even when no tasks have assignments"

@@ -266,8 +266,9 @@ A line that only describes how the code currently does something is deleted: the
 - In a change header before the first section, use `**Tags**: cleanup, small batch` for
   grouping or filtering only. Separate tags by commas; each tag uses only ASCII lowercase
   letters, digits, spaces, `-`, `_`, and `.`.
-  Omit the line or leave it blank if not stated. Tags do not affect scope, status signals,
-  review, or acceptance. On close, the dated log line ends with ` · **Tags**: cleanup, small batch`
+  Omit the line or leave it blank if not stated. The open helper rejects malformed tags
+  in a customized template before creating a record or branch. Tags do not affect scope,
+  status signals, review, or acceptance. On close, the dated log line ends with ` · **Tags**: cleanup, small batch`
   when valid tags are present. Omit `**Tags**` from the close helper's description argument;
   the helper adds the suffix outside the 300-character description limit and escapes `_` and
   `www.` to keep them literal in Markdown. Do the same when writing a close entry by hand.

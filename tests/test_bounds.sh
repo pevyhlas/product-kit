@@ -190,6 +190,23 @@ assert_contains "$OUTPUT" 'in scope: P2.1)'
 assert_contains "$OUTPUT" '- C-91 Recovery'
 assert_not_contains "$OUTPUT" 'C-92'
 
+it "compact legacy separators preserve both parts and journeys in bounds and the opened date"
+printf '# Change: compact\n\n**Opened**: 2026-10-16 ·**Parts**: P1 · **Journeys**: J-02 · **Tier**: T1 · **Parent**: none\n' > specs/changes/017-compact.md
+printf '%s\n' '- **C-99 Journey constraint**: keep the journey. Scope: J-02.' >> specs/product/constraints.md
+run bash "$BOUNDS" 017-compact
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '- C-02 Phone storage cap'
+assert_contains "$OUTPUT" '- C-99 Journey constraint'
+run env PRDKIT_TODAY=2026-10-17 bash .prdkit/scripts/bash/status.sh --json
+assert_eq '["2026-10-16",1,"none"]' "$(jq -c '.changes[] | select(.id == "017-compact") | [.opened,.age_days,.parent]' <<< "$OUTPUT")"
+printf '# Change: compact\n\n**Opened**: 2026-10-16 ·**Parts**: P1 · **Tags**: prose **Parts**: P2·**Journeys**: J-02 · **Tier**: T1\n' > specs/changes/017-compact.md
+run bash "$BOUNDS" 017-compact
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '- C-02 Phone storage cap'
+assert_contains "$OUTPUT" '- C-99 Journey constraint'
+assert_not_contains "$OUTPUT" '- C-03 Server region' "tag prose cannot widen legacy bounds"
+rm specs/changes/017-compact.md
+
 it "ambiguous scope cannot produce a partial set of bounds"
 printf '# Change: ambiguous\n\n**Parts**: P1 · **Parts**: P2\n' > specs/changes/017-ambiguous.md
 run bash "$BOUNDS" 017-ambiguous
@@ -200,6 +217,15 @@ printf '# Change: ambiguous\n\n**Parts**: P1\n**Tags**: cleanup\n**Tags**: anoth
 run bash "$BOUNDS" 017-ambiguous
 assert_eq 1 "$STATUS"
 assert_contains "$OUTPUT" 'Duplicate Tags field'
+printf '# Change: ambiguous\n\n**Parts**: P1 ·**Parts**: P2\n' > specs/changes/017-ambiguous.md
+run bash "$BOUNDS" 017-ambiguous
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'Duplicate Parts field'
+run bash .prdkit/scripts/bash/doctor.sh --json
+assert_contains "$(jq -r '.findings[]' <<< "$OUTPUT")" 'Duplicate Parts field'
+run bash .prdkit/scripts/bash/status.sh --json
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'Duplicate Parts field'
 
 it "no parts or journeys, or --all, lists every live item"
 run bash "$BOUNDS" 006-misc

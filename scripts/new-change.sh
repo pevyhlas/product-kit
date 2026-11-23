@@ -217,9 +217,11 @@ number_owner() { # zero-padded number; prints the claiming source
 # minute) is removed by one reaper at a time, which re-checks it first. PRDKIT_NUMBER_LOCK_WAIT
 # bounds the wait in seconds (default 120).
 NUMBER_LOCK=""
+RENDERED_RECORD=""
 HOST_NAME="$(uname -n)"
 create_exclusive() { ( set -C; printf '%s %s\n' "$$" "$HOST_NAME" > "$1" ) 2>/dev/null; }
 release_number_lock() { [ -z "$NUMBER_LOCK" ] || rm -f "$NUMBER_LOCK"; NUMBER_LOCK=""; }
+cleanup_open() { release_number_lock; [ -z "$RENDERED_RECORD" ] || rm -f "$RENDERED_RECORD"; }
 number_lock_stale() { # lock file -> 0 when its holder is gone
     local owner pid
     owner="$(cat "$1" 2>/dev/null)" || owner=""
@@ -257,7 +259,7 @@ acquire_number_lock() {
         waited=$((waited + 1))
     done
     NUMBER_LOCK="$lock"
-    trap release_number_lock EXIT
+    trap cleanup_open EXIT
     trap 'exit 1' INT TERM HUP
 }
 
@@ -329,7 +331,42 @@ done < <(list_checkouts)
 
 WORKTREE_PATH="$REPO_ROOT"
 CREATED_WORKTREE=false
+TEMPLATE=.prdkit/templates/change-template.md
+TODAY="${PRDKIT_TODAY:-$(date +%Y-%m-%d)}"
+RENDERED_RECORD="$(mktemp)"
+render_template() {
+    PK_INTENT="$INTENT" PK_TODAY="$TODAY" awk '
+        NR == 1 && /^# Change:/ { print "# Change: " ENVIRON["PK_INTENT"]; next }
+        /^\*\*Opened\*\*: <date>/ { sub(/<date>/, ENVIRON["PK_TODAY"]) }
+        { print }
+    '
+}
+prepare_record() ( # optional pinned start commit for a fresh worktree
+    set -o pipefail
+    local entry="" oid type tag_row line issue
+    if [ -n "${1:-}" ]; then
+        entry="$(printf '%s\n' "$1:$TEMPLATE" | git cat-file --batch-check --follow-symlinks)" || exit 1
+    fi
+    read -r oid type _ <<< "$entry"
+    if [ "$type" = blob ]; then
+        git cat-file blob "$oid" | render_template > "$RENDERED_RECORD" || exit 1
+    elif [ -f "$TEMPLATE" ]; then
+        render_template < "$TEMPLATE" > "$RENDERED_RECORD" || exit 1
+    else
+        printf '# Change: %s\n\n**Opened**: %s\n' "$INTENT" "$TODAY" > "$RENDERED_RECORD" || exit 1
+    fi
+    tag_row="$(spec_change_metadata "$RENDERED_RECORD" create)" || {
+        echo "[prdkit] Error: could not validate Tags in the rendered record from $TEMPLATE." >&2
+        exit 1
+    }
+    IFS="$SPEC_SEP" read -r _ _ line issue <<< "$tag_row"
+    if [ -n "$issue" ]; then
+        echo "[prdkit] Error: $TEMPLATE:$line: $issue." >&2
+        exit 1
+    fi
+)
 if $NO_BRANCH; then
+    prepare_record
     BRANCH_NAME=""
     if $HAS_GIT; then BRANCH_NAME="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"; fi
 elif [ "$HAS_GIT" = true ]; then
@@ -348,8 +385,12 @@ elif [ "$HAS_GIT" = true ]; then
     fi
     if [ "$NO_WORKTREE" = true ] || [ "$IN_LINKED_WORKTREE" = true ]; then
         # Explicit opt-out, or already isolated: create the branch in place (no nesting).
+        prepare_record
         git checkout -q -b "$BRANCH_NAME"
     else
+        # Stage the record from the same committed template the new checkout will inherit.
+        worktree_base="$(git rev-parse --verify HEAD)"
+        prepare_record "$worktree_base"
         WORKTREE_DIR="$REPO_ROOT/.worktrees/$BRANCH_NAME"
         mkdir -p "$REPO_ROOT/.worktrees"
         if ! git check-ignore -q .worktrees 2>/dev/null; then
@@ -359,7 +400,7 @@ elif [ "$HAS_GIT" = true ]; then
             echo ".worktrees/" >> "$REPO_ROOT/.gitignore"
             echo "[prdkit] Added '.worktrees/' to .gitignore so isolated worktrees stay untracked." >&2
         fi
-        if WT_ERR="$(git worktree add "$WORKTREE_DIR" -b "$BRANCH_NAME" 2>&1 >/dev/null)"; then
+        if WT_ERR="$(git worktree add "$WORKTREE_DIR" -b "$BRANCH_NAME" "$worktree_base" 2>&1 >/dev/null)"; then
             WORKTREE_PATH="$WORKTREE_DIR"
             CREATED_WORKTREE=true
         else
@@ -377,6 +418,7 @@ elif [ "$HAS_GIT" = true ]; then
                 exit 1
             fi
             echo "[prdkit] Falling back to 'git checkout -b' in the current checkout." >&2
+            prepare_record
             # A failed `worktree add -b` can leave the new branch behind; reuse it then.
             if git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
                 git checkout -q "$BRANCH_NAME"
@@ -386,32 +428,19 @@ elif [ "$HAS_GIT" = true ]; then
         fi
     fi
 else
+    prepare_record
     echo "[prdkit] Warning: Git repository not detected; skipped branch creation for $BRANCH_NAME" >&2
 fi
 
 CHANGES_DIR="$WORKTREE_PATH/specs/changes"
 CHANGE_FILE="$CHANGES_DIR/$CHANGE_ID.md"
 mkdir -p "$CHANGES_DIR"
-TEMPLATE="$WORKTREE_PATH/.prdkit/templates/change-template.md"
-[ -f "$TEMPLATE" ] || TEMPLATE="$REPO_ROOT/.prdkit/templates/change-template.md"
 if [ -e "$CHANGE_FILE" ] || [ -L "$CHANGE_FILE" ]; then
     echo "[prdkit] Error: $CHANGE_FILE already exists; it is never overwritten." >&2
     exit 1
 fi
-TODAY="${PRDKIT_TODAY:-$(date +%Y-%m-%d)}"
-write_record() {
-    if [ -f "$TEMPLATE" ]; then
-        PK_INTENT="$INTENT" PK_TODAY="$TODAY" awk '
-            NR == 1 && /^# Change:/ { print "# Change: " ENVIRON["PK_INTENT"]; next }
-            /^\*\*Opened\*\*: <date>/ { sub(/<date>/, ENVIRON["PK_TODAY"]) }
-            { print }
-        ' "$TEMPLATE" > "$CHANGE_FILE"
-    else
-        printf '# Change: %s\n\n**Opened**: %s\n' "$INTENT" "$TODAY" > "$CHANGE_FILE"
-    fi
-}
 # Refuse a file/symlink created after the existence check, including by an external writer.
-if ! (set -C; write_record); then
+if ! (set -C; cat "$RENDERED_RECORD" > "$CHANGE_FILE"); then
     echo "[prdkit] Error: could not create $CHANGE_FILE; existing records are never overwritten." >&2
     exit 1
 fi

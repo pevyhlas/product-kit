@@ -70,9 +70,9 @@ assert_not_contains "$OUTPUT" "Part citing no journey, R or Q (1): P1 at" "the p
 it "doctor rejects malformed, unknown and out-of-scope task IDs"
 cat >> specs/architecture.md <<'MD'
 
-~~~md
+```md
 | P9 Not a real part | example | hypothesis |
-~~~
+```
 MD
 cat >> specs/changes/001-parts.md <<'MD'
 
@@ -125,6 +125,17 @@ MD
 run bash "$DOCTOR" --json
 assert_eq 0 "$STATUS"
 assert_not_contains "$OUTPUT" 'Duplicate ID R-01'
+git restore -- specs/product.md
+
+it "literal indented tildes do not hide the real requirements below them"
+awk 'NR == 3 { print "    ~~~~text\n" } { print }' specs/product.md > specs/product.tmp
+mv specs/product.tmp specs/product.md
+run bash "$DOCTOR" --json
+assert_eq 0 "$STATUS"
+assert_eq '[]' "$(jq -c '.findings' <<< "$OUTPUT")"
+assert_not_contains "$OUTPUT" 'defined nowhere in the spec'
+run bash .prdkit/scripts/bash/status.sh --json
+assert_eq '["R-01","R-02"]' "$(jq -c '[.items[].id | select(startswith("R-"))]' <<< "$OUTPUT")"
 git restore -- specs/product.md
 
 it "malformed, duplicate and misplaced IDs are failing findings"

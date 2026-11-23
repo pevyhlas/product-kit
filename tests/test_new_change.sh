@@ -59,6 +59,30 @@ assert_eq 0 "$STATUS" "acronym slug generation succeeds"
 assert_contains "$OUTPUT" '"CHANGE_ID":"006-build-ui-tools"' "short uppercase UI retained"
 assert_not_contains "$OUTPUT" 'bad substitution' "no Bash 4-only expansion"
 
+it "invalid template tags cannot create a record, branch or worktree"
+TAG_PROJ="$(make_inited_project)"; track_tmp "$TAG_PROJ"
+TAG_PROJ="$(cd "$TAG_PROJ" && pwd -P)"
+cd "$TAG_PROJ" || exit 1
+tag_script=.prdkit/scripts/bash/new-change.sh
+tag_template=.prdkit/templates/change-template.md
+printf '# Change: template\n\n**Opened**: <date> ·**Tags**: cli/v2 · **Tier**: T1\n' > "$tag_template"
+git add "$tag_template" && git commit -qm "invalid template tags" || exit 1
+printf '# Change: template\n\n**Tags**: cli-v2_1.0, small batch\n' > "$tag_template"
+run bash "$tag_script" --number 51 --short-name "invalid-tags" "desc"
+assert_eq 1 "$STATUS" "isolated changes validate the committed template, not the local edit"
+assert_contains "$OUTPUT" "Malformed Tags"
+assert_not_contains "$(git branch --list)" "051-invalid-tags"
+assert_eq absent "$([ -e .worktrees/051-invalid-tags ] && echo present || echo absent)"
+run bash "$tag_script" --no-branch --number 52 --short-name "valid-tags" "desc"
+assert_eq 0 "$STATUS" "record-only changes use the local template"
+assert_contains "$(cat specs/changes/052-valid-tags.md)" '**Tags**: cli-v2_1.0, small batch'
+printf '# Change: template\n\n**Tags**: cli/v2\n' > "$tag_template"
+run bash "$tag_script" --no-branch --number 53 --short-name "invalid-local-tags" "desc"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "Malformed Tags"
+assert_eq absent "$([ -e specs/changes/053-invalid-local-tags.md ] && echo present || echo absent)"
+cd "$PROJ" || exit 1
+
 it "an empty intent or a non-numeric --number is rejected"
 run bash "$SCRIPT" --json --short-name "x"
 assert_eq 1 "$STATUS" "missing intent exits non-zero"

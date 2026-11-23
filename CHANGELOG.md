@@ -12,7 +12,8 @@ change by change.
 
 - Changes can group tasks by part and carry lowercase tags into the close log. Parts can
   declare one level of subparts. Doctor checks task assignments and parent links, and status
-  reports the optional data without treating it as acceptance. No migration needed.
+  reports the optional data without treating it as acceptance. Opening a change checks tags
+  from customized templates before creating the record. No migration needed.
 
 ### Changed
 

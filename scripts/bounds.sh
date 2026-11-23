@@ -27,8 +27,12 @@ if [ "$1" != "--all" ]; then
     record="$root/specs/changes/$1.md"
     [ -f "$record" ] || { echo "No change record at specs/changes/$1.md" >&2; exit 2; }
     # The header's Parts and Journeys fields, before the first section; their IDs are read below.
-    scope="$(spec_change_metadata "$record" scope)" || return 1
-    scope="${scope#*"$SPEC_SEP"}"; scope="${scope//"$SPEC_SEP"/ }"
+    spec_change_metadata "$record" tags >/dev/null || return 1
+    scope="$(set -o pipefail; awk "$SPEC_CHANGE_TAG_AWK"'
+        { $0 = change_without_tags($0) }
+        /^## /{exit} {
+        s = $0; while (match(s, /\*\*(Parts|Journeys)\*\*:[^*]*/)) { print substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH) }
+    }' "$record" | tr '\n' ' ')" || return 1
 fi
 spec_lifecycle_require "$root" || return
 now="$SPEC_STAGE_NOW"
