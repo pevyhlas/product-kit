@@ -398,7 +398,8 @@ it 'group scan fails closed on ambiguous leaders, threaded zombies and malformed
 prepare_structure() {
     unit_cmd cp "$PK_ROOT/scripts/check-pr-review.sh" "$FIX/launcher"
     unit_write "$FIX/group-view" sed -n \
-        -e '/^group_view() {/,/^}/p' -e '/^probe_group() {/,/^}/p' -e '/^stop_guard() {/,/^}/p' "$FIX/launcher"
+        -e '/^group_view() {/,/^}/p' -e '/^probe_group() {/,/^}/p' -e '/^stop_guard() {/,/^}/p' \
+        -e '/^groups_empty() {/,/^}/p' "$FIX/launcher"
     unit_cmd test -s "$FIX/group-view"
 }
 prepare_structure
@@ -452,6 +453,28 @@ stalled_probe() (
 )
 run stalled_probe
 assert_eq 0 "$STATUS" 'a stalled inventory times out without accepting any later response'
+kernel_probe() (
+    source "$FIX/group-view"
+    guarded_pgids=(20 30)
+    builtin() {
+        [ "$*" = 'kill -0 -- -20' ] || [ "$*" = 'kill -0 -- -30' ] || return 2
+        if [ "$4" = -20 ]; then printf 'kill: (-20) - No such process\n' >&2; return 1; fi
+        [ -z "$probe_result" ] || printf 'kill: (-30) - %s\n' "$probe_result" >&2
+        return "$probe_status"
+    }
+    local probe_status="$1" probe_result="$2"
+    groups_empty
+)
+run kernel_probe 1 'No such process'
+assert_eq 0 "$STATUS" 'only ESRCH on every recorded group permits deletion'
+run kernel_probe 0 ''
+assert_eq 1 "$STATUS" 'a live group (including a reused ID) blocks deletion'
+run kernel_probe 1 'Operation not permitted'
+assert_eq 1 "$STATUS" 'EPERM is not proof of absence'
+run kernel_probe 1 ''
+assert_eq 1 "$STATUS" 'an unrecognized failure is not proof of absence'
+run kernel_probe 2 'No such process'
+assert_eq 1 "$STATUS" 'the diagnostic alone is insufficient'
 run awk '
     /cat .*group-guard.*GUARD/ {in_guard=1}
     /^GUARD$/ {in_guard=0}
@@ -459,6 +482,7 @@ run awk '
         if (!in_guard || $1 != "kill" || $4 != "\"-$$\"") bad=1
         signals++
     }
+    /builtin kill/ && $0 !~ /builtin kill -0 -- "-\$pgid"/ {bad=1}
     END {exit (bad || signals != 2)}
 ' "$FIX/launcher"
 assert_eq 0 "$STATUS" 'only the executing group leader may signal; launcher never waits on a PID'

@@ -24,6 +24,7 @@ export PATH LC_ALL=C LANG=C
 umask 077
 phase=bootstrap; error_code=interrupted; root=""; operation=""
 work=""; reader_out=""; reader_err=""
+guarded_pgids=()
 finishing=false; pending_signal=""; groups_verified=true
 native=null; native_exit=null; transport=refused; status=1
 deadline=$((SECONDS+600))
@@ -42,7 +43,22 @@ request_signal() {
     # set its flags. Explicit safe checkpoints handle cancellation after ownership is known.
     return 0
 }
+groups_empty() {
+    local pgid diagnostic
+    # A ps inventory can miss a fork/exit handoff. Probe the kernel directly;
+    # signal 0 cannot harm a reused group, but it must prevent deletion.
+    for pgid in ${guarded_pgids[@]+"${guarded_pgids[@]}"}; do
+        if diagnostic="$(builtin kill -0 -- "-$pgid" 2>&1)"; then
+            return 1
+        else
+            # Bash reports ESRCH and EPERM with the same exit status. Only
+            # the C-locale ESRCH diagnostic proves the group no longer exists.
+            [ "$?" -eq 1 ] && [[ "$diagnostic" == *"kill: (-$pgid) - No such process" ]] || return 1
+        fi
+    done
+}
 remove_scratch() {
+    groups_empty || return 1
     if [ -n "$root" ] && { ! rm -rf -- "$root" || [ -e "$root" ]; }; then return 1; fi
 }
 finish() {
@@ -289,7 +305,10 @@ guard_status() {
     printf '%s\n' "$rc"
 }
 collect_operation() {
-    local i failed=false out_status err_status probe_ok=true
+    local i pgid failed=false out_status err_status probe_ok=true
+    for pgid in "$work" "$reader_out" "$reader_err"; do
+        if [ -n "$pgid" ]; then guarded_pgids+=("$pgid"); fi
+    done
     stop_guard work "$work" 3 || failed=true
     if [ -f "$operation/work.status" ]; then
         bounded_exit="$(guard_status work)" || failed=true

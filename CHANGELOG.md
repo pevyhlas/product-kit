@@ -26,8 +26,9 @@ change by change.
 ### Fixed
 
 - PR review launcher groups now have live guard leaders that signal only their own groups.
-  The launcher checks for surviving members without waiting for a leader; if it cannot verify
-  shutdown or output drain, it refuses and retains scratch.
+  The launcher checks for surviving members without waiting for a leader and confirms the
+  groups are absent at the kernel level before deleting scratch. If it cannot verify shutdown
+  or output drain, it refuses and retains scratch.
 
 ## [2.1.0] — 2026-11-23 — task parts, change tags and fail-closed verifiers
 

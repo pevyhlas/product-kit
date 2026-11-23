@@ -392,8 +392,11 @@ own guard leader may signal it; the launcher sends private FIFO requests, never 
 remembered process-group ID. If required, the guard sends TERM, allows five seconds, and sends
 KILL at most once, ending the guard itself. After release or KILL, the launcher only observes.
 It polls the process table without calling `wait` on a leader, and treats ambiguous states
-(including Linux `Zl`) as live. It allows readers a separate five-second drain window. If
-shutdown or drain cannot be verified, it refuses with `cleanup-failed` and retains scratch.
+(including Linux `Zl`) as live. It allows readers a separate five-second drain window.
+Before deleting scratch, it checks that the kernel reports every recorded group absent,
+since a process-table scan can miss a fork/exit handoff. An existing group (even a reused
+ID) or any other probe error prevents deletion. If shutdown or drain cannot be verified,
+it refuses with `cleanup-failed` and retains scratch.
 If KILL prevents reporting the native exit, `native_exit` is null. This checks supervised
 process groups; it does not contain processes that leave them. Uncatchable runner termination
 can leave no complete result and is not PASS. stdout is one buffered JSON object,

@@ -48,6 +48,10 @@ bound_gate() { # jq mutation, output mode, actual exit; creates explicitly SYNTH
             stubborn)
                 printf '/bin/bash -c '\''trap "" TERM; echo "$$" > "$1"; while :; do sleep 60; done'\'' _ %q &\n' "$FIX/stubborn"
                 printf 'ps -o pgid= -p "$$" | tr -d " " > %q\nwait\n' "$FIX/group" ;;
+            hidden-member)
+                printf 'ps -o pgid= -p "$$" | tr -d " " > %q\n' "$FIX/group"
+                printf '/bin/bash -c '\''exec 9<>"$1"; printf "held\\n" > "$HOME/member-held"; echo "$$" > "$2"; read -r -t 120 <&9'\'' _ %q %q </dev/null >/dev/null 2>&1 &\n' "$FIX/member-release" "$FIX/hidden-member"
+                printf 'for n in {1..200}; do [ ! -s %q ] || break; sleep 0.1; done\n' "$FIX/hidden-member" ;;
         esac
         printf 'exit %s\n' "$rc"
     } > .prdkit/scripts/bash/check-review.sh
@@ -210,6 +214,42 @@ assert_eq interrupted "$(jq -r .error.code "$FIX/stdout")"
 assert_eq 17 "$(jq -r .native_exit "$FIX/stdout")"
 assert_eq '[null,17,true]' "$(jq -c .native.extension.keep "$FIX/stdout")"
 assert_other_bindings
+restore_control
+
+it 'a live member missed by ps prevents scratch deletion'
+rm -f "$FIX/group" "$FIX/hidden-member" "$FIX/remove-attempted"
+mkfifo "$FIX/member-release"
+bound_gate . hidden-member
+# Hide only members of the native workload group, not its guard or other
+# groups. The real kernel probe must still see the surviving member.
+awk '
+    /^group_view\(\) {/ {
+        print "ps() {"
+        print "    if [ \"$phase\" = native ]; then"
+        print "        command ps \"$@\" | awk -v g=\"$work\" '\''$2 != g || $1 == g'\''"
+        print "    else command ps \"$@\"; fi"
+        print "}"
+    }
+    { print }
+' "$FIX/launcher" > "$FIX/injected"
+mv "$FIX/injected" "$FIX/launcher"
+record_cleanup
+invoke_launcher
+assert_eq 1 "$STATUS"
+assert_eq cleanup "$(jq -r .error.stage "$FIX/stdout")"
+assert_eq cleanup-failed "$(jq -r .error.code "$FIX/stdout")"
+assert_eq 0 "$(jq -r .native_exit "$FIX/stdout")"
+assert_other_bindings
+assert_file "$FIX/hidden-member"
+GROUP="$(cat "$FIX/group")"
+MEMBER="$(cat "$FIX/hidden-member")"
+assert_eq "$MEMBER" "$(live_group "$GROUP")" 'real member remains, but its guard was reaped'
+run find "$FIX/scratch" -name member-held -print
+assert_contains "$OUTPUT" '/home/member-held' 'retained scratch contains the member marker'
+run test ! -e "$FIX/remove-attempted"
+assert_eq 0 "$STATUS" 'deletion was never attempted'
+if [[ "$MEMBER" =~ ^[1-9][0-9]*$ ]]; then kill -TERM "$MEMBER" 2>/dev/null || :; fi
+"$REAL_RM" -rf "$FIX/scratch/"*
 restore_control
 
 for shutdown in clean survivor threaded ambiguous; do
