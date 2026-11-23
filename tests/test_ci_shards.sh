@@ -42,6 +42,40 @@ assert_eq 1 "$STATUS" "the unsharded run still reports failure"
 assert_eq $'test_a.sh:-v\ntest_new.sh:-v\ntest_a.sh:\ntest_b.sh:\ntest_c.sh:\ntest_new.sh:' \
     "$(cat "$fixture/calls")" "the default runs every discovered suite in glob order"
 
+it "a suite that drains stdin cannot hide a later suite's failure"
+cat > "$fixture/test_a.sh" <<'SUITE'
+cat >/dev/null
+SUITE
+cat > "$fixture/test_new.sh" <<'SUITE'
+exit 1
+SUITE
+run "$BASH" "$fixture/run.sh" --shard 1/2 </dev/null
+assert_eq 1 "$STATUS" "the later suite still fails the shard"
+assert_contains "$OUTPUT" "1 of 2 test file(s) FAILED" "both planned suites ran"
+
+it "a premature end of the execution list fails even if all executed suites pass"
+printf ':\n' > "$fixture/test_a.sh"
+# Simulate EOF after the first suite without changing the computed shard plan.
+cat > "$fixture/early-eof.sh" <<'ENV'
+case "$0" in
+    */run.sh)
+        read() {
+            [ "$total_files" -eq 0 ] || return 1
+            builtin read "$@"
+        }
+        ;;
+esac
+ENV
+run env BASH_ENV="$fixture/early-eof.sh" "$BASH" "$fixture/run.sh" --shard 1/2 </dev/null
+assert_eq 1 "$STATUS" "an incomplete shard fails"
+assert_contains "$OUTPUT" "Suite count mismatch: ran 1 of 2 planned test files" "the mismatch is reported"
+assert_not_contains "$OUTPUT" "ALL GREEN" "an incomplete shard cannot report success"
+
+it "an empty shard matches its zero-suite plan"
+run "$BASH" "$fixture/run.sh" --shard 5/5
+assert_eq 0 "$STATUS" "an empty shard succeeds"
+assert_contains "$OUTPUT" "0 test file(s) passed" "the empty plan has no suites to run"
+
 it "invalid plans and broken allowlists cannot silently pass"
 for invalid in '' 0/2 3/2 1/0 01/2 1//2 1/99999999999999999999; do
     run bash "$fixture/run.sh" --shard "$invalid" --list
