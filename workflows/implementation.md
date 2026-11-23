@@ -15,21 +15,20 @@ it does not run a second feature-specification exercise or routinely ask the own
 
 1. Confirm the ready scope against the actual baseline. Record its commit and relevant spec/design
    IDs in Approach. Reuse approved design; choose ordinary code-level details within its bounds.
-2. Make a proportional execution plan. A tiny fix stays in the change's Tasks. For substantial work,
+2. Make a proportional execution plan. A tiny fix needs no extra plan. For substantial work,
    use `.prdkit/templates/implementation-plan-template.md` only if useful, at the gitignored
    `.prdkit/cache/implementation/<change-id>.md`; verify the path is ignored before writing it.
-   This is working material, never a second spec or the sole handover. Keep Acceptance and State
-   authoritative in the change; put review-relevant approach, task/check mapping and progress on
-   the same PR. Before a PR exists, keep enough in the record to reconstruct the next action.
-3. Tasks have stable local keys (T001…), an observable contribution to canonical IDs/acceptance,
-   concrete paths or interfaces, dependencies with required outcomes and checks. Prefer vertical
-   increments; justify enabling tasks. Parallelize only independent touches allowed by project policy.
-   Keep security, data integrity and other hard bounds from the first increment, not a final
-   hardening task. Preserve keys through replanning; supersede rather than recycle them.
+   Keep paths, line ranges, commands and implementation steps in the cache or the PR, not the
+   record. Keep Acceptance and State authoritative; put review-relevant context on the PR.
+3. Write each task as `- [ ] T001 <outcome; dependency; check name>`, with an optional part
+   prefix before the key. Tie the outcome to canonical IDs or acceptance. Use `T###` keys unique
+   within the change; never reuse or renumber them. Prefer vertical increments; justify enabling
+   tasks. Parallelize only independent touches allowed by project policy. Honor security, data
+   integrity and other hard bounds from the first increment, not a final hardening task.
 4. Analyze before execution: scope and design consistency, outcome/check coverage, valid non-cyclic
    dependencies, shared touches, and meaningful negative/cross-part checks. Use the project's real
    verification commands and testing policy; no universal TDD requirement. Do not demand future
-    runtime proof at planning time or mistake completed checkboxes for proof.
+    runtime proof at planning time or mistake task status for proof.
 5. Preflight verification using the repository's documented commands, CI and actual discovery:
    confirm working directory, supported flags, tool versions, test count/selection and required
    environment. Distinguish zero tests, incomplete logs and unavailable tools from PASS. Capture
@@ -56,10 +55,12 @@ adjacent improvements. Broad instructions to continue preserve the outcome, lane
 and explicit holds unless the owner changes them.
 
 Take the selected authorized task whose dependency outcome is evidenced. Implement and run its
-checks; publish coherent increments per [change.md](change.md) and review them per
-[review.md](review.md). Converge the actual diff against approved intent and design, not just the
-task list. Check failure behavior and cross-part interactions where relevant; tests that merely
-repeat the implementation do not establish the intended outcome.
+checks. Local verification is not delivery: keep the task line unchecked until the PR that
+delivers it deletes it. For a single-PR change, the closing PR deletes the record. Use the optional
+`Drops: <change-id> T004, T005` line in the PR description for dropped tasks. Publish and review
+coherent increments per [change.md](change.md) and [review.md](review.md). Converge the actual
+diff against approved intent and design; check failure behavior and cross-part interactions.
+Tests that merely repeat the implementation do not establish the intended outcome.
 
 After integration, compare evidence with the programme milestone and its predeclared dependency
 checks. Record the actual advance, or increment **No-progress changes** once for that integrated
