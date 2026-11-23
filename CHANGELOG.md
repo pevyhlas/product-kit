@@ -14,8 +14,11 @@ change by change.
   Conventional `fix` titles require at least one such suite; other titles are advisory.
   Base and head run on separate hosted runners, so a base worker cannot answer a head test.
   The check compares one-day result artifacts; missing or incomplete evidence fails the check.
-- Cleanup and close tests now run against seeded combinations of local Git states and
-  check that commits and working files survive. The generator is test-only.
+
+## [2.1.0] — 2026-11-23 — task parts, change tags and fail-closed verifiers
+
+### Added
+
 - Changes can group tasks by part and carry lowercase tags into the close log. Parts can
   declare one level of subparts. Doctor checks task assignments and parent links, and status
   reports the optional data without treating it as acceptance. Opening a change checks tags
@@ -28,12 +31,16 @@ change by change.
   balances suites by measured duration and logs per-suite seconds. Required check names and
   release gating are unchanged; all expected jobs must succeed. New PR commits cancel
   superseded runs for that PR without cancelling main or manual runs.
+- Cleanup and close tests now run against seeded combinations of local Git states and
+  check that commits and working files survive. The generator is test-only.
 - `new-change.sh` emits only a one-line outcome checkpoint pointer by default. Use `--programme`
   to include the commented scaffold for a programme or continuing queue, even if the customized
   change template omits it. Existing records are untouched.
 
 ### Fixed
 
+- `init.sh --upgrade` accepts any 2.x install and skips the 1.x review transition for it. It
+  previously refused installs newer than 2.0, so a 2.1 install could not upgrade.
 - Adoption (including pinned-source proof), delivery, doctor, status, and change-close
   preflight fail rather than treating an incomplete inventory as clean. Parsed spec input
   and line-oriented verifier evidence require LF line endings and a final newline;
