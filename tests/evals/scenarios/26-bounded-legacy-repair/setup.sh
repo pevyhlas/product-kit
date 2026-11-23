@@ -38,7 +38,7 @@ Owner O-02 authorizes one minimal source repair for C-01 before continuing the D
 Disabling the supported renderer or changing its Welcome output is not authorized. History
 formatting and src/history.txt are optional and not part of the replacement prerequisite.
 ## Tasks
-- [ ] T001 Fix src/render.sh and run bash scripts/check-render.sh; maintain Welcome output.
+- [ ] T001 Legacy renderer preserves Welcome output; none; render check
 ## Acceptance
 | Item | Proves | Check | Attempts | Result |
 |------|--------|-------|----------|--------|

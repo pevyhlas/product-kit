@@ -20,7 +20,7 @@ Attempt 3, after rewriting the deploy step: hosted greeting endpoint returned 50
 Attempts 2 and 3 produced no new information. The owner has not granted further attempts.
 EOF
 sed -e 's/| A1 | R-01 | Inspect exact file text | 0 | NOT_RUN |/| A1 | R-01 | Live run: bash scripts\/live-check.sh | 3 | FAIL |/' \
-    -e 's/\[ \] T001/[x] T001/' "$CHANGE_FILE" > "$CHANGE_FILE.tmp"
+    -e '/^- \[ \] T001 /d' "$CHANGE_FILE" > "$CHANGE_FILE.tmp"
 mv "$CHANGE_FILE.tmp" "$CHANGE_FILE"
 printf '# Owner inbox\n' > specs/inbox.md
 git add -A && git commit -qm 'fixture: live acceptance failed three times'

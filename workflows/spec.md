@@ -274,10 +274,10 @@ A line that only describes how the code currently does something is deleted: the
   `www.` to keep them literal in Markdown. Do the same when writing a close entry by hand.
   Doctor advises on malformed tags; status omits them and close refuses them. Duplicate `Parts`,
   `Journeys`, or `Tags` fields are errors in doctor, status, bounds, and close.
-- In `## Tasks`, use `- [ ] (P2.1) Add a retry check` or `- [x] (P2.1) Verify recovery` to
-  assign a task. The part must exist and be explicitly named in the header, e.g.
+- In `## Tasks`, use `- [ ] (P2.1) T003 <outcome; dependency; check name>` to assign a task.
+  The part must exist and be explicitly named in the header, e.g.
   `**Parts**: P2, P2.1`; listing a parent does not implicitly list its children. A task without
-  the prefix is unassigned. These are checklist counts, not acceptance results.
+  the prefix is unassigned. Delete task lines on delivery per [change.md](change.md).
 - `status.sh --json` lists explicit relationships in `part_parents` (`id`, `parent`). For
   each open change, `tags` is a list, `tasks_by_part` has `part`, `checked`, `total` for parts
   with recorded assignments, and `unassigned_tasks` has `checked`, `total` for unassigned
