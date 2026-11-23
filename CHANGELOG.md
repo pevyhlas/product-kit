@@ -30,6 +30,8 @@ change by change.
 - Docs-only review passes report the path and blocker checks without claiming receipt coverage.
 - Test suites can no longer consume the runner's pending suite list via stdin. The runner
   fails if the number of suites run differs from the plan.
+- The PR review launcher verifies that no owned process group has live members before deleting
+  scratch. If it cannot verify shutdown, it refuses and keeps scratch intact.
 
 ### Documentation
 

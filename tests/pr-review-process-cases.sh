@@ -22,7 +22,7 @@ record_cleanup() {
     awk -v dir="$FIX" '
         /^    if \[ -n "\$root" \] && \{ ! rm -rf/ {
             print "    if [ -f \"" dir "/group\" ]; then"
-            print "        ps -axo pid=,pgid=,stat= | awk -v g=\"$(cat \"" dir "/group\")\" '\''$2 == g && $3 !~ /^Z/ { print $1 }'\'' > \"" dir "/live-at-remove\""
+            print "        ps -axo pid=,pgid=,stat= | awk -v g=\"$(cat \"" dir "/group\")\" '\''$2 == g && $3 !~ /^Z/ { print $1 }'\'' > \"" dir "/live-at-remove\" || printf unavailable > \"" dir "/live-at-remove\""
             print "    fi"
             print "    if [ -f \"$root/native.json\" ]; then wc -c < \"$root/native.json\" > \"" dir "/stdout-size\"; fi"
             print "    if [ -f \"$root/native.err\" ]; then wc -c < \"$root/native.err\" > \"" dir "/stderr-size\"; fi"
@@ -324,11 +324,76 @@ for boundary in overall child watcher capture_out capture_err; do
     assert_eq interrupted "$(jq -r .error.code "$FIX/stdout")"
     assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
     assert_group_gone "$(cat "$FIX/group")" "$boundary group stopped before result"
+    assert_file "$FIX/live-at-remove" "$boundary pre-deletion snapshot was taken"
     assert_eq '' "$(cat "$FIX/live-at-remove")" "$boundary group stopped before scratch deletion"
     if [ "$boundary" = child ]; then
         assert_file "$FIX/descendant" 'workload is armed at its registration boundary'
         assert_terminated "$(cat "$FIX/descendant")" 'registration-boundary descendant terminated'
     fi
+done
+restore_control
+
+it 'reaping the watchdog leader cannot stand in for verified shutdown of its group'
+for outcome in stopped timeout; do
+    instrument
+    rm -f "$FIX/group" "$FIX/late-member" "$FIX/live-at-remove"
+    awk -v dir="$FIX" -v outcome="$outcome" '
+        /sleep "\$\(\(deadline-SECONDS\)\)"/ {
+            print "    sleep 60 &"
+            print "    printf '\''%s\\n'\'' \"$!\" > \"" dir "/late-member\""
+            print "    wait"
+            next
+        }
+        /^overall=\$!/ {
+            print
+            print "printf '\''%s\\n'\'' \"$overall\" > \"" dir "/group\""
+            print "for n in {1..100}; do [ ! -s \"" dir "/late-member\" ] || break; sleep 0.1; done"
+            print "kill -TERM \"$$\""
+            next
+        }
+        /^        kill -KILL -- "-\$overall"/ {
+            # Deterministically leave a live member behind the first KILL.
+            print "        kill -KILL \"$overall\" 2>/dev/null || true"
+            next
+        }
+        /^await_group_exit\(\)/ { checking=1 }
+        /^}/ { checking=0 }
+        checking && /kill -KILL --/ && outcome == "timeout" {
+            # Keep that member alive even on retry to exercise the bounded failure path.
+            next
+        }
+        { print }
+    ' "$FIX/launcher" > "$FIX/injected"
+    mv "$FIX/injected" "$FIX/launcher"
+    record_cleanup
+    START="$SECONDS"
+    invoke_launcher
+    assert_file "$FIX/late-member" "$outcome watchdog member was started"
+    assert_eq 1 "$STATUS"
+    assert_eq 1 "$(jq -s length "$FIX/stdout")" "$outcome returns one structured refusal"
+    assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
+    if [ "$outcome" = stopped ]; then
+        assert_eq interrupted "$(jq -r .error.code "$FIX/stdout")" 'verified cleanup preserves original refusal'
+        assert_group_gone "$(cat "$FIX/group")" 'late watchdog group stopped before result'
+        assert_file "$FIX/live-at-remove" 'successful cleanup took its pre-deletion snapshot'
+        assert_eq '' "$(cat "$FIX/live-at-remove")" 'late watchdog member stopped before scratch deletion'
+        assert_eq '' "$(find "$FIX/scratch" -mindepth 1 -print)" 'verified cleanup deletes scratch'
+    else
+        MEMBER="$(cat "$FIX/late-member")"
+        assert_eq cleanup-failed "$(jq -r .error.code "$FIX/stdout")" 'unverified shutdown reports the cleanup error'
+        assert_eq cleanup "$(jq -r .error.stage "$FIX/stdout")" 'unverified shutdown reports the cleanup stage'
+        assert_eq "$MEMBER" "$(live_group "$(cat "$FIX/group")")" 'watchdog member still alive at refusal'
+        run test ! -e "$FIX/live-at-remove"
+        assert_eq 0 "$STATUS" 'unverified cleanup never attempts deletion'
+        run test -n "$(find "$FIX/scratch" -mindepth 1 -print)"
+        assert_eq 0 "$STATUS" 'unverified cleanup retains scratch'
+        run test "$((SECONDS-START))" -lt 20
+        assert_eq 0 "$STATUS" 'unverified cleanup refuses within a bounded window'
+    fi
+    # Clean up only after recording the result of the disposable instrumentation.
+    GROUP="$(cat "$FIX/group")"
+    if [[ "$GROUP" =~ ^[1-9][0-9]*$ ]]; then kill -KILL -- "-$GROUP" 2>/dev/null || true; fi
+    "$REAL_RM" -rf "$FIX/scratch/"*
 done
 restore_control
 

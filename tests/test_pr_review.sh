@@ -94,13 +94,16 @@ bindings() { # head [branch] [target]
     jq -n --arg sha "$tip" --arg ref "refs/heads/$t" '{ref:$ref,object:{type:"commit",sha:$sha}}' \
         > "$GH_STUB_DIR/routes/git_ref_heads_${t}.json"
 }
-launch() {
+invoke_launcher() {
     if env -i PATH="$ORIGINAL_PATH" GH_TOKEN=synthetic-read-token GITHUB_EVENT_NAME=pull_request \
         GITHUB_REPOSITORY=owner/repo GITHUB_REPOSITORY_ID=42 \
         "$@" \
         "$REAL_BASH" --noprofile --norc "$FIX/launcher" --repository owner/repo --event "$FIX/event" \
         > "$FIX/stdout" 2>"$FIX/stderr"; then STATUS=0; else STATUS=$?; fi
     OUTPUT="$(cat "$FIX/stdout")"
+}
+launch() {
+    invoke_launcher "$@"
     assert_eq "$EXPECTED_BASH" "$(cat "$FIX/interpreter")" 'actual nested supervisor interpreter'
     assert_eq 1 "$(printf '%s' "$OUTPUT" | jq -s length)" 'one structured stdout object'
     assert_eq '' "$(find "$FIX/scratch" -mindepth 1 -print)" 'owned scratch cleaned'
@@ -638,16 +641,12 @@ assert_eq interrupted "$(jq -r .error.code "$FIX/stdout")"
 assert_terminated "$(cat "$FIX/descendant")" 'fetch cancellation terminates descendant'
 assert_eq '' "$(find "$FIX/scratch" -mindepth 1 -print)" 'cancellation cleans invocation scratch'
 
-it 'cleanup failure prevents a valid native success'
+it 'scratch deletion failure prevents a valid native success'
 instrument
 touch "$FIX/cleanup-fail"
 # The normal helper intentionally asserts cleanup; test the failure contract separately.
-if env -i PATH="$ORIGINAL_PATH" GH_TOKEN=synthetic GITHUB_EVENT_NAME=pull_request \
-    GITHUB_REPOSITORY=owner/repo GITHUB_REPOSITORY_ID=42 \
-    "$REAL_BASH" "$FIX/launcher" --repository owner/repo --event "$FIX/event" \
-    > "$FIX/stdout" 2>"$FIX/stderr"; then STATUS=0; else STATUS=$?; fi
+invoke_launcher
 rm "$FIX/cleanup-fail"
-OUTPUT="$(cat "$FIX/stdout")"
 assert_eq 1 "$STATUS"
 assert_eq cleanup-failed "$(printf '%s' "$OUTPUT" | jq -r .error.code)"
 assert_eq 0 "$(printf '%s' "$OUTPUT" | jq -r .native_exit)"

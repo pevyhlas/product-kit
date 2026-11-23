@@ -41,7 +41,7 @@ request_signal() {
     return 0
 }
 wait_owned() {
-    local pid="$1" before
+    local pid="$1" stop_at="${2:-}" before
     while :; do
         before="$signal_count"
         if wait "$pid" 2>/dev/null; then waited_exit=0; else waited_exit=$?; fi
@@ -51,7 +51,36 @@ wait_owned() {
         # Dispatch ordinary cancellation BEFORE any caller can retire this still-owned job.
         check_signal
         if ! $finishing && [ -n "$pending_signal" ]; then break; fi
+        if [ -n "$stop_at" ] && [ "$SECONDS" -ge "$stop_at" ]; then return 1; fi
     done
+}
+group_stopped() {
+    local pid="$1"
+    # These are same-user groups. When the kernel still sees either the group or its
+    # leader, distinguish live members from zombies (orphan zombies are not ours to reap).
+    if ! kill -0 -- "-$pid" 2>/dev/null && ! kill -0 "$pid" 2>/dev/null; then return 0; fi
+    ps -axo pid=,pgid=,stat= | awk -v group="$pid" '
+        NF != 3 || $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ { bad=1 }
+        ($2 == group || $1 == group) && $3 !~ /^Z/ { live=1 }
+        END { exit (NR == 0 || bad || live) }
+    '
+}
+await_group_exit() {
+    local pid="$1" stop_at="$2" mode="${3:-kill}"
+    while ! group_stopped "$pid"; do
+        check_signal
+        [ "$SECONDS" -lt "$stop_at" ] || return 1
+        # Signal delivery is not an exit barrier. Retry KILL in case a member forked
+        # while the initial group signal was being delivered.
+        if [ "$mode" = kill ]; then kill -KILL -- "-$pid" 2>/dev/null || true; fi
+        sleep 0.1 || true
+    done
+}
+reap_stopped_group() {
+    local pid="$1" stop_at=$((SECONDS+5))
+    # Only wait once the leader cannot still be running, and do not mistake reaping
+    # that leader for proof that its descendants have stopped.
+    await_group_exit "$pid" "$stop_at" && wait_owned "$pid" "$stop_at"
 }
 cancel_group() {
     local pid="$1" stop_at
@@ -65,36 +94,56 @@ cancel_group() {
         done
         kill -KILL -- "-$pid" 2>/dev/null || true
     fi
-    wait_owned "$pid"; group_exit="$waited_exit"
+    reap_stopped_group "$pid" || return 1
+    group_exit="$waited_exit"
     return 0
 }
+kill_and_reap() {
+    local pid="$1"
+    [ -n "$pid" ] || return 0
+    kill -KILL -- "-$pid" 2>/dev/null || true
+    reap_stopped_group "$pid"
+}
 stop_watcher() {
-    [ -n "$watcher" ] || return 0
     # Only our trusted watchdog and its sleep live here; no grace period is needed.
-    kill -KILL -- "-$watcher" 2>/dev/null || true
-    wait_owned "$watcher"
+    kill_and_reap "$watcher" || return 1
     watcher=""
 }
+reap_capture() {
+    local pid="$1" drain_until="$2"
+    if $finishing; then
+        # Allow ordinary EOF and the watchdog's drain grace, but don't block in wait
+        # on a reader that's still live after the watchdog tried to stop it.
+        await_group_exit "$pid" "$drain_until" drain && wait_owned "$pid" "$drain_until" || return 1
+    else
+        wait_owned "$pid"
+        await_group_exit "$pid" "$((SECONDS+5))" || return 1
+    fi
+    [ "$waited_exit" -eq 0 ] || capture_failed=true
+}
 collect_captures() {
+    local drain_until
     capture_failed=false
     if [ -n "$capture_out" ] || [ -n "$capture_err" ]; then
         # The registered operation watchdog bounds this drain too, after all workload writers
         # have been terminated. A failed/killed reader cannot authorize a truncated result.
-        printf 'drain\n' > "$root/drain"
+        printf 'drain\n' > "$root/drain" || return 1
+        drain_until=$((SECONDS+7))
         if [ -n "$capture_out" ]; then
-            wait_owned "$capture_out"
-            [ "$waited_exit" -eq 0 ] || capture_failed=true
+            reap_capture "$capture_out" "$drain_until" || return 1
             capture_out=""
         fi
         if [ -n "$capture_err" ]; then
-            wait_owned "$capture_err"
-            [ "$waited_exit" -eq 0 ] || capture_failed=true
+            reap_capture "$capture_err" "$drain_until" || return 1
             capture_err=""
         fi
     fi
 }
+remove_scratch() {
+    if [ -n "$root" ] && { ! rm -rf -- "$root" || [ -e "$root" ]; }; then return 1; fi
+}
 finish() {
-    local native_pending=false
+    local native_pending=false groups_verified=true
     finishing=true
     trap - EXIT ERR
     # Queue, rather than default or exit on, repeated catchable signals during teardown.
@@ -102,20 +151,28 @@ finish() {
     trap 'request_signal overall-timeout' USR1
     if [ -n "$overall" ]; then
         kill -KILL -- "-$overall" 2>/dev/null || true
-        wait_owned "$overall"; overall=""
+        reap_stopped_group "$overall" || groups_verified=false
+        overall=""
     fi
     if [ "$phase" = native ] && [ -n "$child" ] && [ "$native_exit" = null ]; then native_pending=true; fi
-    cancel_group "$child"
-    if $native_pending; then native_exit="$group_exit"; fi
-    child=""
-    collect_captures
-    stop_watcher
+    if cancel_group "$child"; then
+        if $native_pending; then native_exit="$group_exit"; fi
+        child=""
+        collect_captures || groups_verified=false
+    else
+        groups_verified=false
+    fi
+    # Do not drain indefinitely if writers could not be verified stopped. Stop any
+    # readers still owned, independently of whether another group failed verification.
+    kill_and_reap "$capture_out" || groups_verified=false
+    kill_and_reap "$capture_err" || groups_verified=false
+    stop_watcher || groups_verified=false
     # A signal may interrupt wait after the native gate has already produced complete JSON.
     # It still refuses, but must not discard that diagnostic object or invent a watchdog exit.
-    if [ "$native" = null ] && [ -n "$root" ] && [ -f "$root/native.json" ]; then
+    if $groups_verified && [ "$native" = null ] && [ -n "$root" ] && [ -f "$root/native.json" ]; then
         if one_object "$root/native.json"; then native="$(cat "$root/native.json")"; fi
     fi
-    if [ -n "$root" ] && { ! rm -rf -- "$root" || [ -e "$root" ]; }; then
+    if ! $groups_verified || ! remove_scratch; then
         phase=cleanup; error_code=cleanup-failed; transport=refused; status=1
     fi
     # Teardown is now complete. Close the catchable-signal window before the final decision
@@ -271,9 +328,10 @@ bounded() { # seconds output error command...
     fi
     critical=false
     check_signal
-    cancel_group "$child"; child=""
-    collect_captures
-    stop_watcher
+    cancel_group "$child" || refuse cleanup cleanup-failed
+    child=""
+    collect_captures || refuse cleanup cleanup-failed
+    stop_watcher || refuse cleanup cleanup-failed
     if [ -f "$root/overflow" ]; then bounded_limit=overflow; return 125; fi
     if [ -f "$root/limit" ]; then bounded_limit=timeout; return 124; fi
     if $capture_failed; then bounded_limit=capture; return 126; fi

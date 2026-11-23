@@ -388,9 +388,10 @@ success. Selector history streams are separately capped. These capture limits do
 a file-size limit on Git packs/objects or native working files. Cancellation is deferred through
 each launch-to-ownership registration. Teardown stops the overall watchdog first, queues repeated
 catchable signals and allows up to five seconds for capture readers to drain after writers stop.
-All owned processes are terminated/reaped before deleting only the invocation's scratch.
-Cleanup failure refuses. Uncatchable runner termination can leave no complete result and is not
-PASS. stdout is one buffered JSON object, newline-terminated:
+Before deleting the invocation's scratch, the launcher verifies that no owned group has a live
+member and reaps its leaders. If group shutdown cannot be verified within the bounded cleanup
+window, it refuses with `cleanup-failed` and leaves scratch intact. Uncatchable runner termination
+can leave no complete result and is not PASS. stdout is one buffered JSON object, newline-terminated:
 
 ```json
 {"launcher":"complete","error":null,"native_exit":0,"native":{}}

@@ -156,7 +156,7 @@ nd_instrument() {
             print "    nd_owned \"$$\" \"$child\" \"$capture_out\" \"$capture_err\" \"$watcher\" \"$overall\" || :"
             next
         }
-        /^    if \$native_pending; then/ {
+        /^[[:space:]]+if \$native_pending; then/ {
             print
             print "    nd_transfer \"$native_exit\" \"$group_exit\" \"$native_pending\" || :"
             next
