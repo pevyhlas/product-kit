@@ -36,7 +36,7 @@ compare() { bash "$driver" compare plan.z "$@"; }
 run compare base.json head.json 'fix(scope)!: ordinary retry'
 assert_eq 0 "$STATUS"; assert_contains "$OUTPUT" '1 of 2'
 assert_contains "$OUTPUT" 'Base: FAIL (exit 17); Head: PASS'
-assert_contains "$OUTPUT" '&lt;failure reason&gt;'
+assert_contains "$OUTPUT" '<failure reason>'
 for title in 'fix: no reproduction' 'fix!: no reproduction'; do
     run compare head.json head.json "$title"
     assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" '0 of 2'
@@ -53,16 +53,39 @@ invalid() {
 invalid missing head.json 'missing base'
 printf '[' > bad.json
 invalid base.json bad.json 'malformed head'
-jq '.[0:1]' base.json > bad.json
+jq -cS '.[0:1]' base.json > bad.json
 invalid bad.json bad.json 'same omitted suite on both sides'
-jq '.[1] = .[0]' base.json > bad.json
+jq -cS '.[1] = .[0]' base.json > bad.json
 invalid bad.json head.json 'duplicate rows'
-jq '.[1].status = "0"' head.json > bad.json
+jq -cS '.[1].status = "0"' head.json > bad.json
 invalid base.json bad.json 'wrong exit type'
-jq 'del(.[1].excerpt)' head.json > bad.json
+jq -cS 'del(.[1].excerpt)' head.json > bad.json
 invalid base.json bad.json 'missing diagnostic field'
 cat head.json head.json > bad.json
 invalid base.json bad.json 'multiple documents'
+jq -cS '.[0].status = 1' base.json > one.json
+sed 's/"status":1,/"status":01,/' one.json > bad.json
+invalid bad.json head.json 'invalid leading zero'
+sed 's/"status":1,/"status":0,"status":1,/' one.json > bad.json
+invalid bad.json head.json 'duplicate status'
+jq -cS '.[0].excerpt = ("x\n" * 13)' base.json > bad.json
+invalid bad.json head.json '13 terminated lines'
+jq -cS '.[0].excerpt |= rtrimstr("\n")' bad.json > extra.json
+invalid extra.json head.json '13 lines without trailing newline'
 printf '%s' "$suite" > plan.z
 invalid base.json head.json 'truncated plan'
+
+it "multiline names and embedded code fences remain literal Markdown"
+suite=$'tests/test_new\n\n# name heading\t.sh'
+printf '%s\0' "$suite" > plan.z
+cat > "base/$suite" <<'SUITE'
+printf '```\n\n# excerpt heading\n\n```\n'
+exit 1
+SUITE
+printf 'exit 0\n' > "head/$suite"
+for side in base head; do snapshot "$side" || exit 1; done
+run compare base.json head.json 'fix: summary'
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '<code>tests/test_new\n\n# name heading\t.sh</code>'
+assert_contains "$OUTPUT" $'\n````\n```\n\n# excerpt heading\n\n```\n````\n'
 finish

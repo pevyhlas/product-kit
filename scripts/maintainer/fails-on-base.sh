@@ -41,32 +41,45 @@ if [ "$1" = run ]; then
         jq -cn --arg suite "$path" --argjson status "$status" --rawfile summary "$scratch/summary" \
             --rawfile excerpt "$scratch/excerpt" '{suite:$suite,status:$status,summary:$summary,excerpt:$excerpt}' >> "$scratch/rows"
     done < "$2"
-    jq -s . "$scratch/rows" > "$result"
+    jq -cSs . "$scratch/rows" > "$result"
     exit 0
 fi
 
-# Slurp each file separately: reject empty, multiple or incomplete documents,
-# including matching omissions from both snapshots.
-jq -ne --slurpfile plan "$scratch/plan" --slurpfile base "$3" --slurpfile head "$4" '
-    def valid:
-        length == 1 and (.[0] | type == "array" and map(.suite) == $plan[0] and
-            all(.[]; (.status | type == "number" and floor == . and . >= 0 and . <= 255)
+# jq accepts some non-JSON numbers and silently discards duplicate keys. Require
+# the producer's exact bytes, then report and count only from these checked copies.
+validate() {
+    jq -cSes --slurpfile plan "$scratch/plan" '
+        select(length == 1) | .[0] |
+        select(type == "array" and map(.suite) == $plan[0] and
+            all(.[]; keys == ["excerpt","status","suite","summary"] and
+                (.status | type == "number" and floor == . and . >= 0 and . <= 255)
                 and (.summary | type == "string" and length <= 120)
-                and (.excerpt | type == "string" and length <= 4096)));
-    ($base|valid) and ($head|valid)' >/dev/null || inconclusive 'missing, malformed or incomplete snapshot results'
+                and (.excerpt | type == "string" and length <= 4096 and
+                    (rtrimstr("\n") | split("\n") | length) <= 12))) |
+        map(.status += 0)' "$1" > "$2" ||
+        inconclusive 'missing, malformed or incomplete snapshot results'
+    cmp -s "$1" "$2" || inconclusive 'noncanonical snapshot results'
+}
+validate "$3" "$scratch/base"
+validate "$4" "$scratch/head"
 
 fix='^fix(\([^)]+\))?!?:'
 mode=advisory
 if [[ $5 =~ $fix ]]; then mode=required; fi
 echo "### Fails before the fix ($mode)"
-jq -nr --slurpfile b "$3" --slurpfile h "$4" '
+# ASCII JSON spelling keeps even Unicode control characters visible on one line.
+jq -a '.[] | .suite' "$scratch/base" > "$scratch/names"
+jq -nr --slurpfile b "$scratch/base" --slurpfile h "$scratch/head" --rawfile names "$scratch/names" '
     def outcome: if .status == 0 then "PASS" else "FAIL (exit \(.status))" end;
     def details($side): select(.summary != "" or .excerpt != "") |
-        "<details><summary>\($side) output</summary><pre>\((.summary + "\n" + .excerpt)|@html)</pre></details>";
+        ([.summary,.excerpt] | map(select(length > 0)) | join("\n") | rtrimstr("\n")) as $text |
+        ([2, ($text | scan("`+") | length)] | max + 1) as $width |
+        ("`" * $width) as $fence |
+        "\n\($side) output:\n\n\($fence)\n\($text)\n\($fence)\n";
     range(0; $b[0]|length) as $i | $b[0][$i] as $base | $h[0][$i] as $head |
-        "\n- <code>\($base.suite|@html)</code> — Base: \($base|outcome); Head: \($head|outcome).",
+        "\n- <code>\(($names | split("\n"))[$i][1:-1]|@html)</code> — Base: \($base|outcome); Head: \($head|outcome).",
         ($base|details("Base")), ($head|details("Head"))'
-count=$(jq -nr --slurpfile b "$3" --slurpfile h "$4" '
+count=$(jq -nr --slurpfile b "$scratch/base" --slurpfile h "$scratch/head" '
     [range(0; $b[0]|length) as $i | select($b[0][$i].status != 0 and $h[0][$i].status == 0)] | length')
 printf '\n%s of %s changed test suite(s) fail on base and pass on head.\n' "$count" "$(jq length "$scratch/plan")"
 if [ "$mode" = required ] && [ "$count" = 0 ]; then exit 1; fi
