@@ -223,6 +223,19 @@ assert_eq 0 "$STATUS" "$OUTPUT"
 assert_contains "$(cat "$PROJ/.prdkit/.manifest")" 'version: 2.0.1'
 assert_contains "$(cat "$PROJ/specs/changes/001-work.md")" '**Review**: legacy FAIL'
 
+it 'an installed 2.1 project needs no second review migration to take a patch'
+transition_project
+sed 's/^version: 1.5.0$/version: 2.1.0/' "$PROJ/.prdkit/.manifest" > "$PROJ/manifest.next"
+mv "$PROJ/manifest.next" "$PROJ/.prdkit/.manifest"
+mkdir -p "$PROJ/specs/changes"
+printf '# Record\n## State\n**Review**: legacy FAIL\n' > "$PROJ/specs/changes/001-work.md"
+commit_fixture installed; trusted_tip
+printf '2.1.1\n' > "$PROJ/.product-kit/VERSION"; commit_fixture pin
+upgrade
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_contains "$(cat "$PROJ/.prdkit/.manifest")" 'version: 2.1.1'
+assert_contains "$(cat "$PROJ/specs/changes/001-work.md")" '**Review**: legacy FAIL'
+
 it 'a same-source retry accepts rendered command bytes but no unrelated work'
 for kind in pristine unrelated edited staged outside wrong-source mode; do
     transition_project
