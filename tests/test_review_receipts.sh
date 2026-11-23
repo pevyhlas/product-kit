@@ -274,15 +274,28 @@ it 'tokens are checked against base_at, and missing provenance is not a coverage
 reset_host; receipt 7 '.to="fp1:0000000000000000000000000000000000000000000000000000000000000000"'; fetch
 assert_eq 1 "$RC_INVALID"
 assert_contains "$(problems)" 'its to is not the content of its head'
+printf 'follow-up\n' >> source.txt
+git commit -qam 'follow-up implementation'
+NARROW_HEAD="$(git rev-parse HEAD)"
+NARROW_TO="$(review_fingerprint "$PROJ" 001-reviewed "$BASE" "$NARROW_HEAD")"
+assert_not_contains "$NARROW_TO" "$FP" 'the narrow PASS has a non-empty range'
+NARROW_PASS=".from=\"$FP\"|.to=\"$NARROW_TO\"|.head=\"$NARROW_HEAD\""
 for endpoint in head since base_at; do
     reset_host; receipt 7 '.verdict="FAIL"'
     edit=".$endpoint=\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""
-    [ "$endpoint" != since ] || edit="$edit|.from=.to"
+    if [ "$endpoint" = since ]; then
+        fx_pr 7 "$NARROW_HEAD"
+        edit="$NARROW_PASS|$edit"
+    fi
     receipt 7 "$edit"; fetch
     assert_eq 0 "$RC_INVALID" 'absent objects do not erase authenticated history'
     assert_contains "$(problems)" 'blocking verdict stands' "missing $endpoint cannot clear the blocker"
     assert_eq unverified "$(awk -F '\037' 'END { print $NF }' "$RC_COVERAGE")" "missing $endpoint is not verified coverage"
 done
+reset_host; fx_pr 7 "$NARROW_HEAD"; receipt 7 '.verdict="FAIL"'
+receipt 7 "$NARROW_PASS|.since=\"$HEAD_SHA\""; fetch
+assert_eq verified "$(awk -F '\037' 'END { print $NF }' "$RC_COVERAGE")" 'local since verifies the same narrow range'
+assert_eq '' "$(problems)" 'the same PASS with local since clears the blocker'
 reset_host; receipt 7 '.from=.to|.since=.head'; fetch
 assert_eq 0 "$RC_INVALID" 'available since recomputes to from'
 reset_host; receipt 7 '.from="fp1:0000000000000000000000000000000000000000000000000000000000000000"|.since=.head'; fetch

@@ -359,7 +359,7 @@ git reset -q --hard HEAD~1
     trusted_edit "refs/remotes/origin/$DEFAULT" .prdkit/memory/config.md
 run bash "$CHECK" 003-docs
 assert_eq 0 "$STATUS" "docs under the trusted T0 paths pass"
-assert_contains "$OUTPUT" "tier T0 needs no independent review (every changed path is docs only under the trusted review-t0-paths)" "says why"
+assert_contains "$OUTPUT" "tier T0 needs no independent review. All changes outside the change record and validated closing metadata passed the trusted T0 path check (review-t0-paths)." "says what the path check covered"
 mkdir -p specs/log; printf -- '- 2026-10-20 003-docs: docs — #3\n' > specs/log/003-docs.md
 git add specs/log/003-docs.md; git commit -qm "the change's log entry" >/dev/null
 run bash "$CHECK" 003-docs
