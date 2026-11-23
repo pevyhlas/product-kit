@@ -284,21 +284,27 @@ _spec_archive_log_file() { # file diagnostic-path [diagnostic-context]
             return sha
         }
         function sub_tail(s) { sub(/^[.;]/, "", s); return s }
-        function value(s,    lead, rest, semi, list, fields, n, i, bounds, pair, lo, hi, prev) {
+        function value(s,    lead, rest, raw, semi, list, fields, n, i, bounds, pair, lo, hi, prev) {
             s = trim(s)
             # Older archives also used a bare value, an "as of" date, or a dash and
             # "entries at" annotation. Do not accept arbitrary text in the metadata lane.
             if (s == "<NNN, or none>; those entries: `git show <sha>:specs/log.md`." || s ~ /^through [0-9]+$/) return
-            if (!match(tolower(s), /^([0-9]+|none|n\/a)/)) fail("expected a cutoff number or none")
-            lead = substr(s, 1, RLENGTH)
+            raw = s; sub(/[ \t;].*$/, "", raw)
+            rest = trim(substr(s, length(raw) + 1))
+            lead = tolower(raw); gsub(/[*_`]/, "", lead)
+            if (match(lead, /^([0-9]+|none|n\/a)/) && RLENGTH < length(lead)) {
+                rest = substr(lead, RLENGTH + 1) (rest == "" ? "" : " " rest)
+                lead = substr(lead, 1, RLENGTH)
+            }
             if (lead ~ /^[0-9]/ && !number(lead)) fail("invalid cutoff number")
+            if (lead != "none" && lead != "n/a" && !number(lead)) fail("expected a cutoff number or none")
             cutoff = lead + 0; prev = cutoff
-            rest = trim(substr(s, RLENGTH + 1))
             if (rest == "" || rest == "." || rest == "|" || git_pointer(rest) != "" ||
                 rest ~ /^as of [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\.?$/ ||
                 rest ~ /^(—|–|-) entries at `git show [0-9a-fA-F]+:specs\/log\.md`\.?$/) return
             if (!match(rest, /^;[ \t]*also[ \t]+/)) fail("expected ; also <IDs and ranges>; or ; those entries: `git show <sha>:specs/log.md`")
-            if (NR != label_line || lead == "n/a") fail("keep the sparse field on the cutoff line and use a number or none")
+            if (NR != label_line || lead == "n/a" || tolower(raw) != lead)
+                fail("keep the sparse field on the cutoff line and use a plain number or none")
             rest = substr(rest, RLENGTH + 1); semi = index(rest, ";")
             if (!semi || (pointer = git_pointer(substr(rest, semi))) == "") fail("expected ; those entries: `git show <sha>:specs/log.md` after the sparse set")
             list = trim(substr(rest, 1, semi - 1))
@@ -316,7 +322,7 @@ _spec_archive_log_file() { # file diagnostic-path [diagnostic-context]
         }
         function continuation(s,    low) {
             low = tolower(trim(s))
-            return low ~ /^[;,]|^als[o]?[ \t]*([0-9]|[-,;]|$)|^those entries:|^[0-9]+([-,;]|$)/
+            return low ~ /^[;,]|^als[o]?[ \t]*([0-9]|[-,;:]|$)|^those entries:|^[0-9]+([-,;]|$)/
         }
         {
             if (metadata_skip($0)) next
@@ -390,7 +396,7 @@ spec_archive_log_index_at() ( # root commit
     printf '%s\n' "${parsed%%"$SPEC_SEP"*}"
 )
 
-spec_archive_log_integration() ( # root -> distinct index rows, no fetch
+spec_integration_tips() ( # root -> distinct local commit IDs, no fetch
     local root="$1" target refs rev ref seen=" " candidates=()
     target="$(_spec_archive_git -C "$root" symbolic-ref --quiet refs/remotes/origin/HEAD)" ||
         { [ "$?" -eq 1 ] || return 1; }
@@ -403,15 +409,41 @@ spec_archive_log_integration() ( # root -> distinct index rows, no fetch
     candidates+=(refs/remotes/origin/main refs/remotes/origin/master refs/heads/main refs/heads/master)
     refs="$(verify_lines _spec_archive_git -C "$root" for-each-ref --format='%(objectname) %(refname)' "${candidates[@]}")" || return 1
     if rev="$(_spec_archive_git -C "$root" rev-parse --verify --quiet HEAD)"; then
-        seen="$seen$rev "; spec_archive_log_index_at "$root" "$rev" || return 1
+        seen="$seen$rev "; printf '%s\n' "$rev" || return 1
     elif [ "$?" -ne 1 ]; then return 1
     fi
     while read -r rev ref; do
         case " ${candidates[*]} " in *" $ref "*) ;; *) continue ;; esac
         case "$seen" in *" $rev "*) continue ;; esac
-        seen="$seen$rev "; spec_archive_log_index_at "$root" "$rev" || return 1
+        seen="$seen$rev "; printf '%s\n' "$rev" || return 1
     done <<< "$refs"
     return 0
+)
+
+spec_archive_log_integration() { # root [frozen tips] -> distinct commit index rows
+    local tips rev
+    if [ "$#" -eq 2 ]; then tips="$2"; else tips="$(spec_integration_tips "$1")" || return 1; fi
+    while IFS= read -r rev; do
+        [ -n "$rev" ] || continue
+        spec_archive_log_index_at "$1" "$rev" || return 1
+    done <<< "$tips"
+}
+
+spec_number_claims_at() ( # root commit -> allocated log and record numbers, no fetch
+    local paths blob
+    spec_objects_local "$1" || return 1
+    paths="$(verify_lines _spec_archive_git -C "$1" ls-tree "$2" -- specs/changes/ specs/log/)" || return 1
+    LC_ALL=C awk '
+        $1 ~ /^100(644|755)$/ && $2 == "blob" &&
+        $4 ~ /^specs\/(changes|log)\/[0-9][0-9][0-9][0-9]*-[a-z0-9-]+\.md$/ && NF == 4 {
+            split($4, path, "/"); sub(/\.md$/, "", path[3]); print "committed", path[2], path[3]
+        }
+    ' <<< "$paths" || return 1
+    blob="$(_spec_regular_blob_at "$1" "$2" specs/log.md)" || return 1
+    [ -n "$blob" ] || return 0
+    set -o pipefail
+    _spec_archive_git -C "$1" cat-file blob "$blob" |
+        sed -n 's/^- [0-9-]* \([0-9][0-9][0-9]*-[a-z0-9-]*\):.*/committed log \1/p'
 )
 
 spec_archive_log_covers() { # normalized index, change ID (or just its number)

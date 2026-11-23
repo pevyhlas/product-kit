@@ -12,7 +12,9 @@ change by change.
 
 - Compaction can index closed changes even after an earlier change stays open. Add exact
   closed-number ranges to the archive's **Log condensed through** line and retrieve the full
-  entries from Git. Archived numbers stay closed and cannot be reused. No migration needed.
+  entries from Git. Explicit change numbering must exceed the largest allocated number
+  visible in the archive, logs or change records; it no longer fills older gaps. No
+  archive migration needed.
 
 ### Changed
 

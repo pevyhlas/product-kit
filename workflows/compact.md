@@ -106,10 +106,13 @@ planned numbers, such as 003 and 062 here. After the backticked pointer, an opti
 or prose introduced by a period or semicolon and a space is allowed, not another field
 (for example, `; also see the migration notes` is prose, not a set).
 
-An archived number cannot be reused. Allocation and close check the working archive,
+Allocation and close check the working archive,
 `HEAD`, and the locally available tips of `main`, `master`, `origin/main`, `origin/master`,
 and the branch identified by `origin/HEAD` (remote-tracking and local, if present),
-without fetching. Allocation also checks the other worktrees' working archives. Status,
+without fetching. Allocation also checks the other worktrees' working archives. Explicit
+allocation must exceed the largest number in the checked archives, live logs, per-change
+log files and change records, even when the requested number is a gap. Automatic
+allocation starts above that mark and accounts for planned and other reservations too. Status,
 doctor, and the bounds CLI report against the current checkout's archive; update a stale
 checkout before using them to assess current integration history.
 
@@ -120,8 +123,9 @@ an open record in another worktree does not reopen an archived change.
 Before removal, commit a folded log that contains the entries being indexed, and use its SHA in
 the pointer. The snapshot must remain reachable from a shared Git ref: if merges are squashed,
 land the fold before the removal or preserve the snapshot on a durable ref. To retrieve an
-entry, look up its number in the index and find its full ID in the log at that SHA. On later
-passes, keep earlier numbers reserved and verify that their entries are still retrievable. If
+entry, look up its number in the index and find its full ID in the log at that SHA. On every later
+pass, carry every earlier sparse number forward in the index. It may move under the cutoff,
+but must never become a gap. Verify that its entry is still retrievable. If
 the new pointer would lose earlier entries, carry them forward from the previous snapshot
 into the new Git snapshot only. Keep earlier cutoff-only pointers for any older history that
 predates the snapshot. Doctor checks that every sparse number has an entry in the pointed

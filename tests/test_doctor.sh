@@ -673,7 +673,8 @@ kit_index() ( source "$kit_bin/spec-lib.sh"; spec_archive_log_index "$PWD"; )
 for value in "002, also 005; $pointer" "002; als 005; $pointer" \
              "002;; also 005; $pointer" "002; also005; $pointer" \
              "002; also 005; $pointer; also 006" \
-             $'002\n\n  also 005; '"$pointer" $'002;\n\n  also 005; '"$pointer"; do
+             $'002\n\n  also 005; '"$pointer" $'002;\n\n  also 005; '"$pointer" \
+             $'002\n\n  also: 005; '"$pointer"; do
     printf '**Log condensed through**: %s\n' "$value" > specs/archive.md
     line=1
     case "$value" in $'002\n'*) line=3 ;; esac
@@ -724,10 +725,10 @@ assert_contains "$(jq -r '.advisories[]' <<< "$OUTPUT")" "history unavailable in
 run bash "$shallow_bin/new-change.sh" --no-branch --number 005 --short-name probe Probe
 assert_eq 1 "$STATUS" 'shallow checkout still respects reservations'
 assert_contains "$OUTPUT" 'reserved by the condensed log index'
-printf '**Log condensed through**: 002, also 005; %s\n' "$pointer" > "$shallow/specs/archive.md"
+printf '**Log condensed through**: 002\n\n  also: 005; %s\n' "$pointer" > "$shallow/specs/archive.md"
 run shallow_doctor --json
 assert_eq 1 "$STATUS" 'a shallow clone never downgrades malformed syntax to missing history'
-assert_contains "$(jq -r '.findings[]' <<< "$OUTPUT")" 'specs/archive.md:1:'
+assert_contains "$(jq -r '.findings[]' <<< "$OUTPUT")" 'specs/archive.md:3:'
 git reset -q --hard "$before_sparse"
 
 it "a renamed change record is not a closed one"
