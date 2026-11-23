@@ -301,9 +301,12 @@ implementation or merge need not be complete before the answered item leaves the
    answer durably before moving on if incorporation cannot finish immediately.
 2. Apply the decision to its canonical home: product intent in L0, design in L1/L2, authority in
    the constitution's Action policy, holds/waivers in `specs/records.md`. Record the disposition,
-   operative owner words verbatim, date and source (conversation reference, PR/comment URL or
-   recorded git revision/path). Relayed words keep their original source. A bare option number
-   also needs the selected option's meaning. The canonical entry is the record; do not duplicate a
+    operative owner words verbatim, date and source (conversation reference, PR/comment URL or
+    recorded git revision/path). For a long hold or waiver quote, use the checked authority
+    reference in [protocol.md](protocol.md), without shortening the operative row. The authority
+    file is exempt from reading budgets: it is verbatim evidence read only on demand.
+    Relayed words keep their original source. A bare option number also needs the selected
+    option's meaning. The canonical entry is the record; do not duplicate a
    transcript. Retain the inbox ID as plain provenance text or an
    immutable source link, not a live link back to an entry that will be removed. Update the actual
    governing requirement, design or policy, reconcile superseded contradictory text and affected

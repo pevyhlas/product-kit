@@ -124,7 +124,8 @@ budget 300 "$root"/specs/product/requirements.md "$root"/specs/product/qualities
 budget 200 "$root"/specs/parts/*.md "$root"/specs/parts/*/*.md
 budget_fix 150 "condense its older entries into specs/archive.md at the next compaction (compact.md)" "$root"/specs/log.md
 budget_fix 150 "incorporate answered items (spec.md, Resolve owner answers), review the rest with the owner (/prdkit-inbox), and keep each item's context in the files it links" "$root"/specs/inbox.md
-budget_fix 150 "remove lifted holds, expired waivers, and DEPLOY and ATTEST lines a newer one supersedes; git keeps them" "$root"/specs/records.md
+budget_fix 150 "remove lifted holds, expired waivers, and DEPLOY and ATTEST lines a newer one supersedes; git keeps them. Move long owner quotes to specs/authority.md with a checked ref=; keep the full scope and end condition in the row" "$root"/specs/records.md
+# specs/authority.md is read on demand by the records checker and has no reading budget.
 
 # Share status's log-order and entry-file accounting; compaction is due at ten closes.
 compaction_verified=true
@@ -600,12 +601,16 @@ trace change-undefined "Change record cites an ID defined nowhere" "list it unde
     "$(pick "$change_ids" U)"
 
 # --- Records and inbox -----------------------------------------------------------------------
+authority_records=()
 rows="$(verify_lines spec_records "$root")"
-while IFS="$SEP" read -r line type name who _ _ _ date until _ reason; do
+while IFS="$SEP" read -r line type name who scope _ _ _ until check reason; do
     [ -n "$line" ] || continue
     case "$type" in
         INVALID) findings+=("Malformed record at specs/records.md:$line: $reason") ;;
         HOLD|WAIVER)
+            case "$reason" in
+                ref=*) authority_records+=("$type $name on $scope${check:+ (check $check)} by $who, until $until — $reason") ;;
+            esac
             if spec_is_date "$until" && [ "$(spec_days_between "$until" "$today")" -gt 0 ]; then
                 if [ "$type" = HOLD ]; then
                     advisories+=("HOLD $name due (owner $who, until $until): it still applies; ask the owner to confirm or lift it")
@@ -652,7 +657,7 @@ done <<< "$rows"
 # default is not, nor is a `>` quote: owner words stay verbatim.
 path_files=()
 if $in_git; then
-    rows="$(verify_lines git -C "$root" ls-files -- '*.md' \
+    rows="$(verify_lines git -C "$root" ls-files -- '*.md' ':(exclude)specs/authority.md' \
         ':(exclude).prdkit/templates/**' ':(exclude).prdkit/workflows/**' ':(exclude).product-kit/**')"
 else
     rows="$listed"
@@ -788,6 +793,7 @@ if $json; then
         "$result" "$(json_array ${findings[@]+"${findings[@]}"})" "$(json_array ${advisories[@]+"${advisories[@]}"})" "$trace_json" "$strict"
     printf ',"adoption":%s' "$(diagnostic_adoption "$root")"
     printf ',"budget_excess_reading_lines":%s' "$budget_excess_reading_lines"
+    if [ "${#authority_records[@]}" -gt 0 ]; then printf ',"authority_records":%s' "$(json_array "${authority_records[@]}")"; fi
     if $inventory; then printf ',"configuration":%s' "$(diagnostic_configuration "$root")"; fi
     printf '}\n'
 else
@@ -797,6 +803,7 @@ else
     for reason in ${findings[@]+"${findings[@]}"}; do printf '  %s\n' "$reason"; done
     for reason in ${advisories[@]+"${advisories[@]}"}; do printf '  advisory: %s\n' "$reason"; done
     [ "${#advisories[@]}" -eq 0 ] || printf 'Advisories do not fail doctor; --strict makes them failing findings.\n'
+    for reason in ${authority_records[@]+"${authority_records[@]}"}; do printf '  checked authority: %s\n' "$reason"; done
     printf 'No repairs performed. A clean report is not readiness.\n'
     if $inventory; then
         printf 'Effective configuration (JSON; null means unknown, not a default):\n'

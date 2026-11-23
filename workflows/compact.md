@@ -6,6 +6,9 @@
 
 ## Compaction (on overflow, and every ten closed changes)
 
+Preserve operative hold and waiver rows and their referenced authority entries. Move long quotes
+out of the rows by checked reference ([protocol.md](protocol.md)), never by shortening the scope.
+
 Rewrite within the budgets, by tightening and splitting, never by dropping items. Keep current truth, decisions with their alternatives
 and revisit conditions, why-it-works assumptions, and retired IDs (one line each). Drop to git: history,
 amendment notes, superseded wording and resolved questions. Keep a rejected alternative that is
