@@ -15,12 +15,18 @@ change by change.
   entries from Git. Explicit change numbering must exceed the largest allocated number
   visible in the archive, logs or change records; it no longer fills older gaps. No
   archive migration needed.
+- Holds and waivers can keep long verbatim owner quotes in `specs/authority.md` using
+  checked references. Status and doctor validate the references without shortening the
+  scope or end condition in the row. No migration needed.
 
 ### Changed
 
 - Spec-only reviews judge edits at their spec level and defer test procedures to the
   implementing PR. Acceptance names observable outcomes; review gates are unchanged.
   No migration needed.
+- Change tasks describe outcomes, dependencies and named checks. The delivering PR deletes their
+  lines without checking them off or logging them; an optional `Drops:` line distinguishes
+  dropped tasks. Keep execution details in the ignored plan or PR.
 
 ## [2.1.0] — 2026-11-23 — task parts, change tags and fail-closed verifiers
 

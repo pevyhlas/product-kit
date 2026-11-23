@@ -22,10 +22,14 @@ exclusions. Explain only decisions a reviewer needs, not a second feature specif
 <Approach and useful task/check mapping. For a handover, include remaining work or link the
 change's committed State. Local scratch is not the sole copy of this context.>
 
+<!-- Optional; uncomment only for tasks dropped rather than delivered:
+Drops: <change-id> T004, T005
+-->
+
 ## Verification and review
 
 <Actual revision, environment, checks/results and durable output/review links. Required PR gates
-and their evidence; unknown stays unknown. A task checkmark or exit zero is not product proof.>
+and their evidence; unknown stays unknown. Task delivery or exit zero alone is not product proof.>
 
 ## Remaining observations
 

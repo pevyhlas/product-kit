@@ -110,8 +110,8 @@ Write the plain text file; verify its exact contents using standard utilities.
 
 ## Tasks
 
-- [ ] T001 Write Welcome with a newline to src/greeting.txt.
-- [ ] T002 Check src/greeting.txt has the exact requested contents; depends on T001.
+- [ ] T001 Greeting is available; none; greeting content
+- [ ] T002 Exact greeting is verified; greeting is available; greeting content
 
 ## Acceptance
 
@@ -127,7 +127,7 @@ Write the plain text file; verify its exact contents using standard utilities.
 EOF
 }
 
-# Prints one change-record section (Acceptance or State) for assertions.
+# Prints one change-record section for assertions.
 fixture_section() { # file heading
     awk -v h="## $2" '$0 == h { s = 1; next } /^## / { s = 0 } s' "$1"
 }
@@ -199,9 +199,9 @@ EOF
 ## Intent
 Owner decision O-01: deliver R-01 on the D-02 replacement path, then validate its deployment.
 ## Tasks
-- [ ] T001 Write src/greeting.txt and run bash scripts/check-foundation.sh. Independent of provider; predeclared source milestone M1.
-- [ ] T002 Validate deployed greeting. Depends on T001 and owner-authorized provider provisioning.
-- [ ] T003 Optional legacy display metadata in src/legacy-extra.txt; not a prerequisite.
+- [ ] T001 Greeting foundation is available (M1); none; foundation check
+- [ ] T002 Deployed greeting is validated; greeting foundation and owner-authorized provider provisioning; deployed greeting check
+- [ ] T003 Legacy display includes optional metadata; none; legacy display check
 ## Acceptance
 | Item | Proves | Check | Attempts | Result |
 |------|--------|-------|----------|--------|
