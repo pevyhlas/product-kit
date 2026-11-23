@@ -8,6 +8,12 @@ change by change.
 
 ## [Unreleased]
 
+### Changed
+
+- Spec-only reviews judge edits at their spec level and defer test procedures to the
+  implementing PR. Acceptance names observable outcomes; review gates are unchanged.
+  No migration needed.
+
 ### Removed (breaking)
 
 - Removed kit migration guides and cutover/restructure instructions, installer retirement and
