@@ -135,6 +135,34 @@ printf '%s\n' '## Configuration' "$separate" '## Meaning' '- review-host: github
     '- review-owner: user:1003' | trusted_edit "$ref" "$config"
 gate; assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'review-host: github'
 
+it 'a shorter backtick marker cannot expose policy inside a longer fence'
+heading_fixture() {
+    local lens_line="$1"; shift
+    printf '%s\n' "$@" '## Configuration' '- review-host: github' '- review-owner: user:1003' \
+        "$publishers" "$lens_line" | trusted_edit "$ref" "$config"
+}
+for mapping_line in "$separate" ''; do
+    for opener in '````text' '~~~~text'; do
+        heading_fixture "$mapping_line" "$opener" "${opener:0:3}"
+        gate; assert_eq 1 "$STATUS" 'example credentials must not authorize T3'
+        assert_contains "$OUTPUT" 'Ambiguous fence at config.md line 1'
+    done
+    for closer in '````' '~~~'; do
+        heading_fixture "$mapping_line" '```text' "$closer"
+        gate; assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'Ambiguous fence at config.md line 2'
+    done
+done
+
+it 'a tilde shown inside a closed backtick example cannot hide the following policy'
+heading_fixture "$separate" '```text' '~~~' '```'
+gate; assert_eq 0 "$STATUS" "$OUTPUT"
+
+it 'the fence check includes the selected policy section but ends before later documentation'
+policy "$publishers" '```' '~~~~'; gate
+assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'Ambiguous fence at config.md line 6'
+policy "$publishers" "$separate" '## Meaning' '````text' '```'; gate
+assert_eq 0 "$STATUS" "$OUTPUT"
+
 it 'a noncanonical publisher assignment cannot silently evade the union check'
 review APPROVED 1004
 for key in '-  review-publishers:' '- REVIEW-PUBLISHERS:' $'-\treview-publishers:' '- review-publishers =' \

@@ -6,6 +6,7 @@
 # Its undismissed objections on any PR commit require a later exact-head approval by that account.
 # Report open objections separately from approvals after complete, consistent pagination.
 # With lenses, publisher eligibility is the union of accounts mapped to trusted reviewers.
+# Ambiguous fences may not establish policy, whether or not lenses are configured.
 #
 # Threat model:
 # Review text and candidate policy are untrusted. Trust the authenticated GitHub response;
@@ -29,15 +30,52 @@ github_review_policy() {
             return tolower(spaces(s))
         }'
     # Only raw headings delimit policy. No comment or fence can conceal a lens mention.
-    mode="$(printf '%s\n' "$config" | LC_ALL=C awk "$normalize"'
-        /^## / { active=($0=="## Configuration"); next }
+    mode="$(printf '%s\n' "$config" | LC_ALL=C awk "$SPEC_SKIP_AWK$normalize"'
+        {
+            skipped=spec_skip($0)
+            s=spaces($0); sub(/^ */, "", s)
+            if (match(s,/^(```+|~~~+)/)) {
+                mark=substr(s,1,RLENGTH)
+                bare=(substr(s,RLENGTH+1) ~ /^ *$/)
+                if (!opening) {
+                    opening=mark
+                    if (length(mark)>3 && !bad) bad=NR
+                } else if (bare && mark==opening) {
+                    opening=""; other=0
+                } else if (bare && substr(mark,1,1)==substr(opening,1,1)) {
+                    if (!bad) bad=NR
+                } else if (bare && !other) {
+                    # Literal example content if the actual opener subsequently closes.
+                    other=NR
+                }
+            }
+        }
+        /^## / {
+            active=($0=="## Configuration")
+            if (active && opening) {
+                if (other && !bad) bad=other
+                hidden=NR
+            }
+            if (active && skipped) skipped_heading=NR
+        }
         active {
+            # Snapshot at the policy boundary: later documentation is not policy.
+            policy_bad=(bad ? bad : other)
             if (index(normalized($0),"review-lenses")) lenses=1
             if (/<!--|-->/ || spaces($0) ~ /^ *(```|~~~)/) marker=NR
         }
         END {
+            if (policy_bad) {
+                print "Ambiguous fence at config.md line " policy_bad ": use matching three-character fences before or within ## Configuration"
+                exit 1
+            }
             if (lenses && marker) {
                 print "config.md line " marker ": comments and fenced blocks are not allowed in ## Configuration when review-lenses is mentioned"
+                exit 1
+            }
+            if (lenses && skipped_heading) hidden=skipped_heading
+            if (hidden) {
+                print "Hidden ## Configuration heading at config.md line " hidden ": review-host: github and review-owner must be in a visible policy section"
                 exit 1
             }
             print (lenses ? "lenses" : "legacy")
@@ -50,19 +88,8 @@ github_review_policy() {
             !active || /^- review-lenses:/ { next }'
     else
         policy_locale=C
-        rules="$SPEC_SKIP_AWK$normalize"'
-            # A hidden heading cannot establish trusted policy. Never discard its
-            # mapping and fall back to earlier publisher credentials: fail instead.
-            # The legacy heading guard knows backtick fences. An unmatched raw
-            # tilde fence marker before the heading is ambiguous too. Neither
-            # guard is used to skip assignments within a raw policy section.
-            { skipped=spec_skip($0); if (spaces($0) ~ /^ *~~~/) tilde=!tilde }
-            /^## / {
-                active=($0=="## Configuration")
-                if (active && (skipped || tilde))
-                    malformed="Hidden ## Configuration heading at config.md line " NR ": review-host: github and review-owner must be in a visible policy section"
-                next
-            }
+        rules="$normalize"'
+            /^## / { active=($0=="## Configuration"); next }
             !active { next }
             {
                 ntext=normalized($0)

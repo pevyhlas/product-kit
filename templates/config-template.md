@@ -64,3 +64,4 @@ comment markers or fence lines (three backticks or tildes, even when indented).
 Put examples and comments under `## Meaning`. Within the policy section, a mention
 of either key with a `:` or `=` later on the same line must be a canonical assignment;
 for example, backticks around the key cause a policy error naming the line.
+Before or within `## Configuration`, use exactly three backticks or tildes for a fence and close it with the same marker.
