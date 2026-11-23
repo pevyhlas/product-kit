@@ -15,6 +15,9 @@ change by change.
   conventional `fix` titles require at least one reproducing suite; other titles are advisory.
   Base and head run on separate hosted runners, so a base worker cannot answer a head test.
   The check compares one-day result artifacts; missing or incomplete evidence fails the check.
+- Holds and waivers can keep long verbatim owner quotes in `specs/authority.md` using
+  checked references. Status and doctor validate the references without shortening the
+  scope or end condition in the row. No migration needed.
 
 ### Changed
 
@@ -24,6 +27,23 @@ change by change.
 - Change tasks describe outcomes, dependencies and named checks. The delivering PR deletes their
   lines without checking them off or logging them; an optional `Drops:` line distinguishes
   dropped tasks. Keep execution details in the ignored plan or PR.
+
+### Removed (breaking)
+
+- Removed kit migration guides and cutover/restructure instructions, installer retirement and
+  review-migration flags, historical State verdict and receipt clearance paths, reviewer
+  registration via the capabilities table, and compatibility readers for old install manifests,
+  feature counters, programme checkpoints, inbox entries and agent tier maps.
+  Review requires a per-change close entry at the closing commit. Agents must migrate an older
+  install manually; Product-Kit provides no migration tooling. Ordinary upgrades and consumer
+  data-migration guidance remain.
+
+### Fixed
+
+- PR review launcher groups now have live guard leaders that signal only their own groups.
+  The launcher checks for surviving members without waiting for a leader and confirms the
+  groups are absent at the kernel level before deleting scratch. If it cannot verify shutdown
+  or output drain, it refuses and retains scratch.
 
 ## [2.1.0] — 2026-11-23 — task parts, change tags and fail-closed verifiers
 

@@ -28,8 +28,7 @@ adoption restrictions on every PR. It is **not pinned-source proof**:
   shared baseline, and its vendored snapshot matches its recorded provenance (sha256 and
   library commit: this catches hand edits and baseline mismatch, not upstream origin). Once the map
   declares a `Tier baseline:`, every agent projection must exist and match the resolved
-  model/variant and neutral body (`render-agents.sh --check` is the same check, and also
-  runs on legacy literal maps when invoked directly).
+  model/variant and neutral body (`render-agents.sh --check` checks the same projection rules).
 
 Consumers may impose additional restrictions in the `## Configuration` section of
 `.prdkit/memory/config.md`:
@@ -80,9 +79,9 @@ bytes the links actually serve. Committed proof checks link text, not a mutable 
 The AGENTS.md managed section is compared with pinned data without executing source code;
 in-repository aliases work, and bytes outside the section remain project-owned.
 
-Customized memory/templates and customized retired conffiles remain project-owned. Expected
+Customized memory/templates remain project-owned. Expected
 conffiles must still exist, but their bytes, modes and prior pristine hashes need not match
-the new source. Retired kit-owned helpers/commands may not remain installed. Explicit
+the new source. Kit-owned paths outside the pinned mapping are rejected. Explicit
 `adoption-pin` and `adoption-manifest-sha256` restrictions still reject drift; the installer
 does not silently rewrite or ignore them.
 
@@ -138,10 +137,8 @@ merges (`--head <sha>`, then `gh pr merge --match-head-commit <sha>`). It passes
   reviewer's reviewed content must link to this head's content (`fingerprint` in `--json`), and
   for T1–T3 so must `start`, so narrow re-reviews of fixes chain while a gap fails. A rebase, a
   squash, a reverted edit and a base merge that does not overlap keep the content; a fix or an
-  overlapping base merge (`review.md`, Merge) changes it. Empty coverage ranges are refused;
-  validated empty full PASS legacy-clearance receipts remain start-to-start verdicts and grant
-  no edge. Adding content expires their clearance without invalidating them; a head already
-  inside `--base` fails;
+  overlapping base merge (`review.md`, Merge) changes it. Empty coverage ranges and a head
+  already inside `--base` are refused;
 - the tier's minimum is present: one independent verdict for T1–T3, plus native owner approval
   for T3. The latest decisive owner review must be APPROVED, its GraphQL commit must equal the
   head strictly before submission in the activity log, and its L0/L1 fingerprint must equal this
@@ -198,8 +195,6 @@ A change cannot add its own maker to the registry and approve itself.
 Use a `## Review registry` section with `| Identity | Role |` columns and exact roles `reviewer`
 or `maker`. Lowercase identifiers may contain letters, digits, dots, underscores and hyphens.
 A maker is denied even if also listed as a reviewer; duplicate or invalid roles are ambiguous.
-Legacy `| Role | Available agent or human | Notes |` capability rows also work when they name an
-exact identity and the role is `Independent review`/`Review` or `Implementation`/`Maker`.
 Placeholders and free-form descriptions are not registrations. `owner` remains a reserved verdict.
 
 **Adoption:** establish the advertised remote default (`git remote set-head origin --auto` after
@@ -239,7 +234,7 @@ numeric owner actor: only that issuer's later APPROVED review, after the same na
 non-self-approval, activity, object and L0/L1 freshness checks, can clear it. COMMENTED/PENDING,
 another owner's approval and record/tier edits cannot. An invalid later approval preserves the
 negative and its diagnosis. No decisive event adds no positive requirement to otherwise exempt
-PRs. Substantive T3 and owner/unnamed legacy-history clearance retain their separate requirements.
+PRs. Substantive T3 retain their separate requirements.
 Unknown/missing identity or state, duplicate review ids and incomplete streams are unavailable,
 not empty. This current-PR check grants no cross-PR coverage.
 
@@ -251,7 +246,7 @@ bash .prdkit/scripts/bash/check-review.sh --receipts receipts.txt <change-id>  #
 ```
 
 Snapshots are writable, unauthenticated, US-separated normalized rows, readable with awk and
-without gh/jq. They re-run local policy, fingerprints, coverage, owner slice and legacy history.
+without gh/jq. They re-run local policy, fingerprints, coverage, owner slice and record history.
 The header is `prdkit-receipts 2`; owner rows append the authenticated `user:<database-id>`
 actor after the existing review/time/state/commit/submission-head fields. Version 1 snapshots
 are refused, not used to infer multi-owner clearance; capture a fresh snapshot with the current
@@ -262,19 +257,14 @@ Consumers must inspect authority, problems and exit status: exit 1 is failure an
 would-pass preview; only a host-authority pass exits 0. Human output prints
 PREVIEW and fetch time. A would-be pass in either mode exits **3**, not merge authority. JSON
 also reports `pr`, `pr_head`, `head_is_pr_head`, `publisher_isolation`, receipt/ignored/invalid/
-carried counts, `legacy_blockers`, native `owner` metadata and `reviews[].receipt` URLs.
+carried counts, native `owner` metadata and `reviews[].receipt` URLs.
 The existing `owner` fields still describe the latest decisive event; `owner.actor` identifies
 its actor, while `owner.barriers[]` reports each standing actor/review/state and distinct reason
 (including an invalid later clearing attempt). `problems` includes these barriers at every tier.
 
-The legacy blocker-only scan reads active 1.x State review lines from raw Git blobs and complete
-history, including deleted/edited/transferred inherited records. No 1.x PASS converts or covers.
-FAIL, blocking counts and unreadable verdicts/counts stand until the same reviewer's clean full
-native PASS on this PR includes them in its own reviewed history. Owner and unnamed blockers
-need a valid native owner approval with the same historical proof. Lines never enter coverage.
-These blockers apply to T0 and record-only changes too. Branch renaming can escape closed-PR
-carry; rewriting pre-merge branch history can erase a newly introduced legacy line. Default-
-branch inherited blockers are protected. The ordinary gate does not authenticate its own execution
+The gate rejects `**Review**:` fields in checked change-record history from raw Git blobs.
+The current format uses `prdkit.review.v3` host receipts. Rewriting pre-merge branch history
+can erase a newly introduced field. The ordinary gate does not authenticate its own execution
 source; use the trusted all-PR boundary below for enforcement. With shared credentials, review
 independence remains a deployment property, not something the host can prove.
 
@@ -295,7 +285,7 @@ unresolved findings and the combined tier/reviewer concerns. Log/delete the othe
 the combined final review, then finalize only the carrier after PASS. Check the carrier ID; the
 helper does not automatically transfer obligations or exempt sibling record deletions.
 
-For compatibility, a pull request that carries only the record and the log since a trusted base,
+A pull request that carries only the record and the log since a trusted base,
 including an old change's explicit disposition, skips coverage. Fingerprints, like that
 exemption, are computed only against a trusted base; both trust only the remote default
 identified by `origin/HEAD`, plus `review-integration-branches` in `.prdkit/memory/config.md` read
@@ -347,7 +337,7 @@ contained regular Git blob (100644 or 100755) from W; no symlink/gitlink or cand
 Exclude BASH_ENV, ENV, SHELLOPTS, BASHOPTS, exported BASH_FUNC_* functions, loader/language injection,
 caller proxies, credential helpers and **all** inherited GIT_* variables. Unsetting them in an
 already-started poisoned shell is too late. The launcher's later defensive sanitization is not
-this constructor. gh/jq/Git/core tools must be installed in trusted host tool locations, not the
+this constructor. Install gh, jq, Git and core tools in trusted host tool locations, not the
 workspace, caller bin directory, user configuration or gh extensions. Deliver the credential only
 ephemerally; never a publisher write token, persisted login or credential-bearing URL.
 
@@ -369,7 +359,7 @@ The exact native gate/helper closure is extracted as regular blobs from P's inst
 `.prdkit/scripts/bash/`, not from H or the old merge base: `check-review.sh`, `common.sh`,
 `spec-lib.sh`, its required `spec-navigation-lib.sh`, and the `review-policy-lib.sh`,
 `review-fingerprint-lib.sh`, `review-coverage-lib.sh`, `review-receipts-lib.sh`,
-`review-owner-lib.sh` and `review-legacy-lib.sh` helpers. Every entry must be a contained regular
+`review-owner-lib.sh` helper. Every entry must be a contained regular
 Git blob (mode 100644 or 100755); missing helpers, symlinks and gitlinks refuse before sourcing.
 The navigation parser is required even for the launcher's early policy-ref parsing; it is not
 loaded from adjacent candidate or workspace files. Native `spec_trusted_refs` at P must
@@ -381,16 +371,26 @@ present at S. Git 2.31+ combined-diff capability is required; incomplete history
 or zero/multiple assignments refuse. The native gate owns record recovery, closure, tier,
 fingerprints, owner events, receipts, coverage and sibling-deletion checks.
 
-Bounds are 600 seconds overall, 120 per acquisition/selection/extraction and 180 for the native
-gate, with five seconds TERM-to-KILL grace for owned process groups. Dedicated FIFO readers cap
-stdout/stderr at 4 MiB each; reaching the ceiling refuses with `capture-limit`, never truncated
-success. Selector history streams are separately capped. These capture limits do **not** impose
-a file-size limit on Git packs/objects or native working files. Cancellation is deferred through
-each launch-to-ownership registration. Teardown stops the overall watchdog first, queues repeated
-catchable signals and allows up to five seconds for capture readers to drain after writers stop.
-All owned processes are terminated/reaped before deleting only the invocation's scratch.
-Cleanup failure refuses. Uncatchable runner termination can leave no complete result and is not
-PASS. stdout is one buffered JSON object, newline-terminated:
+The launcher checks a 600-second overall budget, with up to 120 seconds per acquisition,
+selection or extraction and 180 seconds for the native gate before cleanup. FIFO readers cap
+stdout and stderr at 4 MiB each; native output at the ceiling refuses with `capture-limit`, never
+truncated success. Selector history streams are separately capped. These limits do **not** cap
+Git objects or native working files.
+
+The launcher queues catchable cancellation, including during startup and cleanup. Only a group’s
+own guard leader may signal it; the launcher sends private FIFO requests, never signals to a
+remembered process-group ID. If required, the guard sends TERM, allows five seconds, and sends
+KILL at most once, ending the guard itself. After release or KILL, the launcher only observes.
+It polls the process table without calling `wait` on a leader, and treats ambiguous states
+(including Linux `Zl`) as live. It allows readers a separate five-second drain window.
+Before deleting scratch, it checks that the kernel reports every recorded group absent,
+since a process-table scan can miss a fork/exit handoff. An existing group (even a reused
+ID) or any other probe error prevents deletion. If shutdown or drain cannot be verified,
+it refuses with `cleanup-failed` and retains scratch.
+If KILL prevents reporting the native exit, `native_exit` is null. This checks supervised
+process groups; it does not contain processes that leave them. Uncatchable runner termination
+can leave no complete result and is not PASS. stdout is one buffered JSON object,
+newline-terminated:
 
 ```json
 {"launcher":"complete","error":null,"native_exit":0,"native":{}}
@@ -408,13 +408,6 @@ ready/content-bound diagnostics can exit 0. Usage exits 2; all other refusals/fa
 Missing/partial host data never falls back to offline success. Final CI certifies actual remote H,
 not the ordinary gate's permitted local metadata-only closing descendant.
 
-It replaces the 0.x `check-signoff.sh`, but not one for one. The 0.x gate ran on every pull
-request touching `gated-paths` and required a `readiness.md` with fingerprinted evidence; 1.0
-drops that record, the fingerprint and `evidence-fingerprint.sh`; all-PR integration requires a
-unique review carrier rather than skipping unnumbered branches. `init.sh --upgrade` warns while `signoff-requirements.md` still lists
-`gated-paths:`; replace the CI step and fold the review policy into the constitution's `Review
-and checks` at the cutover.
-
 ## Spec and context advisories — `doctor.sh --strict`
 
 ```
@@ -424,15 +417,13 @@ bash .prdkit/scripts/bash/doctor.sh --strict
 Doctor always fails on malformed or duplicate IDs, malformed records, installation drift,
 agent definition or tier-map findings, a malformed `specs/log/<id>.md`, and a change record
 deleted in history without its log entry (`check-review.sh` fails the same at close).
-It reports, as advisories: a 0.x layout or two canons, a `specs/archive/` folder on main, a
-`specs/archive.md` whose base commit or last 0.x feature cannot be read, agent context naming
-removed 0.x paths, spec files over their reading budgets,
+It reports unsupported kit layouts and formats as findings. Advisories include spec files over their reading budgets,
 cited IDs that are undefined or retired (in spec files and tests), a reviewed change record
 still on the default branch and in the checkout with no child or outcome checkpoint keeping it
 open (merged without closing, including T0 and records with no verdict), trace
 drift (`Code:` paths not in the repository, stale `planned:` markers, unallocated R/Q items and
 parts, change records restating or citing undefined IDs), past-due hold reminders and expired waivers,
-open inbox items and their age, retained resolved items, inbox items in the old one-line form, local machine paths in
+open inbox items and their age, retained resolved items, local machine paths in
 specs and agent context, links to missing files in the spec and `specs/archive.md`, spec files
 that no chain of links from
 `product.md` or `architecture.md` reaches (1.1 layout; retired files exempt) and `observed.md`

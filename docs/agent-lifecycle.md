@@ -25,8 +25,7 @@ render; unavailable validation stays unknown.
 | `render-agents.sh --refresh-baseline <library> [--library-ref <ref>]` | Vendor the library `tiers.json` at a committed revision and update the `Tier baseline:` line |
 
 Resolution: shared baseline (explicit `Local tier -> Library tier` row, else the library tier
-of the same name, else the aliases `frontier`->`verydeep`, `high`->`deep`, `fast`->`light`)
-or, without a baseline, the legacy literal table; then `tier:` overrides, then `agent:`
+of the same name); then `tier:` overrides, then `agent:`
 overrides (a specific harness beats `*`). The renderer owns `model`, OpenCode `variant`,
 `description` (copied from a single-line neutral description; a block scalar is copied whole
 into a new projection, then stays project-owned) and the prompt body (the whole neutral body,

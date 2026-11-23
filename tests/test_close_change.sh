@@ -28,7 +28,7 @@ record() { # id tier parent, then State lines
     } > "specs/changes/$id.md"
 }
 pass_line() { # reviewer from to
-    printf '**Review**: round 1 · %s..%s · %s · PASS · 0 critical, 0 high, 0 medium, 0 low · https://example.invalid/pr/1#c1\n' "$2" "$3" "$1"
+    printf '**Receipt fixture**: round 1 · %s..%s · %s · PASS · 0 critical, 0 high, 0 medium, 0 low · https://example.invalid/pr/1#c1\n' "$2" "$3" "$1"
 }
 branch_with_code() { # id
     git checkout -q -b "$1" "$DEFAULT"
@@ -395,7 +395,7 @@ sed -i.bak 's/Tier\*\*: T1/Tier**: T3/' specs/changes/003-owner.md; rm -f specs/
 git commit -qam "003-owner: T3" >/dev/null
 START="$(git merge-base HEAD "$DEFAULT")"; REVIEWED="$(git rev-parse HEAD)"
 pass_line code "$START" "$REVIEWED" >> specs/changes/003-owner.md
-printf '**Review**: round 1 · %s..%s · owner · PASS · https://example.invalid/pr/3#approval\n' "$START" "$REVIEWED" >> specs/changes/003-owner.md
+printf '**Receipt fixture**: round 1 · %s..%s · owner · PASS · https://example.invalid/pr/3#approval\n' "$START" "$REVIEWED" >> specs/changes/003-owner.md
 git commit -qam "003-owner: verdicts" >/dev/null
 run bash "$B/close-change.sh" 003-owner "owner-shaped — R-01 — #4"
 assert_eq 0 "$STATUS" "owner approval of the reviewed head survives the closing commit: $OUTPUT"
@@ -468,8 +468,9 @@ assert_contains "$OUTPUT" "is already on origin/$DEFAULT" "the default-branch re
 
 it "closing the left record removes only its advisory, not other open leaves"
 git rm -q specs/changes/004-left.md
-printf -- '- 2026-11-09 004-left: left open — R-01 — #5; closed in #8\n' >> specs/log.md
-git add specs/log.md; git commit -qm "close 004-left in the next PR" >/dev/null
+mkdir -p specs/log
+printf -- '- 2026-11-09 004-left: left open — R-01 — #5; closed in #8\n' > specs/log/004-left.md
+git add specs/log; git commit -qm "close 004-left in the next PR" >/dev/null
 run bash "$B/doctor.sh"
 assert_not_contains "$OUTPUT" "004-left" "doctor reads the checkout, not only the default branch"
 assert_contains "$OUTPUT" 'Merged without closing: 007-child, 008-planned, 010-tzero, 011-child records' 'other open leaves remain'

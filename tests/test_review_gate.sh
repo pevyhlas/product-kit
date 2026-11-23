@@ -44,10 +44,7 @@ payload() { # PR [jq edit]
 publish() { local body; body="$(payload "$1" "${2:-.}")"; fx_review "$1" "$(printf '<!-- prdkit-review\n%s\n-->\n' "$body")" "${3:-}"; }
 online() { run bash "$CHECK" --json --pr "$PR" "$@" 001-reviewed; }
 
-it 'record PASS text supplies no independent verdict, even online'
-printf '**Review**: round 1 · start..%s · code · PASS · 0 critical, 0 high, 0 medium, 0 low · text-only\n' "$FP" >> specs/changes/001-reviewed.md
-git commit -qam 'untrusted verdict text'
-fx_pr 7 "$(git rev-parse HEAD)"
+it 'a current record requires an independent host receipt'
 online
 assert_eq 1 "$STATUS"
 assert_contains "$OUTPUT" 'needs a recorded independent review'
@@ -56,7 +53,7 @@ publish 7
 online --save-receipts .git/receipts
 assert_eq 0 "$STATUS" "$OUTPUT"
 assert_contains "$OUTPUT" '"authority":"host"'
-assert_contains "$OUTPUT" '"result":"pass"' 'only host authority reports a JSON pass'
+assert_contains "$OUTPUT" '"result":"pass"'
 assert_contains "$OUTPUT" '"receipt":"https://github.com/owner/repo/pull/7#pullrequestreview-1001"'
 assert_not_contains "$OUTPUT" report_verification
 
@@ -98,7 +95,7 @@ assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
 it 'offline gate modes use only standard tools; either missing online tool fails unavailable'
 TOOLS="$(mktemp -d)"; track_tmp "$TOOLS"
 sha_tool=sha256sum; command -v sha256sum >/dev/null 2>&1 || sha_tool=shasum
-for cmd in bash dirname basename git sed awk tr head tail grep cat mktemp rm mv mkdir wc sort "$sha_tool"; do
+for cmd in bash dirname basename git sed awk tr head tail grep cat mktemp rm mv mkdir wc sort od "$sha_tool"; do
     ln -s "$(command -v "$cmd")" "$TOOLS/$cmd"
 done
 : > "$GH_STUB_DIR/requests"
@@ -159,6 +156,8 @@ fx_pr 7 "$(git rev-parse HEAD)" '{"base":{"ref":"other"}}'
 online
 assert_eq 1 "$STATUS"
 assert_contains "$OUTPUT" 'the PR merges into other, not --base main'
+printf '**Step**: verified\n' >> specs/changes/001-reviewed.md
+git commit -qam 'record verification'
 fx_pr 7 "$(git rev-parse HEAD)"
 PR_HEAD="$(git rev-parse HEAD)"
 
@@ -199,126 +198,32 @@ assert_eq 0 "$STATUS" "$OUTPUT"
 assert_contains "$OUTPUT" '"head_is_pr_head":false'
 assert_contains "$OUTPUT" "\"pr_head\":\"$PR_HEAD\""
 
-it 'a legacy shared-log close preserves only its own new line as metadata'
+it 'a shared-log-only close requires a per-change entry at deletion'
 git checkout -qb shared-log-close "$PR_HEAD"
+git rm -q specs/changes/001-reviewed.md
 printf -- '- 2026-01-03 001-reviewed: closed\n' >> specs/log.md
-git commit -qam 'write the shared log while the record is still open'
-run bash "$CHECK" --json --pr "$PR" 001-reviewed
-assert_eq 1 "$STATUS" 'an open record cannot exempt even its own log line'
-assert_contains "$OUTPUT" 'PR head does not match the content'
-git rm -q specs/changes/001-reviewed.md; git commit -qm 'close the selected change'
-SHARED_CLOSE="$(git rev-parse HEAD)"
+git commit -qam 'close without a per-change entry'
 online
-assert_eq 0 "$STATUS" "a valid shared-log close keeps the old receipt: $OUTPUT"
-assert_eq "$FP" "$(printf '%s' "$OUTPUT" | jq -r .fingerprint)" 'the close alone leaves the fingerprint unchanged'
-git update-ref refs/remotes/origin/main "$PR_HEAD"
-online
-assert_eq 0 "$STATUS" 'a clean bridge close after the implementation merged needs no new receipt'
-assert_contains "$OUTPUT" '"record_only":true'
-git update-ref refs/remotes/origin/main "$BASE"
-sed 's/: closed$/: deferred/' specs/log.md > .git/revised-log
-cp .git/revised-log specs/log.md; git commit -qam 'revise the closing disposition'
-assert_changed_fingerprint() {
-    run review_fingerprint "$PROJ" 001-reviewed "$BASE" HEAD
-    assert_eq 0 "$STATUS" "$1: fingerprint computation succeeded"
-    if review_is_fp "$OUTPUT"; then _ok "$1: valid fingerprint"; else _no "$1: expected a fingerprint"; fi
-    assert_not_contains "$OUTPUT" "$FP" "$1"
-}
-assert_changed_fingerprint 'H2: a revised disposition is reviewed content'
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'current per-change entry format'
+
+it 'a current close can be compacted without changing its own fingerprint'
 git checkout -q "$PR_HEAD"
 git rm -q specs/changes/001-reviewed.md
-printf -- '- 2026-01-03 001-reviewed: closed\rannotation\n' >> specs/log.md
-git commit -qam 'close with a multiline description'
-assert_changed_fingerprint 'M1: embedded CR is not one-line closing metadata'
-git checkout -q "$PR_HEAD"
-git rm -q specs/changes/001-reviewed.md
-printf -- '- 2026-01-03 001-reviewed: closed\r\n' >> specs/log.md
-git commit -qam 'close with CRLF'
-assert_eq "$FP" "$(review_fingerprint "$PROJ" 001-reviewed "$BASE" HEAD)" 'a CRLF-terminated close is still one line'
-git checkout -q "$SHARED_CLOSE"
-printf -- '- 2026-01-03 001-reviewed: closed\n' > specs/log.md
-git commit -qam 'drop another change from the shared log'
+mkdir -p specs/log
+printf -- '- 2026-01-03 001-reviewed: closed\n' > specs/log/001-reviewed.md
+git add specs/log; git commit -qm close
+CLOSE_ENTRY="$(git rev-parse HEAD)"
+cat specs/log/001-reviewed.md >> specs/log.md
+git rm -q specs/log/001-reviewed.md; git commit -qam compact
 online
-assert_eq 1 "$STATUS" 'dropping another close breaks the unpushed close bridge'
-assert_contains "$OUTPUT" 'PR head does not match the content'
-assert_not_contains "$OUTPUT" "\"fingerprint\":\"$FP\"" 'the shared-log loss changes the fingerprint'
-fx_pr 7 "$(git rev-parse HEAD)"
-online
-assert_eq 1 "$STATUS" 'publishing the bad merge resolution does not restore receipt coverage'
-assert_contains "$OUTPUT" 'reviewed content differs at: specs/log.md'
-BAD_HEAD="$(git rev-parse HEAD)"
-git update-ref refs/remotes/origin/main "$PR_HEAD"
-online
-assert_eq 1 "$STATUS" 'a bridge after the implementation merged still needs review for the shared-log loss'
-assert_contains "$OUTPUT" '"record_only":false'
-git update-ref refs/remotes/origin/main "$BASE"
-
-it 'old receipts keep their posted fingerprints but do not grandfather shared-log edits'
-OLD_FP="$(review_legacy_log_fingerprint "$PROJ" 001-reviewed "$BASE" "$BAD_HEAD")"
-NEW_FP="$(review_fingerprint "$PROJ" 001-reviewed "$BASE" "$BAD_HEAD")"
-assert_eq "$FP" "$(review_legacy_log_fingerprint "$PROJ" 001-reviewed "$BASE" "$PR_HEAD")" 'unchanged log is compatible at the reviewed head'
-assert_not_contains "$OLD_FP" "$NEW_FP" 'legacy and corrected provenance differ at the edited head'
-cp "$GH_STUB_DIR/reviews/7.json" "$GH_STUB_DIR/reviews-original.json"
-printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
-publish 7 ".head=\"$BAD_HEAD\"|.to=\"$OLD_FP\""
-git checkout "$SHARED_CLOSE" -- specs/log.md; git commit -qm 'restore earlier log state'
-fx_pr 7 "$(git rev-parse HEAD)"
-online
-assert_eq 1 "$STATUS" 'H1: legacy-only provenance supplies no positive coverage'
-git checkout -q "$BAD_HEAD"; fx_pr 7 "$BAD_HEAD"
-publish 7 ".id=\"00000000000000000000000000000003\"|.head=\"$BAD_HEAD\"|.to=\"$OLD_FP\"|.verdict=\"FAIL\""
-online
-assert_eq 1 "$STATUS" 'a pre-upgrade FAIL still blocks'
-assert_contains "$OUTPUT" '"invalid_receipts":0' 'old matching provenance is recognized'
-assert_contains "$OUTPUT" 'blocking verdict stands'
-publish 7 ".id=\"00000000000000000000000000000005\"|.head=\"$BAD_HEAD\"|.to=\"$OLD_FP\""
-online
-assert_contains "$OUTPUT" 'blocking verdict stands' 'H1: a legacy-only PASS does not clear a blocker'
-publish 7 ".id=\"00000000000000000000000000000004\"|.head=\"$BAD_HEAD\"|.to=\"$NEW_FP\""
-online
-assert_eq 0 "$STATUS" "a new full PASS reviews the log and clears the old blocker: $OUTPUT"
-mv "$GH_STUB_DIR/reviews-original.json" "$GH_STUB_DIR/reviews/7.json"
-
-it 'a fresh checkout without the superseded reviewed head cannot use its legacy token'
-fresh="$(mktemp -d)"; track_tmp "$fresh"; git -C "$fresh" init -q
-git -C "$fresh" fetch -q --no-tags "$PROJ" "$PR_HEAD"
-git -C "$fresh" checkout -q --detach FETCH_HEAD
-git -C "$fresh" update-ref refs/remotes/origin/main "$BASE"
-git -C "$fresh" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
-run git -C "$fresh" cat-file -e "$BAD_HEAD^{commit}"
-if [ "$STATUS" != 0 ]; then _ok 'superseded object is absent'; else _no 'superseded object unexpectedly present'; fi
-cp "$GH_STUB_DIR/reviews/7.json" "$GH_STUB_DIR/saved-reviews.json"
-printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
-fx_pr 7 "$PR_HEAD"
-publish 7 ".head=\"$BAD_HEAD\"|.to=\"$OLD_FP\""
-online --repo "$fresh"
-assert_eq 1 "$STATUS" 'unverified receipt cannot cover the current head in a fresh checkout'
-publish 7 '.id="00000000000000000000000000000006"'
-online --repo "$fresh"
-assert_eq 0 "$STATUS" 'corrected full PASS restores coverage without the superseded object'
-
-it 'every reviewer needs usable latest provenance'
-git checkout -q "$PR_HEAD"
-for prior in absent present; do
-    printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
-    publish 7 '.reviewer="second"'
-    if [ "$prior" = present ]; then publish 7 '.id="00000000000000000000000000000006"'; fi
-    publish 7 ".id=\"00000000000000000000000000000007\"|.head=\"$BAD_HEAD\"|.to=\"$OLD_FP\""
-    online --diagnostics
-    assert_eq 1 "$STATUS" "another reviewer cannot cover a legacy-only latest PASS (earlier PASS $prior)"
-    assert_eq false "$(printf '%s' "$OUTPUT" | jq -r '.diagnostics.latest[]|select(.reviewer=="code")|.end_covered')" 'latest unusable review stays visible'
-    assert_contains "$OUTPUT" 'corrected full PASS'
-done
-publish 7 ".id=\"00000000000000000000000000000008\"|.since=\"$BAD_HEAD\"|.from=\"$NEW_FP\""
-online
-assert_eq 1 "$STATUS" 'a corrected narrow PASS cannot repair an unusable latest range'
-publish 7 '.id="00000000000000000000000000000009"'
-online
-assert_eq 0 "$STATUS" 'both reviewers now have usable latest verdicts'
-mv "$GH_STUB_DIR/saved-reviews.json" "$GH_STUB_DIR/reviews/7.json"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq "$FP" "$(jq -r .fingerprint <<< "$OUTPUT")" 'the compacted close retains the reviewed fingerprint'
 
 it 'compaction is not closing metadata'
-git checkout -q "$SHARED_CLOSE"
+git checkout -q "$CLOSE_ENTRY"
+cat specs/log/001-reviewed.md >> specs/log.md
+git rm -q specs/log/001-reviewed.md
 printf -- '- 2026-01-04 compaction: retain current entries\n' >> specs/log.md
 git commit -qam 'compact the shared log'
 fx_pr 7 "$PR_HEAD"
@@ -356,21 +261,20 @@ run bash "$CHECK" --json --pr "$PR" 002-docs
 assert_eq 1 "$STATUS" 'T0 FAIL blocks online'
 assert_contains "$OUTPUT" 'blocking verdict stands'
 
-it 'T0 reports the path and blocker checks, not coverage, with only a legacy PASS'
-printf -- '- 2026-01-03 003-other: carried in an old docs revision\n' >> specs/log.md
-git commit -qam 'old docs revision with a shared log edit'
-DOCS_OLD_HEAD="$(git rev-parse HEAD)"
-DOCS_OLD_FP="$(review_legacy_log_fingerprint "$PROJ" 002-docs "$BASE" "$DOCS_OLD_HEAD")"
-git revert --no-edit "$DOCS_OLD_HEAD" >/dev/null
+it 'an unsupported State verdict blocks even T0 with no host verdicts'
+git checkout -qb unsupported-state
+printf '**Review**: round 1 · historical range · code · PASS\n' >> specs/changes/002-docs.md
+git commit -qam 'unsupported record format'
 use_gh_stub; fx_pr 7 "$(git rev-parse HEAD)"
-publish 7 ".change=\"002-docs\"|.head=\"$DOCS_OLD_HEAD\"|.to=\"$DOCS_OLD_FP\""
-run bash "$CHECK" --json --diagnostics --pr "$PR" 002-docs
-assert_eq 0 "$STATUS" "$OUTPUT"
-assert_eq true "$(jq -r '.diagnostics | .edges == [] and (.latest[0] | .provenance == "legacy-only" and .end_covered == false)' <<< "$OUTPUT")" 'the legacy PASS supplies no coverage'
-run bash "$CHECK" --pr "$PR" 002-docs
-assert_eq 0 "$STATUS" "$OUTPUT"
-assert_contains "$OUTPUT" 'tier T0 needs no independent review. All changes outside the change record and validated closing metadata passed the trusted T0 path check (review-t0-paths).' 'reports the docs-only exemption and the scope of the path check'
-assert_contains "$OUTPUT" '1 recorded verdict(s), none blocking. Review coverage was not required.' 'does not claim the legacy PASS covers the head'
+run bash "$CHECK" --json --save-receipts .git/t0-receipts --pr "$PR" 002-docs
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'current reviews are prdkit.review.v3 host receipts'
+run bash "$CHECK" --json --receipts .git/t0-receipts 002-docs
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'current reviews are prdkit.review.v3 host receipts'
+run bash "$CHECK" --json 002-docs
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'current reviews are prdkit.review.v3 host receipts'
 
 it "a renamed carrier cannot drop another identity's FAIL, and foreign PASS never covers"
 git checkout -qb 003-original "$BASE"

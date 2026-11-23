@@ -28,8 +28,8 @@ inbox template for a complete example):
 
 - **ID**: `IN-` followed by 12 lowercase hexadecimal characters. Generate a fresh token, for
   example with `od -An -N6 -tx1 /dev/urandom | tr -d ' \n'`; check for a collision before use.
-  Never renumber, reuse or derive an ID from the title or list position. Preserve existing IDs
-  when migrating; resolve duplicate identities before accepting an ID-based answer.
+  Never renumber, reuse or derive an ID from the title or list position. Resolve duplicate
+  identities before accepting an ID-based answer.
 - **Revision**: a positive integer, initially 1. Increment when the question, option meaning,
   option order, relevant context or action scope changes. Option order matters for numeric
   answers. Moving the whole item, tags and cosmetic edits do not change its revision or ID.
@@ -61,10 +61,8 @@ for imported answers. Preserve known provenance and name any uncertainty.
    newer local answers before editing in the appropriate workspace. Cross-project review uses
    only the repositories requested, with their own policies, revisions and qualified IDs; no
    home-directory scan or implicit write to every repository.
-2. **Reconcile before asking.** Inspect pending answers, owner direction and legacy `folded`,
-   `declined`, `deferred`, or answered-in-body entries. Read destinations, not just dispositions.
-   Apply spec.md, Resolve owner answers. Migrate surviving legacy items incrementally without
-   overwriting owner words or treating old option numbers as current keys. Keep work that still
+2. **Reconcile before asking.** Inspect pending answers, owner direction and resolved entries.
+   Read destinations, not just dispositions. Apply spec.md, Resolve owner answers. Keep work that still
    needs processing visible separately; if incorporation needs clarification, ask only that gap.
    A topic/ID filter limits the review and edits to matching items and their linked destinations;
    report other known pending processing without silently widening the scope.

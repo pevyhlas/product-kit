@@ -136,18 +136,6 @@ online; assert_eq 1 "$STATUS" 'a State line supplies no owner verdict'
 fresh; approve; AUTHOR_OVERRIDE='{"user":{"id":1003},"author":{"databaseId":1003}}'
 online; assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'owner authored this PR'
 
-it 'owner and unnamed legacy blockers require a valid approval whose history includes them'
-for reviewer in owner ''; do
-    fresh; approve
-    printf '**Review**: round 1 · ignored · %s · FAIL\n' "$reviewer" >> specs/changes/001-reviewed.md
-    git commit -qam blocker; B="$(git rev-parse HEAD)"
-    # Same L0/L1, but the old approval cannot have seen the new blocker.
-    fx_activity "$A" "$B" '{"timestamp":"2026-01-03T00:00:00Z"}'
-    online; assert_eq 1 "$STATUS"; assert_eq false "$(printf '%s' "$OUTPUT" | jq '.legacy_blockers[0].cleared')"
-    approve "$B" '{"submittedAt":"2026-01-04T00:00:00Z"}'
-    online; assert_eq 0 "$STATUS" "$OUTPUT"; assert_eq true "$(printf '%s' "$OUTPUT" | jq '.legacy_blockers[0].cleared')"
-done
-
 it 'approve-request-approve and dismissed approval variants follow the latest decisive state'
 fresh; approve
 fx_owner_review 7 CHANGES_REQUESTED "$A" '{"submittedAt":"2026-01-03T00:00:00Z"}'
@@ -226,7 +214,7 @@ fresh; approve; online --save-receipts .git/owner-offline
 assert_eq 0 "$STATUS" "$OUTPUT"
 TOOLS="$(mktemp -d)"; track_tmp "$TOOLS"
 sha_tool=sha256sum; command -v sha256sum >/dev/null 2>&1 || sha_tool=shasum
-for cmd in bash dirname basename git sed awk tr head tail grep cat mktemp rm mv mkdir wc sort "$sha_tool"; do
+for cmd in bash dirname basename git sed awk tr head tail grep cat mktemp rm mv mkdir wc sort od "$sha_tool"; do
     ln -s "$(command -v "$cmd")" "$TOOLS/$cmd"
 done
 : > "$GH_STUB_DIR/requests"
@@ -245,54 +233,6 @@ run env PATH="$TOOLS" bash "$CHECK" --json --receipts .git/owner-bad-time 001-re
 assert_eq 1 "$STATUS"
 assert_contains "$OUTPUT" 'malformed receipt snapshot'
 assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
-
-it 'inherited owner and unnamed blockers clear on T0, record-only closing and a new carrier'
-for reviewer in owner ''; do
-    for mode in docs closing carrier; do
-        fresh; git reset -q --hard "$BASE"
-        mkdir -p specs/changes docs
-        printf '# Record\n**Tier**: T0\n## State\n**Review**: round 1 · ignored · %s · FAIL\n**Review**: round 2 · ignored · owner · PASS\n' "$reviewer" > specs/changes/001-reviewed.md
-        if [ "$mode" = docs ]; then
-            printf documentation > docs/guide.md; git add -A; git commit -qm docs
-            CHANGE=001-reviewed
-        else
-            git add specs/changes; git commit -qm inherited
-            git update-ref refs/remotes/origin/main HEAD
-            git rm -q specs/changes/001-reviewed.md
-            mkdir -p specs/log; printf -- '- 2026-01-01 001-reviewed: closed\n' > specs/log/001-reviewed.md
-            CHANGE=001-reviewed
-            if [ "$mode" = carrier ]; then
-                CHANGE=002-carrier
-                mkdir -p specs/changes
-                printf '# Carrier\n**Tier**: T1\n## State\n' > specs/changes/002-carrier.md
-                printf implementation > source.txt
-            fi
-            git add -A; git commit -qm "$mode"
-        fi
-        AT="$(git rev-parse HEAD)"; use_gh_stub; fx_pr 7 "$AT"
-        if [ "$mode" = carrier ]; then
-            # This fixture's new host allocates review IDs from the start.
-            rm -rf "$PROJ/.git/prdkit/receipts"
-            run bash .prdkit/scripts/bash/publish-review.sh "$CHANGE" --pr "$PR" --reviewer code --verdict PASS --counts 0,0,0,0 --report https://example.invalid/report --head HEAD
-            assert_eq 0 "$STATUS" "$OUTPUT"
-        fi
-        run bash "$CHECK" --json --pr "$PR" "$CHANGE"
-        assert_eq 1 "$STATUS" "$mode waits for native approval"
-        assert_eq false "$(printf '%s' "$OUTPUT" | jq '.legacy_blockers[0].cleared')"
-        fx_activity 0000000000000000000000000000000000000000 "$AT" '{"activity_type":"branch_creation","timestamp":"2026-01-01T00:00:00Z"}'
-        fx_owner_review 7 DISMISSED "$AT"
-        run bash "$CHECK" --json --pr "$PR" "$CHANGE"
-        assert_eq 1 "$STATUS" 'dismissed approval cannot clear an inherited owner blocker'
-        fx_owner_review 7 APPROVED "$AT" '{"submittedAt":"2026-01-03T00:00:00Z"}'
-        run bash "$CHECK" --json --pr "$PR" --save-receipts .git/owner-clearance "$CHANGE"
-        assert_eq 0 "$STATUS" "$mode: $OUTPUT"
-        assert_eq true "$(printf '%s' "$OUTPUT" | jq '.legacy_blockers[0].cleared')"
-        : > "$GH_STUB_DIR/requests"
-        run env PATH="$TOOLS" bash "$CHECK" --json --receipts .git/owner-clearance "$CHANGE"
-        assert_eq 3 "$STATUS" "$mode snapshot: $OUTPUT"
-        assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
-    done
-done
 
 # These fixtures isolate PR-wide owner barriers from tier, scope and receipt errors.
 # No real host or approval is used; every review below belongs to the local stub.
@@ -349,7 +289,7 @@ barrier_assert() {
     assert_eq '["owner"]' "$(printf '%s' "$OUTPUT" | jq -c '. as $g |
         [range(0; $g.problems|length) as $i |
          select($g.problems[$i]==$g.owner.barriers[0].reason) | $g.diagnostics.problem_classes[$i]]')" \
-        'early PR-wide barriers are owner diagnostics, not legacy or structure problems'
+        'early PR-wide barriers are owner diagnostics, not structure problems'
 }
 
 it 'owner negatives block every tier, record-only closure, renamed and missing carriers'

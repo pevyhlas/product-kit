@@ -19,7 +19,7 @@ receipt_policy() { # project; call before the fixture's baseline commit
 EOF
 }
 
-receipt_host() { # root change head [base]; intentionally test-only legacy recipe decoding
+receipt_host() { # root change head [base]; intentionally test-only recipe decoding
     local project="$1" change="$2" head="$3" base="${4:-origin/HEAD}" at record text cache key body
     local line reviewer round from to verdict c h m l link from_token to_token since rhead base_at canonical serial=0
     local owner_commit="" candidate owner_key slice publisher_output publish_args policy_ref fixture_registry from_fp published publisher
@@ -71,7 +71,6 @@ receipt_host() { # root change head [base]; intentionally test-only legacy recip
                 if [ "$from_token" = "$REVIEW_FP_EMPTY" ]; then from_token=start; since=""; fi
             elif [ "$from" != start ]; then since=0000000000000000000000000000000000000000; fi
             # A recipe whose full range became empty supplies no coverage receipt.
-            # Real empty-content legacy clearance uses direct fixtures in its own suite.
             if [ "$from_token" = start ] && [ "$to_token" = "$REVIEW_FP_EMPTY" ] && [ "$verdict" = PASS ]; then continue; fi
             body="$(jq -cn --arg id "${key:0:32}" --arg change "$change" --arg reviewer "$reviewer" \
                 --arg from "$from_token" --arg to "$to_token" --arg head "$rhead" --arg since "$since" \
@@ -119,8 +118,8 @@ receipt_host() { # root change head [base]; intentionally test-only legacy recip
         function trim(s) { gsub(/`/, "", s); gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
         function count(s,k, v) { if (!match(s,"[0-9]+ " k)) return "?"; v=substr(s,RSTART,RLENGTH); sub(/ .*/,"",v); return v }
         /^## / { section=$0; next }
-        section=="## State" && /^\*\*(Review|Receipt fixture)\*\*:/ {
-            original=$0; sub(/^\*\*(Review|Receipt fixture)\*\*:[[:space:]]*/,""); n=split($0,f," · ")
+        section=="## State" && /^\*\*Receipt fixture\*\*:/ {
+            original=$0; sub(/^\*\*Receipt fixture\*\*:[[:space:]]*/,""); n=split($0,f," · ")
             range=trim(f[2]); cut=index(range,"..."); width=3; if (!cut) { cut=index(range,".."); width=2 }
             print original "\037" trim(f[3]) "\037" trim(f[1]) "\037" (cut?substr(range,1,cut-1):"") "\037" (cut?substr(range,cut+width):"") "\037" trim(f[4]) "\037" count(f[5],"critical") "\037" count(f[5],"high") "\037" count(f[5],"medium") "\037" count(f[5],"low") "\037" trim(f[n])
         }')
