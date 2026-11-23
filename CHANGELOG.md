@@ -25,6 +25,9 @@ change by change.
   balances suites by measured duration and logs per-suite seconds. Required check names and
   release gating are unchanged; all expected jobs must succeed. New PR commits cancel
   superseded runs for that PR without cancelling main or manual runs.
+- `new-change.sh` emits only a one-line outcome checkpoint pointer by default. Use `--programme`
+  to include the commented scaffold for a programme or continuing queue, even if the customized
+  change template omits it. Existing records are untouched.
 
 ### Fixed
 

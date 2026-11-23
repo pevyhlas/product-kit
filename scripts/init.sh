@@ -334,7 +334,7 @@ RETIRED_MEMORY="task-ledger.md"
 list_kit_files() {
     local src
     for src in "$PK_ROOT"/commands/prdkit*.md "$PK_ROOT"/workflows/*.md \
-        "$PK_ROOT"/scripts/*.sh "$PK_ROOT"/scripts/agents-section.md "$PK_ROOT"/templates/*.md; do
+        "$PK_ROOT"/scripts/*.sh "$PK_ROOT"/scripts/{agents-section,outcome-checkpoint}.md "$PK_ROOT"/templates/*.md; do
         [ -e "$src" ] || continue
         install_file_targets "${src#"$PK_ROOT"/}" "$HARNESSES" "$OPTIONS" "$src"$'\t' || return 1
     done
@@ -398,7 +398,7 @@ is_kit_command_link() {
 # since `*` also matches `/`. A directory the installer writes into must be a real directory
 # inside TARGET, and a kit-owned file is replaced rather than written through a symlink.
 NAME_RE='[A-Za-z0-9_][A-Za-z0-9_.-]*'
-KIT_FILE_RE="^\\.prdkit/(scripts/bash/($NAME_RE\\.sh|agents-section\\.md)|workflows/$NAME_RE\\.md|templates/$NAME_RE\\.md)\$"
+KIT_FILE_RE="^\\.prdkit/(scripts/bash/($NAME_RE\\.sh|agents-section\\.md|outcome-checkpoint\\.md)|workflows/$NAME_RE\\.md|templates/$NAME_RE\\.md)\$"
 INSTALLED_RE="^(\\.(claude|opencode)/commands/$NAME_RE\\.md|\\.prdkit/memory/$NAME_RE\\.md)\$"
 MEMORY_FILE_RE="^\\.prdkit/memory/$NAME_RE\\.md\$"
 

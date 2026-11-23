@@ -107,6 +107,205 @@ assert_eq "absent" "$([ -d "$WT/.worktrees" ] && echo present || echo absent)" "
 assert_file "$WT/specs/changes/060-from-worktree.md" "record created in the current worktree"
 cd "$PROJ" || exit 1
 
+it "ordinary changes get a one-line pointer, not the programme checkpoint"
+POINTER='<!-- Outcome checkpoint format: .prdkit/scripts/bash/outcome-checkpoint.md -->'
+assert_eq 1 "$(grep -cxF "$POINTER" "$REC")" "one pointer to the canonical scaffold"
+assert_not_contains "$(cat "$REC")" '### Outcome checkpoint' "no scaffold heading"
+assert_not_contains "$(cat "$REC")" '**Selection**:' "no trailing scaffold fields"
+assert_contains "$(cat "$REC")" '<!-- Verdicts live' "the next template comment is preserved"
+
+it "doctor and status leave a pointer-only record alone"
+run bash -c 'cd "$1" && bash .prdkit/scripts/bash/doctor.sh --json' _ "$WT"
+assert_eq 0 "$STATUS" "doctor passes in the record's worktree: $OUTPUT"
+# The default Bounds example can have a trace advisory; it is unrelated to the pointer.
+assert_eq '[]' "$(printf '%s\n' "$OUTPUT" | jq -c '[.advisories[] | select(test("checkpoint"; "i"))]')" "no checkpoint advisory"
+run bash .prdkit/scripts/bash/status.sh --json
+assert_eq 0 "$STATUS" "status succeeds"
+assert_eq '[]' "$(printf '%s\n' "$OUTPUT" | jq -c '.outcome_progress')" "no outcome row"
+
+it "retrying the same ordinary change leaves its linked-worktree record alone"
+cp "$REC" .git/ordinary-before
+run bash "$SCRIPT" --no-branch --number 1 --short-name user-auth "Different intent"
+assert_eq 1 "$STATUS" "the existing identity is refused"
+assert_contains "$OUTPUT" "never overwritten" "the refusal explains why"
+run cmp -s .git/ordinary-before "$REC"
+assert_eq 0 "$STATUS" "ordinary record is byte-for-byte unchanged"
+
+it "--programme emits the full commented scaffold with unknown history"
+PROGRAMME_REC=specs/changes/061-programme.md
+run bash "$SCRIPT" --json --programme --no-branch --number 61 --short-name programme "Coordinate related changes"
+assert_eq 0 "$STATUS" "programme opens: $OUTPUT"
+assert_file "$PROGRAMME_REC" "programme record exists"
+if [ -f "$PROGRAMME_REC" ]; then
+    assert_not_contains "$(cat "$PROGRAMME_REC")" "$POINTER" "the scaffold replaces the pointer"
+    SCAFFOLD="$(sed -n '/^<!-- A programme or continuing follow-up queue/,/^-->$/p' "$PROGRAMME_REC")"
+    assert_eq 8 "$(printf '%s\n' "$SCAFFOLD" | grep -c '^\*\*')" "all checkpoint fields are in the comment"
+    assert_contains "$SCAFFOLD" '### Outcome checkpoint' "scaffold heading"
+    assert_contains "$SCAFFOLD" '**Selection**:' "scaffold includes its last field"
+    assert_contains "$SCAFFOLD" '**Progress**: unknown' "no unevidenced advance is assumed"
+    assert_contains "$SCAFFOLD" '**No-progress changes**: unknown' "unknown history is not a zero count"
+    assert_contains "$(cat "$PROGRAMME_REC")" '<!-- Verdicts live' "the next template comment is preserved"
+fi
+
+it "retrying creation cannot rewrite a filled checkpoint"
+mkdir -p specs/changes
+cat > "$PROGRAMME_REC" <<'MD'
+# Change: Coordinate related changes
+
+## State
+
+### Outcome checkpoint
+**Outcome**: A verified path
+**Milestone**: An integrated interface
+**Critical path**: Review the interface contract
+**Allocation**: One contract lane
+**Progress**: unknown
+**No-progress changes**: unknown
+**Progress limit**: 4
+MD
+# Deliberately omit the final newline, so a render pass cannot masquerade as a no-op.
+printf '**Selection**: Verify the interface contract  ' >> "$PROGRAMME_REC"
+cp "$PROGRAMME_REC" .git/programme-before
+for mode in '' --programme; do
+    run bash "$SCRIPT" ${mode:+"$mode"} --no-branch --number 61 --short-name programme "Different intent"
+    assert_eq 1 "$STATUS" "retry ${mode:-without opt-in} refuses the existing record"
+    assert_contains "$OUTPUT" 'never overwritten' "refusal happens at the record"
+    run cmp -s .git/programme-before "$PROGRAMME_REC"
+    assert_eq 0 "$STATUS" "filled record is byte-for-byte unchanged"
+done
+# The verifier requires LF-terminated Markdown. The retry checks above use a deliberately partial line.
+printf '\n' >> "$PROGRAMME_REC"
+run bash .prdkit/scripts/bash/status.sh --json
+assert_eq 0 "$STATUS" "status can read the resumed programme"
+assert_eq '["unknown",null]' "$(printf '%s\n' "$OUTPUT" | jq -c '.outcome_progress[] | select(.id == "061-programme") | [.count_signal, .no_progress_changes]')" "resume preserves unknown history"
+
+it "upgrade supplies a programme scaffold when a customized change template has no block"
+CUSTOM="$(make_project)"; track_tmp "$CUSTOM"
+cd "$CUSTOM" || exit 1
+SOURCE_TEMPLATE=.product-kit/templates/change-template.md
+TEMPLATE=.prdkit/templates/change-template.md
+SOURCE_SNIPPET=.product-kit/scripts/outcome-checkpoint.md
+SNIPPET=.prdkit/scripts/bash/outcome-checkpoint.md
+if [ -f "$SOURCE_SNIPPET" ]; then mv "$SOURCE_SNIPPET" .git/kit-scaffold; fi
+cat > "$SOURCE_TEMPLATE" <<'MD'
+# Change: <short name>
+**Opened**: <date>
+## State
+**Next**: Check the result
+<!-- A programme or continuing follow-up queue (workflows/planning.md, Protect the outcome):
+### Outcome checkpoint
+-->
+## Notes
+Keep this section.
+MD
+run bash .product-kit/scripts/init.sh
+assert_eq 0 "$STATUS" "pre-upgrade install succeeds: $OUTPUT"
+sed '/^<!-- A programme or continuing follow-up queue/,/^-->$/d' "$TEMPLATE" > .git/custom-template
+cp .git/custom-template "$TEMPLATE"
+cp "$PK_ROOT/templates/change-template.md" "$SOURCE_TEMPLATE"
+if [ -f .git/kit-scaffold ]; then mv .git/kit-scaffold "$SOURCE_SNIPPET"; fi
+snapshot_upgrade_fixture "$CUSTOM" || exit 1
+run bash .product-kit/scripts/init.sh --upgrade
+assert_eq 0 "$STATUS" "upgrade succeeds: $OUTPUT"
+run cmp -s .git/custom-template "$TEMPLATE"
+assert_eq 0 "$STATUS" "upgrade keeps the consumer template byte-for-byte"
+assert_file "$SNIPPET" "upgrade installs the canonical snippet"
+if [ -f "$SNIPPET" ]; then
+    HASH="$(source .prdkit/scripts/bash/install-lib.sh && install_hash_stream < "$SNIPPET")"
+    assert_contains "$(cat .prdkit/.manifest)" "$HASH  $SNIPPET" "manifest records the snippet's content"
+    printf '\nLocal edit.\n' >> "$SNIPPET"
+    run bash .prdkit/scripts/bash/doctor.sh --json
+    assert_contains "$OUTPUT" "Kit-owned content drift: $SNIPPET" "doctor detects snippet drift"
+    cp "$SOURCE_SNIPPET" "$SNIPPET"
+    printf '\n<!-- Revised kit snippet -->\n' >> "$SOURCE_SNIPPET"
+    snapshot_upgrade_fixture "$CUSTOM" || exit 1
+    run bash .product-kit/scripts/init.sh --upgrade
+    assert_eq 0 "$STATUS" "another upgrade refreshes kit-owned content: $OUTPUT"
+    run cmp -s "$SOURCE_SNIPPET" "$SNIPPET"
+    assert_eq 0 "$STATUS" "upgrade installs the revised canonical snippet"
+fi
+run env PRDKIT_TODAY=2026-10-17 bash .prdkit/scripts/bash/new-change.sh --programme --no-branch --number 1 --short-name custom "Custom programme"
+assert_eq 0 "$STATUS" "programme opens with the consumer template: $OUTPUT"
+CUSTOM_RECORD=specs/changes/001-custom.md
+assert_contains "$(cat "$CUSTOM_RECORD")" '**No-progress changes**: unknown' "missing history is still initialized as unknown"
+if [ -f "$SNIPPET" ]; then
+    {
+        printf '# Change: Custom programme\n**Opened**: 2026-10-17\n## State\n**Next**: Check the result\n'
+        cat "$SNIPPET"
+        printf '## Notes\nKeep this section.\n'
+    } > .git/expected
+    run cmp -s .git/expected "$CUSTOM_RECORD"
+    assert_eq 0 "$STATUS" "the canonical snippet is inserted in State, before the next section"
+fi
+
+it "a template missing only its final LF produces a record both verifiers can read"
+TEXT=$'# Change: Check record text\n\n**Opened**: 2026-10-17\n\n## State\n\n**Step**: intent\n**Waiting on**: nothing\n**Next**: Check the result  '
+printf '%s' "$TEXT" > "$TEMPLATE"
+printf '%s\n' "$TEXT" > .git/expected
+run bash .prdkit/scripts/bash/new-change.sh --no-branch --number 5 --short-name final-lf "Check record text"
+assert_eq 0 "$STATUS" "creation succeeds: $OUTPUT"
+run cmp -s .git/expected specs/changes/005-final-lf.md
+assert_eq 0 "$STATUS" "creation adds only the final LF"
+run bash .prdkit/scripts/bash/status.sh --json
+assert_eq 0 "$STATUS" "status reads the created record: $OUTPUT"
+run jq -e '.changes | any(.id == "005-final-lf")' <<< "$OUTPUT"
+assert_eq 0 "$STATUS" "status lists the created record"
+run bash .prdkit/scripts/bash/doctor.sh --json
+assert_eq 0 "$STATUS" "doctor reads the created record: $OUTPUT"
+run jq -e '.result == "pass"' <<< "$OUTPUT"
+assert_eq 0 "$STATUS" "doctor emits a passing JSON report"
+
+it "stripping the current and v1.3.2 checkpoint comments keeps the closing-line suffix and remaining content"
+NUM_SUFFIX=2
+for opener in \
+    '<!-- A programme or continuing follow-up queue (workflows/planning.md, Protect the outcome):' \
+    '<!-- For a programme/continuing follow-up queue, fill the outcome checkpoint here (change.md).'; do
+    printf '## State\r\n%s\r\n### Outcome checkpoint\r\n-->  <p>Keep this instruction.</p> \t\r\n\r\n## Notes\r\nLast line without a newline  ' "$opener" > "$TEMPLATE"
+    printf '## State\n%s\n  <p>Keep this instruction.</p> \t\n\n## Notes\nLast line without a newline  \n' "$POINTER" > .git/expected
+    run bash .prdkit/scripts/bash/new-change.sh --no-branch --number "$NUM_SUFFIX" --short-name suffix "Check closing text"
+    assert_eq 0 "$STATUS" "ordinary creation succeeds for $opener"
+    SUFFIX_RECORD="specs/changes/00$NUM_SUFFIX-suffix.md"
+    assert_contains "$(cat "$SUFFIX_RECORD")" '<p>Keep this instruction.</p>' "closing-line text is not discarded"
+    assert_not_contains "$(cat "$SUFFIX_RECORD")" '### Outcome checkpoint' "recognized scaffold is removed"
+    run cmp -s .git/expected "$SUFFIX_RECORD"
+    assert_eq 0 "$STATUS" "the remaining content is byte-for-byte unchanged apart from LF normalization"
+    NUM_SUFFIX=$((NUM_SUFFIX + 1))
+done
+
+it "--programme keeps a checkpoint already present in a custom change template"
+awk '{ sub(/\r$/, ""); print }' "$TEMPLATE" > .git/legacy-template
+cp .git/legacy-template "$TEMPLATE"
+run bash .prdkit/scripts/bash/new-change.sh --programme --no-branch --number 4 --short-name existing "Keep the existing scaffold"
+assert_eq 0 "$STATUS" "the custom template already has a checkpoint"
+run cmp -s "$TEMPLATE" specs/changes/004-existing.md
+assert_eq 0 "$STATUS" "no second scaffold or changes to the custom checkpoint"
+
+it "--programme ignores example headings and inserts before the next real section"
+N=6
+for heading in '### Outcome checkpoint' '## Example output' '### Outcome checkpoint'; do
+    case "$N" in
+        6|7) START='```markdown'; END='```' ;;
+        8) START='<!-- Example output'; END='-->' ;;
+    esac
+    {
+        sed '/^## Notes/,$d' .git/custom-template
+        printf '\n%s\n%s\n%s\n\n' "$START" "$heading" "$END"
+    } > .git/state
+    printf '## Notes\nKeep this section.\n' > .git/notes
+    cat .git/state .git/notes > "$TEMPLATE"
+    {
+        printf '# Change: Example headings\n**Opened**: 2026-10-17\n'
+        tail -n +3 .git/state
+        cat "$SNIPPET" .git/notes
+    } > .git/expected
+    run env PRDKIT_TODAY=2026-10-17 bash .prdkit/scripts/bash/new-change.sh --programme --no-branch \
+        --number "$N" --short-name example "Example headings"
+    assert_eq 0 "$STATUS" "creation succeeds for $START / $heading"
+    run cmp -s .git/expected "specs/changes/00$N-example.md"
+    assert_eq 0 "$STATUS" "the scaffold is in State outside $START / $heading"
+    N=$((N + 1))
+done
+
 # --- Numbering across every claimed identity -----------------------------------------------
 PROJ2="$(make_inited_project)"; track_tmp "$PROJ2"
 PROJ2="$(cd "$PROJ2" && pwd -P)"
