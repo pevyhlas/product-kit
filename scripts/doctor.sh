@@ -182,12 +182,22 @@ items="$(verify_lines spec_items "$root")"
 rows="$(printf '%s\n' "$items" | awk -F "$SEP" 'NF { if ($1 in at) print "Duplicate ID " $1 ": defined at " at[$1] " and " $7; else at[$1] = $7 }')"
 while IFS= read -r problem; do [ -z "$problem" ] || findings+=("$problem"); done <<< "$rows"
 parts="$(verify_lines spec_part_headings "$root")"
-while IFS="$SEP" read -r file part; do
+part_graph="$(verify_lines spec_part_graph "$items" "$parts")"
+known_parts=" "; part_parents=" "
+while IFS="$SEP" read -r kind name target; do
+    case "$kind" in
+        part) known_parts="$known_parts$name " ;;
+        edge) part_parents="$part_parents$target " ;;
+        error) findings+=("$name") ;;
+    esac
+done <<< "$part_graph"
+while IFS="$SEP" read -r file part _; do
     [ -n "$file" ] || continue
     if [ -z "$part" ]; then advisories+=("$file: no '# P<n> name' heading, so its behaviors and invariants cannot be checked against their part"); continue; fi
     rows="$(printf '%s\n' "$items" | awk -F "$SEP" -v file="$file" -v part="$part" '
-            index($7, file ":") == 1 && $1 ~ /^P[0-9]+\./ && substr($1, 1, index($1, ".") - 1) != part {
-                print $1 " is defined in " $7 ", the part file of " part }')"
+            index($7, file ":") == 1 && $1 ~ /^P.*\.[BI]-/ {
+                owner = $1; sub(/\.[BI]-.*/, "", owner)
+                if (owner != part) print $1 " is defined in " $7 ", the part file of " part }')"
     while IFS= read -r problem; do [ -z "$problem" ] || findings+=("$problem"); done <<< "$rows"
 done <<< "$parts"
 listed="$(verify_lines spec_files "$root")"
@@ -196,11 +206,11 @@ rows="$(
         [ -n "$file" ] || continue
         awk -v file="$file" "$SPEC_SKIP_AWK"'{ if (spec_skip($0)) next }
             /^[[:space:]]*[-*][[:space:]]+\*\*J-[0-9][[:space:]*]/ { next }
-            /^[[:space:]]*[-*][[:space:]]+\*\*(P[0-9]+\.)?[JRQCDNBI]-/ && !/^[[:space:]]*[-*][[:space:]]+\*\*(P[0-9]+\.[BI]|[JRQCDN])-[0-9][0-9]+[[:space:]*]/ { print file ":" NR }
+            /^[[:space:]]*[-*][[:space:]]+\*\*(P[0-9]+(\.[0-9]+)*\.)?[JRQCDNBI]-/ && !/^[[:space:]]*[-*][[:space:]]+\*\*(P[0-9]+(\.[0-9]+)?\.[BI]|[JRQCDN])-[0-9][0-9]+[[:space:]*]/ { print file ":" NR }
             /^#[[:space:]]+J-/ && !/^#[[:space:]]+J-[0-9][0-9]+[[:space:]]/ { print file ":" NR }
             /^##?#?[[:space:]]+D-/ && !/^##?#?[[:space:]]+D-[0-9][0-9]+[[:space:]]/ { print file ":" NR }' "$root/$file" || exit 1
     done <<< "$listed")"
-while IFS= read -r where; do [ -z "$where" ] || findings+=("Malformed ID at $where: IDs are J-, R-, Q-, C-, N-, D- or P<n>.B-/P<n>.I- with two or more digits"); done <<< "$rows"
+while IFS= read -r where; do [ -z "$where" ] || findings+=("Malformed ID at $where: IDs are J-, R-, Q-, C-, N-, D- or <part>.B-/<part>.I- with two or more digits"); done <<< "$rows"
 # The 1.0 product template wrote journeys as one-digit `- **J-1 ...**` bullets; the Restructure
 # renumbers them.
 oldj=""
@@ -571,10 +581,10 @@ allocation="$({ printf '%s\n' "$items" | awk 'NF { print "T\037" $0 }' || exit 1
         function flush(   f) { if (lines) { f = at[1]; sub(/:[0-9]+$/, "", f); cites(text, at[1] "\037" (why ? f : "")) } }
         function newfile() { why = 0; top = (FILENAME ~ /^specs\/parts\/[^\/]+\.md$/) }
         /^#/ { why = top && tolower($0) ~ /^##[[:space:]]+why/ }' "${alloc[@]}"); } |
-    awk -F "$SEP" -v now="$now" -v stage_order="$SPEC_STAGE_ORDER" -v stage_custom="$SPEC_STAGE_CUSTOM" "$SPEC_STAGE_AWK"'
+    awk -F "$SEP" -v now="$now" -v parents="$part_parents" -v stage_order="$SPEC_STAGE_ORDER" -v stage_custom="$SPEC_STAGE_CUSTOM" "$SPEC_STAGE_AWK"'
         $1 == "T" { at[$2] = $8; if ($6 == "yes") gone[$2] = 1
                     else if ($2 ~ /^[RQ]-/) need[++n] = $2
-                    else if ($2 ~ /^P[0-9]+$/ && !($2 in listed)) { listed[$2] = 1; part[++m] = $2 }
+                    else if ($2 ~ /^P[0-9]+(\.[0-9]+)?$/ && !($2 in listed)) { listed[$2] = 1; part[++m] = $2 }
                     next }
         $1 == "S" { from[$2] = $3; next }
         $1 == "H" { if ($2 ~ /^specs\/parts\/[^\/]+\.md$/ && $3 != "") { file[$3] = $2; if (!($3 in listed)) { listed[$3] = 1; part[++m] = $3 } } next }
@@ -587,7 +597,7 @@ allocation="$({ printf '%s\n' "$items" | awk 'NF { print "T\037" $0 }' || exit 1
             }
             for (i = 1; i <= m; i++) {
                 p = part[i]
-                if ((p in gone) || ((p in at) && (at[p] in row)) || ((p in file) && (file[p] in why))) continue
+                if ((p in gone) || index(parents, " " p " ") || ((p in at) && (at[p] in row)) || ((p in file) && (file[p] in why))) continue
                 print "X\037" p " at " ((p in at) ? at[p] : file[p])
             }
         }')"
@@ -602,6 +612,23 @@ trace part-need "Part citing no journey, R or Q" "say in Why it exists which J, 
 change_files=(); for file in "$root"/specs/changes/*.md; do [ -f "$file" ] && change_files+=("${file#"$root"/}"); done
 change_ids=""
 if [ "${#change_files[@]}" -gt 0 ]; then
+    for file in "${change_files[@]}"; do
+        rows="$(verify_lines spec_change_metadata "$root/$file")"
+        while IFS="$SEP" read -r kind name a b problem; do
+            case "$kind" in
+                duplicate) findings+=("$file:$a: Duplicate $name field") ;;
+                tags) [ -z "$b" ] || advisories+=("$file:$a: $b") ;;
+                task)
+                    case "$problem" in
+                        malformed) findings+=("$file:$b: Malformed task part $name; use (P<n>) or (P<n>.<n>)"); continue ;;
+                    esac
+                    [ -n "$name" ] || continue
+                    case "$known_parts" in *" $name "*) ;; *) findings+=("$file:$b: Unknown task part $name"); continue ;; esac
+                    [ "$problem" != outside ] || findings+=("$file:$b: Task part $name is not in the change header Parts")
+                    ;;
+            esac
+        done <<< "$rows"
+    done
     change_ids="$({ printf '%s\n' "$items" | awk -F "$SEP" 'NF { print "D" FS $1 FS $7 }' || exit 1
         spec_items "$root" "${change_files[@]}" | awk -F "$SEP" 'NF { print "N" FS $1 FS $7 }' || exit 1
         (cd "$root" && awk "$SPEC_SKIP_AWK $SPEC_ID_AWK"'

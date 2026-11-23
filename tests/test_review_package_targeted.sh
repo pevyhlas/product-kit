@@ -28,6 +28,7 @@ cat > "specs/changes/$ID.md" <<'EOF'
 # Change: targeted
 
 **Tier**: T2 · **Parts**: P1 · **Parent**: 900-programme · **Opened**: 2026-01-01
+**Tags**: sample **Parent**: 999-not-a-parent
 
 ## Spec edits
 

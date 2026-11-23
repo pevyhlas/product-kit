@@ -41,6 +41,103 @@ assert_contains "$OUTPUT" '"findings":[],"advisories":[],"trace":{"code-path":0,
 assert_contains "$OUTPUT" '"readiness":"not-evaluated"' "never a readiness claim"
 assert_eq 0 "$(printf '%s\n' "$OUTPUT" | jq '.budget_excess_reading_lines')" "no reading-budget excess"
 
+it "doctor accepts a declared subpart and a task assigned to it"
+mkdir -p specs/changes
+sed -i.bak 's/| R-01, Q-01 |/| none |/' specs/architecture.md
+rm specs/architecture.md.bak
+printf '| P1.1 Index | indexes items | hypothesis | none | R-01 | parts/p1.1-index.md |\n' >> specs/architecture.md
+printf '# P1.1 Index\n\n**Parent**: P1\n\n- **P1.1.B-01 Lookup**: finds an item. Test: lookup.\n' > specs/parts/p1.1-index.md
+printf '# P2 Other\n' > specs/parts/p2-other.md
+cat > specs/changes/001-parts.md <<'MD'
+# Change: Parts
+**Opened**: 2026-10-16 · **Parts**: P1.1, P9 · **Tags**: cleanup · **Tier**: T1
+
+## Tasks
+- [ ] (P1.1) Update P1.1.B-01
+- [ ] (optional) Describe the change
+- [ ] Update the notes
+
+## State
+**Waiting on**: nothing
+**Next**: start
+MD
+run bash "$DOCTOR" --json
+assert_eq 0 "$STATUS"
+assert_eq 0 "$(jq '.trace["change-undefined"]' <<< "$OUTPUT")" "a subpart behavior is a single canonical ID"
+assert_eq 1 "$(jq '.trace["part-need"]' <<< "$OUTPUT")" "only the unrelated P2 lacks an allocation"
+assert_not_contains "$OUTPUT" "Part citing no journey, R or Q (1): P1 at" "the parent does not repeat the child's allocation"
+
+it "doctor rejects malformed, unknown and out-of-scope task IDs"
+cat >> specs/architecture.md <<'MD'
+
+```md
+| P9 Not a real part | example | hypothesis |
+```
+MD
+cat >> specs/changes/001-parts.md <<'MD'
+
+##   Tasks
+- [ ] (P1.1.1) Malformed ID
+- [ ] (p1.1) Malformed lowercase ID
+- [ ] (P9) Unknown part, even though listed
+- [ ] (P2) Known part outside scope
+MD
+run bash "$DOCTOR" --json
+assert_eq 1 "$STATUS"
+findings="$(jq -r '.findings[]' <<< "$OUTPUT")"
+assert_contains "$findings" 'Malformed task part P1.1.1'
+assert_contains "$findings" 'Malformed task part p1.1'
+assert_contains "$findings" 'Unknown task part P9'
+assert_contains "$findings" 'Task part P2 is not in the change header Parts'
+rm specs/changes/001-parts.md
+
+it "doctor rejects an unknown parent, cycles and a second level of subparts"
+for parent in P9 P1.1; do
+    printf '# P1.1 Index\n\n**Parent**: %s\n' "$parent" > specs/parts/p1.1-index.md
+    run bash "$DOCTOR" --json
+    assert_eq 1 "$STATUS"
+    case "$parent" in
+        P9) assert_contains "$OUTPUT" 'Unknown parent P9 for P1.1' ;;
+        P1.1) assert_contains "$OUTPUT" 'Part parent cycle' ;;
+    esac
+done
+printf '# P1.1 Index\n\n**Parent**: P2\n' > specs/parts/p1.1-index.md
+printf '# P2 Other\n\n**Parent**: P1.1\n' > specs/parts/p2-other.md
+run bash "$DOCTOR" --json
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'Part parent cycle'
+printf '# P2 Other\n\n**Parent**: P1\n' > specs/parts/p2-other.md
+run bash "$DOCTOR" --json
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'Part nesting exceeds one level'
+rm specs/parts/{p1.1-index,p2-other}.md
+git restore -- specs/architecture.md
+
+it "an ordered-list code fence is not a second definition"
+cat >> specs/product.md <<'MD'
+
+1. Example:
+
+    ```markdown
+    - **R-01 Sample definition** (validated): example only.
+    ```
+MD
+run bash "$DOCTOR" --json
+assert_eq 0 "$STATUS"
+assert_not_contains "$OUTPUT" 'Duplicate ID R-01'
+git restore -- specs/product.md
+
+it "literal indented tildes do not hide the real requirements below them"
+awk 'NR == 3 { print "    ~~~~text\n" } { print }' specs/product.md > specs/product.tmp
+mv specs/product.tmp specs/product.md
+run bash "$DOCTOR" --json
+assert_eq 0 "$STATUS"
+assert_eq '[]' "$(jq -c '.findings' <<< "$OUTPUT")"
+assert_not_contains "$OUTPUT" 'defined nowhere in the spec'
+run bash .prdkit/scripts/bash/status.sh --json
+assert_eq '["R-01","R-02"]' "$(jq -c '[.items[].id | select(startswith("R-"))]' <<< "$OUTPUT")"
+git restore -- specs/product.md
+
 it "malformed, duplicate and misplaced IDs are failing findings"
 printf -- '- **R-1 Short id** (validated): x.\n- **R-01 Again** (validated): y.\n' >> specs/product.md
 printf -- '- **P2.I-01 Wrong part**: z. Enforced by: unenforced.\n' >> specs/parts/p1-web.md

@@ -90,6 +90,17 @@ cat > "$_SCRATCH_CWD/bin/awk" <<'SH'
 if [ "$VERIFY_FAULT" = version-reader ] && [ "${2:-}" = 'prefix=version: ' ]; then
     "$REAL_AWK" "$@"; exit 5
 fi
+if [ "$VERIFY_FAULT" = metadata-short ]; then
+    case "$*" in *'function metadata_header'*'specs/changes/001-example.md')
+        printf 'task\037P1\0370\0371\037\n'; exit 0 ;;
+    esac
+fi
+case "$VERIFY_FAULT:$*" in
+    part-short:*'function metadata_header'*'specs/parts/p1.1-truncated.md')
+        printf 'specs/parts/p1.1-truncated.md\037P1.1\n'; exit 0 ;;
+    part-extra:*'function metadata_header'*'specs/parts/p1.1-truncated.md')
+        printf 'specs/parts/p1.1-truncated.md\037P1.1\037\037\037\037extra\n'; exit 0 ;;
+esac
 exec "$REAL_AWK" "$@"
 SH
 chmod +x "$_SCRATCH_CWD"/bin/*
@@ -247,6 +258,18 @@ for format in empty crlf eof truncated; do
 done
 printf '# Example\n- **R-01 First**: example.\n' > specs/SPEC.md
 
+it 'status and doctor reject incomplete or overlong part metadata rows'
+mkdir -p specs/parts
+printf '# P1.1 Truncated\n\n**Parent**: P9\n' > specs/parts/p1.1-truncated.md
+for mode in part-short part-extra; do
+    for verifier in status doctor; do
+        fault "$mode" bash "$B/$verifier.sh" --json
+        failed "$verifier: $mode"
+        assert_contains "$OUTPUT" 'Invalid part metadata row'
+    done
+done
+rm specs/parts/p1.1-truncated.md
+
 it 'target lookup refuses damaged text even when the navigation target itself is intact'
 target_file=specs/navigation.md
 printf '%s\n' '# Example' 'Tracking: [X][nav-x]' '<!-- prdkit:navigation:v1 begin -->' \
@@ -318,10 +341,25 @@ it 'close preflight refuses an incomplete duplicate scan without changing HEAD, 
 printf '#!/usr/bin/env bash\nprintf "review passed\\n"\n' > "$B/check-review.sh"
 git add "$B/check-review.sh" && git commit -qm 'stub delegated review' || exit 1
 record=specs/changes/001-example.md
-printf '# Change: Example\n' > "$record"
+printf '# Change: Example\n\n**Tags**: sample\n' > "$record"
 git add "$record" && git commit -qm 'open record' || exit 1
 before_head="$(git rev-parse HEAD)"; before_index="$(git hash-object .git/index)"
 close_args=(--pr https://example.test/pull/1 001-example 'Update behavior — R-01 — complete — #1')
+it 'status, doctor and close reject a short optional metadata inventory'
+for verifier in status doctor; do
+    fault metadata-short bash "$B/$verifier.sh" --json
+    failed "$verifier: missing metadata footer"
+done
+fault metadata-short bash "$B/close-change.sh" "${close_args[@]}"
+failed 'close: missing metadata footer'
+assert_contains "$OUTPUT" 'cannot read tags'
+assert_eq "$before_head" "$(git rev-parse HEAD)" 'HEAD unchanged'
+assert_eq "$before_index" "$(git hash-object .git/index)" 'index bytes unchanged'
+assert_file "$record"
+[ ! -e specs/log/001-example.md ] || _no 'no entry written'
+if [ "$(git rev-parse HEAD)" != "$before_head" ]; then git checkout -qb retry-metadata "$before_head" || exit 1; fi
+
+it 'close preflight rejects invalid folded logs before writing an entry'
 for format in empty crlf eof; do
     case "$format" in
         empty) : > specs/log.md ;;

@@ -36,6 +36,8 @@ ju() { if [[ "$1" =~ ^(0|[1-9][0-9]*)$ ]]; then printf '%s' "$1"; else printf nu
 ji() { if [[ "$1" =~ ^(0|-?[1-9][0-9]*)$ ]]; then printf '%s' "$1"; else printf null; fi; }
 
 items="$(verify_lines spec_items "$root")"
+part_headers="$(verify_lines spec_part_headings "$root")"
+part_graph="$(verify_lines spec_part_graph "$items" "$part_headers")"
 spec_lifecycle_require "$root"
 stage_now="$SPEC_STAGE_NOW"; stage_next="$SPEC_STAGE_NEXT"
 # Live items marked for a stage after the current one: needed later, not now.
@@ -52,6 +54,97 @@ leftover="$(verify_lines spec_leftover_features "$root")"
 inbox="$(verify_lines spec_inbox "$root")"
 records="$(verify_lines spec_records "$root")"
 
+change_root_at() { case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s/%s\n' "$root" "$1" ;; esac; }
+known_task_parts() { awk -F "$SEP" '$1 == "part" { printf " %s", $2 } END { print " " }' <<< "$1"; }
+change_metadata() { # open rows -> same rows with tags, task tallies, and invalid assignments appended
+    local row id loc change_root metadata tallies graph known other_items other_headers root_parts
+    root_parts="$(known_task_parts "$part_graph")" || return 1
+    while IFS= read -r row; do
+        [ -n "$row" ] || continue
+        id="${row%%"$SEP"*}"; loc="${row##*"$SEP"}"
+        change_root="$(change_root_at "$loc")"
+        metadata="$(verify_lines spec_change_metadata "$change_root/specs/changes/$id.md" status)" || return 1
+        known="$root_parts"
+        # Only read other checkouts' part inventories when they have an ID to resolve.
+        if [ "$loc" != . ] && [[ "$metadata" == "task$SEP"P* || "$metadata" == *$'\n'"task$SEP"P* ]]; then
+            other_items="$(verify_lines spec_items "$change_root")" || return 1
+            other_headers="$(verify_lines spec_part_headings "$change_root")" || return 1
+            graph="$(verify_lines spec_part_graph "$other_items" "$other_headers")" || return 1
+            known="$(known_task_parts "$graph")" || return 1
+        fi
+        tallies="$(printf '%s\n' "$metadata" | awk -F "$SEP" -v known="$known" '
+            $1 == "tags" { tag_rows++; tags = $2; next }
+            $1 == "task" {
+                issue = $5
+                if (issue != "malformed" && $2 != "" && !index(known, " " $2 " ")) issue = "unknown"
+                if (issue != "") {
+                    invalid = invalid (invalid != "" ? "\t" : "") $4 ":" issue ":" $2
+                    next
+                }
+                if ($2 != "" && !($2 in total)) order[++n] = $2
+                total[$2]++; checked[$2] += $3
+            }
+            END {
+                if (tag_rows != 1) exit 1
+                printf "%s\037", tags
+                for (i = 1; i <= n; i++) {
+                    p = order[i]; printf "%s%s:%d:%d", (i > 1 ? " " : ""), p, checked[p], total[p]
+                }
+                printf "\037"
+                if ("" in total) printf "%d:%d", checked[""], total[""]
+                print "\037" invalid
+            }')" || return 1
+        printf '%s\037%s\n' "$row" "$tallies" || return 1
+    done <<< "$1"
+}
+detailed_changes="$(verify_lines change_metadata "$changes")"
+
+change_metadata_json() { # tags, part tallies, unassigned tally, invalid assignments
+    local tags="$1" tallies="$2" unassigned="$3" tag tally part counts sep=""
+    printf ',"tags":'
+    if [ -n "$tags" ]; then
+        printf '['
+        while [[ "$tags" == *,* ]]; do
+            tag="${tags%%,*}"; tags="${tags#*, }"
+            printf '%s%s' "$sep" "$(js "$tag")"; sep=,
+        done
+        printf '%s%s]' "$sep" "$(js "$tags")"
+    else printf null; fi
+    printf ',"tasks_by_part":'
+    if [ -n "$tallies" ]; then
+        printf '['; sep=""
+        for tally in $tallies; do
+            part="${tally%%:*}"; counts="${tally#*:}"
+            printf '%s{"part":%s,"checked":%s,"total":%s}' "$sep" "$(js "$part")" "${counts%%:*}" "${counts#*:}"; sep=,
+        done
+        printf ']'
+    else printf null; fi
+    printf ',"unassigned_tasks":'
+    if [ -n "$unassigned" ]; then
+        printf '{"checked":%s,"total":%s}' "${unassigned%%:*}" "${unassigned#*:}"
+    else printf null; fi
+    printf ',"invalid_task_parts":'
+    if [ -n "$4" ]; then printf '['; invalid_task_parts "$4" json; printf ']'
+    else printf null; fi
+}
+
+invalid_task_parts() { # tab-separated line:reason:part records
+    local row line reason part sep=""
+    while IFS= read -r row; do
+        [ -n "$row" ] || continue
+        line="${row%%:*}"; row="${row#*:}"; reason="${row%%:*}"; part="${row#*:}"
+        if [ "${2:-}" = json ]; then
+            printf '%s{"part":%s,"line":%s,"reason":%s}' "$sep" "$(js "$part")" "$(ju "$line")" "$(js "$reason")"
+            sep=,
+        else
+            case "$reason" in
+                outside) printf '    tasks: line %s: task part %s is not in the change header Parts\n' "$line" "$part" ;;
+                *) printf '    tasks: line %s: %s task part %s\n' "$line" "$reason" "$part" ;;
+            esac
+        fi
+    done <<< "${1//$'\t'/$'\n'}"
+}
+
 # Use the same winning worktree record. Children reference the parent; ordinary standalone
 # changes have no outcome row. A referenced but missing/incomplete parent stays visibly unknown.
 parents="$(printf '%s\n' "$changes" | awk -F '\037' '$7 != "" && $7 != "none" { print $7 }' | sort -u)"
@@ -60,7 +153,7 @@ progress="$(while IFS="$SEP" read -r id title _ _ _ _ parent _ _ _ _ _ _ _ loc; 
     required=false
     if printf '%s\n' "$parents" | grep -qxF "$id"; then required=true
     elif [ -n "$parent" ] && [ "$parent" != none ]; then continue; fi
-    if [ "${loc#/}" != "$loc" ]; then change_root="$loc"; else change_root="$root/$loc"; fi
+    change_root="$(change_root_at "$loc")"
     [ -f "$change_root/specs/changes/$id.md" ] || exit 1
     checkpoint="$(verify_lines spec_change_progress "$change_root/specs/changes/$id.md" "$required")" || exit 1
     [ -z "$checkpoint" ] || printf '%s\037%s\037%s\037%s\n' "$id" "$title" "$loc" "$checkpoint"
@@ -220,16 +313,23 @@ if $json; then
         sep=,
     done <<< "$items"
     printf '],"changes":['; sep=""
-    while IFS="$SEP" read -r id title opened step waits nxt parent total passed failed maxatt stalled_items ws ns loc; do
+    while IFS="$SEP" read -r id title opened step waits nxt parent total passed failed maxatt stalled_items ws ns loc tags tallies unassigned invalid; do
         [ -n "$id" ] || continue
         flag=false; case "$unclosed" in *" $id "*) flag=true ;; esac
-        printf '%s{"id":%s,"title":%s,"opened":%s,"age_days":%s,"step":%s,"waiting_on":%s,"next":%s,"parent":%s,"location":%s,"merged_unclosed":%s,"state_fields":{"waiting_on":"%s","next":"%s"},"acceptance":{"total":%s,"passed":%s,"failed_or_blocked":%s,"max_attempts":%s,"stalled":%s}}' "$sep" \
+        printf '%s{"id":%s,"title":%s,"opened":%s,"age_days":%s,"step":%s,"waiting_on":%s,"next":%s,"parent":%s,"location":%s,"merged_unclosed":%s,"state_fields":{"waiting_on":"%s","next":"%s"},"acceptance":{"total":%s,"passed":%s,"failed_or_blocked":%s,"max_attempts":%s,"stalled":%s}' "$sep" \
             "$(js "$id")" "$(js "$title")" "$(js "$opened")" "$(ji "$(age "$opened")")" "$(js "$step")" "$(js "$waits")" \
             "$(js "$nxt")" "$(js "$parent")" "$(js "$loc")" "$flag" "$ws" "$ns" \
             "$(ju "$total")" "$(ju "$passed")" "$(ju "$failed")" "$(ju "$maxatt")" "$(js "$stalled_items")"
-        sep=,
-    done <<< "$changes"
-    printf '],"leftover_features":['; sep=""
+        change_metadata_json "$tags" "$tallies" "$unassigned" "$invalid"
+        printf '}'; sep=,
+    done <<< "$detailed_changes"
+    printf '],"part_parents":'; sep="["
+    while IFS="$SEP" read -r kind part parent; do
+        [ "$kind" = edge ] || continue
+        printf '%s{"id":%s,"parent":%s}' "$sep" "$(js "$part")" "$(js "$parent")"; sep=,
+    done <<< "$part_graph"
+    if [ "$sep" = '[' ]; then printf null; else printf ']'; fi
+    printf ',"leftover_features":['; sep=""
     while IFS="$SEP" read -r id done_n total_n; do
         [ -n "$id" ] || continue
         printf '%s{"id":%s,"tasks_done":%s,"tasks_total":%s}' "$sep" "$(js "$id")" "$(ju "$done_n")" "$(ju "$total_n")"
@@ -318,7 +418,9 @@ printf '\nTrue now\n'
 printf '%s\n' "$items" | awk -F '\037' '
     NF {
         any = 1
-        k = $1; sub(/-.*/, "", k); if ($1 ~ /^P[0-9]+$/) k = "P"; else if ($1 ~ /^P[0-9]+\./) k = substr($1, index($1, ".") + 1, 1)  # awk-bytes-ok: sub() reads k only as $1; the one-letter k is a subscript, compared with ==
+        k = $1; sub(/-.*/, "", k)  # awk-bytes-ok: k is the whole ID before trimming the suffix
+        if ($1 ~ /^P[0-9]+(\.[0-9]+)?$/) k = "P"
+        else if ($1 ~ /^P[0-9]+(\.[0-9]+)?\.[BI]-/) k = substr(k, length(k), 1)
         if ($5 == "yes") { retired[k]++; next }
         n[k]++; if ($3 == "hypothesis") h[k]++; if ($3 == "validated") v[k]++
         if ($4 != "") planned = planned sprintf("    %s %s (planned: %s)\n", $1, $2, $4)
@@ -337,10 +439,14 @@ printf '%s\n' "$items" | awk -F '\037' '
         if (unenf != "") printf "  Unenforced:\n%s", unenf
         if (!any) print "  No spec items found."
     }'
+while IFS="$SEP" read -r kind part parent; do
+    [ "$kind" = edge ] || continue
+    printf '    %s (parent: %s)\n' "$part" "$parent"
+done <<< "$part_graph"
 
 printf '\nIn flight\n'
 if [ -z "$changes" ] && [ -z "$leftover" ]; then printf '  No open changes.\n'; fi
-while IFS="$SEP" read -r id title opened step waits nxt parent total passed failed maxatt stalled_items ws ns loc; do
+while IFS="$SEP" read -r id title opened step waits nxt parent total passed failed maxatt stalled_items ws ns loc tags tallies unassigned invalid; do
     [ -n "$id" ] || continue
     a="$(age "$opened")"
     printf '  %s — %s\n' "$id" "$title"
@@ -349,6 +455,13 @@ while IFS="$SEP" read -r id title opened step waits nxt parent total passed fail
     [ "$failed" -eq 0 ] || printf ', %s failing or blocked' "$failed"
     [ "$maxatt" -eq 0 ] || printf ', up to %s attempts' "$maxatt"
     printf '\n'
+    [ -z "$tags" ] || printf '    tags: %s\n' "$tags"
+    for tally in $tallies; do
+        counts="${tally#*:}"
+        printf '    tasks: %s %s/%s checked\n' "${tally%%:*}" "${counts%%:*}" "${counts#*:}"
+    done
+    [ -z "$unassigned" ] || printf '    tasks: unassigned %s/%s checked\n' "${unassigned%%:*}" "${unassigned#*:}"
+    invalid_task_parts "$invalid"
     [ -z "$stalled_items" ] || printf '    stalled: %s (alternatives note and owner decision due)\n' "$stalled_items"
     [ -z "$waits" ] || printf '    waiting on: %s\n' "$waits"
     [ -z "$nxt" ] || printf '    next: %s\n' "$nxt"
@@ -356,7 +469,7 @@ while IFS="$SEP" read -r id title opened step waits nxt parent total passed fail
     [ "$ns" = present ] || printf '    State: Next is %s\n' "$ns"
     case "$parent" in ''|none) ;; *) printf '    parent: %s\n' "$parent" ;; esac
     case "$unclosed" in *" $id "*) printf '    merged without closing: record on %s, with no child or outcome checkpoint keeping it open; close it in the next relevant PR, or give a change spanning PRs a checkpoint (review.md, Closing)\n' "$base" ;; esac
-done <<< "$changes"
+done <<< "$detailed_changes"
 while IFS="$SEP" read -r id done_n total_n; do
     [ -n "$id" ] || continue
     printf '  0.x feature %s — still in specs/features/%s/, tasks %s/%s checked; finish the cutover: a change record if the owner keeps it open (.prdkit/workflows/compact.md)\n' "$id" "$id" "$done_n" "$total_n"
