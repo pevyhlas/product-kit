@@ -2,7 +2,7 @@
 # new-change.sh — Open a change: number it, create specs/changes/<id>.md from the change
 # template, and (by default) put its branch in an isolated worktree under .worktrees/.
 #
-# Usage: new-change.sh [--json] [--short-name <name>] [--number N] [--no-worktree|--no-branch] <intent>
+# Usage: new-change.sh [--json] [--short-name <name>] [--number N] [--programme] [--no-worktree|--no-branch] <intent>
 #
 # --no-worktree (or an already linked worktree) branches in place, carrying
 # existing local edits onto the new branch.
@@ -24,11 +24,12 @@ source "$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 # shellcheck source=/dev/null
 source "$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/spec-lib.sh"
 
-usage() { echo "Usage: $0 [--json] [--short-name <name>] [--number N] [--no-worktree|--no-branch] <intent>"; }
+usage() { echo "Usage: $0 [--json] [--short-name <name>] [--number N] [--programme] [--no-worktree|--no-branch] <intent>"; }
 
 JSON_MODE=false
 NO_WORKTREE=false
 NO_BRANCH=false
+PROGRAMME=false
 SHORT_NAME=""
 CHANGE_NUMBER=""
 ARGS=()
@@ -37,6 +38,7 @@ while [ "$#" -gt 0 ]; do
         --json) JSON_MODE=true ;;
         --no-worktree) NO_WORKTREE=true ;;
         --no-branch) NO_BRANCH=true ;;
+        --programme) PROGRAMME=true ;;
         --) shift; ARGS+=("$@"); break ;;
         --short-name|--number)
             if [ "$#" -lt 2 ] || [[ "$2" == --* ]]; then echo "Error: $1 requires a value" >&2; exit 1; fi
@@ -47,6 +49,7 @@ while [ "$#" -gt 0 ]; do
             echo "  --json              Output in JSON format"
             echo "  --short-name <name> Short name (2-4 words) for the change id and branch"
             echo "  --number N          Change number (overrides auto-detection)"
+            echo "  --programme         Include the outcome checkpoint scaffold for a programme or continuing queue"
             echo "  --no-worktree       Create and switch to the branch in the current checkout"
             echo "                      instead of an isolated worktree; existing edits carry over"
             echo "  --no-branch         Create only the change record in the current checkout"
@@ -217,11 +220,17 @@ number_owner() { # zero-padded number; prints the claiming source
 # minute) is removed by one reaper at a time, which re-checks it first. PRDKIT_NUMBER_LOCK_WAIT
 # bounds the wait in seconds (default 120).
 NUMBER_LOCK=""
-RENDERED_RECORD=""
+RECORD_TMP=""
 HOST_NAME="$(uname -n)"
 create_exclusive() { ( set -C; printf '%s %s\n' "$$" "$HOST_NAME" > "$1" ) 2>/dev/null; }
 release_number_lock() { [ -z "$NUMBER_LOCK" ] || rm -f "$NUMBER_LOCK"; NUMBER_LOCK=""; }
-cleanup_open() { release_number_lock; [ -z "$RENDERED_RECORD" ] || rm -f "$RENDERED_RECORD"; }
+cleanup_open() {
+    release_number_lock
+    if [ -n "$RECORD_TMP" ]; then
+        rm -f "$RECORD_TMP"/{template,scaffold,record}
+        rmdir "$RECORD_TMP"
+    fi
+}
 number_lock_stale() { # lock file -> 0 when its holder is gone
     local owner pid
     owner="$(cat "$1" 2>/dev/null)" || owner=""
@@ -332,28 +341,110 @@ done < <(list_checkouts)
 WORKTREE_PATH="$REPO_ROOT"
 CREATED_WORKTREE=false
 TEMPLATE=.prdkit/templates/change-template.md
+SCAFFOLD=.prdkit/scripts/bash/outcome-checkpoint.md
+POINTER='<!-- Outcome checkpoint format: .prdkit/scripts/bash/outcome-checkpoint.md -->'
 TODAY="${PRDKIT_TODAY:-$(date +%Y-%m-%d)}"
-RENDERED_RECORD="$(mktemp)"
-render_template() {
-    PK_INTENT="$INTENT" PK_TODAY="$TODAY" awk '
-        NR == 1 && /^# Change:/ { print "# Change: " ENVIRON["PK_INTENT"]; next }
-        /^\*\*Opened\*\*: <date>/ { sub(/<date>/, ENVIRON["PK_TODAY"]) }
-        { print }
-    '
+RECORD_TMP="$(mktemp -d)"
+RENDERED_RECORD="$RECORD_TMP/record"
+record_input() { # project-relative path, temp path, optional pinned start commit
+    local path="$1" staged="$2" entry oid type
+    if [ -n "${3:-}" ]; then
+        entry="$(printf '%s\n' "$3:$path" | git cat-file --batch-check --follow-symlinks)" || return 1
+        read -r oid type _ <<< "$entry"
+        if [ "$type" = blob ]; then
+            git cat-file blob "$oid" > "$staged" || return 1
+            path="$staged"
+        fi
+    fi
+    printf '%s\n' "$path"
+}
+render_record() {
+    local template="$1" scaffold="$2" snippet=""
+    if $PROGRAMME && [ -f "$scaffold" ] && verify_lf_file "$scaffold"; then snippet="$scaffold"; fi
+    if [ -f "$template" ]; then
+        review_file_without_nul "$template" || return 1
+        LC_ALL=C PK_INTENT="$INTENT" PK_TODAY="$TODAY" PK_SCAFFOLD="$snippet" PK_POINTER="$POINTER" \
+            awk -v programme="$PROGRAMME" "$SPEC_SKIP_AWK"'
+            function scaffold(    row, rc, n, file) {
+                file = ENVIRON["PK_SCAFFOLD"]
+                if (file == "") exit 1
+                while ((rc = (getline row < file)) > 0) { print row; n++ }
+                if (rc < 0 || !n) exit 1
+                close(file)
+            }
+            {
+                # Emit LF text even for CRLF templates or a missing final terminator.
+                sub(/\r$/, "")
+                lines[NR] = $0
+                # Recognize the kit comments only when not already inside an example.
+                outside = !fence && !comment
+                hidden = spec_skip($0)
+                if (outside && $0 == ENVIRON["PK_POINTER"]) {
+                    if (state && !slot) slot = NR
+                    wrote_pointer = 1
+                }
+                if (outside && /^<!-- (A programme or continuing follow-up queue \(|For a programme\/continuing follow-up queue,)/) {
+                    legacy = NR
+                    legacy_heading = 0
+                }
+                if (legacy && !fence && $0 == "### Outcome checkpoint") legacy_heading = 1
+                if (legacy && !comment) {
+                    legacy_end[legacy] = NR
+                    if (state && legacy_heading) has_block = 1
+                    legacy = 0
+                }
+                if (!hidden && /^## /) state = ($0 == "## State")
+                if (!hidden && state && $0 == "### Outcome checkpoint") has_block = 1
+                # A safe slot follows a line that leaves neither a comment nor a fence open.
+                if (!fence && !comment) {
+                    safe = NR + 1
+                    if (state) state_end = safe
+                }
+            }
+            END {
+                # Use the stock pointer as the insertion slot; otherwise stay in State.
+                at = slot ? slot : state_end ? state_end : safe ? safe : 1
+                if (programme != "true" || has_block) at = 0
+                for (i = 1; i <= NR + 1; i++) {
+                    if (i == at) {
+                        if (!state_end) print "\n## State\n"
+                        scaffold()
+                        if (i == slot) continue
+                    }
+                    if (i > NR) break
+                    if (programme != "true" && (i in legacy_end)) {
+                        # Strip only the recognized comment, not bytes after its closing marker.
+                        i = legacy_end[i]
+                        text = substr(lines[i], index(lines[i], "-->") + 3)
+                        if (!wrote_pointer) {
+                            print ENVIRON["PK_POINTER"]
+                            wrote_pointer = 1
+                        }
+                        if (text != "") print text
+                        continue
+                    }
+                    text = lines[i]
+                    if (i == 1 && text ~ /^# Change:/) text = "# Change: " ENVIRON["PK_INTENT"]
+                    if (text ~ /^\*\*Opened\*\*: <date>/) sub(/<date>/, ENVIRON["PK_TODAY"], text)
+                    print text
+                }
+            }
+        ' "$template"
+    else
+        printf '# Change: %s\n\n**Opened**: %s\n' "$INTENT" "$TODAY" || return 1
+        if $PROGRAMME; then [ -n "$snippet" ] && printf '\n## State\n\n' && cat "$snippet"; fi
+    fi
 }
 prepare_record() ( # optional pinned start commit for a fresh worktree
     set -o pipefail
-    local entry="" oid type tag_row line issue
-    if [ -n "${1:-}" ]; then
-        entry="$(printf '%s\n' "$1:$TEMPLATE" | git cat-file --batch-check --follow-symlinks)" || exit 1
+    local template scaffold="" tag_row line issue
+    template="$(record_input "$TEMPLATE" "$RECORD_TMP/template" "${1:-}")" || exit 1
+    if $PROGRAMME; then
+        scaffold="$(record_input "$SCAFFOLD" "$RECORD_TMP/scaffold" "${1:-}")" || exit 1
     fi
-    read -r oid type _ <<< "$entry"
-    if [ "$type" = blob ]; then
-        git cat-file blob "$oid" | render_template > "$RENDERED_RECORD" || exit 1
-    elif [ -f "$TEMPLATE" ]; then
-        render_template < "$TEMPLATE" > "$RENDERED_RECORD" || exit 1
-    else
-        printf '# Change: %s\n\n**Opened**: %s\n' "$INTENT" "$TODAY" > "$RENDERED_RECORD" || exit 1
+    if ! render_record "$template" "$scaffold" > "$RENDERED_RECORD" || ! verify_lf_file "$RENDERED_RECORD"; then
+        echo "[prdkit] Error: could not render the change record; check the change template and the installed outcome checkpoint snippet." >&2
+        exit 1
     fi
     tag_row="$(spec_change_metadata "$RENDERED_RECORD" create)" || {
         echo "[prdkit] Error: could not validate Tags in the rendered record from $TEMPLATE." >&2

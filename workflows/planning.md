@@ -49,29 +49,21 @@ place; no amendment journals. Children and the parent close per [review.md](revi
 ## Protect the outcome
 
 For a programme or a sequence of follow-ups, keep an **outcome checkpoint** in the existing
-parent's State: these keys, one line each, under `### Outcome checkpoint`. Children link it
-rather than copying a second tracker; a standalone small change can keep its outcome/selection in
-prose. Define the check for each enabling step before starting it: a reviewed interface, working
-source path or deployed service can be a real intermediate advance without claiming the final
-user outcome.
+parent's State, using the format in `.prdkit/scripts/bash/outcome-checkpoint.md`.
+Children link it rather than copying a second tracker; a standalone small change can keep its
+outcome and selection in prose. Define the check for each enabling step in Tasks before starting
+it: a reviewed interface, working source path or deployed service can be a real intermediate
+advance without claiming the final user outcome.
 
-- **Outcome**: original owner goal/source, intended architecture and stage.
-- **Milestone**: next observable result and its acceptance/check reference; predeclared enabling
-  steps and their checks stay in Tasks.
-- **Critical path**: ordered dependencies, their required outcomes, and the actual blocker.
-- **Allocation**: lane purposes, original start/deadline, time/cost bounds and known consumption,
-  with their authority source; explicitly unknown where not measured.
-- **Progress**: latest evidenced milestone/dependency advance, date/revision and evidence link;
-  `none` or `unknown` when appropriate. Scope the claim: source, deployed or user-validated.
-- **No-progress changes**: nonnegative integer counting integrated children since that advance,
-  or `unknown` when history cannot be reconciled.
-- **Progress limit**: positive integer; default `3` unless the owner/project sets another bound
-  (cite its source in Allocation). Reassessment is due at this count or an existing
-  timebox/investment boundary, whichever comes first.
-- **Selection**: next task, its milestone contribution, why now, and disposition of competing work.
+Scope linked progress evidence to what it proves: source, deployed or user-validated. Record
+`none` only if the history shows no advance. Count integrated children since the latest evidenced
+advance as a nonnegative integer. Keep the scaffold's positive progress limit unless the
+owner/project sets another (cite its source in Allocation). Reassess at that count or an existing
+timebox/investment boundary, whichever comes first.
 
 On adoption/resume, reconstruct missing fields from actual records and owner direction before
-selecting more work; do not invent a new baseline. Ordinary State prose such as an `**Outcome**:`
+selecting more work. If history or consumption cannot be reconciled, record `unknown`, not zero;
+do not invent a new baseline. Ordinary State prose such as an `**Outcome**:`
 result is not a programme goal; status still reads a legacy 1.3.1 checkpoint outside the block,
 and doctor advises moving its keys in. Count/reset/reassessment rules are in
 [implementation.md](implementation.md). These fields report recorded claims, not machine-verified

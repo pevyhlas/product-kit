@@ -24,6 +24,9 @@ change by change.
   superseded runs for that PR without cancelling main or manual runs.
 - Cleanup and close tests now run against seeded combinations of local Git states and
   check that commits and working files survive. The generator is test-only.
+- `new-change.sh` emits only a one-line outcome checkpoint pointer by default. Use `--programme`
+  to include the commented scaffold for a programme or continuing queue, even if the customized
+  change template omits it. Existing records are untouched.
 
 ### Fixed
 

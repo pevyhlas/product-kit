@@ -34,6 +34,10 @@ own the operational behavior, starting with [protocol.md](../workflows/protocol.
 On a harness without native slash commands, ask it to read `.prdkit/workflows/protocol.md` and
 follow the matching installed operation. A command name does not grant extra action authority.
 
+When using `new-change.sh` directly, pass `--programme` to include the commented outcome
+checkpoint scaffold for a programme parent or continuing follow-up queue. Ordinary records get
+only a pointer to the format. See [Running a change](../workflows/change.md).
+
 ## Installed version, spec layout and migration
 
 Ordinary `status.sh` and `doctor.sh` output includes these three observations separately.
