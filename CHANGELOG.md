@@ -8,6 +8,12 @@ change by change.
 
 ## [Unreleased]
 
+### Added
+
+- Compaction can index closed changes even after an earlier change stays open. Add exact
+  closed-number ranges to the archive's **Log condensed through** line and retrieve the full
+  entries from Git. Archived numbers stay closed and cannot be reused. No migration needed.
+
 ### Changed
 
 - Spec-only reviews judge edits at their spec level and defer test procedures to the
@@ -22,9 +28,6 @@ change by change.
   declare one level of subparts. Doctor checks task assignments and parent links, and status
   reports the optional data without treating it as acceptance. Opening a change checks tags
   from customized templates before creating the record. No migration needed.
-- Compaction can index closed changes even after an earlier change stays open. Add exact
-  closed-number ranges to the archive's **Log condensed through** line and retrieve the full
-  entries from Git. Archived numbers stay closed and cannot be reused. No migration needed.
 
 ### Changed
 
