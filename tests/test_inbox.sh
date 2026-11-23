@@ -54,14 +54,10 @@ cat > specs/inbox.md <<'MD'
 **Answer**:
 > hello — "Hello", in English.
 > Record it now, implement later.
+2026-10-30 owner requested that we hold checkout.
 **Answer date**: 2026-10-30
 **Answer source**: owner-message-1
 **Answer revision**: 3
-
-### Legacy answer
-*2026-10-27 · agent · open*
-
-Owner answer, 2026-10-30, source: owner-message-2: "Keep the header."
 
 ## To incorporate
 
@@ -77,7 +73,6 @@ Owner answer, 2026-10-30, source: owner-message-2: "Keep the header."
 **Answer source**: owner-message-3
 **Answer revision**: 1
 
-2026-10-30 owner "One more direction → still pending" → open
 MD
 before="$(git status --porcelain; cat specs/inbox.md)"
 
@@ -85,15 +80,15 @@ it "status separates recorded answers and direction from questions, with identit
 run bash "$STATUS_SH" --json
 json="$OUTPUT"
 assert_eq 0 "$STATUS" "status succeeds"
-run jq -e '.inbox | length == 5' <<< "$json"
-assert_eq 0 "$STATUS" "all headed and appended legacy items survive"
+run jq -e '.inbox | length == 3' <<< "$json"
+assert_eq 0 "$STATUS" "all headed items are visible"
 run jq -e '[.inbox[] | select(.state == "open") | .id] == ["IN-111111111111"]' <<< "$json"
 assert_eq 0 "$STATUS" "empty answer and sample fields stay unanswered"
-run jq -e '[.inbox[] | select(.state == "processing")] | length == 4' <<< "$json"
-assert_eq 0 "$STATUS" "answered-in-body, legacy and owner direction await processing"
+run jq -e '[.inbox[] | select(.state == "processing")] | length == 2' <<< "$json"
+assert_eq 0 "$STATUS" "recorded answers and owner direction await processing"
 run jq -e '.inbox[0] | .revision == "2" and .tags == "copy, ux" and .kind == "decision"' <<< "$json"
 assert_eq 0 "$STATUS" "metadata is projected without deriving identity from title"
-run jq -e '.inbox[1].answer == "hello — \"Hello\", in English. Record it now, implement later."' <<< "$json"
+run jq -e '.inbox[1].answer == "hello — \"Hello\", in English. Record it now, implement later. 2026-10-30 owner requested that we hold checkout."' <<< "$json"
 assert_eq 0 "$STATUS" "multiline quoted answer preserves qualifications and JSON escaping"
 run jq -e '.longest_pole.item | contains("Which punctuation?")' <<< "$json"
 assert_eq 0 "$STATUS" "the actual unanswered question is the owner blocker"
@@ -103,14 +98,12 @@ assert_contains "$owner_queue" "Which punctuation?" "question is in owner queue"
 assert_not_contains "$owner_queue" "Greeting wording" "answered question is not re-presented as owner work"
 assert_contains "$OUTPUT" "Inbox awaiting agent processing" "processing is visible, not silently hidden"
 
-it "doctor warns on processing and legacy metadata without claiming semantic incorporation"
+it "doctor warns on processing without claiming semantic incorporation"
 run bash "$DOCTOR"
-assert_contains "$OUTPUT" "Owner inbox: 4 item(s) awaiting agent processing" "processing backlog named"
+assert_contains "$OUTPUT" "Owner inbox: 2 item(s) awaiting agent processing" "processing backlog named"
 assert_contains "$OUTPUT" "Owner inbox: 1 open item(s)" "only true unanswered metadata counted"
-assert_contains "$OUTPUT" "missing ID" "legacy item receives migration guidance"
 assert_not_contains "$OUTPUT" "duplicate" "distinct IDs and keys accepted"
 assert_not_contains "$OUTPUT" "answer revision mismatch" "matching answer revisions accepted"
-assert_eq 1 "$(printf '%s\n' "$OUTPUT" | grep -c 'missing or invalid Answer date')" "only the legacy answer lacks structured provenance"
 assert_eq "$before" "$(git status --porcelain; cat specs/inbox.md)" "status and doctor never write"
 
 it "pending incorporation alone is never reported as waiting on the owner"
@@ -212,28 +205,35 @@ assert_contains "$OUTPUT" "missing or invalid Answer date" "date gap named"
 assert_contains "$OUTPUT" "missing or invalid Answer revision" "revision gap named"
 assert_contains "$OUTPUT" "awaiting agent processing" "missing provenance does not become a fresh owner question"
 
-it "legacy stable IDs survive migration and answer aliases cannot hide duplicate fields"
+it "superseded inbox fields fail with the current format"
 cat > specs/inbox.md <<'MD'
 # Owner inbox
 
 ### Existing question identity
 *2026-10-31 · agent · open*
 
-**ID**: inbox-021
+**ID**: IN-444444444444
 **Revision**: 1
 **Kind**: feedback
 **Tags**: ux
-**Answer**: Readable.
 **Owner answer**: Not readable.
-**Answer date**: 2026-10-31
-**Answer source**: imported-thread
-**Answer revision**: 1
 MD
 run bash "$DOCTOR"
-assert_contains "$OUTPUT" "duplicate field Answer" "alias conflict requires reconciliation"
-assert_not_contains "$OUTPUT" "invalid ID" "legacy single-token identity is retained"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "**Answer**"
 run bash "$STATUS_SH" --json
-run jq -e '.inbox[0].id == "inbox-021"' <<< "$OUTPUT"
-assert_eq 0 "$STATUS" "identity is not rewritten"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "**Answer**"
+
+it "quoted and unquoted one-line owner items below a heading are not mistaken for metadata"
+for hold in '- 2026-10-30 owner "Do not release." → open' '- 2026-10-30 owner Do not release. -> open'; do
+    printf '# Owner inbox\n\n### Release hold\n%s\n' "$hold" > specs/inbox.md
+    for reader in "$DOCTOR" "$STATUS_SH"; do
+        run bash "$reader" --json
+        assert_eq 1 "$STATUS"
+        assert_contains "$OUTPUT" 'specs/inbox.md:4'
+        assert_contains "$OUTPUT" 'structured **Answer** fields'
+    done
+done
 
 finish

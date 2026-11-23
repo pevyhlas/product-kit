@@ -42,7 +42,6 @@ limits each scenario; `EVAL_MAX_TURNS` applies where supported. No automatic ret
 | 23-review-preflight | Incomplete verification and inaccessible evidence leave review pending with capability-aware preparation steps |
 | 24-successful-change-drift | Successful adjacent repairs trigger reassessment; an independent replacement prerequisite advances while deployment stays blocked |
 | 25-outcome-resume-limit | A compacted local queue cannot reset an exhausted owner allocation, no-progress history or lane purpose |
-| 26-bounded-legacy-repair | A retiring supported path gets its minimal safety repair, verification and removal rationale without legacy expansion |
 | 27-inbox-review | Filtered review updates governing intent, routes agent-only work, retains stale answers for clarification and preserves out-of-scope topics |
 | 28-quality-band-change | A changed quality band lives only in its Q- item; the old number disappears and the part cites the Q- ID |
 | 29-interface-promise | An answered compatibility promise lands on its owning part with provenance; nothing keeps or contradicts the old one |
@@ -71,8 +70,7 @@ behaviors.
 
 Human pilot review additionally assesses interpretation quality, spec coherence, question
 usefulness, late corrections, duplicated work, and whether outcome evidence affects the next
-decision. Compare the 0.x flow and the 1.0 change flow using comparable requests and record
-uncertainty rather than claiming gains from template completion.
+decision. Record uncertainty rather than claiming gains from template completion.
 For recovery pilots, also record substantive fix rounds separately from tool/setup failures,
 owner interruptions, repeated review scopes, and acceptance/dependency progress. Agent transcript
 inspection checks classification and explanation; the assertions establish observable behavior,

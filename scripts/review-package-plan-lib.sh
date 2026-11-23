@@ -145,7 +145,7 @@ review_plan_write() {
     fi
     [ -f "$PACKAGE_DIR/review-plan.json" ] || printf '{"reviewers":[],"fixes":[]}\n' > "$PACKAGE_SCRATCH/plan.json"
     # No invented edge enters the graph. This JSON is scheduling advice alongside the unchanged
-    # failing gate, and explicitly retains all native/foreign/carried/legacy/invalid/owner problems.
+    # failing gate, and explicitly retains all native/foreign/carried/invalid/owner problems.
     jq -n --slurpfile gate "$PACKAGE_DIR/gate.json" --slurpfile plan "$PACKAGE_SCRATCH/plan.json" \
         --rawfile paths "$PACKAGE_DIR/delta-paths.txt" --rawfile reaches "$PACKAGE_SCRATCH/reaches-since" \
         --rawfile obligation_gaps "$PACKAGE_SCRATCH/obligation-gaps" \
@@ -160,7 +160,8 @@ review_plan_write() {
         ([ $p.reviewers[] | select(.action=="review" and eligible(.id)) | .id ]) as $affected |
         ([ $d.standing[].reviewer, $d.scope_blockers[].reviewer,
             ($d.latest[]|select(.provenance!="verified")|.reviewer),
-            ($g.legacy_blockers[]|select(.cleared==false)|.reviewer) ] | unique) as $blockers |
+            (if ($d.problem_classes|index("record-format"))!=null then $d.latest[].reviewer else empty end)
+          ] | unique) as $blockers |
         ([ $d.latest[] | . as $r | select(.eligibility=="reviewer" and .clean and .end_covered and
             (.standing|not) and ($blockers|index($r.reviewer)|not)) ]) as $retained |
         ([ $p.reviewers[].id ]) as $ids |
@@ -186,7 +187,8 @@ review_plan_write() {
             all($d.scope_blockers[] | select(.reviewer==$id); (.full_required|not) and .to==$since) and
             all($d.latest[] | select(.reviewer==$id); .provenance=="verified") and
             all($d.standing[] | select(.reviewer==$id); .to==$since)) ]) as $delta_reviewers |
-        ([ $d.latest[] | . as $r | select($scope and $since!="" and
+         # An invalid receipt may have been a blocker; do not suggest bypassing a full review.
+         ([ $d.latest[] | . as $r | select($scope and $since!="" and $g.invalid_receipts==0 and
             .eligibility=="reviewer" and .clean and (.standing|not) and (.end_covered|not) and
             ($blockers|index($r.reviewer)|not) and
             ($reaches|index("start"))!=null and ($reaches|index($r.reviewer))!=null and
@@ -203,7 +205,7 @@ review_plan_write() {
              missing_initial:$missing_initial,unresolved_obligations:($obligation_gaps|split("\n")|map(select(.!=""))),
              map_required:($mapped|not),context_gaps:($gaps|split("\n")|map(select(.!="")))},
          uncovered:[$d.latest[] | select(.end_covered|not) | .reviewer],
-         blockers:{native:$d.standing,scope:$d.scope_blockers,legacy:$g.legacy_blockers,
+         blockers:{native:$d.standing,scope:$d.scope_blockers,
              invalid_receipts:$g.invalid_receipts,carried:$g.carried_blockers,owner:$g.owner,
              problem_classes:$d.problem_classes,problems:$g.problems},
          advisory:"lead judgment is not a verdict; retained coverage is not whole-gate approval; unresolved obligations need action"}' \

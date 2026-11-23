@@ -76,8 +76,8 @@ schema. Supply every prior reviewer and every additional applicable concern unde
 project policy; concern selection remains the lead's judgment, not mandatory generic ceremony.
 Exactly one JSON object is accepted, and that same copied object is consumed. Prior current-PR
 identities include valid receipts for other changes, without granting those receipts coverage.
-Standing native, scope or uncleared legacy blockers exclude the identity from retained and
-prospective classifications; cleared historical rows do not become new blockers.
+Standing native or scope blockers exclude the identity from retained and
+prospective classifications.
 
 ```json
 {
@@ -118,7 +118,7 @@ stream changes are also accounted for. If automatic merge is unavailable, accoun
 conservatively includes every full-diff entry so omitted resolutions cannot disappear.
 Missing/invalid assignments, omitted prior identities, ineligible concerns or unresolved
 obligations disable reduced selection and remain `scope_pending`. Standing blockers always
-remain actions regardless of the map. Native, foreign, carried, legacy, invalid, owner and
+remain actions regardless of the map. Native, foreign, carried, invalid, owner and
 structural blockers remain alongside the recommendation; replacement reviews do not repair
 invalid receipts or change tier floors.
 

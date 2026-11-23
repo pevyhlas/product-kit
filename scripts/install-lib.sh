@@ -95,6 +95,26 @@ install_manifest_value() {
     } END { if(count != 1 || value == "") exit 1; print value }' "$1"
 }
 
+install_manifest_format() {
+    local mode options
+    verify_lf_file "$1" &&
+        install_manifest_value "$1" version >/dev/null &&
+        install_manifest_value "$1" harnesses >/dev/null &&
+        mode="$(install_manifest_value "$1" mode)" &&
+        options="$(install_manifest_value "$1" options)" || return 1
+    case "$mode" in copy|symlink) ;; *) return 1 ;; esac
+    case "$options" in none|agent-tiers) ;; *) return 1 ;; esac
+    LC_ALL=C awk '
+        /^(version|harnesses|mode|options|agents-section): / { next }
+        NF == 0 { next }
+        length($1) == 64 && $1 ~ /^[0-9a-f]+$/ && substr($0, 65, 2) == "  " &&
+            substr($0, 67) ~ /^(\.(claude|opencode)\/commands\/prdkit[^\/]*\.md|\.prdkit\/(scripts\/bash|templates|memory|workflows)\/[A-Za-z0-9_.-]+)$/ &&
+            substr($0, 67) !~ /\/\.\.?$/ { next }
+        { bad = 1 }
+        END { exit bad }
+    ' "$1"
+}
+
 # Exact stage-0 gitlink only: a directory pathspec also matches nested submodules.
 install_source_pin() {
     git -C "$1" ls-files -s -- ":(literal)$2" 2>/dev/null |
@@ -120,8 +140,10 @@ install_findings() {
     install_manifest_value "$manifest" version >/dev/null || printf 'Manifest must record exactly one version\n'
     harnesses="$(install_manifest_value "$manifest" harnesses || true)"
     [ -n "$harnesses" ] || printf 'Manifest must record configured harnesses\n'
-    mode="$(install_manifest_value "$manifest" mode || true)"; mode="${mode:-symlink}"
+    mode="$(install_manifest_value "$manifest" mode || true)"
     case "$mode" in copy|symlink) ;; *) printf 'Invalid manifest install mode: %s\n' "$mode" ;; esac
+    install_manifest_format "$manifest" ||
+        printf 'Invalid install manifest: expected version, harnesses, mode (copy or symlink), and options (none or agent-tiers)\n'
     while IFS= read -r line; do
         checked=$((checked + 1))
         case "$line" in version:*|harnesses:*|mode:*|options:*|agents-section:*|'') continue ;; esac

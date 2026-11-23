@@ -33,9 +33,9 @@ start_case() {
 # Change: Reviewed feature
 **Tier**: T3
 ## State
-**Review**: round 1 · $BASE..$REVIEWED · code · PASS · $CLEAN · https://example.invalid/review/1
-**Review**: round 1 · $BASE..$REVIEWED · security · PASS · $CLEAN · https://example.invalid/review/2
-**Review**: round 1 · $BASE..$REVIEWED · owner · PASS · https://example.invalid/review/3
+**Receipt fixture**: round 1 · $BASE..$REVIEWED · code · PASS · $CLEAN · https://example.invalid/review/1
+**Receipt fixture**: round 1 · $BASE..$REVIEWED · security · PASS · $CLEAN · https://example.invalid/review/2
+**Receipt fixture**: round 1 · $BASE..$REVIEWED · owner · PASS · https://example.invalid/review/3
 EOF
     git add "$RECORD"; git commit -qm 'record verdicts'
     CHECK="$PROJ/.prdkit/scripts/bash/check-review.sh"
@@ -88,7 +88,7 @@ check
 assert_eq 1 "$STATUS" 'actual edit fails'
 assert_contains "$OUTPUT" 'src/owned.txt' 'unreviewed path named'
 FIXED="$(git rev-parse HEAD)"
-printf '\n**Review**: round 2 · %s..%s · code · PASS · %s · https://example.invalid/review/4\n' "$REVIEWED" "$FIXED" "$CLEAN" >> "$RECORD"
+printf '\n**Receipt fixture**: round 2 · %s..%s · code · PASS · %s · https://example.invalid/review/4\n' "$REVIEWED" "$FIXED" "$CLEAN" >> "$RECORD"
 git add "$RECORD"; git commit -qm 'scoped review of actual edit'
 check
 assert_eq 0 "$STATUS" 'scoped re-review covers the older reviewer and the imported base'
@@ -98,7 +98,7 @@ git commit -qm 'unreviewed executable bit'
 check
 assert_eq 1 "$STATUS" 'mode-only change fails'
 git reset -q --hard "$GOOD"
-printf '\n**Review**: round 2 · %s..%s · security · FAIL · 0 critical, 1 high, 0 medium, 0 low · https://example.invalid/review/5\n' "$BASE" "$REVIEWED" >> "$RECORD"
+printf '\n**Receipt fixture**: round 2 · %s..%s · security · FAIL · 0 critical, 1 high, 0 medium, 0 low · https://example.invalid/review/5\n' "$BASE" "$REVIEWED" >> "$RECORD"
 git add "$RECORD"; git commit -qm 'standing failure'
 check
 assert_eq 1 "$STATUS" 'base import cannot clear a standing FAIL'
@@ -129,7 +129,7 @@ check
 assert_eq 1 "$STATUS" 'resolution still requires coverage'
 assert_contains "$OUTPUT" "code: reviewed content differs at: src/owned.txt" 'the resolution changed the reviewed hunk against the new base'
 MERGED="$(git rev-parse HEAD)"
-printf '\n**Review**: round 2 · %s..%s · code · PASS · %s · https://example.invalid/review/6\n' "$REVIEWED" "$MERGED" "$CLEAN" >> "$RECORD"
+printf '\n**Receipt fixture**: round 2 · %s..%s · code · PASS · %s · https://example.invalid/review/6\n' "$REVIEWED" "$MERGED" "$CLEAN" >> "$RECORD"
 git add "$RECORD"; git commit -qm 'review integration decision'
 check
 assert_eq 0 "$STATUS" 'review of the resolution restores coverage'
@@ -155,7 +155,7 @@ assert_eq 1 "$STATUS" 'L0 fixture conflicts'
 printf 'reviewed contract\n' > specs/product.md
 git add specs/product.md; git commit -qm 'resolve L0 with old bytes'
 MERGED="$(git rev-parse HEAD)"
-printf '\n**Review**: round 2 · %s..%s · code · PASS · %s · https://example.invalid/review/7\n' "$REVIEWED" "$MERGED" "$CLEAN" >> "$RECORD"
+printf '\n**Receipt fixture**: round 2 · %s..%s · code · PASS · %s · https://example.invalid/review/7\n' "$REVIEWED" "$MERGED" "$CLEAN" >> "$RECORD"
 git add "$RECORD"; git commit -qm 'code review after resolution'
 check
 assert_eq 1 "$STATUS" 'code review cannot replace owner approval for L0 integration'

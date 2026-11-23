@@ -903,11 +903,11 @@ printf '# Demo — qualities\n\n- **Q-01 Fast greeting** (hypothesis): p95 under
 printf '# Notes\n' > docs/café.md
 printf 'def test_greeting():  # proves R-01—and R-09—the old one\n    pass\nR-08—a line that starts with an ID\n' > tests/test_greeting.py
 printf '# Change: pages\n\n**Opened**: 2026-10-16 · **Parts**: P1–P2 · **Journeys**: J-01–J-02 · **Tier**: T1\n' > specs/changes/007-pages.md
-printf '# Owner inbox\n\n2026-10-02 owner "Pick the colour" → open\n' > specs/inbox.md
+printf '# Owner inbox\n\n### Pick the colour\n*2026-10-02 · owner · processing*\n' > specs/inbox.md
 git add -A >/dev/null; git commit -qm spec >/dev/null
 run bash .prdkit/scripts/bash/status.sh
 assert_eq 0 "$STATUS" "status exits 0"
-assert_eq 1 "$(printf '%s\n' "$OUTPUT" | grep -cFx '  2026-10-02 owner, 15 days: "Pick the colour"')" "a one-line inbox item with an arrow, its words exactly"
+assert_eq 1 "$(printf '%s\n' "$OUTPUT" | grep -cFx '  2026-10-02 owner, 15 days: Pick the colour')" "an inbox item retains its exact title"
 run bash .prdkit/scripts/bash/doctor.sh
 assert_eq 0 "$STATUS" "doctor exits 0"
 assert_contains "$OUTPUT" "Owner inbox: 1 item(s) awaiting agent processing" "doctor reads the same owner direction"

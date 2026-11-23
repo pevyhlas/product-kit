@@ -4,7 +4,7 @@ cd "$FIXTURE"
 fail() { echo "ASSERT FAIL: $1"; exit 1; }
 test ! -e specs/changes/001-greeting.md || fail 'record left for a cleanup PR'
 git cat-file -e HEAD:specs/changes/001-greeting.md 2>/dev/null && fail 'deletion not committed'
-grep -qs '^- [0-9-]* 001-greeting:' specs/log.md specs/log/001-greeting.md || fail 'closed transaction missing log entry'
+grep -qs '^- [0-9-]* 001-greeting:' specs/log/001-greeting.md || fail 'closed transaction missing per-change log entry'
 if grep -qs 'T001' specs/log.md specs/log/001-greeting.md; then fail 'delivered task was logged'; fi
 grep -Eiq 'runtime.*(unverif|unknown)|production.*(unverif|unknown)|unverif.*(runtime|production)' .eval-state/pr.md || fail 'PR lost runtime unknown'
 grep -q 'R-01' .eval-state/pr.md || fail 'PR lost canonical reference'
@@ -17,5 +17,5 @@ source "$PK_ROOT/tests/lib.sh"
 cd "$FIXTURE"
 use_gh_stub "$FIXTURE/.eval-state/host"
 fx_pr 7 "$(git rev-parse HEAD)" "$(jq -cn --arg base "$(git symbolic-ref --short refs/remotes/origin/HEAD | sed 's|^origin/||')" '{base:{ref:$base}}')"
-bash .prdkit/scripts/bash/check-review.sh --pr https://github.com/owner/repo/pull/7 001-greeting >/dev/null || fail 'same-PR close breaks review compatibility'
+bash .prdkit/scripts/bash/check-review.sh --pr https://github.com/owner/repo/pull/7 001-greeting >/dev/null || fail 'same-PR close fails the review gate'
 echo 'ASSERT PASS: same-PR close with explicit runtime unknown and intact canon'

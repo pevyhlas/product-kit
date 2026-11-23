@@ -3,7 +3,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
-source "$SCRIPT_DIR/spec-navigation-lib.sh"
+source "$SCRIPT_DIR/spec-lib.sh"
 mode=compact; target=""; path=""
 usage() { echo 'Usage: read-spec.sh [--raw | --stats | --target <nav-key>] specs/<file>.md'; }
 while [ "$#" -gt 0 ]; do
@@ -29,6 +29,7 @@ esac
 if [[ "$path" =~ [[:cntrl:]] ]]; then echo 'Control characters in source paths are unsupported.' >&2; exit 2; fi
 root="$(get_repo_root)"
 require_consumer_root "$root" read-spec.sh
+spec_require_layout "$root" || exit 1
 file="$root/$path"
 [ -f "$file" ] || { printf 'No source file: %s\n' "$path" >&2; exit 2; }
 snapshot="$(mktemp)"

@@ -21,6 +21,7 @@ while [ "$#" -gt 0 ]; do
 done
 root="$(get_repo_root)"
 require_consumer_root "$root" status.sh
+spec_require_layout "$root" || exit 1
 today="$(spec_today)"
 layout="$(spec_layout "$root")"
 mixed="$(spec_mixed_forms "$root")"
@@ -50,7 +51,6 @@ later="$(if [ -n "$stage_now" ]; then
         END { print out }'
 fi)"
 changes="$(verify_lines spec_open_changes "$root")"
-leftover="$(verify_lines spec_leftover_features "$root")"
 inbox="$(verify_lines spec_inbox "$root")"
 records="$(verify_lines spec_records "$root")"
 
@@ -329,13 +329,7 @@ if $json; then
         printf '%s{"id":%s,"parent":%s}' "$sep" "$(js "$part")" "$(js "$parent")"; sep=,
     done <<< "$part_graph"
     if [ "$sep" = '[' ]; then printf null; else printf ']'; fi
-    printf ',"leftover_features":['; sep=""
-    while IFS="$SEP" read -r id done_n total_n; do
-        [ -n "$id" ] || continue
-        printf '%s{"id":%s,"tasks_done":%s,"tasks_total":%s}' "$sep" "$(js "$id")" "$(ju "$done_n")" "$(ju "$total_n")"
-        sep=,
-    done <<< "$leftover"
-    printf '],"deployments":['; sep=""
+    printf ',"deployments":['; sep=""
     while IFS="$SEP" read -r app env rev date by; do
         [ -n "$app" ] || continue
         printf '%s{"app":%s,"env":%s,"rev":%s,"live":%s,"date":%s,"by":%s,"commits_behind_default":%s,"commits_not_on_default":%s}' "$sep" \
@@ -383,8 +377,6 @@ fi
 printf 'Product-Kit status — %s (derived from local files and git; read-only)\n' "$today"
 diagnostic_adoption "$root" --text
 case "$layout" in
-    0.x) printf '\n0.x layout — run the cutover (.prdkit/workflows/compact.md); 1.0 views below are partial.\n' ;;
-    both) printf '\nTwo canons: 1.0 spec files and 0.x folders (specs/product-spec, specs/targets or specs/features) — finish the cutover (.prdkit/workflows/compact.md).\n' ;;
     none) printf '\nNo spec yet — start specs/product.md or specs/SPEC.md (.prdkit/workflows/init.md).\n' ;;
 esac
 [ -z "$mixed" ] || printf '\nTwo spec forms: specs/SPEC.md beside %s — keep one; the views below combine both.\n' "$mixed"
@@ -445,7 +437,7 @@ while IFS="$SEP" read -r kind part parent; do
 done <<< "$part_graph"
 
 printf '\nIn flight\n'
-if [ -z "$changes" ] && [ -z "$leftover" ]; then printf '  No open changes.\n'; fi
+if [ -z "$changes" ]; then printf '  No open changes.\n'; fi
 while IFS="$SEP" read -r id title opened step waits nxt parent total passed failed maxatt stalled_items ws ns loc tags tallies unassigned invalid; do
     [ -n "$id" ] || continue
     a="$(age "$opened")"
@@ -470,10 +462,6 @@ while IFS="$SEP" read -r id title opened step waits nxt parent total passed fail
     case "$parent" in ''|none) ;; *) printf '    parent: %s\n' "$parent" ;; esac
     case "$unclosed" in *" $id "*) printf '    merged without closing: record on %s, with no child or outcome checkpoint keeping it open; close it in the next relevant PR, or give a change spanning PRs a checkpoint (review.md, Closing)\n' "$base" ;; esac
 done <<< "$detailed_changes"
-while IFS="$SEP" read -r id done_n total_n; do
-    [ -n "$id" ] || continue
-    printf '  0.x feature %s — still in specs/features/%s/, tasks %s/%s checked; finish the cutover: a change record if the owner keeps it open (.prdkit/workflows/compact.md)\n' "$id" "$id" "$done_n" "$total_n"
-done <<< "$leftover"
 if [ -n "$branches" ]; then
     printf '  Unmerged branches (oldest first):\n'
     printf '%s\n' "$branches" | head -10 | awk -F '\037' 'NF { printf "    %s (last commit %s%s)\n", $1, $2, ($3 == "yes" ? ", possibly squash-merged" : "") }'

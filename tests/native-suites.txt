@@ -1,7 +1,5 @@
 # Native macOS coverage, independent of the Linux discovery list.
 test_init.sh
-test_upgrade_1_0.sh
-test_upgrade_2_0.sh
 test_optional_subsystems.sh
 test_upgrade_recovery.sh
 test_new_change.sh
@@ -33,10 +31,8 @@ test_review_base_merge.sh
 test_review_fingerprint.sh
 test_review_receipts.sh
 test_review_gate.sh
+test_review_record_format.sh
 test_pr_review.sh
-test_review_legacy_scan.sh
-test_review_legacy_gate.sh
-test_review_upgrade.sh
 test_review_owner.sh
 test_publish_review.sh
 test_review_package.sh
