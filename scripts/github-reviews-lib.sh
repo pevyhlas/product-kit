@@ -13,54 +13,72 @@
 # shellcheck disable=SC2034,SC2016 # Public outputs; jq/GraphQL variables are literal.
 
 github_review_policy() {
-    local root="$1" at="$2" config fields registry area entry
+    local root="$1" at="$2" config fields registry area entry mode normalize rules policy_locale="${LC_ALL:-}"
     RC_ERROR="Cannot read trusted review policy at ${at:-origin/HEAD}"
     [ -n "$at" ] || return 1
     config="$(git -C "$root" show "$at:.prdkit/memory/config.md" | review_text_stream)" || return 1
-    fields="$(printf '%s\n' "$config" | LC_ALL=C awk '
-        function fail(reason, key) {
-            print reason ((key in line) ? " (config.md line " line[key] ")" : "")
-            exit 1
-        }
-        # Mask comments and fenced examples before looking for assignments. Preserve
-        # original lines for validation; the recognition copy never supplies a value.
-        function visible(s,   text,i,mark,rest) {
-            if (!comment && match(s,/^[[:space:]]*(```+|~~~+)/)) {
-                rest=substr(s,RLENGTH+1)
-                mark=substr(s,1,RLENGTH); sub(/^[[:space:]]*/, "", mark)
-                if (!fence && (substr(mark,1,1)=="~" || rest !~ /`/)) { fence=mark; return "" }
-                if (fence && index(mark,fence)==1 && rest ~ /^[[:space:]]*$/) { fence=""; return "" }
-            }
-            if (fence) return ""
-            while (length(s)) {
-                if (comment) {
-                    i=index(s,"-->"); if (!i) return text
-                    s=substr(s,i+3); comment=0
-                } else {
-                    i=index(s,"<!--"); if (!i) return text s
-                    text=text substr(s,1,i-1) " "; s=substr(s,i+4); comment=1
-                }
-            }
-            return text
+    normalize='
+        function spaces(s) {
+            # Unicode White_Space in UTF-8, in the C byte locale.
+            gsub(/[[:space:]]|\302[\205\240]|\341\232\200|\342\200[\200-\212\250\251\257]|\342\201\237|\343\200\200/, " ", s)
+            return s
         }
         function normalized(s) {
             gsub(/`/, "", s)
-            # Unicode White_Space in UTF-8, in the C byte locale.
-            gsub(/[[:space:]]|\302[\205\240]|\341\232\200|\342\200[\200-\212\250\251\257]|\342\201\237|\343\200\200/, " ", s)
             gsub(/\305\277/, "s", s) # long s also case-folds to an ASCII key letter
-            return tolower(s)
-        }
-        { text=visible($0); if (text=="") next }
-        text ~ /^## / { active=(text=="## Configuration"); next }
+            return tolower(spaces(s))
+        }'
+    # Only raw headings delimit policy. No comment or fence can conceal a lens mention.
+    mode="$(printf '%s\n' "$config" | LC_ALL=C awk "$normalize"'
+        /^## / { active=($0=="## Configuration"); next }
         active {
-            ntext=normalized(text)
-            if (match(ntext,/review-(lenses|publishers)/) && substr(ntext,RSTART+RLENGTH) ~ /[:=]/) {
-                key=substr(ntext,RSTART,RLENGTH)
-                if (text!=$0 || index($0,"- " key ":")!=1)
-                    malformed="Invalid " key " key at config.md line " NR ": expected - " key ": <value>"
-            }
+            if (index(normalized($0),"review-lenses")) lenses=1
+            if (/<!--|-->/ || spaces($0) ~ /^ *(```|~~~)/) marker=NR
         }
-        active && text==$0 && /^- review-(host|publishers|owner|publisher-isolation|lenses):/ {
+        END {
+            if (lenses && marker) {
+                print "config.md line " marker ": comments and fenced blocks are not allowed in ## Configuration when review-lenses is mentioned"
+                exit 1
+            }
+            print (lenses ? "lenses" : "legacy")
+        }')" || { RC_ERROR="${mode:-Cannot inspect trusted review policy}"; return 1; }
+    if [ "$mode" = legacy ]; then
+        # Original reader, including its locale, skipped examples and heading rules.
+        rules="$SPEC_SKIP_AWK"'
+            { if (spec_skip($0)) next }
+            /^## / { active=($0=="## Configuration"); next }
+            !active || /^- review-lenses:/ { next }'
+    else
+        policy_locale=C
+        rules="$SPEC_SKIP_AWK$normalize"'
+            # A hidden heading cannot establish trusted policy. Never discard its
+            # mapping and fall back to earlier publisher credentials: fail instead.
+            # The legacy heading guard knows backtick fences. An unmatched raw
+            # tilde fence marker before the heading is ambiguous too. Neither
+            # guard is used to skip assignments within a raw policy section.
+            { skipped=spec_skip($0); if (spaces($0) ~ /^ *~~~/) tilde=!tilde }
+            /^## / {
+                active=($0=="## Configuration")
+                if (active && (skipped || tilde))
+                    malformed="Hidden ## Configuration heading at config.md line " NR ": review-host: github and review-owner must be in a visible policy section"
+                next
+            }
+            !active { next }
+            {
+                ntext=normalized($0)
+                if (match(ntext,/review-(lenses|publishers)/) && substr(ntext,RSTART+RLENGTH) ~ /[:=]/) {
+                    key=substr(ntext,RSTART,RLENGTH)
+                    if (index($0,"- " key ":")!=1)
+                        malformed="Invalid " key " key at config.md line " NR ": expected - " key ": <value>"
+                }
+            }'
+    fi
+    fields="$(printf '%s\n' "$config" | LC_ALL="$policy_locale" awk -v mode="$mode" "$rules"'
+        function fail(reason, key) {
+            print reason ((mode=="lenses" && key in line) ? " (config.md line " line[key] ")" : "")
+            exit 1
+        }
+        /^- review-(host|publishers|owner|publisher-isolation|lenses):/ {
             key=$0; sub(/:.*/, "", key); sub(/^- /,"",key)
             sub(/^[^:]*:[[:space:]]*/,""); sub(/[[:space:]]+$/,"")
             values[key]=$0; count[key]++; line[key]=NR

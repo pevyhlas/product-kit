@@ -59,7 +59,8 @@ with lenses; if present it must list exactly the same set of typed accounts as t
 mapping. T3 requires a `design` mapping and a distinct owner approval. Without lenses
 the publisher list and tier minimums work as before.
 
-In `## Configuration`, write either key exactly as shown. Outside comments and
-fenced examples, a mention of `review-lenses` or `review-publishers` with a `:`
-or `=` later on the same line is treated as an attempted assignment. Formatting
-such as backticks around the key causes a policy error naming the line.
+If `## Configuration` mentions `review-lenses` anywhere, it must contain no HTML
+comment markers or fence lines (three backticks or tildes, even when indented).
+Put examples and comments under `## Meaning`. Within the policy section, a mention
+of either key with a `:` or `=` later on the same line must be a canonical assignment;
+for example, backticks around the key cause a policy error naming the line.

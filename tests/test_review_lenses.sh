@@ -82,7 +82,7 @@ for key in '-  review-lenses:' '- REVIEW-LENSES:' $'-\treview-lenses:' \
     '- review-lenses   :' '- review-lenses =' '-review-lenses:' \
     $'- review-lenses\302\240:' $'- review-lenses\342\200\207:' $'- review-lenses\342\200\257:' \
     '- `review-lenses`:' '- review-lenses' '* review-lenses:' '+ review-lenses:' \
-    '1. Review-`Lenses` maps these areas' '<!-- note --> review-lenses:'; do
+    '1. Review-`Lenses` maps these areas'; do
     policy "$publishers" "$key $mapping"; gate
     assert_eq 1 "$STATUS" "reject '$key'"; assert_contains "$OUTPUT" 'Invalid review-lenses key'
     assert_contains "$OUTPUT" 'config.md line 5'
@@ -93,11 +93,47 @@ assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'approval for the design area'
 it 'only assignments affect policy; prose leaves a valid legacy gate alone'
 policy "$publishers" '- review-lenses are optional.'; gate
 assert_eq 0 "$STATUS" "$OUTPUT"; assert_not_contains "$OUTPUT" '"areas":'
-policy "$publishers" 'Note: `review-lenses` are optional. <!-- review-publishers: example -->' \
-    '```text' '- review-lenses code=bot:1001' '```' \
-    '~~~text' '- review-publishers: bot:42' '~~~' \
-    'An example: <!--' '- review-lenses: code=bot:1001' '-->'; gate
+it 'raw lens policy rejects comment and fence markers, even when they look like prose'
+for marker in 'A literal `<!--` starts a comment.' '    ~~~' '```text' '-->' $'\342\200\257~~~'; do
+    policy "$publishers" "$marker" "$separate"; gate
+    assert_eq 1 "$STATUS" "reject '$marker' before mapping"
+    assert_contains "$OUTPUT" 'comments and fenced blocks are not allowed'
+done
+policy "$publishers" '<!--' "$separate" '-->'; gate
+assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'comments and fenced blocks are not allowed'
+policy "$publishers" 'The `Review-Lenses` setting is optional.' '<!-- note -->'; gate
+assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'comments and fenced blocks are not allowed'
+
+it 'without a mention of lenses the original comment and fence rules apply'
+policy "$publishers" '<!--' '- review-publishers: bot:42' '-->' \
+    '```text' '- review-owner: user:42' '```' 'A literal `<!--` is harmless.'; gate
 assert_eq 0 "$STATUS" "$OUTPUT"; assert_not_contains "$OUTPUT" '"areas":'
+# The legacy reader does not treat an inline opener as a multiline comment.
+policy 'A literal `<!--` is harmless.' "$publishers"; gate
+assert_eq 0 "$STATUS" "$OUTPUT"
+
+it 'the shipped template keeps examples outside the raw policy section'
+awk -v pub="$publishers" -v lenses="$separate" '
+    { print } /^## Configuration$/ {
+        print "- review-host: github\n- review-owner: user:1003"; print pub; print lenses
+    }' "$PK_ROOT/templates/config-template.md" | trusted_edit "$ref" "$config"
+gate; assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'approval for the design area'
+review APPROVED 1004; gate; assert_eq 0 "$STATUS" "$OUTPUT"
+
+it 'a hidden heading cannot supply required host and owner policy'
+for mapping_line in '' "$separate"; do
+    printf '%s\n' '```text' '## Configuration' '- review-host: github' \
+        '- review-owner: user:1003' "$publishers" "$mapping_line" | trusted_edit "$ref" "$config"
+    gate; assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'review-host: github'
+done
+# Previous visible credentials must not compensate for an ambiguous later heading.
+for fence in '```text' '~~~text'; do
+    policy "$publishers" '## Meaning' "$fence" '## Configuration' "$separate"; gate
+    assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'Hidden ## Configuration heading'
+done
+printf '%s\n' '## Configuration' "$separate" '## Meaning' '- review-host: github' \
+    '- review-owner: user:1003' | trusted_edit "$ref" "$config"
+gate; assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'review-host: github'
 
 it 'a noncanonical publisher assignment cannot silently evade the union check'
 review APPROVED 1004
