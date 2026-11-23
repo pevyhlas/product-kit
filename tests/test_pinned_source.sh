@@ -10,10 +10,8 @@ git rm -rq --cached .product-kit || exit 1
 git -C .product-kit init -q
 git -C .product-kit config user.name test
 git -C .product-kit config user.email t@example.com
-# Exercise the 1.x-to-2.0 upgrade path independently of the checkout's release version.
-printf '1.5.0\n' > .product-kit/VERSION
-printf '#!/bin/sh\nexit 0\n' > .product-kit/scripts/retired-c7a.sh
-printf '# Retired fixture command\n' > .product-kit/commands/prdkit-retired.md
+# Distinct fixture versions exercise an ordinary upgrade with the same format.
+printf '10.0.0\n' > .product-kit/VERSION
 git -C .product-kit add -A
 git -C .product-kit commit -qm 'synthetic source before upgrade' || exit 1
 OLD_PIN="$(git -C .product-kit rev-parse HEAD)"
@@ -44,9 +42,8 @@ save_manifest() { cp .prdkit/.manifest .git/manifest.saved; }
 restore_manifest() { cp .git/manifest.saved .prdkit/.manifest; }
 
 it 'prepared upgrade needs one installer command and no copied hashes'
-printf '2.0.0\n' > .product-kit/VERSION
+printf '10.1.0\n' > .product-kit/VERSION
 printf '\nNew shipped command content.\n' >> .product-kit/commands/prdkit.md
-rm .product-kit/scripts/retired-c7a.sh .product-kit/commands/prdkit-retired.md
 git -C .product-kit add -A
 git -C .product-kit commit -qm 'synthetic prepared upgrade' || exit 1
 PIN="$(git -C .product-kit rev-parse HEAD)"
@@ -62,9 +59,7 @@ assert_eq "$policy" "$(install_hash_stream < .prdkit/memory/constitution.md)" 'c
 assert_eq "$template" "$(install_hash_stream < .prdkit/templates/spec-template.md)" 'custom template preserved'
 assert_contains "$(cat AGENTS.md)" 'Consumer prefix.' 'unmanaged prefix preserved'
 assert_eq '.' "$(tail -c 1 AGENTS.md)" 'unmanaged suffix keeps absent final newline'
-for path in .prdkit/scripts/bash/retired-c7a.sh .prdkit/scripts/bash/render-agents.sh .claude/commands/prdkit-retired.md; do
-    if [ ! -e "$path" ]; then _ok "retired path absent: $path"; else _no "retired path retained: $path"; fi
-done
+assert_eq absent "$([ -e .prdkit/scripts/bash/render-agents.sh ] && echo present || echo absent)" 'deselected optional helper is absent'
 git add -A
 git commit -qm 'installed prepared upgrade' || exit 1
 HEAD_SHA="$(git rev-parse HEAD)"
@@ -166,7 +161,7 @@ printf '999.0.0\n' > .product-kit/VERSION
 printf '\nDirty source bytes.\n' >> .product-kit/scripts/status.sh
 check_source --head "$HEAD_SHA"
 assert_eq 0 "$STATUS" "source objects, not source worktree: $OUTPUT"
-printf '2.0.0\n' > .product-kit/VERSION
+printf '10.1.0\n' > .product-kit/VERSION
 git -C .product-kit show HEAD:scripts/status.sh > .product-kit/scripts/status.sh
 
 it 'replacement refs cannot substitute consumer or source history'

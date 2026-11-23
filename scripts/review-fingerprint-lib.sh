@@ -95,8 +95,8 @@ _review_anchored() { # old-blob-file diff-file
         }' "$1" "$2"
 }
 
-# A legacy shared-log close is metadata only if the selected record was deleted in this
-# range, there is no per-change entry, and exactly one well-formed line was added for it.
+# A compacted close is metadata only if the selected record was deleted in this
+# range with a valid per-change entry, and exactly that line moved to the shared log.
 # Return the blob ID of the log without that line, or fail to keep the original log delta.
 _review_shared_log_without_close() { # root id start rev old-mode old-id new-id oldtext newtext deletion-text
     local root="$1" id="$2" start="$3" rev="$4" oldmode="$5" last entry lines deletion_lines
@@ -107,9 +107,9 @@ _review_shared_log_without_close() { # root id start rev old-mode old-id new-id 
     last="$(git -C "$root" log -1 --format=%H "$start..$rev" -- "$record")" && [ -n "$last" ] || return 1
     entry="$(git -C "$root" ls-tree "$last^" -- "$record")" || return 1
     case "$entry" in "100644 blob "*) ;; *) return 1 ;; esac
-    entry="$(git -C "$root" ls-tree "$last" -- specs/log.md)" || return 1
+    entry="$(git -C "$root" ls-tree "$last" -- "$own")" || return 1
     case "$entry" in "100644 blob "*) ;; *) return 1 ;; esac
-    _review_blob_text "$root" "$last:specs/log.md" "${10}" || return 1
+    _review_blob_text "$root" "$last:$own" "${10}" && spec_log_entry_valid "${10}" "$id" || return 1
     deletion_lines="$(wc -l < "${10}")" || return 1
 
     if [ "$oldmode" = 000000 ]; then : > "$8" || return 1
@@ -128,9 +128,7 @@ _review_shared_log_without_close() { # root id start rev old-mode old-id new-id 
         $0 ~ key {
             n++
             if ($0 != original || terminated != (FNR <= lines)) next
-            text=$0
-            if (FNR <= lines) sub(/\r$/, "", text)
-            if (text !~ /\r/ && text ~ ("^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] " id ": .*[^[:space:]]")) valid++
+            valid++
             next
         }
         { printf "%s%s", $0, (FNR <= lines ? "\n" : "") }
@@ -214,13 +212,6 @@ review_fingerprint() { # root id base rev [pathspec...]
     rm -f "$stream"
     REVIEW_FP="fp1:$digest"
     printf '%s\n' "$REVIEW_FP"
-}
-
-# Validate historical v3 receipt provenance only. Never use the old shared-log
-# exclusion to publish a verdict or check what content the current head carries.
-review_legacy_log_fingerprint() { # root id base rev
-    review_fingerprint "$@" . ":(top,literal,exclude)specs/changes/$2.md" \
-        ':(top,literal,exclude)specs/log.md' ":(top,literal,exclude)specs/log/$2.md"
 }
 
 # The paths whose chunks differ between two streams (files), one per line, sorted: for messages.

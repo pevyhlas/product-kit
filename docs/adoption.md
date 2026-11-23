@@ -17,6 +17,3 @@ and tests realize them, so the spec grows only where it narrows real choices.
 Long-lived consumers can check the adoption contract mechanically with the installed
 [CI gates](ci-gates.md): the pinned kit revision, manifest and command surface
 (`check-adoption.sh`), and optionally `doctor.sh --strict`.
-
-A project already on Product-Kit 0.x follows [migrating to 1.0](migrating-to-1.0.md): upgrade,
-then one cutover between changes.

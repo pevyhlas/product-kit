@@ -128,7 +128,7 @@ for mode in "$@"; do
     setup
     case "$mode" in
         blockers)
-            it "Same-identity foreign/carried/legacy blockers exclude retained and prospective facts"
+            it "Same-identity foreign and carried blockers exclude retained and prospective facts"
             post security PASS; foreign security FAIL 7
             if mapped; then
                 assert_eq 0 "$(jq .blockers.invalid_receipts "$PKG/dispatch.json")" 'foreign FAIL is valid native fixture evidence'
@@ -155,31 +155,7 @@ for mode in "$@"; do
             fi
             rm "$GH_STUB_DIR/pulls/6.json" "$GH_STUB_DIR/reviews/6.json"
             cp "$GH_STUB_DIR/original.json" "$GH_STUB_DIR/reviews/7.json"
-            advance legacy
-            post security PASS
-            printf '**Review**: round 1 · %s..%s · security · FAIL · 0 critical, 1 high, 0 medium, 0 low · https://example.invalid/legacy\n' \
-                "$BASE" "$F1" >> "specs/changes/$ID.md"
-            git add "specs/changes/$ID.md"; git commit -qm 'synthetic legacy blocker' || exit 1
-            host_head
-            if mapped; then
-                assert_eq 0 "$(jq .blockers.invalid_receipts "$PKG/dispatch.json")" 'foreign prior PASS is valid'
-                assert_eq true "$(jq 'any(.blockers.legacy[]; .reviewer=="security" and (.cleared|not))' "$PKG/dispatch.json")" 'legacy actually stands'
-                assert_eq '[]' "$(jq -c '[.retained[].reviewer]' "$PKG/dispatch.json")" 'legacy blocker excludes retained identity'
-            fi
-            cp "$GH_STUB_DIR/original.json" "$GH_STUB_DIR/reviews/7.json"
-            advance legacy-prospective
-            plan
-            jq --arg path "specs/changes/$ID.md" '.fixes += [(.fixes[0]|.path=$path)]' .git/plan.json > .git/next.json
-            mv .git/next.json .git/plan.json
-            if build --since "$F1" --pr https://github.com/owner/repo/pull/7 --review-plan .git/plan.json; then
-                assert_eq true "$(jq .scope_valid "$PKG/dispatch.json")" 'legacy prospective control has a complete structural map'
-                assert_eq '[]' "$(jq -c '[.prospective_carry[].reviewer]' "$PKG/dispatch.json")" 'legacy excludes prospective identity'
-            fi
-            advance cleared-control; post security PASS
-            if mapped; then
-                assert_eq true "$(jq 'all(.blockers.legacy[]; .cleared)' "$PKG/dispatch.json")" 'native clearance control'
-                assert_eq '["security"]' "$(jq -c '[.retained[].reviewer]' "$PKG/dispatch.json")" 'different-identity FAIL/cleared legacy do not hide retention'
-            fi ;;
+            ;;
         prior)
             it "Every valid current-PR identity is accounted without foreign approval transfer"
             foreign design PASS 7

@@ -2,8 +2,8 @@
 # Faults at real command boundaries, not installer-only test hooks. Each retry uses real tools.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 source "$PK_ROOT/scripts/install-lib.sh"
-REAL_CP="$(command -v cp)"; REAL_MV="$(command -v mv)"; REAL_RM="$(command -v rm)"; REAL_MKTEMP="$(command -v mktemp)"
-export REAL_CP REAL_MV REAL_RM REAL_MKTEMP
+REAL_CP="$(command -v cp)"; REAL_MV="$(command -v mv)"; REAL_MKTEMP="$(command -v mktemp)"
+export REAL_CP REAL_MV REAL_MKTEMP
 SHIMS="$(mktemp -d)"; track_tmp "$SHIMS"
 cat > "$SHIMS/fault" <<'EOF'
 #!/usr/bin/env bash
@@ -28,18 +28,18 @@ case "$tool:$FAULT" in
             done
             exit 78
         fi ;;
-    rm:retire) if [ "$last" = "$FAULT_ROOT/.prdkit/scripts/bash/retired-probe.sh" ]; then exit 74; fi ;;
     mv:agents) if [ "$last" = "$FAULT_ROOT/AGENTS.md" ]; then exit 75; fi ;;
     mv:manifest) if [ "$last" = "$FAULT_ROOT/.prdkit/.manifest" ]; then exit 76; fi ;;
+    mv:published) if [ "$last" = "$FAULT_ROOT/.prdkit/.manifest" ]; then "$REAL_MV" "$@" || exit; exit 76; fi ;;
     mktemp:storage) case "$last" in *prdkit-install*) exit 77 ;; esac ;;
 esac
 case "$tool" in
     cp) exec "$REAL_CP" "$@" ;; mv) exec "$REAL_MV" "$@" ;;
-    rm) exec "$REAL_RM" "$@" ;; mktemp) exec "$REAL_MKTEMP" "$@" ;;
+    mktemp) exec "$REAL_MKTEMP" "$@" ;;
 esac
 EOF
 chmod +x "$SHIMS/fault"
-for tool in cp mv rm mktemp; do ln -s fault "$SHIMS/$tool"; done
+for tool in cp mv mktemp; do ln -s fault "$SHIMS/$tool"; done
 
 it 'a partial mapping cannot become a successful partial install'
 PROJ="$(make_project)"; track_tmp "$PROJ"
@@ -54,13 +54,12 @@ assert_eq 1 "$STATUS" 'enumeration failure reaches the installer'
 assert_contains "$OUTPUT" 'Cannot enumerate kit files' 'failure names the incomplete plan'
 if [ ! -e "$PROJ/.prdkit" ] && [ ! -e "$PROJ/.claude" ]; then _ok 'no partial install'; else _no 'partial install created'; fi
 
-for fault in copy interrupt kill retire agents manifest storage; do
+for fault in copy interrupt kill agents manifest storage; do
     it "$fault failure remains explicit and the same-source retry preserves consumer bytes"
     PROJ="$(make_project)"; track_tmp "$PROJ"
     # The installer canonicalizes /var to /private/var on macOS; fault operands
     # must identify the same physical paths, not silently miss every boundary.
     PROJ="$(CDPATH='' cd "$PROJ" && pwd -P)"
-    printf '#!/bin/sh\nexit 0\n' > "$PROJ/.product-kit/scripts/retired-probe.sh"
     printf 'User prefix.\n' > "$PROJ/AGENTS.md"
     bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --harness all >/dev/null
     printf '\nUser suffix.\n' >> "$PROJ/AGENTS.md"
@@ -78,7 +77,6 @@ for fault in copy interrupt kill retire agents manifest storage; do
     # Early changed command guarantees an interrupted install can actually be mixed-version.
     printf '\nNew command bytes.\n' >> "$PROJ/.product-kit/commands/prdkit.md"
     printf '\nNew pristine template.\n' >> "$PROJ/.product-kit/templates/change-template.md"
-    rm "$PROJ/.product-kit/scripts/retired-probe.sh"
     # Change only the generated section, retaining the same delimiters.
     sed 's/## Product-Kit workflow/## Product-Kit workflow updated/' "$PROJ/.product-kit/scripts/agents-section.md" > "$PROJ/new-section"
     mv "$PROJ/new-section" "$PROJ/.product-kit/scripts/agents-section.md"
@@ -125,6 +123,96 @@ for fault in copy interrupt kill retire agents manifest storage; do
     assert_eq 0 "$STATUS" 'second retry is idempotent'
     assert_eq "$stable" "$(install_hash_stream < "$PROJ/.prdkit/.manifest")" 'second retry keeps manifest bytes'
 done
+
+refusal_snapshot() ( # consumer bytes, path types, modes, and staged state (including ignored markers)
+    set -o pipefail
+    cd "$1" || return 1
+    {
+        git ls-files --stage || return 1
+        tar --format ustar --exclude=./.git --exclude=./.product-kit -cf - .
+    } | git hash-object --stdin
+)
+
+refuses_unchanged() { # label diagnostic
+    local before after
+    before="$(refusal_snapshot "$PROJ")" || exit 1
+    run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade
+    assert_eq 1 "$STATUS" "$1 refuses"
+    assert_contains "$OUTPUT" "$2" "$1 diagnosis"
+    after="$(refusal_snapshot "$PROJ")" || exit 1
+    assert_eq "$before" "$after" "$1 leaves target, index and marker unchanged"
+}
+
+it 'plain upgrade refuses dirty checkouts and invalid retry states without changing them'
+BASE="$(make_inited_project)"; track_tmp "$BASE"
+printf '\nNew command bytes.\n' >> "$BASE/.product-kit/commands/prdkit.md"
+# Exercise marker validation even if the runtime marker is visible to Git.
+grep -vxF '.prdkit/.install-state' "$BASE/.gitignore" > "$BASE/.git/ignore"
+mv "$BASE/.git/ignore" "$BASE/.gitignore"
+snapshot_upgrade_fixture "$BASE" || exit 1
+version="$(cat "$BASE/.product-kit/VERSION")"
+for kind in staged unstaged untracked wrong-source unrelated edited retry-staged outside \
+    bytes type mode missing duplicate extra wrong-path executable; do
+    PROJ="$(mktemp -d)" || exit 1; track_tmp "$PROJ"
+    cp -pR "$BASE/." "$PROJ/" || exit 1
+    marker="$PROJ/.prdkit/.install-state"
+    conffile="$PROJ/.prdkit/templates/change-template.md"
+    command_path=.claude/commands/prdkit.md
+    diagnosis='checkout must be clean'
+    case "$kind" in
+        staged|unstaged|untracked) ;;
+        *)
+            cp "$PROJ/.product-kit/commands/prdkit.md" "$PROJ/$command_path"
+            printf 'phase: file\npath: %s\nsource-version: %s\n' "$command_path" "$version" > "$marker"
+            diagnosis='not a valid installer marker' ;;
+    esac
+    case "$kind" in
+        staged|unstaged)
+            printf '\nUser edit.\n' >> "$PROJ/AGENTS.md"
+            if [ "$kind" = staged ]; then git -C "$PROJ" add AGENTS.md || exit 1; fi ;;
+        untracked) printf 'User work.\n' > "$PROJ/unrelated" ;;
+        wrong-source)
+            printf 'phase: file\npath: %s\nsource-version: 0.0.0\n' "$command_path" > "$marker"
+            diagnosis='checkout must be clean' ;;
+        unrelated)
+            printf 'User work.\n' > "$PROJ/unrelated"
+            diagnosis='not a validated installer-owned intermediate state: unrelated' ;;
+        edited)
+            printf '\nUser edit.\n' >> "$PROJ/.claude/commands/prdkit-inbox.md"
+            diagnosis='not a validated intermediate state (bytes, type or mode): .claude/commands/prdkit-inbox.md' ;;
+        retry-staged)
+            git -C "$PROJ" add "$command_path" || exit 1
+            diagnosis='checkout must be clean' ;;
+        outside)
+            printf '\nUser edit.\n' >> "$PROJ/AGENTS.md"
+            diagnosis='AGENTS.md changed outside the managed section' ;;
+        bytes|type|mode)
+            case "$kind" in
+                bytes) printf '\nUser edit.\n' >> "$conffile" ;;
+                type) rm "$conffile" && ln -s product-template.md "$conffile" || exit 1 ;;
+                mode) chmod +x "$conffile" || exit 1 ;;
+            esac
+            diagnosis='not a validated intermediate state (bytes, type or mode): .prdkit/templates/change-template.md' ;;
+        missing) printf 'source-version: %s\n' "$version" > "$marker" ;;
+        duplicate) printf 'phase: file\n' >> "$marker" ;;
+        extra) printf 'unrelated: data\n' >> "$marker" ;;
+        wrong-path) printf 'phase: file\npath: unrelated\nsource-version: %s\n' "$version" > "$marker" ;;
+        executable) chmod +x "$marker" || exit 1 ;;
+    esac
+    refuses_unchanged "$kind" "$diagnosis"
+done
+
+it "deselecting an option can resume after manifest publication"
+PROJ="$(make_inited_project --with agent-tiers)"; track_tmp "$PROJ"
+PROJ="$(CDPATH='' cd "$PROJ" && pwd -P)"
+snapshot_upgrade_fixture "$PROJ" || exit 1
+run env PATH="$SHIMS:$PATH" FAULT=published FAULT_ROOT="$PROJ" bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --without agent-tiers
+assert_eq 76 "$STATUS" "$OUTPUT"
+assert_contains "$(cat "$PROJ/.prdkit/.manifest")" 'options: none'
+assert_file "$PROJ/.prdkit/.install-state"
+run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --without agent-tiers
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq absent "$([ -e "$PROJ/.prdkit/.install-state" ] && echo present || echo absent)"
 
 it "overlapping writers refuse before mutation and the original writer finishes coherently"
 PROJ="$(make_inited_project)"; track_tmp "$PROJ"

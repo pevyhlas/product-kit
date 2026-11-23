@@ -160,7 +160,7 @@ done < "$PKG/manifest.tsv"
 it "Gate diagnostics do not change any existing JSON field, coverage or exits"
 parity
 
-it "A pre-upgrade FAIL needs a full review, not a focused bridge"
+it "An unsupported fingerprint cannot supply a prospective bridge"
 # Same source delta as F1, plus a log edit the former token did not bind.
 git checkout -q --detach "$F1"
 printf -- '- 2026-01-02 002-other: complete\n' >> specs/log.md
@@ -170,7 +170,15 @@ git checkout -q "$ID"
 jq --arg old "$old_head" '.[1].body |= (split("\n") | .[1] |= (fromjson | .head=$old | tojson) | join("\n"))' \
     "$GH_STUB_DIR/original.json" > "$GH_STUB_DIR/reviews/7.json"
 package
-assert_eq '[]' "$(jq -c .prospective_carry "$PKG/dispatch.json")" 'unbound blocker cannot supply the focused bridge' || :
+assert_eq '[]' "$(jq -c .prospective_carry "$PKG/dispatch.json")" 'invalid receipt cannot support reduced dispatch'
+assert_eq 1 "$(jq -r '.blockers.invalid_receipts' "$PKG/dispatch.json")" 'unsupported fingerprint is an explicit refusal'
+assert_contains "$(cat "$PKG/dispatch.json")" 'requires current fp1 provenance'
+
+it "A FAIL with an unavailable head needs a full review, not a focused bridge"
+jq '.[1].body |= (split("\n") | .[1] |= (fromjson | .head="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" | tojson) | join("\n"))' \
+    "$GH_STUB_DIR/original.json" > "$GH_STUB_DIR/reviews/7.json"
+package
+assert_eq '[]' "$(jq -c .prospective_carry "$PKG/dispatch.json")" 'unbound blocker cannot supply the focused bridge'
 assert_eq true "$(jq -r '.blockers.scope[]|select(.reviewer=="code")|.full_required' "$PKG/dispatch.json")" 'dispatch names the required full re-review'
 cp "$GH_STUB_DIR/original.json" "$GH_STUB_DIR/reviews/7.json"
 
@@ -296,7 +304,7 @@ for native_state in CHANGES_REQUESTED DISMISSED; do
     assert_eq "$native_state" "$(jq -r '.blockers.owner.barriers[0].state' "$PKG/dispatch.json")" \
         'advisory output retains the actual owner barrier'
     assert_eq '["owner"]' "$(jq -c .blockers.problem_classes "$PKG/dispatch.json")" \
-        'the only failure is classified as owner, not an unrelated coverage or legacy failure'
+        'the only failure is classified as owner, not an unrelated coverage failure'
     assert_eq 1 "$(jq '.problems|length' "$PKG/gate.json")" 'one native owner barrier, no duplicate T3 error'
     assert_eq '["code","security"]' "$(jq -c '[.retained[].reviewer]|sort' "$PKG/dispatch.json")" \
         'actual independent coverage stays distinct from overall eligibility'
@@ -306,15 +314,7 @@ for native_state in CHANGES_REQUESTED DISMISSED; do
 done
 cp "$GH_STUB_DIR/original.json" "$GH_STUB_DIR/reviews/7.json"
 
-it "Legacy blockers, owner requirements and tier floors are not waived by the map"
-printf '**Review**: round 1 · %s..%s · code · FAIL · 0 critical, 1 high, 0 medium, 0 low · https://example.invalid/legacy\n' \
-    "$BASE" "$F1" >> "specs/changes/$ID.md"
-git add "specs/changes/$ID.md"; git commit -qm 'synthetic standing legacy FAIL'
-advance legacy-blocker
-package
-assert_eq true "$(jq '(.blockers.legacy|length)>0' "$PKG/dispatch.json")" 'standing legacy FAIL explicit'
-assert_eq fail "$(jq -r .gate_result "$PKG/dispatch.json")" 'legacy blocks'
-parity
+it "Owner requirements and tier floors are not waived by the map"
 sed 's/\*\*Tier\*\*: T2/**Tier**: T3/' "specs/changes/$ID.md" > .git/record
 cp .git/record "specs/changes/$ID.md"; git add "specs/changes/$ID.md"; git commit -qm 'synthetic T3 requirement'
 advance owner-required
@@ -327,7 +327,7 @@ cp .git/record "specs/changes/$ID.md"; git add "specs/changes/$ID.md"; git commi
 advance tier-floor
 package
 assert_eq T3 "$(jq -r .tier "$PKG/gate.json")" 'historical floor cannot be lowered'
-assert_eq fail "$(jq -r .gate_result "$PKG/dispatch.json")" 'floor/owner/legacy still blocking'
+assert_eq fail "$(jq -r .gate_result "$PKG/dispatch.json")" 'tier and owner still block'
 parity
 
 it "Ambiguous selectors, symlink context and deleted child provenance stay explicit"

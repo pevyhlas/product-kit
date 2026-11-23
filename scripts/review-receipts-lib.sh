@@ -102,17 +102,16 @@ _receipt_matches_v3() { # root change base_at rev token -> 0 match, 1 mismatch, 
         RC_PROVENANCE=unverified; return 0
     fi
     fp="$(review_fingerprint "$1" "$2" "$3" "$4")" || { RC_PROVENANCE=unverified; return 0; }
-    [ "$fp" != "$5" ] || return 0
-    # Recognize old provenance for blocker history, never as a coverage edge.
-    fp="$(review_legacy_log_fingerprint "$1" "$2" "$3" "$4")" || return 2
-    [ "$fp" = "$5" ] || return 1
-    [ "$RC_PROVENANCE" = unverified ] || RC_PROVENANCE=legacy-only
+    [ "$fp" = "$5" ]
 }
 
 _receipts_consistency() { # root change from to head since base base_at -> RC_ERROR
     local root="$1" change="$2" from="$3" to="$4" head="$5" since="$6" base="$7" base_at="$8"
     RC_ERROR=""
     RC_PROVENANCE=verified
+    if [ "$to" != none ] && { { [ "$from" = start ] && [ "$to" = "$REVIEW_FP_EMPTY" ]; } || [ "$from" = "$to" ]; }; then
+        RC_ERROR='empty review range; prdkit.review.v3 requires a non-empty fingerprint delta'; return 1
+    fi
     git check-ref-format "$base" >/dev/null 2>&1 || { RC_ERROR='invalid base ref'; return 1; }
     if ! spec_objects_local "$root"; then
         RC_ERROR='receipt provenance cannot be checked without fetching from the promisor remote on this Git version'; return 1
@@ -122,7 +121,7 @@ _receipts_consistency() { # root change from to head since base base_at -> RC_ER
     if [ "$to" != none ]; then
         _receipt_matches_v3 "$root" "$change" "$base_at" "$head" "$to" || {
             if [ "$?" = 2 ]; then RC_ERROR='cannot fingerprint the receipt head against base_at'
-            else RC_ERROR="its to is not the content of its head ${head:0:12}; the publisher computed it against another base or is wrong; publish the verdict again"; fi
+            else RC_ERROR="its to is not the content of its head ${head:0:12}; prdkit.review.v3 requires current fp1 provenance including changes to specs/log.md"; fi
             return 1
         }
     fi
@@ -310,7 +309,10 @@ review_receipts_read() { # snapshot work; no gh or jq, including on errors
         $1=="X" { if (NF!=5 || !digits($2) || !digits($3) || !digits($4) || $5=="" || $2<=last) bad=1; last=$2; next }
         $1=="O" { if (NF!=7 || $2 !~ /^[1-9][0-9]*$/ || !timestamp($3) ||
             $4 !~ /^(APPROVED|CHANGES_REQUESTED|DISMISSED)$/ || $7 !~ /^user:[1-9][0-9]*$/ || seen_owner[$2]++) bad=1; next }
-        { bad=1 } END { exit (bad || NR==0) }' "$file"; then RC_ERROR='malformed receipt snapshot'; return 1; fi
+        { bad=1 } END { exit (bad || NR==0) }' "$file"; then
+        RC_ERROR='malformed receipt snapshot: expected prdkit-receipts 2 with current prdkit.review.v3 receipt rows'
+        return 1
+    fi
     IFS= read -r header < "$file" || { RC_ERROR='empty receipt snapshot'; return 1; }
     IFS=$'\037' read -r magic repo pr prhead created base fetched isolation author <<< "$header"
     RC_ERROR='invalid snapshot header'
@@ -352,7 +354,6 @@ review_receipts_scope() { # change rigor registry work root; local checks also r
     RC_PROBLEMS=(); RC_SCOPE_BLOCKERS=(); RC_REFERENCES=(); RC_CURRENT_REVIEWERS=(); RC_COVERAGE="$work/coverage"; RC_INVALID=0; RC_CARRIED=0; RC_RECEIPTS=0
     RC_FULL_REQUIRED=()
     : > "$RC_COVERAGE" || { RC_ERROR='cannot write receipt coverage'; return 1; }
-    RC_VERIFIED="$work/verified"; : > "$RC_VERIFIED" || { RC_ERROR='cannot write verified receipts'; return 1; }
     scoped="$(mktemp "$work/scoped.XXXXXX")" || { RC_ERROR='cannot allocate scoped receipts'; return 1; }
     while IFS= read -r row; do
         IFS=$'\037' read -r type seq origin review time receipt_id change reviewer from to rhead since base base_at verdict c h m l report carried <<< "$row"
@@ -367,7 +368,7 @@ review_receipts_scope() { # change rigor registry work root; local checks also r
             R) RC_RECEIPTS=$((RC_RECEIPTS+1)) ;;
             *) RC_ERROR='invalid normalized receipt row'; return 1 ;;
         esac
-        RC_ERROR="invalid receipt tokens or fields"
+        RC_ERROR="invalid receipt tokens or fields; expected current prdkit.review.v3 receipt rows"
         if ! _receipts_row_valid || ! _receipts_consistency "$root" "$change" "$from" "$to" "$rhead" "$since" "$base" "$base_at"; then
             RC_INVALID=$((RC_INVALID+1)); RC_PROBLEMS+=("receipt https://github.com/$RC_REPO/pull/$origin#pullrequestreview-$review: $RC_ERROR")
             printf 'X\037%s\037%s\037%s\037%s\n' "$seq" "$origin" "$review" "$RC_ERROR" >> "$scoped"
@@ -387,7 +388,7 @@ review_receipts_scope() { # change rigor registry work root; local checks also r
             done
         fi
         if [ "$RC_PROVENANCE" != verified ]; then
-            # No edge in either direction, including for carry and legacy clearance.
+            # No edge in either direction, including for carry.
             # A blocker with an unbound endpoint still stands until a fresh full PASS.
             to=none
         fi
@@ -441,7 +442,6 @@ review_receipts_scope() { # change rigor registry work root; local checks also r
         fi
         [ "${origins[k]}" != "$RC_PR" ] || printf '%s\n' "${rs[k]}" >> "$scoped"
         if [ "${origins[k]}" = "$RC_PR" ]; then
-            [ "${provenance[k]}" != verified ] || printf '%s\n' "${rs[k]}" >> "$RC_VERIFIED"
             # Only this internal evaluation stream adds provenance. Snapshots keep
             # the original rows and recheck the objects available at replay time.
             if [ "${changes[k]}" = "$checked" ]; then printf '%s\037%s\n' "${rs[k]}" "${provenance[k]}" >> "$RC_COVERAGE"; fi

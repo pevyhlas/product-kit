@@ -274,10 +274,10 @@ assert_eq 1 "$STATUS" "check-review.sh fails"
 assert_contains "$OUTPUT" "This head's content cannot be fingerprinted against origin/$DEFAULT: $(git rev-parse HEAD | cut -c1-12) and origin/$DEFAULT have more than one merge base" "says why"
 done_with
 
-it "legacy range lines still pass; one whose commit is gone fails closed"
+it "native range endpoints must be locally verifiable"
 begin 015-legacy
 START="$(git rev-parse --short "$TIP")"; REVIEWED="$(git rev-parse --short HEAD~1)"
-printf '**Review**: round 1 · %s..%s · code · PASS · 0 critical, 0 high, 0 medium, 0 low · %s\n' "$START" "$REVIEWED" "$LINK" >> "specs/changes/$ID.md"
+printf '**Receipt fixture**: round 1 · %s..%s · code · PASS · 0 critical, 0 high, 0 medium, 0 low · %s\n' "$START" "$REVIEWED" "$LINK" >> "specs/changes/$ID.md"
 git commit -qam legacy >/dev/null
 check
 assert_eq 0 "$STATUS" "a commit range is read by its commits' content: $OUTPUT"
@@ -385,44 +385,6 @@ assert_contains "$OUTPUT" '"record_only":true' "the merge carries only the recor
 check
 assert_eq 1 "$STATUS" "record-only exempts coverage, not a standing FAIL"
 assert_contains "$OUTPUT" "code (round 3): its FAIL at $(shown "$FAILED_TO") stands: no later clean PASS from code reaches that content" "exact message"
-done_with
-
-it "a legacy FAIL needs native full PASS; narrow ancestry clearance no longer suffices, including after merge"
-legacy_line() { # verdict from to
-    local counts='0 critical, 0 high, 0 medium, 0 low'
-    [ "$1" = PASS ] || counts='0 critical, 1 high, 0 medium, 0 low'
-    printf '**Review**: round 1 · %s..%s · code · %s · %s · %s\n' "$2" "$3" "$1" "$counts" "$LINK" >> "specs/changes/$ID.md"
-    git commit -qam "legacy $1 $2..$3" >/dev/null
-    receipt_host . "$ID" "$(git rev-parse HEAD)"
-}
-close_after_merge() { # the code merged with its record open; a record-only PR closes it
-    git update-ref "$TRUSTED" HEAD
-    git rm -q "specs/changes/$ID.md"; mkdir -p specs/log
-    printf -- '- 2026-11-01 %s: closed\n' "$ID" > "specs/log/$ID.md"; git add specs/log; git commit -qm close >/dev/null
-    run bash "$CHECK" --json "$ID"
-}
-for shape in full narrow; do
-    begin "02$([ "$shape" = full ] && echo 1 || echo 2)-legacy-$shape"
-    S="$(git rev-parse --short "$TIP")"; B="$(git rev-parse --short HEAD~1)"
-    legacy_line FAIL "$S" "$B"
-    set_line src/app.txt 16 'line sixteen, fixed'; git commit -qam fix >/dev/null; C="$(git rev-parse --short HEAD)"
-    if [ "$shape" = full ]; then legacy_line PASS "$S" "$C"; else legacy_line PASS "$B" "$C"; fi
-    check
-    expected=0; [ "$shape" != narrow ] || expected=1
-    assert_eq "$expected" "$STATUS" "$shape: only native full PASS clears the legacy blocker before merge: $OUTPUT"
-    close_after_merge
-    assert_eq "$expected" "$STATUS" "$shape: record-only close retains the same legacy full-PASS requirement: $OUTPUT"
-    assert_contains "$OUTPUT" '"record_only":true' "$shape: record-only"
-    done_with
-done
-begin 023-legacy-stands
-S="$(git rev-parse --short "$TIP")"; B="$(git rev-parse --short HEAD~1)"
-set_line src/app.txt 16 'line sixteen, fixed'; git commit -qam fix >/dev/null; C="$(git rev-parse --short HEAD)"
-legacy_line FAIL "$S" "$C"
-legacy_line PASS "$B" "$B"
-close_after_merge
-assert_eq 1 "$STATUS" "a later PASS on an older commit does not resolve a legacy FAIL after merge"
-assert_contains "$OUTPUT" "stands: no later clean PASS from code reaches that content" "a later PASS on older content does not clear the FAIL"
 done_with
 
 finish

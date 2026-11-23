@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Reviewer eligibility from committed policy. Source spec-lib.sh first. No network/dependencies.
-# shellcheck disable=SC2154 # root is supplied by the gate or the upgrade caller.
+# shellcheck disable=SC2154 # root is supplied by the gate.
 read_rigor() { # rev -> light|full|unknown; caller supplies root
     { git -C "$root" show "$1:.prdkit/memory/constitution.md" 2>/dev/null || true; } | read_rigor_text
 }
@@ -23,19 +23,11 @@ review_registry() { # agents.md on stdin -> identity, role, policy line
         /^\|/ {
             n = split($0, c, "|")
             if (section == "## Review registry" && trim(c[2]) == "identity" && trim(c[3]) == "role") {
-                identity = 2; role = 3; explicit = 1; next
-            }
-            if (trim(c[2]) == "role" && trim(c[3]) == "available agent or human") {
-                identity = 3; role = 2; explicit = 0; next
+                identity = 2; role = 3; next
             }
             if (!identity || c[2] ~ /^[[:space:]:-]+$/) next
             id = trim(c[identity]); kind = trim(c[role])
             if (id !~ /^[a-z0-9][a-z0-9_.-]*$/) next
-            if (!explicit) {
-                if (kind == "review" || kind == "independent review") kind = "reviewer"
-                else if (kind == "implementation" || kind == "maker") kind = "maker"
-                else next
-            }
             if (kind != "reviewer" && kind != "maker") kind = "invalid"
             print id "\037" kind "\037" NR
             next
@@ -55,3 +47,66 @@ review_eligibility() { # registry identity -> reviewer|maker|ambiguous|unregiste
             else print "unregistered"
         }'
 }
+
+# Review text in State is not an authority in the current record format.
+review_record_format() { # record file -> 0 current, 1 unreadable, 2 unsupported review field
+    verify_lf_file "$1" || return 1
+    local found
+    found="$(LC_ALL=C awk "$SPEC_SKIP_AWK"'
+        { gsub(/[\035-\037]/, " "); if (spec_skip($0)) next }
+        /^ ? ? ?##([[:space:]]|$)/ { state = ($0 ~ /^ ? ? ?##[[:space:]]+State([[:space:]]*|[[:space:]]+#+[[:space:]]*)$/) }
+        state && /(^[[:space:]]*|·[[:space:]]*)\*\*Review\*\*:/ { print NR; exit }
+    ' "$1")" || return 1
+    [ -z "$found" ] || return 2
+}
+
+# Check the inherited checked record and both sides of every changed record. A
+# candidate cannot erase unsupported evidence by deleting or moving its record
+# or by merging away a branch-side commit. No verdict parsing or clearance.
+review_record_history() ( # root id base head work -> first diagnostic, if any
+    local root="$1" id="$2" base="$3" head="$4" work="$5" start entry commit meta mode new_mode old new blob expected checked=0
+    export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
+    set -o pipefail
+    spec_objects_local "$root" &&
+        [ "$(git -C "$root" rev-parse --is-shallow-repository)" = false ] &&
+        start="$(review_merge_base "$root" "$base" "$head")" || return 1
+    entry="$(git -C "$root" ls-tree "$start" -- "specs/changes/$id.md")" || return 1
+    : > "$work/record-blobs" || return 1
+    case "$entry" in
+        '100644 blob '*|'100755 blob '*)
+            meta="${entry%%$'\t'*}"
+            printf '%s\n' "${meta##* }" >> "$work/record-blobs" || return 1 ;;
+    esac
+    git -C "$root" rev-list "$start..$head" > "$work/record-commits" || return 1
+    verify_lf_file "$work/record-commits" allow-empty || return 1
+    # Include the net diff so an inherited record changed across the range is
+    # checked too; use all branch-side merge parents, not a simplified log.
+    git -C "$root" diff-tree --no-commit-id --no-renames --no-abbrev -r -z "$start" "$head" -- specs/changes/ > "$work/record-diff" || return 1
+    while IFS= read -r commit; do
+        git -C "$root" diff-tree --no-commit-id --no-renames --no-abbrev --root -m -r -z "$commit" -- specs/changes/ >> "$work/record-diff" || return 1
+    done < "$work/record-commits"
+    expected="$(verify_nul_count "$work/record-diff")" || return 1
+    while IFS= read -r -d '' meta; do
+        [[ "$meta" =~ ^:[0-7]{6}\ [0-7]{6}\ [0-9a-f]+\ [0-9a-f]+\ [AMDT]$ ]] || return 1
+        IFS= read -r -d '' entry || return 1
+        [ -n "$entry" ] || return 1
+        checked=$((checked + 2))
+        case "$entry" in *.md) ;; *) continue ;; esac
+        read -r mode new_mode old new _ <<< "${meta#:}"
+        case "$mode" in 100644|100755) printf '%s\n' "$old" >> "$work/record-blobs" || return 1 ;; esac
+        case "$new_mode" in 100644|100755) printf '%s\n' "$new" >> "$work/record-blobs" || return 1 ;; esac
+    done < "$work/record-diff"
+    [ "$checked" -eq "$expected" ] || return 1
+    LC_ALL=C sort -u "$work/record-blobs" > "$work/record-unique" || return 1
+    while IFS= read -r blob; do
+        git -C "$root" cat-file blob "$blob" > "$work/record-text" || return 1
+        if review_record_format "$work/record-text"; then continue
+        elif [ "$?" -eq 2 ]; then
+            printf 'Unsupported **Review** field in change record history (blob %s): current reviews are prdkit.review.v3 host receipts, not State text.\n' "$blob"
+            return 0
+        else
+            printf 'Invalid change record text in history (blob %s): expected LF-terminated Markdown.\n' "$blob"
+            return 0
+        fi
+    done < "$work/record-unique"
+)

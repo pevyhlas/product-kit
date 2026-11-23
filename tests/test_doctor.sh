@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # doctor.sh diagnoses read-only: malformed IDs and records and installation drift fail;
-# budgets, citations, expired records, the inbox, raw evidence and the 0.x layout are
+# budgets, citations, expired records, the inbox, raw evidence and the spec layout are
 # advisories that --strict promotes.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -335,27 +335,11 @@ run bash "$DOCTOR" --json
 assert_eq 0 "$STATUS"
 rm specs/records.md
 
-it "the owner inbox: open lines with age, lines without a disposition"
-cat > specs/inbox.md <<'MD'
-# Owner inbox
-
-2026-10-01 owner "Add CSV export" → folded: 004-export
-2026-10-03 agent "Library or service? Recommend library; default library" → open
-2026-10-09 owner "Ship before the fair"
-2026-10-02T09:00Z owner "Timestamped words" → open
-Prose that is not an inbox line
-2026-10-04 owner "Quick Start → Onboarding, as in the log" → open
-2026-10-05 owner "Map A -> B" -> declined: out of scope
-2026-10-06 owner "Rename" → folded: renamed "A" -> "B"
-2026-10-07 owner "x" → declined: dup of "y" → see the log
-MD
-run bash "$DOCTOR"
-assert_contains "$OUTPUT" "advisory: Owner inbox: 1 open item(s), oldest from 2026-10-03 (14 days)" "only unanswered agent questions count as owner input"
-assert_contains "$OUTPUT" "Owner inbox: 2 item(s) awaiting agent processing" "timestamped and arrow-containing owner direction awaits incorporation"
-assert_contains "$OUTPUT" "advisory: Owner inbox: 1 item(s) without an open" "missing disposition"
-assert_contains "$OUTPUT" "advisory: Owner inbox: specs/inbox.md line(s) 7 are not" "an unparsed line is reported"
-assert_contains "$OUTPUT" "advisory: Owner inbox: 8 item(s) in the one-line form" "one-line items are asked to move to headings"
-assert_contains "$OUTPUT" "Owner inbox: 4 resolved-state item(s) retained" "legacy dispositions require reconciliation before removal"
+it "one-line inbox items require the current headed format"
+printf '2026-10-01 owner "Request" → open\n' > specs/inbox.md
+run bash "$DOCTOR" --json
+assert_eq 1 "$STATUS" "unsupported inbox fails diagnostics"
+assert_contains "$OUTPUT" "headed items" "current format named"
 
 it "the owner inbox: headed items with options, a missing meta line, prose under a section"
 cat > specs/inbox.md <<'MD'
@@ -376,8 +360,6 @@ Export runs inside the request today.
 ### Rename the export?
 _2026-10-02 · agent_
 
-2026-10-01 owner "a body line that looks like a one-line item" → open
-
 ## Your direction
 
 Prose under a section heading
@@ -391,11 +373,9 @@ Prose under a section heading
 MD
 run bash "$DOCTOR"
 assert_contains "$OUTPUT" "advisory: Owner inbox: 1 open item(s), oldest from 2026-10-03 (14 days)" "headed open question"
-assert_contains "$OUTPUT" "Owner inbox: 1 item(s) awaiting agent processing" "one-line owner direction under an item body is not lost"
 assert_contains "$OUTPUT" "advisory: Owner inbox: 1 item(s) without an open" "a meta line without a disposition"
-assert_contains "$OUTPUT" "line(s) 29 are not inbox items" "a heading without a meta line"
+assert_contains "$OUTPUT" "are not inbox items" "a heading without a meta line"
 assert_not_contains "$OUTPUT" "line(s) 22" "prose in a headed inbox is ordinary text"
-assert_contains "$OUTPUT" "advisory: Owner inbox: 1 item(s) in the one-line form" "only the one-line item is asked to move"
 assert_contains "$OUTPUT" "Owner inbox: 1 resolved-state item(s) retained" "headed deferred item is diagnosed too"
 assert_contains "$(cat specs/inbox.md)" "Ship before the fair" "doctor preserves owner words"
 rm specs/inbox.md
@@ -509,11 +489,11 @@ assert_contains "$OUTPUT" "advisory: Budget: specs/inbox.md has 156 lines, over 
 assert_contains "$OUTPUT" "advisory: Budget: specs/records.md has 1 line that reads as 161 at 100 characters a line, over its 150-line reading budget; remove lifted holds, expired waivers" "superseded records leave"
 rm specs/inbox.md specs/records.md
 
-it "a 1.0 product.md with one-digit journey bullets still passes, with an advisory"
+it "one-digit journey IDs are rejected"
 printf -- '\n## Users and journeys\n\n- **J-1 Greet**: a visitor is greeted.\n' >> specs/product.md
 run bash "$DOCTOR"
-assert_eq 0 "$STATUS" "the 1.0 template's journey bullets are not a failing finding"
-assert_contains "$OUTPUT" "advisory: One-digit journey IDs at specs/product.md:9" "the Restructure is suggested"
+assert_eq 1 "$STATUS" "unsupported ID fails"
+assert_contains "$OUTPUT" "with two or more digits" "current ID format named"
 git checkout -q -- specs/product.md
 
 it "beside specs/product/, product.md and architecture.md are summaries with 80 and 100-line budgets"
@@ -663,12 +643,12 @@ run bash "$DOCTOR"
 assert_contains "$OUTPUT" "Malformed log entry specs/log/003-x.md" "a dangling symlink is seen too"
 rm -rf specs/log
 # shellcheck disable=SC2016 # backticks are Markdown code spans, not command substitution
-printf '# Demo — archive\n\n**Last 0.x feature**: none\n\n**Log condensed through**: 003; those entries: `git show abc1234:specs/log.md`.\n' > specs/archive.md
+printf '# Demo — archive\n\n**Log condensed through**: 003; those entries: `git show abc1234:specs/log.md`.\n' > specs/archive.md
 run bash "$DOCTOR"
 assert_not_contains "$OUTPUT" "Closed without" "a log condensed into the archive keeps it closed"
 # shellcheck disable=SC2016 # backticks are Markdown code spans, not command substitution
 for value in '002 — entries at `git show 9f81234:specs/log.md`' '002 as of 2026-10-30' 'through 9'; do
-    printf '# Demo — archive\n\n**Last 0.x feature**: none\n\n**Log condensed through**: %s\n' "$value" > specs/archive.md
+    printf '# Demo — archive\n\n**Log condensed through**: %s\n' "$value" > specs/archive.md
     run bash "$DOCTOR"
     assert_contains "$OUTPUT" "Closed without a log entry: 003-x" "only a leading number counts: $value"
 done
@@ -896,14 +876,15 @@ run bash "$DOCTOR"
 assert_contains "$OUTPUT" "advisory: Raw evidence tracked under specs/: 1 file(s)" "tracked evidence surfaced"
 git rm -rqf specs/changes
 
-it "a raw archive on main is an advisory naming the fix; --strict fails it"
+it "a tracked raw archive requires the current archive format"
 mkdir -p specs/archive/product-spec; printf '# Old product spec\n' > specs/archive/product-spec/product-spec.md
 run bash "$DOCTOR"
 assert_not_contains "$OUTPUT" "Archive on main" "an untracked folder is not on main"
 git add specs/archive
 run bash "$DOCTOR"
-assert_eq 0 "$STATUS" "an advisory"
-assert_contains "$OUTPUT" "advisory: Archive on main: specs/archive/ tracks 1 file(s); condense them into specs/archive.md and remove them from main with git rm; git keeps them (.prdkit/workflows/compact.md)" "the fix is named"
+assert_eq 1 "$STATUS" "unsupported layout is a finding"
+assert_contains "$OUTPUT" "Unsupported specs/archive/ layout:" "the old path is named"
+assert_contains "$OUTPUT" "specs/archive.md history" "the current path is named"
 run bash "$DOCTOR" --strict
 assert_eq 1 "$STATUS" "--strict fails it"
 git rm -rqf specs/archive
@@ -920,40 +901,6 @@ assert_not_contains "$OUTPUT" "gone-in-code" "a git path or a link in code is no
 assert_contains "$OUTPUT" "Budget: specs/archive.md has 155 lines that read as 156 at 100 characters a line, over its 150-line reading budget" "condensed past its budget"
 assert_not_contains "$OUTPUT" "Archive on main" "the condensed file is no raw archive"
 rm specs/archive.md
-
-it "specs/archive.md names a base commit here and its last 0.x feature, or doctor says so"
-cp .prdkit/templates/archive-template.md specs/archive.md
-run bash "$DOCTOR"
-assert_eq 0 "$STATUS" "an advisory"
-assert_contains "$OUTPUT" "advisory: Archive: specs/archive.md has no readable **Last 0.x feature** line (a number, or none) and no **Base** commit; new-change.sh reserves the old 0.x feature numbers from them" "the unfilled template"
-printf '# Demo — archive\n\n**Base**: deadbeef1, main before the cutover.\n\n**Last 0.x feature**: 012\n' > specs/archive.md
-run bash "$DOCTOR"
-assert_contains "$OUTPUT" "Archive: specs/archive.md has a **Base** commit that is not in this repository (deadbeef1)" "a dead base"
-printf '# Demo — archive\n\n- Base: %s\n- Last 0.x feature: 012\n' "$(git rev-parse HEAD)" > specs/archive.md
-run bash "$DOCTOR"
-assert_not_contains "$OUTPUT" "Archive:" "a base here and a last feature, written plainly"
-printf '# Demo — archive\n\n**Last 0.x feature**: none\n' > specs/archive.md
-run bash "$DOCTOR"
-assert_not_contains "$OUTPUT" "Archive:" "none needs no base"
-rm specs/archive.md
-
-it "agent context: only a plain repo-relative 0.x path that is missing is stale"
-cat > CLAUDE.md <<'MD'
-# Agents
-
-- A feature lived in `specs/features/005-<slug>/tasks.md`; its tasks matched specs/features/00*/tasks.md.
-- Old spec pieces: specs/product-spec/old-{product,architecture}.md.
-- Never recreate specs/features/ or specs/archive/.
-- History: `git show abc1234:specs/features/012-y/spec.md`.
-- Shared rules: acme/platform:specs/product-spec/approved.md, https://example.com/acme/platform/blob/main/specs/product-spec/approved.md, acme/platform/specs/targets/t.md, team@platform:specs/targets/t.md, ourspecs/features/x.md.
-- Stale: **specs/features/003-x/spec.md**.
-- Imports: @specs/features/004-z/spec.md and ./specs/targets/old.md.
-MD
-git add CLAUDE.md
-run bash "$DOCTOR"
-assert_eq 0 "$STATUS" "an advisory"
-assert_contains "$OUTPUT" "advisory: Agent context names removed 0.x paths (CLAUDE.md: specs/features/003-x/spec.md, CLAUDE.md: specs/features/004-z/spec.md, CLAUDE.md: specs/targets/old.md); point it at the current spec, and history questions at specs/archive.md; qualify paths in other repositories as owner/repo:path" "stale plain, ./ and @ paths; placeholders, globs, braces, bare folders, git show pointers, URLs and other repositories' paths are not"
-git rm -qf CLAUDE.md
 
 it "installation drift in kit-owned files is a failing finding"
 echo "LOCAL EDIT" >> .prdkit/workflows/change.md
