@@ -115,6 +115,20 @@ The PR author counts for neither role. An account listed in both keys counts **o
 commit authorship is irrelevant. For approval, only the account’s latest submitted review
 on the exact current head counts. A new SHA needs fresh approvals.
 
+With optional `review-lenses`, the publishers are the union of the accounts mapped to
+reviewer identities in trusted `agents.md`. For example, `code=bot:1001, design=bot:1004`
+lets either App meet the T1 or T2 minimum, but only `1004` can supply the T3 design
+approval. Without a `design` mapping T3 fails even if the owner approves. Mapping both
+names to `bot:1001` lets one approval cover both areas. An objection from either App
+still blocks at every tier, whether its area supplied a required approval or not.
+
+As in 2.x, the worker must cover **every applicable T2 concern**; the gate can verify
+at least one, because there is no authoritative list of required areas in the change
+record. With lenses, the live `--json` result adds `areas`: one row per configured area
+with `area`, `reviewer` (numeric account ID) and `review` (GitHub review ID). The last
+two are null if no mapped independent publisher approved. `reviews` retains all qualifying
+approvals even if more than one covers an area; `blocking` lists open objections separately.
+
 **As in 2.x, a push does not clear an objection.** An eligible account’s `CHANGES_REQUESTED`
 on **any commit of this PR** blocks every tier, including T0. The gate reads all review pages
 in submission order. The objector must submit a later `APPROVED` on the exact current head,
@@ -131,7 +145,7 @@ review ID and policy role; each blocker also records the SHA on which it was sub
 in `commit`. Project review obligations and required checks still apply.
 
 Policy comes from the current `origin/HEAD`, never the candidate or its merge base. Configure
-`review-host: github`, numeric `review-publishers` and `review-owner` on the default branch.
+`review-host: github`, numeric `review-publishers` or `review-lenses`, and `review-owner` on the default branch.
 `--base` must resolve to the default target or a listed `review-integration-branches` ref.
 The gate checks the change record, closure log, trusted Rigor, tier floor and T0 path rules.
 See [the configuration template](../templates/config-template.md) for key syntax.

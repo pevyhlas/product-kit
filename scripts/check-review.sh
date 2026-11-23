@@ -5,6 +5,7 @@
 # Use committed policy from the trusted default branch, even for other PR targets.
 # Exit 0 requires host authority; a would-pass offline preview exits 3.
 # Require the exact PR head, its effective tier's approvals and no eligible open objection.
+# With lenses, only a mapped independent publisher covers an area; T3 requires design.
 # PR-authored record text does not grant approval.
 #
 # Threat model:
@@ -64,6 +65,7 @@ $base_trusted || import_base=""
 
 problems=(); tier=""; record_at=""; record_only=false; start=""
 authority=none; pr_head=""; approvals='[]'; blocking='[]'; head_is_pr_head=false
+lenses=""; areas='[]'
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 if [ -z "$policy_at" ]; then
     problems+=("No trusted integration base: origin/HEAD does not resolve here, so there is no policy to check against; establish it (git remote set-head origin --auto) with its history fetched")
@@ -81,11 +83,14 @@ if [ -n "$policy_at" ]; then
         problems+=("The trusted base's constitution must name exactly one Rigor, light or full (- **Rigor**: light); fix .prdkit/memory/constitution.md on the integration branch")
 fi
 if $online; then authority=unavailable; fi
-if ! github_review_policy "$root" "$policy_at"; then problems+=("$RC_ERROR")
-elif $online; then
-    if github_review_fetch "$pr_url" "$work" "$head" "${base_canonical#refs/remotes/origin/}"; then
-        authority=host; head_is_pr_head=true
-    else problems+=("$RC_ERROR"); fi
+if github_review_policy "$root" "$policy_at"; then
+    lenses="$REVIEW_LENSES"
+    if $online; then
+        if github_review_fetch "$pr_url" "$work" "$head" "${base_canonical#refs/remotes/origin/}"; then
+            authority=host; head_is_pr_head=true
+        else problems+=("$RC_ERROR"); fi
+    fi
+else problems+=("$RC_ERROR")
 fi
 # Every **Tier** field in a record on stdin, one per line: T0-T3, or ? when its whole value (up to
 # the next · or the end of the line, in optional backticks) is not exactly one tier: T1/T3, T1-T3,
@@ -117,10 +122,8 @@ tier_floor_of() { # rev -> the highest tier the record names there, if any
 # a trailing / names a directory), and never the kit's policy, another change record or the L0/L1
 # spec. Prints the paths that do not qualify; fails when the diff cannot be read.
 t0_paths() { # rev -> configured entries, one per line
-    { git -C "$root" show "$1:.prdkit/memory/config.md" 2>/dev/null || true; } | awk "$SPEC_SKIP_AWK"'
-        { if (spec_skip($0)) next }
-        /^## / { section = $0; next }
-        section == "## Configuration" && /^- review-t0-paths:/ {
+    { git -C "$root" show "$1:.prdkit/memory/config.md" 2>/dev/null || true; } | spec_review_config_section 2>/dev/null | awk '
+        /^- review-t0-paths:/ {
             n++; value = $0; sub(/^- review-t0-paths:[[:space:]]*/, "", value)
         }
         END { if (n == 1) { gsub(/,/, " ", value); print value } }' | tr -s ' \t\r' '\n' |
@@ -361,13 +364,34 @@ else
     fi
 fi
 # Apply the minimum to the effective tier, after trusted floor and path validation.
+if [ -n "$lenses" ] && [ "$tier" = T3 ] && [[ ",$lenses," != *,design=* ]]; then
+    problems+=("T3 requires a review-lenses mapping for design")
+fi
 if [ "$authority" = host ]; then
+    if [ -n "$lenses" ]; then
+        areas="$(jq -c --arg lenses "$lenses" '
+            [.[] | select(.role=="publisher")] as $pub |
+            $lenses | split(",") | map(split("=") |
+                .[0] as $area | (.[1]|split("|")) as $ids |
+                (first($pub[] | select((.reviewer|tostring) as $r | $ids|index($r)!=null)) // {}) |
+                {area:$area, reviewer, review})' <<< "$approvals")"
+    fi
     if [ "$blocking" != '[]' ]; then
         problems+=("Outstanding CHANGES_REQUESTED: $(jq -r 'map("\(.role) \(.reviewer) (review \(.review) on \(.commit))") | join(", ")' <<< "$blocking")")
     fi
     case "$tier" in T1|T2|T3)
-        jq -e 'any(.[]; .role=="publisher")' <<< "$approvals" >/dev/null ||
+        if [ -n "$lenses" ]; then
+            case "$tier" in
+                T1|T2) jq -e 'any(.[]; .review!=null)' <<< "$areas" >/dev/null ||
+                    problems+=("$tier requires an independent approval for at least one mapped area") ;;
+                T3) if [[ ",$lenses," == *,design=* ]]; then
+                        jq -e 'any(.[]; .area=="design" and .review!=null)' <<< "$areas" >/dev/null ||
+                            problems+=("T3 requires an independent approval for the design area")
+                    fi ;;
+            esac
+        else jq -e 'any(.[]; .role=="publisher")' <<< "$approvals" >/dev/null ||
             problems+=("$tier requires an independent review-publishers APPROVED review on the exact PR head $head")
+        fi
         if [ "$tier" = T3 ]; then
             jq -e 'any(.[]; .role=="owner")' <<< "$approvals" >/dev/null ||
                 problems+=("T3 also requires a review-owner APPROVED review on the exact PR head $head")
@@ -386,6 +410,7 @@ if $json; then
         "$json_result" "$id" "$head" "$(json_escape "$base_ref")" "$base_trusted" "$policy_at" "$record_only" "$record_open" "$tier" "$rigor" "$(json_escape "$record_at")" "$approvals"
     printf '"blocking":%s,"authority":"%s","pr":"%s","pr_head":"%s","head_is_pr_head":%s,"problems":%s' \
         "$blocking" "$authority" "$(json_escape "$pr_url")" "$pr_head" "$head_is_pr_head" "$(json_array ${problems[@]+"${problems[@]}"})"
+    if [ -n "$lenses" ]; then printf ',"areas":%s' "$areas"; fi
     if $diagnostics; then
         printf ',"diagnostics":{"base_ref":"%s","base_at":"%s","policy_at":"%s","head":"%s"}' \
             "$(json_escape "$base_canonical")" "$import_base" "$policy_at" "$head"

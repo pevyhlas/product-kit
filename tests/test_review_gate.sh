@@ -7,7 +7,7 @@ STATUS=0
 PROJ="$(make_inited_project)"; track_tmp "$PROJ"
 cd "$PROJ" || exit 1
 CHECK="${TEST_REVIEW_GATE:-$PROJ/.prdkit/scripts/bash/check-review.sh}"
-cat >> .prdkit/memory/config.md <<'EOF'
+cat > .prdkit/memory/config.md <<'EOF'
 
 ## Configuration
 - review-host: github

@@ -25,7 +25,7 @@ umask 077
 set -m # each asynchronous child gets its own process group, including on Bash 3.2
 phase=bootstrap; error_code=interrupted; root=""; child=""; watcher=""; overall=""
 capture_out=""; capture_err=""; critical=false; finishing=false; pending_signal=""; signal_count=0
-native=null; native_exit=null; transport=refused; status=1
+native=null; native_exit=null; transport=refused; status=1; policy_error=""
 deadline=$((SECONDS+600))
 
 # All output is buffered until owned processes are gone and private scratch is deleted.
@@ -128,6 +128,7 @@ finish() {
         printf '{"launcher":"complete","error":null,"native_exit":%s,"native":%s}\n' "$native_exit" "$native"
     else
         printf 'check-pr-review: %s/%s\n' "$phase" "$error_code" >&2
+        if [ "$error_code" = invalid-policy ] && [ -n "$policy_error" ]; then printf '%s\n' "$policy_error" >&2; fi
         printf '{"launcher":"refused","error":{"stage":"%s","code":"%s"},"native_exit":%s,"native":%s}\n' \
             "$phase" "$error_code" "$native_exit" "$native"
     fi
@@ -431,7 +432,11 @@ bounded 120 "$root/extract.out" "$root/extract.err" extract || refuse extract cl
 # Source ONLY the two enumerated, policy-bound native parsers; never adjacent caller files.
 source "$root/trusted/common.sh"
 source "$root/trusted/spec-lib.sh"
-spec_trusted_refs "$objects" > "$root/approved"
+if ! spec_trusted_refs "$objects" --policy-errors "$root/policy-error" > "$root/approved"; then
+    # Only the trusted reader's line-numbered message, never raw tool stderr.
+    [ ! -s "$root/policy-error" ] || policy_error="$(cat "$root/policy-error")"
+    refuse binding invalid-policy
+fi
 grep -qxF "$canonical" "$root/approved" || refuse binding unapproved-target
 
 select_carrier() {
@@ -504,6 +509,16 @@ if [ "$native_exit" -eq 0 ]; then
         .diagnostics.policy_at == $p and .blocking == [] and (.reviews | type == "array") and
         all(.reviews[]; (.reviewer|type=="number" and .>0 and floor==.) and (.role|IN("publisher","owner"))) and
         ([.reviews[].reviewer] | length == (unique|length)) and
+        (if has("areas") then
+            .reviews as $reviews | .tier as $tier |
+            (.areas|type=="array" and length>0) and
+            all(.areas[]; . as $a |
+                (.area|type=="string") and
+                ((.reviewer==null and .review==null) or
+                 ((.review|type=="string") and any($reviews[]; .role=="publisher" and
+                     .reviewer==$a.reviewer and .review==$a.review)))) and
+            ($tier=="T0" or any(.areas[]; .review!=null and ($tier!="T3" or .area=="design")))
+         else true end) and
         (.tier == "T0" or
          ((.tier | IN("T1","T2","T3")) and any(.reviews[]; .role=="publisher") and
           (.tier != "T3" or any(.reviews[]; .role=="owner"))))

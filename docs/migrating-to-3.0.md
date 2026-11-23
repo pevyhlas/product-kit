@@ -34,6 +34,8 @@ not a substitute for the required workflow.
    The 3.0 gate warns about the isolation key but accepts its presence. Use independent
    numeric `bot:<id>`/`user:<id>` publisher accounts or personal `user:<id>` owners.
    The PR author never counts in 3.0, even if listed or if 2.0 uses `shared`.
+   Before 3.0, remove HTML comments and fenced code blocks from the top of
+   `config.md` through its Configuration section; keep that heading name unique.
 3. Stage a distinct, trusted 3.0 check alongside the still-required 2.0 check on the
    target branch. Follow the [all-PR execution contract](ci-gates.md#trusted-all-pr-execution--check-pr-reviewsh).
    Give each check a distinct identity and name. The stock launcher loads its gate
@@ -102,6 +104,13 @@ only its latest submitted review on the exact PR head counts toward approval. A 
 does not count; a later submitted comment, dismissal or changes request on that
 head supersedes its approval. Commit authorship is irrelevant. Obtain the tier’s required approvals for
 each open PR’s current SHA, including any new SHA created by `close-change.sh`.
+
+**Optional after cutover:** keep one bundled publisher, or configure
+[`review-lenses`](../templates/config-template.md) on the trusted default branch.
+Use your existing registered reviewer names; map every area to the same account
+for a bundled App, or map areas to different accounts. Include `design` for T3.
+Keep `review-owner`. If you retain `review-publishers`, its accounts must equal the
+union of the mappings. No change to a record or new review-plan file is needed.
 
 ## Roll back to 2.0.x
 
