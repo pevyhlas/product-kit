@@ -97,11 +97,24 @@ for notable outcomes and lessons. For example:
 
 > **Log condensed through**: 002; also 004-061, 063; those entries: `git show <sha>:specs/log.md`.
 
-The optional `; also …;` field lists change numbers and inclusive ranges in ascending order.
-Use `none` when there is no cutoff. Do not overlap ranges, include the cutoff, or span a gap:
-open or planned numbers (like 003 or 062 here) must not be covered. An archived number cannot
-be reused. Once indexed, remove its entry from both `specs/log.md` and `specs/log/`; doctor
-rejects duplicates in the resulting live log, even if the text is identical. A stale copy of
+Use `none` when there is no cutoff. To use cutoff-only form, omit `; also 004-061, 063`
+from the example. Both forms put the Git pointer after `; those entries:`. The sparse field
+must be on the same physical line, between the cutoff and pointer, and consists of
+comma-separated numbers or inclusive `N-M` ranges (one to nine decimal digits each).
+Use ascending, non-overlapping ranges strictly above the cutoff. Do not span open or
+planned numbers, such as 003 and 062 here. After the backticked pointer, an optional period
+or prose introduced by a period or semicolon and a space is allowed, not another field
+(for example, `; also see the migration notes` is prose, not a set).
+
+An archived number cannot be reused. Allocation and close check the working archive,
+`HEAD`, and the locally available tips of `main`, `master`, `origin/main`, `origin/master`,
+and the branch identified by `origin/HEAD` (remote-tracking and local, if present),
+without fetching. Allocation also checks the other worktrees' working archives. Status,
+doctor, and the bounds CLI report against the current checkout's archive; update a stale
+checkout before using them to assess current integration history.
+
+Once indexed, remove the entry from both `specs/log.md` and `specs/log/`; doctor rejects
+duplicates in the resulting live log, even if the text is identical. A stale copy of
 an open record in another worktree does not reopen an archived change.
 
 Before removal, commit a folded log that contains the entries being indexed, and use its SHA in
@@ -111,7 +124,9 @@ entry, look up its number in the index and find its full ID in the log at that S
 passes, keep earlier numbers reserved and verify that their entries are still retrievable. If
 the new pointer would lose earlier entries, carry them forward from the previous snapshot
 into the new Git snapshot only. Keep earlier cutoff-only pointers for any older history that
-predates the snapshot.
+predates the snapshot. Doctor checks that every sparse number has an entry in the pointed
+folded log. A missing commit fails in a full clone; in a shallow clone it is reported as
+unavailable history, not as verified. Fetch the history and rerun doctor.
 
 A first `specs/archive.md` starts from `archive-template.md` (`Last 0.x feature: none`), so
 numbering works. End each pass with `- <date> compaction: <what changed>` as the newest entry

@@ -165,14 +165,23 @@ budget_fix 150 "remove lifted holds, expired waivers, and DEPLOY and ATTEST line
 
 # Share status's log-order and entry-file accounting; compaction is due at ten closes.
 archive_verified=true
-if ! archive_index="$(spec_archive_log_index "$root" 2>&1)"; then
+if archive_details="$(spec_archive_log_details "$root" 2>&1)"; then
+    IFS="$SPEC_SEP" read -r archive_index archive_pointer archive_line <<< "$archive_details"
+    if [ -n "$archive_pointer" ] && [ "$archive_pointer" != - ]; then
+        if archive_proof="$(spec_archive_log_proof "$root" "$archive_index" "$archive_pointer")"; then :
+        elif [ "$?" -eq 2 ]; then advisories+=("specs/archive.md:$archive_line: $archive_proof")
+        else findings+=("specs/archive.md:$archive_line: ${archive_proof:-cannot verify sparse snapshot $archive_pointer}")
+        fi
+    fi
+else
     archive_verified=false
-    findings+=("$archive_index")
+    findings+=("$archive_details")
+    archive_index=0
 fi
 compaction_verified=true
-if compaction="$(spec_compaction "$root")"; then
+if compaction="$(spec_compaction "$root" "$archive_index")"; then
     read -r closed_since last_pass <<< "$compaction"
-    if [ "$closed_since" -ge 10 ]; then
+    if $archive_verified && [ "$closed_since" -ge 10 ]; then
         since="and no pass recorded in specs/log.md"
         [ -z "$last_pass" ] || since="since the last pass ($last_pass)"
         advisories+=("Compaction due: $closed_since changes closed $since (.prdkit/workflows/compact.md, Compaction)")

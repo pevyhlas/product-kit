@@ -248,40 +248,60 @@ spec_archive_last() { # root
     [ -z "$max" ] || echo "$max"
     return 0
 }
-# One normalized row: cutoff (0 for none), then sparse lo-hi pairs, without expanding ranges.
-# Cutoff-only archives keep their loose syntax: only the leading number ever counts. The
-# opt-in `; also ...;` field is strict; return no index on an error, not even the cutoff.
-spec_archive_log_index() { _spec_archive_log_file "$1/specs/archive.md" "${2:-specs/archive.md}"; }
+# One normalized row: cutoff (0 for none), then sparse lo-hi pairs, without expanding
+# ranges. Doctor also reads the sparse pointer and its source line for snapshot proof.
+spec_archive_log_index() { # root [diagnostic-path]
+    local row
+    row="$(spec_archive_log_details "$@")" || return 1
+    printf '%s\n' "${row%%"$SPEC_SEP"*}"
+}
+spec_archive_log_details() { _spec_archive_log_file "$1/specs/archive.md" "${2:-specs/archive.md}"; }
 
-_spec_archive_log_file() { # file diagnostic-path
-    local parsed expected
+_spec_archive_log_file() { # file diagnostic-path [diagnostic-context]
+    local parsed expected end index pointer line context="${3:-}"
     if [ ! -e "$1" ] && [ ! -L "$1" ]; then echo 0; return 0; fi
-    if [ ! -f "$1" ] || ! verify_lf_file "$1" allow-empty; then
-        printf '%s: cannot read condensed log index (expected LF text)\n' "$2" >&2
+    if [ ! -f "$1" ] || ! review_file_without_nul "$1"; then
+        printf '%s: cannot read condensed log index (expected text)%s\n' "$2" "$context" >&2
         return 1
     fi
     expected="$(wc -l < "$1")" || return 1
+    if [ -s "$1" ]; then
+        end="$(tail -c 1 "$1" && printf x)" || return 1
+        [ "$end" = $'\nx' ] || expected=$((expected + 1))
+    fi
     parsed="$(LC_ALL=C awk -v expected="$expected" "$SPEC_METADATA_SKIP_AWK"'
         function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
         function number(s) { return s ~ /^[0-9]+$/ && length(s) <= 9 }
         function fail(why) { print NR ": " why; bad = 1; exit 1 }
-        function value(s,    low, lead, rest, semi, list, fields, n, i, bounds, pair, lo, hi, prev) {
-            low = tolower(s)
-            if (!match(low, /;[[:space:]]*also([^a-z]|$)/)) {
-                if (low ~ /^([0-9]+|none)[[:space:]]+also([^a-z]|$)/) fail("expected ; before also")
-                gsub(/[*_`#|>]/, "", s)
-                sub(/^([-[:space:]:=]|—|–)+/, "", s)
-                if (match(s, /^[0-9]+/) && RLENGTH <= 9) cutoff = substr(s, 1, RLENGTH) + 0
-                return
-            }
-            lead = trim(substr(s, 1, RSTART - 1))
-            if (tolower(lead) != "none" && !number(lead)) fail("expected a cutoff number or none before also")
+        # Parse only at the field boundary. Ordinary prose after the code span is not a set.
+        function git_pointer(s,    sha, tail) {
+            if (!match(s, /^;[ \t]*those entries:[ \t]*`git show [0-9a-fA-F]+:specs\/log\.md`/)) return ""
+            tail = trim(substr(s, RLENGTH + 1))
+            if (tail != "" && tail != "." && tail !~ /^[.;][ \t]+[^[:space:];,]/) return ""
+            if (continuation(sub_tail(tail))) return ""
+            sha = substr(s, 1, RLENGTH); sub(/^.*`git show /, "", sha); sub(/:.*/, "", sha)
+            if (length(sha) < 7 || length(sha) > 64) return ""
+            return sha
+        }
+        function sub_tail(s) { sub(/^[.;]/, "", s); return s }
+        function value(s,    lead, rest, semi, list, fields, n, i, bounds, pair, lo, hi, prev) {
+            s = trim(s)
+            # Older archives also used a bare value, an "as of" date, or a dash and
+            # "entries at" annotation. Do not accept arbitrary text in the metadata lane.
+            if (s == "<NNN, or none>; those entries: `git show <sha>:specs/log.md`." || s ~ /^through [0-9]+$/) return
+            if (!match(tolower(s), /^([0-9]+|none|n\/a)/)) fail("expected a cutoff number or none")
+            lead = substr(s, 1, RLENGTH)
+            if (lead ~ /^[0-9]/ && !number(lead)) fail("invalid cutoff number")
             cutoff = lead + 0; prev = cutoff
-            rest = substr(s, RSTART); sub(/^;[[:space:]]*/, "", rest)
-            semi = index(rest, ";")
-            if (tolower(rest) !~ /^also[[:space:]]/ || !semi) fail("expected ; also <IDs and ranges>;")
-            if (tolower(substr(rest, semi)) ~ /;[[:space:]]*also([^a-z]|$)/) fail("duplicate also field")
-            list = trim(substr(rest, 5, semi - 5))
+            rest = trim(substr(s, RLENGTH + 1))
+            if (rest == "" || rest == "." || rest == "|" || git_pointer(rest) != "" ||
+                rest ~ /^as of [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\.?$/ ||
+                rest ~ /^(—|–|-) entries at `git show [0-9a-fA-F]+:specs\/log\.md`\.?$/) return
+            if (!match(rest, /^;[ \t]*also[ \t]+/)) fail("expected ; also <IDs and ranges>; or ; those entries: `git show <sha>:specs/log.md`")
+            if (NR != label_line || lead == "n/a") fail("keep the sparse field on the cutoff line and use a number or none")
+            rest = substr(rest, RLENGTH + 1); semi = index(rest, ";")
+            if (!semi || (pointer = git_pointer(substr(rest, semi))) == "") fail("expected ; those entries: `git show <sha>:specs/log.md` after the sparse set")
+            list = trim(substr(rest, 1, semi - 1))
             if (list == "" || list ~ /,$/) fail("empty ID or range")
             n = split(list, fields, ",")
             for (i = 1; i <= n; i++) {
@@ -294,71 +314,183 @@ _spec_archive_log_file() { # file diagnostic-path
                 ranges = ranges " " lo "-" hi; prev = hi
             }
         }
+        function continuation(s,    low) {
+            low = tolower(trim(s))
+            return low ~ /^[;,]|^als[o]?[ \t]*([0-9]|[-,;]|$)|^those entries:|^[0-9]+([-,;]|$)/
+        }
         {
             if (metadata_skip($0)) next
-            s = $0
-            if (value_line == NR - 1 && value_line &&
-                (tolower(s) ~ /^[[:space:]]*;[[:space:]]*also([^a-z]|$)/ ||
-                 (continued && tolower(s) ~ /^[[:space:]]*also([^a-z]|$)/)))
-                fail("keep the also field on the cutoff line")
+            s = $0; sub(/\r$/, "", s)
+            if (after && trim(s) != "") {
+                rest = trim(s); sub(/^([>#*]+|-)[ \t]+/, "", rest)
+                if (continuation(rest) || tolower(rest) ~ /^als[o]?([ \t]|$)/)
+                    fail("keep the condensed log fields on one line")
+                after = 0
+            }
             sub(/^([-[:space:]*_`#|>:=]|—|–)+/, "", s)
             if (tolower(s) ~ /^log condensed through([-[:space:]*_`#|>:=]|—|–|$)/) {
                 if (seen++) fail("duplicate Log condensed through field")
+                label_line = NR
                 s = substr(s, 22)
                 if (!sub(/^[[:space:]*_`#|>]*:[[:space:]]*/, "", s))
                     sub(/^([-[:space:]*_`#|>:=]|—|–)+/, "", s)
                 pending = 1
             }
             if (pending && trim(s) != "") {
-                value(s); value_line = NR; continued = (s ~ /;[[:space:]]*$/); pending = 0
+                value(s); value_line = NR; after = 1; pending = 0
             }
         }
         END {
             if (bad) exit 1
             if (NR != expected) fail("incomplete archive read (expected " expected + 0 " lines, checked " NR ")")
-            print cutoff + 0 ranges
+            if (pending) { print label_line ": expected a cutoff number or none"; exit 1 }
+            print cutoff + 0 ranges "\037" (pointer != "" ? pointer : "-") "\037" value_line + 0
         }
     ' "$1")" || {
-        printf '%s:%s\n' "$2" "${parsed:- cannot read condensed log index}" >&2
+        printf '%s:%s%s\n' "$2" "${parsed:- cannot read condensed log index}" "$context" >&2
         return 1
     }
-    if ! [[ "$parsed" =~ ^[0-9]+(\ [0-9]+-[0-9]+)*$ ]]; then
-        printf '%s: incomplete condensed log index\n' "$2" >&2
+    IFS="$SPEC_SEP" read -r index pointer line <<< "$parsed"
+    if ! [[ "$index" =~ ^[0-9]+(\ [0-9]+-[0-9]+)*$ && "$line" =~ ^[0-9]+$ ]]; then
+        printf '%s: incomplete condensed log index%s\n' "$2" "$context" >&2
+        return 1
+    fi
+    if [ "$pointer" != - ] && ! verify_lf_file "$1"; then
+        printf '%s:%s: sparse condensed log index requires LF-terminated text%s\n' "$2" "$line" "$context" >&2
         return 1
     fi
     printf '%s\n' "$parsed"
 }
 
-# A close must not miss a committed index when the checkout is sparse or stale.
-spec_archive_log_index_at() ( # root rev
-    local path=specs/archive.md row meta tmp
-    export GIT_NO_LAZY_FETCH=1
-    row="$(verify_lines git -C "$1" ls-tree "$2" -- ":(literal)$path")" || return 1
-    if [ -z "$row" ]; then echo 0; return 0; fi
-    spec_objects_local "$1" || { printf 'Cannot read %s at %s without risking a lazy fetch\n' "$path" "$2" >&2; return 1; }
+_spec_archive_git() {
+    GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1 git "$@"
+}
+
+_spec_regular_blob_at() { # root rev path -> blob ID, empty when absent
+    local path="$3" row meta
+    row="$(verify_lines _spec_archive_git -C "$1" ls-tree "$2" -- ":(literal)$path")" || return 1
+    [ -n "$row" ] || return 0
     meta="${row%%$'\t'*}"
     if ! [[ "${row#*$'\t'}" = "$path" && "$meta" =~ ^100(644|755)\ blob\ [0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
-        printf '%s at %s: expected a regular archive file\n' "$path" "$2" >&2
+        printf '%s at %s: expected a regular file\n' "$path" "$2" >&2
         return 1
     fi
+    printf '%s\n' "${meta##* }"
+}
+
+spec_archive_log_index_at() ( # root commit
+    local path=specs/archive.md blob tmp parsed
+    spec_objects_local "$1" || { printf 'Cannot read %s at %s without risking a lazy fetch\n' "$path" "$2" >&2; return 1; }
+    blob="$(_spec_regular_blob_at "$1" "$2" "$path")" || return 1
+    if [ -z "$blob" ]; then echo 0; return 0; fi
     tmp="$(mktemp)" || return 1
     trap 'rm -f "$tmp"' EXIT
-    git -C "$1" cat-file blob "${meta##* }" > "$tmp" || return 1
-    _spec_archive_log_file "$tmp" "$path"
+    _spec_archive_git -C "$1" cat-file blob "$blob" > "$tmp" || return 1
+    parsed="$(_spec_archive_log_file "$tmp" "$path" " (at $2)")" || return 1
+    printf '%s\n' "${parsed%%"$SPEC_SEP"*}"
+)
+
+spec_archive_log_integration() ( # root -> distinct index rows, no fetch
+    local root="$1" target refs rev ref seen=" " candidates=()
+    target="$(_spec_archive_git -C "$root" symbolic-ref --quiet refs/remotes/origin/HEAD)" ||
+        { [ "$?" -eq 1 ] || return 1; }
+    case "$target" in
+        refs/remotes/*/*)
+            ref="${target#refs/remotes/}"
+            candidates+=("$target" "refs/heads/${ref#*/}") ;;
+        refs/heads/*) candidates+=("$target") ;;
+    esac
+    candidates+=(refs/remotes/origin/main refs/remotes/origin/master refs/heads/main refs/heads/master)
+    refs="$(verify_lines _spec_archive_git -C "$root" for-each-ref --format='%(objectname) %(refname)' "${candidates[@]}")" || return 1
+    if rev="$(_spec_archive_git -C "$root" rev-parse --verify --quiet HEAD)"; then
+        seen="$seen$rev "; spec_archive_log_index_at "$root" "$rev" || return 1
+    elif [ "$?" -ne 1 ]; then return 1
+    fi
+    while read -r rev ref; do
+        case " ${candidates[*]} " in *" $ref "*) ;; *) continue ;; esac
+        case "$seen" in *" $rev "*) continue ;; esac
+        seen="$seen$rev "; spec_archive_log_index_at "$root" "$rev" || return 1
+    done <<< "$refs"
+    return 0
 )
 
 spec_archive_log_covers() { # normalized index, change ID (or just its number)
     local cutoff="${1%% *}" n="${2%%-*}" range
-    n="${n#"${n%%[!0]*}"}"
     case "$n" in ''|*[!0-9]*) return 1 ;; esac
+    n="${n#"${n%%[!0]*}"}"; n="${n:-0}"
     [ "${#n}" -le 9 ] || return 1
-    [ "$n" -gt "$cutoff" ] || return 0
+    if [ "$cutoff" -gt 0 ] && [ "$n" -le "$cutoff" ]; then return 0; fi
     for range in ${1#"$cutoff"}; do
         [ "$n" -ge "${range%-*}" ] || return 1
         [ "$n" -gt "${range#*-}" ] || return 0
     done
     return 1
 }
+
+# Sparse proof only. A shallow clone without the commit returns 2 (explicitly
+# unverified); an available commit must prove every range in its folded regular log.
+spec_archive_log_proof() ( # root index pointer
+    local root="$1" index="$2" pointer="$3" commit blob tmp numbers missing expected
+    spec_objects_local "$root" || { echo "cannot verify snapshot $pointer without local Git objects"; return 1; }
+    commit="$(verify_lines _spec_archive_git -C "$root" rev-parse --disambiguate="$pointer")" ||
+        { echo "cannot look up sparse snapshot $pointer in local Git objects"; return 1; }
+    if [ -z "$commit" ]; then
+        if [ "$(_spec_archive_git -C "$root" rev-parse --is-shallow-repository 2>/dev/null)" = true ]; then
+            echo "history unavailable in this shallow clone: cannot verify sparse snapshot $pointer; fetch the history and rerun doctor"
+            return 2
+        fi
+        echo "cannot resolve sparse snapshot $pointer to a commit"
+        return 1
+    fi
+    if ! [[ "$commit" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] ||
+        [ "$(_spec_archive_git -C "$root" cat-file -t "$commit")" != commit ]; then
+        echo "sparse snapshot $pointer does not identify a unique commit"
+        return 1
+    fi
+    blob="$(_spec_regular_blob_at "$root" "$commit" specs/log.md 2>/dev/null)" &&
+        [ -n "$blob" ] || { echo "sparse snapshot $pointer has no readable regular specs/log.md"; return 1; }
+    tmp="$(mktemp)" || return 1
+    trap 'rm -f "$tmp"' EXIT
+    if ! _spec_archive_git -C "$root" cat-file blob "$blob" > "$tmp" || ! verify_lf_file "$tmp"; then
+        echo "cannot read complete LF text at $pointer:specs/log.md"
+        return 1
+    fi
+    expected="$(wc -l < "$tmp")" || return 1
+    set -o pipefail
+    numbers="$(LC_ALL=C awk -v expected="$expected" "$SPEC_METADATA_SKIP_AWK"'
+        { if (metadata_skip($0)) next }
+        /^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9][0-9]+-[a-z0-9]+(-[a-z0-9]+)*: [[:space:]]*[^[:space:]]/ {
+            n = $3; sub(/-.*/, "", n); sub(/^0+/, "", n)
+            if (length(n) <= 9) print n + 0
+        }
+        END { if (NR != expected) exit 1 }
+    ' "$tmp" | LC_ALL=C sort -nu)" || { echo "incomplete read of $pointer:specs/log.md"; return 1; }
+    # Walk sorted evidence and interval endpoints; report the first missing run.
+    missing="$(LC_ALL=C awk -v index_row="$index" '
+        function advance(   endpoints) {
+            if (++i > n) return 0
+            split(ranges[i], endpoints, "-"); lo = endpoints[1] + 0; hi = endpoints[2] + 0
+            return 1
+        }
+        function gap(a, b) {
+            if (!found) printf "%03d%s\n", a, (a == b ? "" : sprintf("-%03d", b))
+            found = 1
+        }
+        BEGIN { n = split(index_row, ranges, " "); i = 1; advance() }
+        NF && i <= n {
+            id = $1 + 0
+            if (id > hi) { gap(lo, hi); exit }
+            if (id < lo) next
+            if (id > lo) { gap(lo, id - 1); exit }
+            if (++lo > hi) advance()
+        }
+        END { if (!found && i <= n) gap(lo, hi) }
+    ' <<< "$numbers")" || return 1
+    if [ -n "$missing" ]; then
+        printf 'sparse snapshot %s:specs/log.md is missing closed number(s) %s\n' "$pointer" "$missing"
+        return 1
+    fi
+)
 
 # The closed-change log: the lines of specs/log.md, then each entry file specs/log/<id>.md, one
 # "- <date> <id>: <text>" line that close-change.sh writes, so two branches that each close a
@@ -414,17 +546,37 @@ spec_log_entries_at() { # root rev
 # entries newer than the latest compaction line, or all entries if no pass is recorded.
 # Within log.md position counts, not dates, in either log order. Every entry file is
 # newer: compaction folds them all. Keep status and doctor on this same accounting.
-# A failed folded-log read must not be mistaken for an absent log.
-spec_compaction() { # root
+# A failed folded-log read must not be mistaken for an absent log. Archive
+# duplicates do not count, but still mark dates used to recognize log order.
+SPEC_ARCHIVE_COUNT_AWK='
+    BEGIN {
+        n_ranges = split(archive_index, archive_ranges, " "); cutoff = archive_ranges[1] + 0
+        for (i = 2; i <= n_ranges; i++) {
+            split(archive_ranges[i], endpoints, "-"); lo[i] = endpoints[1] + 0; hi[i] = endpoints[2] + 0
+        }
+    }
+    function archived(s,   a, b, m, id) {
+        sub(/-.*/, "", s); id = s + 0
+        if (cutoff > 0 && id <= cutoff) return 1
+        a = 2; b = n_ranges
+        while (a <= b) {
+            m = int((a + b) / 2)
+            if (id < lo[m]) b = m - 1
+            else if (id > hi[m]) a = m + 1
+            else return 1
+        }
+        return 0
+    }'
+spec_compaction() { # root, normalized archive index
     local root="$1" compaction='0 0' closed_since last_pass pending expected checked
     if [ -f "$root/specs/log.md" ]; then
         # Read order and counts together. Equal first/last dates mean newest-first.
-        compaction="$(LC_ALL=C awk '
+        compaction="$(LC_ALL=C awk -v archive_index="$2" "$SPEC_ARCHIVE_COUNT_AWK"'
             /^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] / {
                 date = substr($0, 3, 10); if (!n++) first_date = date; last_date = date
             }
             /^- [0-9-]+ compaction:/ { if (!seen++) { above = c; top = $2 }; c = 0; last = $2; next }
-            /^- [0-9-]+ [0-9][0-9][0-9][0-9]*-[a-z0-9-]*:/ { c++ }
+            /^- [0-9-]+ [0-9][0-9][0-9][0-9]*-[a-z0-9-]*:/ && !archived($3) { c++ }
             END {
                 printf "%d ", NR
                 if (!seen) print c + 0
@@ -439,7 +591,9 @@ spec_compaction() { # root
         fi
     fi
     read -r checked closed_since last_pass <<< "$compaction"
-    pending="$(spec_log_files "$root" | LC_ALL=C awk '/^- [0-9-]+ [0-9][0-9][0-9][0-9]*-[a-z0-9-]*:/ { c++ } END { print c + 0 }')" || return "$?"
+    pending="$(spec_log_files "$root" | LC_ALL=C awk -v archive_index="$2" "$SPEC_ARCHIVE_COUNT_AWK"'
+        /^- [0-9-]+ [0-9][0-9][0-9][0-9]*-[a-z0-9-]*:/ && !archived($3) { c++ }
+        END { print c + 0 }')" || return "$?"
     [[ "$closed_since" =~ ^[0-9]+$ && "$pending" =~ ^[0-9]+$ ]] || return 1
     printf '%s %s\n' "$((closed_since + pending))" "$last_pass"
 }

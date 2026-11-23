@@ -363,6 +363,15 @@ run bash "$B/close-change.sh" 013-guard "again — R-01 — #6"
 assert_eq 1 "$STATUS" "a stale branch sees the default branch's archive"
 assert_contains "$OUTPUT" "013-guard is already closed"
 git update-ref "$archive_ref" "$saved_integration"
+git symbolic-ref --delete refs/remotes/origin/HEAD
+fetched_ref=refs/remotes/origin/master
+[ "$fetched_ref" != "$archive_ref" ] || fetched_ref=refs/remotes/origin/main
+git update-ref "$fetched_ref" "$archived_head"
+run bash "$B/close-change.sh" 013-guard "again — R-01 — #6"
+assert_eq 1 "$STATUS" "a fetched integration archive without origin/HEAD still refuses a close"
+assert_contains "$OUTPUT" "013-guard is already closed"
+git update-ref -d "$fetched_ref"
+git symbolic-ref refs/remotes/origin/HEAD "$archive_ref"
 git checkout -q 013-guard; git branch -q -D 013-stale 013-archived
 
 it "two branches that each close a change merge without a log conflict"

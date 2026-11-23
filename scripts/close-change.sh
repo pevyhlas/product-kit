@@ -76,15 +76,13 @@ check_paths() {
     done
 }
 check_paths
-check_archive_index() {
-    local index
-    index="$("$@")" || refuse "could not read the condensed log index"
-    if spec_archive_log_covers "$index" "$id"; then
+working_index="$(spec_archive_log_index "$root")" || refuse "could not read the condensed log index"
+committed_indexes="$(spec_archive_log_integration "$root")" || refuse "could not read the condensed log index"
+while IFS= read -r index; do
+    if [ -n "$index" ] && spec_archive_log_covers "$index" "$id"; then
         refuse "$id is already closed: its number is condensed in specs/archive.md"
     fi
-}
-check_archive_index spec_archive_log_index "$root"
-check_archive_index spec_archive_log_index_at "$root" HEAD
+done <<< "$working_index"$'\n'"$committed_indexes"
 git -C "$root" diff --quiet HEAD -- "$path" ||
     refuse "$path has uncommitted edits: commit the record edits first; the check reads committed state"
 verify_lf_file "$root/$path" || refuse "invalid record $path: expected non-empty LF-terminated text"
@@ -137,7 +135,6 @@ if [ -n "$folded" ]; then
 fi
 default="$(spec_default_branch "$root")" || refuse "could not identify the default branch"
 if [ -n "$default" ]; then
-    check_archive_index spec_archive_log_index_at "$root" "$default"
     existing="$(verify_lines git -C "$root" ls-tree --name-only "$default" -- ":(literal)$path")" ||
         refuse "could not check for $path on $default"
     if [ -n "$existing" ]; then

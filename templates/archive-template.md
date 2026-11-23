@@ -7,8 +7,9 @@ details stay in git at the base. Past the budget, condense older entries harder.
 new-change.sh reads the Base, Last and Log lines to never reuse an old number.
 Optional sparse closes above the cutoff: insert `; also 004-061, 063` before
 `; those entries:`. Only closed numbers, in ascending, non-overlapping ranges
-or as single numbers. Every indexed close stays retrievable at a Git pointer;
-none remains in the live log or an open or planned change. See compact.md. -->
+or as single numbers. Keep the sparse field and the `git show` pointer on this
+same line. Every indexed close must be in the pointed folded log; none remains
+in the live log or an open or planned change. See compact.md. -->
 
 **Base**: `<full commit sha>`, main before the cutover (<YYYY-MM-DD>). Details:
 `git show <sha>:<path>`; history: `git log -- <path>`.

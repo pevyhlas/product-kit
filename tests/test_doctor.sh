@@ -538,6 +538,44 @@ for value in '002 — entries at `git show 9f81234:specs/log.md`' '002 as of 202
 done
 rm specs/archive.md; git reset -q --hard HEAD~2
 
+it "legacy cutoff-only archives accept CRLF, no final LF, and trailing pointer prose"
+kit_bin="$PROJ/.prdkit/scripts/bash"
+mkdir -p specs/changes
+printf '# Open\n\n## State\n\nWaiting on: nothing\nNext: continue\n' > specs/changes/007-open.md
+# shellcheck disable=SC2016 # Markdown code span
+cutoff_line='**Log condensed through**: 005; those entries: `git show abc1234:specs/log.md`.'
+legacy_capture() (
+    bash "$kit_bin/status.sh" --json &&
+        bash "$kit_bin/bounds.sh" 007-open
+)
+printf '%s\n' "$cutoff_line" > specs/archive.md
+run legacy_capture
+assert_eq 0 "$STATUS" 'canonical cutoff-only fixture'
+cutoff_output="$OUTPUT"
+run bash "$DOCTOR" --json
+assert_eq 0 "$STATUS" 'doctor accepts canonical cutoff-only text'
+cutoff_doctor="$OUTPUT"
+for encoding in crlf unterminated prose; do
+    case "$encoding" in
+        crlf) printf '%s\r\n' "$cutoff_line" ;;
+        unterminated) printf '%s' "$cutoff_line" ;;
+        prose) printf '%s; also see the migration notes\n' "${cutoff_line%.}" ;;
+    esac > specs/archive.md
+    run legacy_capture
+    assert_eq 0 "$STATUS" "$encoding: status and bounds succeed"
+    assert_eq "$cutoff_output" "$OUTPUT" "$encoding: output is unchanged"
+    run bash "$DOCTOR" --json
+    if [ "$encoding" = prose ]; then
+        assert_eq 0 "$STATUS" 'doctor accepts pointer prose'
+        assert_eq "$cutoff_doctor" "$OUTPUT" 'doctor output is unchanged'
+    else
+        assert_eq 1 "$STATUS" "$encoding: doctor retains its general LF text check"
+        assert_eq '["Invalid spec text: specs/archive.md (expected LF-terminated text)"]' \
+            "$(jq -c .findings <<< "$OUTPUT")" 'the archive parser does not add a finding'
+    fi
+done
+rm specs/archive.md specs/changes/007-open.md
+
 it "sparse compaction preserves exact history past open and planned changes, in either log order"
 before_sparse="$(git rev-parse HEAD)"
 mkdir -p specs/changes
@@ -555,7 +593,7 @@ done
 git add specs/log.md; git commit -qm 'close changes and snapshot the folded log'
 folded_sha="$(git rev-parse HEAD)"
 # shellcheck disable=SC2016 # Markdown code span
-printf '# Archive\n\n**Last 0.x feature**: none\n\n**Log condensed through**: 002; also 004-006, 010; those entries: `git show %s:specs/log.md`.\n' "$folded_sha" > specs/archive.md
+printf '# Archive\n\n**Last 0.x feature**: none\n\n**Log condensed through**: 002; also 004-006, 010; those entries: `git show %s:specs/log.md`; also see the migration notes\n' "$folded_sha" > specs/archive.md
 archive_sha="$(sed -n 's/.*git show \([0-9a-f]*\):specs\/log.md.*/\1/p' specs/archive.md)"
 assert_contains "$(git show "$archive_sha:specs/log.md")" '005-fifth: historical evidence for 005-fifth' "a member in the middle of a range is retrievable by ID"
 pass='- 2026-10-12 compaction: condensed older closes'
@@ -598,14 +636,26 @@ for id in 004-fourth 006-sixth; do
     assert_contains "$OUTPUT" "Live log entry for $id is also condensed" "even identical archived and live text is an error for $id"
 done
 assert_contains "$OUTPUT" 'Duplicate live log entry for 009-gap' 'folded and per-entry copies cannot both remain live'
+run bash "$kit_bin/status.sh" --json
+assert_eq 0 "$STATUS" 'status can summarize the live view despite the doctor finding'
+assert_eq 11 "$(jq '.compaction.closed_since_last' <<< "$OUTPUT")" 'only non-archived closes count, including the live entry in a gap'
+for order in oldest newest; do
+    archived_copy='- 2026-10-14 004-fourth: stray folded copy'
+    if [ "$order" = oldest ]; then printf '%s\n' "$before_pass" "$pass" "$after_pass" "$archived_copy"
+    else printf '%s\n' "$archived_copy" "$after_pass" "$pass" "$before_pass"; fi > specs/log.md
+    run bash "$kit_bin/status.sh" --json
+    assert_eq 11 "$(jq '.compaction.closed_since_last' <<< "$OUTPUT")" "$order: ignore archived entries on both live paths"
+done
 git worktree remove "$stale"
 rm -f specs/changes/{001,005}-reused.md specs/archive.md specs/log/{006-sixth,009-gap}.md
 git reset -q --hard "$before_sparse"
 
 it "malformed sparse archive fields fail at their line in doctor and status"
-for value in '002; also 006-004;' '002; also 004-006, 006-008;' '002; also 008, 004;' \
-             '002; also 001-004;' '002; also four;' '002; also 004-;' '002; also -004;' \
-             '002; also 004,;' '002; also ;' '002; also 004' '002 also 004;'; do
+for value in '002; also 006-004; @' '002; also 004-006, 006-008; @' '002; also 008, 004; @' \
+             '002; also 001-004; @' '002; also four; @' '002; also 004-; @' '002; also -004; @' \
+             '002; also 004,; @' '002; also ; @' '002; also 004' '002 also 004; @'; do
+    # shellcheck disable=SC2016 # Markdown code span
+    value="${value//@/those entries: \`git show abc1234:specs/log.md\`.}"
     printf '# Archive\n\n**Last 0.x feature**: none\n\n**Log condensed through**: %s\n' "$value" > specs/archive.md
     run bash "$DOCTOR" --json
     assert_eq 1 "$STATUS" "doctor rejects: $value"
@@ -615,11 +665,70 @@ for value in '002; also 006-004;' '002; also 004-006, 006-008;' '002; also 008, 
     assert_contains "$OUTPUT" 'specs/archive.md:5:' 'status reports the same line, not cutoff-only JSON'
     assert_not_contains "$OUTPUT" '"compaction":' 'status does not report partial state'
 done
-printf '**Log condensed through**: 002;\n  also 004-006;\n' > specs/archive.md
-run bash "$DOCTOR"
-assert_eq 1 "$STATUS" 'a split sparse field does not silently fall back to the cutoff'
-assert_contains "$OUTPUT" 'specs/archive.md:2:' 'the continuation line is named'
+
+it "all archive readers reject misplaced, misspelled, or split sparse fields before proceeding"
+# shellcheck disable=SC2016 # Markdown code span
+pointer='those entries: `git show abc1234:specs/log.md`.'
+kit_index() ( source "$kit_bin/spec-lib.sh"; spec_archive_log_index "$PWD"; )
+for value in "002, also 005; $pointer" "002; als 005; $pointer" \
+             "002;; also 005; $pointer" "002; also005; $pointer" \
+             "002; also 005; $pointer; also 006" \
+             $'002\n\n  also 005; '"$pointer" $'002;\n\n  also 005; '"$pointer"; do
+    printf '**Log condensed through**: %s\n' "$value" > specs/archive.md
+    line=1
+    case "$value" in $'002\n'*) line=3 ;; esac
+    for reader in index doctor status bounds new-change close-change; do
+        case "$reader" in
+            index) run kit_index ;;
+            doctor|status) run bash "$kit_bin/$reader.sh" --json ;;
+            bounds) run bash "$kit_bin/bounds.sh" 005-probe ;;
+            new-change) run bash "$kit_bin/new-change.sh" --no-branch --number 005 --short-name probe 'Probe' ;;
+            close-change) run bash "$kit_bin/close-change.sh" --pr https://example.invalid/pull/1 005-probe 'Probe' ;;
+        esac
+        assert_eq 1 "$STATUS" "$reader rejects $value"
+        assert_contains "$OUTPUT" "specs/archive.md:$line:" "$reader names the malformed line"
+        assert_eq absent "$([ -e specs/changes/005-probe.md ] && echo present || echo absent)" 'no change number reused'
+        rm -f specs/changes/005-probe.md
+    done
+done
 rm specs/archive.md
+
+it "doctor verifies every sparse number in the local snapshot, and distinguishes shallow history"
+# Use the real compaction snapshot; 007 is unused, and no live file can prove it.
+# shellcheck disable=SC2016 # Markdown code span
+printf '**Log condensed through**: 002; also 004-007, 010; those entries: `git show %s:specs/log.md`.\n' "$folded_sha" > specs/archive.md
+run bash "$DOCTOR" --json
+assert_eq 1 "$STATUS" 'unused number inside the claimed range is a finding'
+assert_contains "$OUTPUT" 'is missing closed number(s) 007' 'reports the missing part of the range'
+# shellcheck disable=SC2016 # Markdown code span
+printf '**Log condensed through**: 002; also 004-999999999; those entries: `git show %s:specs/log.md`.\n' "$folded_sha" > specs/archive.md
+run bash "$DOCTOR" --json
+assert_contains "$OUTPUT" 'is missing closed number(s) 007-008' 'even a large range is compared as runs'
+# shellcheck disable=SC2016 # Markdown code span
+printf '**Log condensed through**: 002; also 005; those entries: `git show deadbeef:specs/log.md`.\n' > specs/archive.md
+run bash "$DOCTOR" --json
+assert_eq 1 "$STATUS" 'unresolvable SHA fails in the full clone'
+assert_contains "$OUTPUT" 'specs/archive.md:1: cannot resolve sparse snapshot deadbeef to a commit'
+# shellcheck disable=SC2016 # Markdown code span
+printf '**Log condensed through**: 002; also 005; those entries: `git show %s:specs/log.md`.\n' "$folded_sha" > specs/archive.md
+git add specs/archive.md; git commit -qm 'publish archive with older snapshot'
+shallow="$(mktemp -d)"; track_tmp "$shallow"
+git clone -q --depth 1 "file://$PROJ" "$shallow" || exit 1
+assert_eq true "$(git -C "$shallow" rev-parse --is-shallow-repository)" 'the fixture really is shallow'
+shallow_bin="$shallow/.prdkit/scripts/bash"
+shallow_doctor() { bash "$shallow_bin/doctor.sh" "$@"; }
+run shallow_doctor --json
+assert_eq 0 "$STATUS" 'missing shallow history is advisory'
+assert_contains "$(jq -r '.advisories[]' <<< "$OUTPUT")" "history unavailable in this shallow clone: cannot verify sparse snapshot $folded_sha"
+# A valid index need not have local proof to reserve its number, but invalid syntax must fail.
+run bash "$shallow_bin/new-change.sh" --no-branch --number 005 --short-name probe Probe
+assert_eq 1 "$STATUS" 'shallow checkout still respects reservations'
+assert_contains "$OUTPUT" 'reserved by the condensed log index'
+printf '**Log condensed through**: 002, also 005; %s\n' "$pointer" > "$shallow/specs/archive.md"
+run shallow_doctor --json
+assert_eq 1 "$STATUS" 'a shallow clone never downgrades malformed syntax to missing history'
+assert_contains "$(jq -r '.findings[]' <<< "$OUTPUT")" 'specs/archive.md:1:'
+git reset -q --hard "$before_sparse"
 
 it "a renamed change record is not a closed one"
 mkdir -p specs/changes; printf '# 004-y\n\nIntent: export the weekly report as a file.\n' > specs/changes/004-y.md

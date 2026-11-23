@@ -409,6 +409,10 @@ run bash "$SCRIPT2" --json --no-worktree --number 35 --short-name "explicit-old"
 assert_eq 1 "$STATUS" "an explicit number at or below the mark is refused"
 assert_contains "$OUTPUT" 'change number 035 is reserved: specs/archive.md condenses the log through 040' "the refusal names the mark"
 assert_eq absent "$([ -e "$PROJ2/specs/changes/035-explicit-old.md" ] && echo present || echo absent)" "no record is created"
+run bash "$SCRIPT2" --no-branch --number 000 --short-name zero "desc"
+assert_eq 1 "$STATUS" '000 is refused under a positive cutoff'
+assert_contains "$OUTPUT" 'change number 000 is reserved: specs/archive.md condenses the log through 040'
+rm -f "$PROJ2/specs/changes/000-zero.md"
 # shellcheck disable=SC2016 # backticks are Markdown code spans, not command substitution
 for value in '040 — entries at `git show 9f81234:specs/log.md`' '040 as of 2026-10-30'; do
     printf '# Demo — archive\n\n**Last 0.x feature**: none\n\n**Log condensed through**: %s\n' "$value" > "$PROJ2/specs/archive.md"
@@ -439,14 +443,31 @@ assert_eq 0 "$STATUS" 'a gap above the cutoff is not reserved'
 assert_contains "$OUTPUT" '"CHANGE_ID":"034-spare-gap"'
 archive_ref=refs/remotes/origin/main
 git update-ref "$archive_ref" HEAD
-git symbolic-ref refs/remotes/origin/HEAD "$archive_ref"
 archive_text="$(cat specs/archive.md)"
 trusted_edit "$archive_ref" specs/archive.md <<< "$archive_text" || exit 1
 rm specs/archive.md
 run bash "$sparse_new" --no-branch --number 31 --short-name stale "desc"
-assert_eq 1 "$STATUS" "a branch without an archive still honors the default branch's index"
+assert_eq 1 "$STATUS" "a stale branch honors fetched origin/main without a symbolic origin/HEAD"
 assert_contains "$OUTPUT" 'reserved by the condensed log index'
+rm -f specs/changes/031-stale.md
+custom_ref=refs/remotes/origin/integration
+git update-ref "$custom_ref" HEAD
+git symbolic-ref refs/remotes/origin/HEAD "$custom_ref"
+# shellcheck disable=SC2016 # Markdown code span
+trusted_edit "$custom_ref" specs/archive.md <<'MD' || exit 1
+**Last 0.x feature**: none
+**Log condensed through**: 020; also 050; those entries: `git show abc1234:specs/log.md`.
+MD
+for num in 20 31 50; do
+    run bash "$sparse_new" --no-branch --number "$num" --short-name union "desc"
+    assert_eq 1 "$STATUS" "the union of integration refs reserves $num"
+    rm -f "specs/changes/0$num-union.md"
+done
+run bash "$sparse_new" --json --no-branch --short-name union-next "desc"
+assert_eq 0 "$STATUS" 'automatic allocation works with different integration tips'
+assert_contains "$OUTPUT" '"CHANGE_ID":"051-union-next"' 'the maximum number across both tips determines allocation'
 git symbolic-ref --delete refs/remotes/origin/HEAD
+git update-ref -d "$custom_ref"
 git update-ref -d "$archive_ref"
 printf '**Last 0.x feature**: none\n**Log condensed through**: 002; also 030-033, 032;\n' > specs/archive.md
 for num in auto explicit; do

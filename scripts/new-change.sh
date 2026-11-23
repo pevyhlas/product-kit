@@ -187,23 +187,13 @@ archive_unreadable() {
 }
 
 list_archive_indexes() {
-    local checkouts checkout rev head="" default
+    local checkouts checkout
     checkouts="$(set -o pipefail; list_checkouts | sort -u)" || return 1
     while IFS= read -r checkout; do
         spec_archive_log_index "$checkout" "$checkout/specs/archive.md" || return 1
     done <<< "$checkouts"
     [ "$HAS_GIT" = true ] || return 0
-    if rev="$(git rev-parse --verify --quiet HEAD)"; then
-        head="$rev"
-        spec_archive_log_index_at "$REPO_ROOT" "$head" || return 1
-    elif [ "$?" -ne 1 ]; then return 1
-    fi
-    # A branch cut before compaction may have no index in any working copy, even
-    # though the default branch known to local Git has reserved those numbers.
-    default="$(spec_default_branch "$REPO_ROOT")" || return 1
-    [ -n "$default" ] || return 0
-    rev="$(git rev-parse --verify --quiet "$default^{commit}")" || return 1
-    [ "$rev" = "$head" ] || spec_archive_log_index_at "$REPO_ROOT" "$rev"
+    spec_archive_log_integration "$REPO_ROOT"
 }
 
 claimed_numbers() {

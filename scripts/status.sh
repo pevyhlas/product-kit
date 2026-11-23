@@ -26,7 +26,7 @@ layout="$(spec_layout "$root")"
 mixed="$(spec_mixed_forms "$root")"
 SEP="$SPEC_SEP"
 archive_index="$(spec_archive_log_index "$root")" || exit "$?"
-compaction="$(spec_compaction "$root")" || exit "$?"
+compaction="$(spec_compaction "$root" "$archive_index")" || exit "$?"
 read -r closed_since last_pass <<< "$compaction"
 
 age() { # date -> days since, or blank
