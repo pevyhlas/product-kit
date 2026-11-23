@@ -1,11 +1,11 @@
 # Running a change
 
 **Inputs**: a bounded request or owner direction, open inbox items, the spec, code and policy.
-**Writes**: `specs/changes/<id>.md`, approved spec edits with the code that realizes them, PR context
+**Writes**: `specs/changes/<id>.md`, approved spec edits, any realizing code, PR context
 and evidence. Optional execution detail is ignored working material.
-**Result**: a built change ready for [review.md](review.md), or a recorded blocker or decision.
+**Result**: a change ready for [review.md](review.md), or a recorded blocker or decision.
 
-A change is a transaction on the spec and the code. Open one only for bounded work; discuss a
+A change is a transaction on the spec, the code or both. Open one only for bounded work; discuss a
 vague request (and ask its consequential questions) first. Create it with
 `.prdkit/scripts/bash/new-change.sh --json --short-name <name> "<intent>"`: it numbers the change,
 renders `.prdkit/templates/change-template.md` and creates a worktree unless `--no-worktree` (a new
@@ -45,9 +45,10 @@ edited in the same PR. Sections of one file; skip a section that has nothing rea
 6. **Checks**: before building, a few lines: every edit passes the line test, touched IDs agree
    with L0 and L1, every new Q and I is enforced.
 7. **Acceptance**: state bounded PR obligations as observable outcomes and map each to a canonical
-   R, Q, B or I and the check that proves it (test, CI job, live run, owner trial). For spec-only
-   changes, review whether the outcome can be observed. Proof design (oracles, fixtures, controls)
-   belongs in the implementing PR's tests and is reviewed there against real code.
+   R, Q, B or I and the check that proves it (test, CI job, live run, owner trial). A spec-only PR
+   proves its spec obligations, not the future runtime outcome. Check that the intended outcome can
+   be observed; proof design (oracles, fixtures, controls) belongs in the implementing PR's tests
+   and is reviewed there against real code.
    Keep the template's five columns, on a programme parent too: status helpers read them.
    Result is exactly `NOT_RUN`, `PASS`, `FAIL`, `BLOCKED` or `NOT_APPLICABLE`; put revision/environment
    and output links in Check or below the table, not after the status token. A PASS needs that evidence.
@@ -64,8 +65,10 @@ edited in the same PR. Sections of one file; skip a section that has nothing rea
 
 ## While building
 
-- Spec edits land in the PR whose code and tests realize them. Only approved meaning changes;
-  implementation findings follow [implementation.md](implementation.md), never manufacture intent.
+- Spec edits that claim built behavior land in the PR whose code and tests realize them.
+  Owner-approved, unbuilt intent may land in a spec-only PR under the [`planned:` rule](spec.md#elements).
+  Only approved meaning changes; follow [implementation.md](implementation.md) for findings, never
+  manufacture intent.
 - A PR that edits or deletes a test citing an ID also edits that ID's line, retires it, or says
   in the PR why the line still holds.
 - A behavior change without a spec edit says `Spec impact: none — <reason>`. Unaffected changes

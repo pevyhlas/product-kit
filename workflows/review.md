@@ -1,6 +1,6 @@
 # Review, merge and closing
 
-**Inputs**: a built change with its acceptance results, its record, PR and diff, the spec it
+**Inputs**: a change with its acceptance results, its record, PR and diff, the spec it
 touches, the reviewers registered in `.prdkit/memory/agents.md`, and project policy.
 **Writes**: the review package, reports and publisher-authored receipts on the PR, the final PR
 context, the log entry (`specs/log/<id>.md`) and the record's deletion.
@@ -31,8 +31,9 @@ trustworthy package, review is pending.
 
 For spec edits, judge each line at its edited level: [Levels](spec.md#levels),
 [What earns a line](spec.md#what-earns-a-line) and Left open ([Elements](spec.md#elements)).
-Make those rules readable. Snapshot the installed prompt and `.prdkit/workflows/spec.md` with
-`--context` if the trusted copies are tracked at the reviewed head; otherwise attach them.
+Send those rules with the prompt. Snapshot the installed prompt and `.prdkit/workflows/spec.md`
+with `--context` if the trusted copies are tracked at the reviewed head; otherwise attach both
+at dispatch.
 Use the `level` category for detail the edit adds at the wrong level or over budget.
 
 In a spec-only change, apply the existing severities to contradictions with constraints, decisions
