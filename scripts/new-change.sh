@@ -330,6 +330,10 @@ render_record() {
                 # Recognize the kit comments only when not already inside an example.
                 outside = !fence && !comment
                 hidden = spec_skip($0)
+                if (outside && /^<!-- (A programme or continuing follow-up queue \(|For a programme\/continuing follow-up queue,)/)
+                    obsolete = 1
+                if (obsolete && !fence && $0 == "### Outcome checkpoint") unsupported = 1
+                if (!comment) obsolete = 0
                 if (outside && $0 == ENVIRON["PK_POINTER"]) {
                     if (state && !slot) slot = NR
                 }
@@ -342,6 +346,7 @@ render_record() {
                 }
             }
             END {
+                if (unsupported) exit 2
                 # Use the stock pointer as the insertion slot; otherwise stay in State.
                 at = slot ? slot : state_end ? state_end : safe ? safe : 1
                 if (programme != "true" || has_block) at = 0
@@ -366,12 +371,17 @@ render_record() {
 }
 prepare_record() ( # optional pinned start commit for a fresh worktree
     set -o pipefail
-    local template scaffold="" tag_row line issue
+    local template scaffold="" tag_row line issue render_status=0
     template="$(record_input "$TEMPLATE" "$RECORD_TMP/template" "${1:-}")" || exit 1
     if $PROGRAMME; then
         scaffold="$(record_input "$SCAFFOLD" "$RECORD_TMP/scaffold" "${1:-}")" || exit 1
     fi
-    if ! render_record "$template" "$scaffold" > "$RENDERED_RECORD" || ! verify_lf_file "$RENDERED_RECORD"; then
+    render_record "$template" "$scaffold" > "$RENDERED_RECORD" || render_status=$?
+    if [ "$render_status" -eq 2 ]; then
+        echo "[prdkit] Error: Unsupported change template scaffold; use the current outcome checkpoint pointer: $POINTER" >&2
+        exit 1
+    fi
+    if [ "$render_status" -ne 0 ] || ! verify_lf_file "$RENDERED_RECORD"; then
         echo "[prdkit] Error: could not render the change record; check the change template and the installed outcome checkpoint snippet." >&2
         exit 1
     fi

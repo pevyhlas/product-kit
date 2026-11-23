@@ -108,7 +108,7 @@ install_manifest_format() {
         /^(version|harnesses|mode|options|agents-section): / { next }
         NF == 0 { next }
         length($1) == 64 && $1 ~ /^[0-9a-f]+$/ && substr($0, 65, 2) == "  " &&
-            substr($0, 67) ~ /^(\.(claude|opencode)\/commands\/prdkit[^/]*\.md|\.prdkit\/(scripts\/bash|templates|memory|workflows)\/[A-Za-z0-9_.-]+)$/ &&
+            substr($0, 67) ~ /^(\.(claude|opencode)\/commands\/prdkit[^\/]*\.md|\.prdkit\/(scripts\/bash|templates|memory|workflows)\/[A-Za-z0-9_.-]+)$/ &&
             substr($0, 67) !~ /\/\.\.?$/ { next }
         { bad = 1 }
         END { exit bad }

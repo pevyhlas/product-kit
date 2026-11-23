@@ -255,9 +255,10 @@ EOF
             printf '# PR 1\nR-01: README names Welcome, local check passed. Runtime production observation unverified; observe after a future deployment.\n' > .eval-state/pr.md
             accept PASS
             git add "$cf" && git commit -qm 'verified record'
-            printf -- '- 2026-10-25 001-greeting: document R-01 — delivered; runtime unverified — PR 1\n' >> specs/log.md
+            mkdir -p specs/log
+            printf -- '- 2026-10-25 001-greeting: document R-01 — delivered; runtime unverified — PR 1\n' > specs/log/001-greeting.md
             git rm -q "$cf"
-            git add specs/log.md && git commit -qm 'finalize same PR'
+            git add specs/log/001-greeting.md && git commit -qm 'finalize same PR'
         else echo 'Leave record open for a production check and cleanup PR.'; fi ;;
     20-dependency-drift)
         mkdir -p src

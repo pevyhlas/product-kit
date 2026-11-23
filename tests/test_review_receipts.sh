@@ -296,8 +296,10 @@ reset_host; fx_pr 7 "$NARROW_HEAD"; receipt 7 '.verdict="FAIL"'
 receipt 7 "$NARROW_PASS|.since=\"$HEAD_SHA\""; fetch
 assert_eq verified "$(awk -F '\037' 'END { print $NF }' "$RC_COVERAGE")" 'local since verifies the same narrow range'
 assert_eq '' "$(problems)" 'the same PASS with local since clears the blocker'
+assert_eq 0 "$RC_INVALID" 'available since recomputes to from for a non-empty range'
 reset_host; receipt 7 '.from=.to|.since=.head'; fetch
-assert_eq 0 "$RC_INVALID" 'available since recomputes to from'
+assert_eq 1 "$RC_INVALID" 'matching provenance cannot make an empty range valid'
+assert_contains "$(problems)" 'prdkit.review.v3 requires a non-empty fingerprint delta'
 reset_host; receipt 7 '.from="fp1:0000000000000000000000000000000000000000000000000000000000000000"|.since=.head'; fetch
 assert_eq 1 "$RC_INVALID"
 assert_contains "$(problems)" 'its from is not the content of since'

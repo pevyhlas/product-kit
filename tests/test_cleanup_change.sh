@@ -469,7 +469,7 @@ printf 'lessons\n' > "$EV/retrospectives/016-evidence.md"
 # Usage-enrichment input is gitignored too, so it is not dirt; it must not vanish with the worktree.
 run bash "$CLEAN" --json 016-evidence
 assert_eq 0 "$STATUS" "worktree removed"
-assert_contains "$OUTPUT" "preserved 4 evidence file(s)" "preservation reported"
+assert_contains "$OUTPUT" "preserved 3 evidence file(s)" "preservation reported"
 assert_eq "Verdict: PASS" "$(cat "$PROJ/.prdkit/cache/evidence/016-evidence/reviews/round-1/report.md" 2>/dev/null)" "review report kept"
 assert_eq "lessons" "$(cat "$PROJ/.prdkit/cache/retrospectives/016-evidence.md" 2>/dev/null)" "retrospective kept"
 

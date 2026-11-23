@@ -279,11 +279,16 @@ assert_eq 0 "$STATUS" "doctor reads the created record: $OUTPUT"
 run jq -e '.result == "pass"' <<< "$OUTPUT"
 assert_eq 0 "$STATUS" "doctor emits a passing JSON report"
 
-it "a retired checkpoint scaffold fails with the current template format"
-printf '%s\n' '## State' '<!-- A programme or continuing follow-up queue (workflows/planning.md):' '### Outcome checkpoint' '-->' > "$TEMPLATE"
-run bash .prdkit/scripts/bash/new-change.sh --no-branch --number 2 --short-name obsolete "Check an unsupported template"
-assert_eq 1 "$STATUS" 'unsupported stock scaffold rejected'
-assert_contains "$OUTPUT" 'current outcome checkpoint pointer'
+it "retired checkpoint scaffolds fail with the current template format"
+for opener in \
+    '<!-- A programme or continuing follow-up queue (workflows/planning.md):' \
+    '<!-- For a programme/continuing follow-up queue,'; do
+    printf '%s\n' '## State' "$opener" '### Outcome checkpoint' '-->' > "$TEMPLATE"
+    run bash .prdkit/scripts/bash/new-change.sh --no-branch --number 2 --short-name obsolete "Check an unsupported template"
+    assert_eq 1 "$STATUS" 'unsupported stock scaffold rejected'
+    assert_contains "$OUTPUT" 'current outcome checkpoint pointer'
+    assert_eq absent "$([ -e specs/changes/002-obsolete.md ] && echo present || echo absent)"
+done
 printf '%s\n' '## State' '### Outcome checkpoint' '**Outcome**: The result' > "$TEMPLATE"
 
 it "--programme keeps a checkpoint already present in a custom change template"

@@ -326,7 +326,7 @@ else
             *) problems+=("$log_path at $head is not a regular file; the log and the change's entry are plain files") ;;
         esac
     done < <(GIT_NO_LAZY_FETCH=1 git -C "$root" ls-tree "$head" -- specs/log.md "specs/log/$id.md" 2>/dev/null)
-     record="$(cat "$fp_cache/selected-record")"
+    record="$(cat "$fp_cache/selected-record")"
     # The tier is the record's single **Tier** field; a second one, even in a comment, is refused.
     claims="$(printf '%s\n' "$record" | record_tiers)"
     case "$claims" in
@@ -429,7 +429,7 @@ else
             problems+=("${v_receipt[i]}: No trusted integration-baseline registry: establish origin/HEAD and fetch its shared history before checking reviewer eligibility")
         fi
         eligibility="$(review_eligibility "$registry" "${v_rev[i]}")"
-        [ "$eligibility" = reviewer ] || problems+=("${v_receipt[i]}: reviewer '${v_rev[i]}' is $eligibility in the integration-baseline registry; register an eligible identity in agents.md before using it")
+        [ "$eligibility" = reviewer ] || problems+=("${v_receipt[i]}: reviewer '${v_rev[i]}' is $eligibility in the integration-baseline registry; use an eligible identity from the ## Review registry table (Identity and Role) in agents.md")
     done
 
     coverage_record_only="$record_only"

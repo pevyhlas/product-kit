@@ -187,7 +187,8 @@ review_plan_write() {
             all($d.scope_blockers[] | select(.reviewer==$id); (.full_required|not) and .to==$since) and
             all($d.latest[] | select(.reviewer==$id); .provenance=="verified") and
             all($d.standing[] | select(.reviewer==$id); .to==$since)) ]) as $delta_reviewers |
-        ([ $d.latest[] | . as $r | select($scope and $since!="" and
+         # An invalid receipt may have been a blocker; do not suggest bypassing a full review.
+         ([ $d.latest[] | . as $r | select($scope and $since!="" and $g.invalid_receipts==0 and
             .eligibility=="reviewer" and .clean and (.standing|not) and (.end_covered|not) and
             ($blockers|index($r.reviewer)|not) and
             ($reaches|index("start"))!=null and ($reaches|index($r.reviewer))!=null and

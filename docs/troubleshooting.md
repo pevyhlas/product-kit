@@ -39,7 +39,6 @@
 | `cleanup-change.sh --closed` leaves a closed change's worktree | It removes only the layout `new-change.sh` creates, `.worktrees/<id>` on branch `<id>`. Remove any other worktree by id |
 | Agent context file huge, slow costly turns | Keep `CLAUDE.md`/`AGENTS.md` to orientation and pointers within `context-budget-bytes` |
 | Unsupported installed command or helper | Check the current kit mapping and reconcile the installation manually; `--upgrade` does not retire old kit files |
-| Upgrade kept an edited retired template | Fold what you need into the constitution or a 1.0 template, then delete it |
 | A helper exits 2: resolved root has no `.prdkit/` | Run the installed copy under `<project>/.prdkit/scripts/bash/` from a project whose Git root holds `.prdkit/` |
 | `init.sh` exits 2: unknown harness, or the list would drop a recorded one | Separate names with commas or spaces and keep every recorded harness; see [removing a harness](harnesses.md#removing-a-harness) |
 | Slash commands missing in a change worktree; `new-change.sh` warns that links do not resolve | The install uses `--symlink` and the worktree lacks the kit: run the `git submodule update --init` it names, or switch once with `init.sh --upgrade --copy` and commit |
