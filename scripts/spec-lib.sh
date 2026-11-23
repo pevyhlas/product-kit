@@ -1014,6 +1014,49 @@ spec_default_branch() { # root
     printf '%s\n' "$base"
 }
 
+# Validate the whole raw config before emitting policy. Blank prefix lines preserve
+# assignment line numbers. An absent level-two Configuration heading emits no policy.
+spec_review_config_section() {
+    LC_ALL=C awk '
+        function scan(raw,following,n,   s,title,level) {
+            s=raw; sub(/\r$/, "", s); sub(/^ ? ? ?/, "", s)
+            if (match(s,/^#+/) && RLENGTH<=6 && substr(s,RLENGTH+1) ~ /^([ \t]|$)/) {
+                level=RLENGTH; title=substr(s,level+1)
+            } else if (following ~ /^ ? ? ?(===|---)\r?$/) {
+                level=(index(following,"=") ? 1 : 2); title=raw
+            }
+            if (level) {
+                sub(/[[:space:]]+$/, "", title); sub(/#+$/, "", title)
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", title)
+                if (tolower(title)=="configuration") {
+                    if (!first) first=n; else if (!duplicate) duplicate=n
+                    if (level==2 && !start) start=n
+                }
+                if (start && !stop && n>start && level<=2) stop=n
+            }
+            if (!stop && !marker) {
+                s=raw
+                # Non-ASCII Unicode White_Space, bytewise for BSD and older awk.
+                gsub(/\302[\205\240]|\341\232\200|\342\200[\200-\212\250\251\257]|\342\201\237|\343\200\200/, " ", s)
+                if (s ~ /<!--|-->/ || s ~ /^[[:space:]]*(```|~~~)/) marker=n
+            }
+            if (start && !stop && n>start) body[n]=raw
+        }
+        NR>1 { scan(previous,$0,NR-1) }
+        { previous=$0 }
+        END {
+            if (NR) scan(previous,"",NR)
+            if (duplicate) {
+                print "Duplicate Configuration headings at config.md lines " first " and " duplicate > "/dev/stderr"; exit 1
+            }
+            if (!start) exit
+            if (marker) {
+                print "config.md line " marker ": comments and fenced blocks are not allowed before or within the policy section" > "/dev/stderr"; exit 1
+            }
+            for (i=1;i<(stop ? stop : NR+1);i++) print body[i]
+        }'
+}
+
 # The trusted integration refs: origin/HEAD's target (a full refs/remotes/ name, always first),
 # then each ref named by `review-integration-branches` in the committed config at that target,
 # never the worktree's own. One full ref per line; blank when origin/HEAD does not resolve to a
@@ -1027,10 +1070,9 @@ spec_trusted_refs() { # root [--tips: include a frozen commit after each ref]
     if [ "${2:-}" = --tips ]; then printf '%s\t%s\n' "$default" "$sha"; else printf '%s\n' "$default"; fi
     seen="$default"
     policy="$(git -C "$root" show "$sha:.prdkit/memory/config.md" 2>/dev/null || true)"
-    configured="$(printf '%s\n' "$policy" | awk "$SPEC_SKIP_AWK"'
-        { if (spec_skip($0)) next }
-        /^## / { section = $0; next }
-        section == "## Configuration" && /^- review-integration-branches:/ {
+    policy="$(printf '%s\n' "$policy" | spec_review_config_section 2>/dev/null)" || return 0
+    configured="$(printf '%s\n' "$policy" | awk '
+        /^- review-integration-branches:/ {
             n++; value = $0; sub(/^- review-integration-branches:[[:space:]]*/, "", value)
         }
         END { if (n == 1) { gsub(/,/, " ", value); print value } }')"

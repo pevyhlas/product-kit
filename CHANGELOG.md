@@ -23,6 +23,8 @@ change by change.
   to accounts. One App can cover several areas; T3 requires a mapped `design`
   approval plus the owner. The live gate reports the approving account and review
   per area. Without lenses, publisher policy works as before (#161).
+- Before adopting 3.0, move HTML comments and fenced examples below the Configuration
+  section of `config.md` and use that heading name only once, including in examples.
 - Cleanup and close tests now run against seeded combinations of local Git states and
   check that commits and working files survive. The generator is test-only.
 

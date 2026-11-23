@@ -44,7 +44,7 @@ make_transition_seed() {
 - **Rigor**: full
 EOF
     cat > "$PROJ/.prdkit/memory/config.md" <<'EOF'
-# Configuration
+# Project settings
 ## Configuration
 - review-host: github
 - review-publishers: bot:1001

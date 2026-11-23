@@ -8,7 +8,7 @@ source "$PK_ROOT/scripts/spec-lib.sh"
 STATUS=0
 PROJ="$(make_inited_project)"; track_tmp "$PROJ"
 cd "$PROJ" || exit 1
-cat >> .prdkit/memory/config.md <<'EOF'
+cat > .prdkit/memory/config.md <<'EOF'
 
 ## Configuration
 - review-host: github

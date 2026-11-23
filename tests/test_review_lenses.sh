@@ -104,13 +104,12 @@ assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'comments and fenced blocks are
 policy "$publishers" 'The `Review-Lenses` setting is optional.' '<!-- note -->'; gate
 assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'comments and fenced blocks are not allowed'
 
-it 'without a mention of lenses the original comment and fence rules apply'
+it 'publisher-only policy also rejects comment and fence markers'
 policy "$publishers" '<!--' '- review-publishers: bot:42' '-->' \
     '```text' '- review-owner: user:42' '```' 'A literal `<!--` is harmless.'; gate
-assert_eq 0 "$STATUS" "$OUTPUT"; assert_not_contains "$OUTPUT" '"areas":'
-# The legacy reader does not treat an inline opener as a multiline comment.
+assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'config.md line 5'
 policy 'A literal `<!--` is harmless.' "$publishers"; gate
-assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'config.md line 4'
 
 it 'the shipped template keeps examples outside the raw policy section'
 awk -v pub="$publishers" -v lenses="$separate" '
@@ -124,12 +123,12 @@ it 'a hidden heading cannot supply required host and owner policy'
 for mapping_line in '' "$separate"; do
     printf '%s\n' '```text' '## Configuration' '- review-host: github' \
         '- review-owner: user:1003' "$publishers" "$mapping_line" | trusted_edit "$ref" "$config"
-    gate; assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'review-host: github'
+    gate; assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'config.md line 1'
 done
 # Previous visible credentials must not compensate for an ambiguous later heading.
 for fence in '```text' '~~~text'; do
     policy "$publishers" '## Meaning' "$fence" '## Configuration' "$separate"; gate
-    assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'Hidden ## Configuration heading'
+    assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'config.md lines 1 and 7'
 done
 printf '%s\n' '## Configuration' "$separate" '## Meaning' '- review-host: github' \
     '- review-owner: user:1003' | trusted_edit "$ref" "$config"
@@ -145,23 +144,50 @@ for mapping_line in "$separate" ''; do
     for opener in '````text' '~~~~text'; do
         heading_fixture "$mapping_line" "$opener" "${opener:0:3}"
         gate; assert_eq 1 "$STATUS" 'example credentials must not authorize T3'
-        assert_contains "$OUTPUT" 'Ambiguous fence at config.md line 1'
+        assert_contains "$OUTPUT" 'config.md line 1'
     done
     for closer in '````' '~~~'; do
         heading_fixture "$mapping_line" '```text' "$closer"
-        gate; assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'Ambiguous fence at config.md line 2'
+        gate; assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'config.md line 1'
     done
 done
 
-it 'a tilde shown inside a closed backtick example cannot hide the following policy'
-heading_fixture "$separate" '```text' '~~~' '```'
-gate; assert_eq 0 "$STATUS" "$OUTPUT"
+it 'fence indentation and pairing cannot confer authority on later fields'
+for closer in '```' '   ```' '    ```'; do
+    heading_fixture "$separate" '```text' '~~~' "$closer"
+    gate; assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'config.md line 1'
+done
 
 it 'the fence check includes the selected policy section but ends before later documentation'
 policy "$publishers" '```' '~~~~'; gate
-assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'Ambiguous fence at config.md line 6'
+assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'config.md line 5'
 policy "$publishers" "$separate" '## Meaning' '````text' '```'; gate
 assert_eq 0 "$STATUS" "$OUTPUT"
+
+it 'a heading inside a policy example cannot hide a subsequent design requirement'
+tier T3; review APPROVED 1001; review APPROVED 1003
+for marker in '```text' '<!--'; do
+    if [ "$marker" = '<!--' ]; then closer='-->'; else closer='```'; fi
+    policy "$publishers" "$marker" '## Example' "$closer" "$separate"; gate
+    assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'config.md line 5'
+done
+
+it 'a second Configuration heading anywhere reports both locations'
+for heading in '## Configuration' '   #### CONFIGURATION ##' $'Configuration\n   ---' $'Configuration\n==='; do
+    policy "$publishers" '## Meaning' '```' "$heading" '```'; gate
+    assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'config.md lines 1 and 7'
+done
+
+it 'level-two heading spelling and section boundaries use raw lines'
+review APPROVED 1004
+for heading in ' ## Configuration' '  ## configuration ###' $'   ##\tCONFIGURATION' $'Configuration\n---'; do
+    for boundary in '# Notes' '  ## Notes' $'Notes\n===' $'Notes\n---'; do
+        printf '%s\n' "$heading" '- review-host: github' '### Roles' '- review-owner: user:1003' \
+            "$separate" "$boundary" '<!-- examples -->' '```' '- review-owner: user:42' '```' |
+            trusted_edit "$ref" "$config"
+        gate; assert_eq 0 "$STATUS" "$heading / $boundary: $OUTPUT"
+    done
+done
 
 it 'a noncanonical publisher assignment cannot silently evade the union check'
 review APPROVED 1004
@@ -187,4 +213,18 @@ it 'candidate registry or mapping cannot authorize design'
 policy "$separate"
 git show "$base:$registry" | sed '/^| design | reviewer |/d' | trusted_edit "$ref" "$registry"
 gate; assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" "area 'design' must name one eligible reviewer"
+
+it 'documentation cannot supply a T0 path or an additional trusted base'
+tier T0
+mkdir -p docs; echo note > docs/note; git add docs/note; git commit -qm 'document change'
+fx_pr 7 "$(git rev-parse HEAD)"
+git update-ref refs/remotes/origin/integration "$base"
+policy "$publishers" '# Meaning' '- review-t0-paths: docs/' '- review-integration-branches: origin/integration'
+gate; assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'lists no review-t0-paths'
+run bash .prdkit/scripts/bash/check-review.sh --json --base origin/integration 001-reviewed
+assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'not a trusted integration branch'
+policy "$publishers" '- review-t0-paths: docs/' '- review-integration-branches: origin/integration' '# Meaning'
+gate; assert_eq 0 "$STATUS" "$OUTPUT"
+run bash .prdkit/scripts/bash/check-review.sh --json --base origin/integration 001-reviewed
+assert_eq 3 "$STATUS" 'configured base qualifies for structural preview'
 finish

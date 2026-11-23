@@ -34,6 +34,8 @@ not a substitute for the required workflow.
    The 3.0 gate warns about the isolation key but accepts its presence. Use independent
    numeric `bot:<id>`/`user:<id>` publisher accounts or personal `user:<id>` owners.
    The PR author never counts in 3.0, even if listed or if 2.0 uses `shared`.
+   Before 3.0, remove HTML comments and fenced code blocks from the top of
+   `config.md` through its Configuration section; keep that heading name unique.
 3. Stage a distinct, trusted 3.0 check alongside the still-required 2.0 check on the
    target branch. Follow the [all-PR execution contract](ci-gates.md#trusted-all-pr-execution--check-pr-reviewsh).
    Give each check a distinct identity and name. The stock launcher loads its gate

@@ -122,10 +122,8 @@ tier_floor_of() { # rev -> the highest tier the record names there, if any
 # a trailing / names a directory), and never the kit's policy, another change record or the L0/L1
 # spec. Prints the paths that do not qualify; fails when the diff cannot be read.
 t0_paths() { # rev -> configured entries, one per line
-    { git -C "$root" show "$1:.prdkit/memory/config.md" 2>/dev/null || true; } | awk "$SPEC_SKIP_AWK"'
-        { if (spec_skip($0)) next }
-        /^## / { section = $0; next }
-        section == "## Configuration" && /^- review-t0-paths:/ {
+    { git -C "$root" show "$1:.prdkit/memory/config.md" 2>/dev/null || true; } | spec_review_config_section 2>/dev/null | awk '
+        /^- review-t0-paths:/ {
             n++; value = $0; sub(/^- review-t0-paths:[[:space:]]*/, "", value)
         }
         END { if (n == 1) { gsub(/,/, " ", value); print value } }' | tr -s ' \t\r' '\n' |

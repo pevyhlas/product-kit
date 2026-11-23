@@ -6,7 +6,7 @@
 # Its undismissed objections on any PR commit require a later exact-head approval by that account.
 # Report open objections separately from approvals after complete, consistent pagination.
 # With lenses, publisher eligibility is the union of accounts mapped to trusted reviewers.
-# Ambiguous fences may not establish policy, whether or not lenses are configured.
+# Only the single raw Configuration section can establish policy.
 #
 # Threat model:
 # Review text and candidate policy are untrusted. Trust the authenticated GitHub response;
@@ -14,11 +14,12 @@
 # shellcheck disable=SC2034,SC2016 # Public outputs; jq/GraphQL variables are literal.
 
 github_review_policy() {
-    local root="$1" at="$2" config fields registry area entry mode normalize rules policy_locale="${LC_ALL:-}"
+    local root="$1" at="$2" config fields registry area entry
     RC_ERROR="Cannot read trusted review policy at ${at:-origin/HEAD}"
     [ -n "$at" ] || return 1
     config="$(git -C "$root" show "$at:.prdkit/memory/config.md" | review_text_stream)" || return 1
-    normalize='
+    config="$(printf '%s\n' "$config" | spec_review_config_section 2>&1)" || { RC_ERROR="$config"; return 1; }
+    fields="$(printf '%s\n' "$config" | LC_ALL=C awk '
         function spaces(s) {
             # Unicode White_Space in UTF-8, in the C byte locale.
             gsub(/[[:space:]]|\302[\205\240]|\341\232\200|\342\200[\200-\212\250\251\257]|\342\201\237|\343\200\200/, " ", s)
@@ -28,82 +29,18 @@ github_review_policy() {
             gsub(/`/, "", s)
             gsub(/\305\277/, "s", s) # long s also case-folds to an ASCII key letter
             return tolower(spaces(s))
-        }'
-    # Only raw headings delimit policy. No comment or fence can conceal a lens mention.
-    mode="$(printf '%s\n' "$config" | LC_ALL=C awk "$SPEC_SKIP_AWK$normalize"'
-        {
-            skipped=spec_skip($0)
-            s=spaces($0); sub(/^ */, "", s)
-            if (match(s,/^(```+|~~~+)/)) {
-                mark=substr(s,1,RLENGTH)
-                bare=(substr(s,RLENGTH+1) ~ /^ *$/)
-                if (!opening) {
-                    opening=mark
-                    if (length(mark)>3 && !bad) bad=NR
-                } else if (bare && mark==opening) {
-                    opening=""; other=0
-                } else if (bare && substr(mark,1,1)==substr(opening,1,1)) {
-                    if (!bad) bad=NR
-                } else if (bare && !other) {
-                    # Literal example content if the actual opener subsequently closes.
-                    other=NR
-                }
-            }
         }
-        /^## / {
-            active=($0=="## Configuration")
-            if (active && opening) {
-                if (other && !bad) bad=other
-                hidden=NR
-            }
-            if (active && skipped) skipped_heading=NR
-        }
-        active {
-            # Snapshot at the policy boundary: later documentation is not policy.
-            policy_bad=(bad ? bad : other)
-            if (index(normalized($0),"review-lenses")) lenses=1
-            if (/<!--|-->/ || spaces($0) ~ /^ *(```|~~~)/) marker=NR
-        }
-        END {
-            if (policy_bad) {
-                print "Ambiguous fence at config.md line " policy_bad ": use matching three-character fences before or within ## Configuration"
-                exit 1
-            }
-            if (lenses && marker) {
-                print "config.md line " marker ": comments and fenced blocks are not allowed in ## Configuration when review-lenses is mentioned"
-                exit 1
-            }
-            if (lenses && skipped_heading) hidden=skipped_heading
-            if (hidden) {
-                print "Hidden ## Configuration heading at config.md line " hidden ": review-host: github and review-owner must be in a visible policy section"
-                exit 1
-            }
-            print (lenses ? "lenses" : "legacy")
-        }')" || { RC_ERROR="${mode:-Cannot inspect trusted review policy}"; return 1; }
-    if [ "$mode" = legacy ]; then
-        # Original reader, including its locale, skipped examples and heading rules.
-        rules="$SPEC_SKIP_AWK"'
-            { if (spec_skip($0)) next }
-            /^## / { active=($0=="## Configuration"); next }
-            !active || /^- review-lenses:/ { next }'
-    else
-        policy_locale=C
-        rules="$normalize"'
-            /^## / { active=($0=="## Configuration"); next }
-            !active { next }
-            {
-                ntext=normalized($0)
-                if (match(ntext,/review-(lenses|publishers)/) && substr(ntext,RSTART+RLENGTH) ~ /[:=]/) {
-                    key=substr(ntext,RSTART,RLENGTH)
-                    if (index($0,"- " key ":")!=1)
-                        malformed="Invalid " key " key at config.md line " NR ": expected - " key ": <value>"
-                }
-            }'
-    fi
-    fields="$(printf '%s\n' "$config" | LC_ALL="$policy_locale" awk -v mode="$mode" "$rules"'
         function fail(reason, key) {
-            print reason ((mode=="lenses" && key in line) ? " (config.md line " line[key] ")" : "")
+            print reason ((key in line) ? " (config.md line " line[key] ")" : "")
             exit 1
+        }
+        {
+            ntext=normalized($0)
+            if (match(ntext,/review-(lenses|publishers)/) && substr(ntext,RSTART+RLENGTH) ~ /[:=]/) {
+                key=substr(ntext,RSTART,RLENGTH)
+                if (index($0,"- " key ":")!=1)
+                    malformed="Invalid " key " key at config.md line " NR ": expected - " key ": <value>"
+            }
         }
         /^- review-(host|publishers|owner|publisher-isolation|lenses):/ {
             key=$0; sub(/:.*/, "", key); sub(/^- /,"",key)
