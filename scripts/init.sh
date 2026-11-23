@@ -577,12 +577,15 @@ if $UPGRADE; then
     upgrade_checkout_clean || exit 1
     upgrade_no_overwrite || exit 1
     if [ -n "$REMOVE_OPTIONS_FILES" ]; then
-        # Search tracked project text for the files this option would remove, not the
-        # installed kit or pinned source, both of which describe the option themselves.
-        if references="$(git -C "$TARGET" grep -n -I -F -e render-agents.sh -e agent-definition-template.md -- \
-            . ':(exclude).prdkit/scripts/bash' ':(exclude).prdkit/templates' \
-            ':(exclude).prdkit/workflows' ':(exclude).prdkit/memory/agents.md' ':(exclude).prdkit/.manifest' \
-            ':(exclude).product-kit')"; then
+        # Exclude the exact installed paths from the validated manifest, not their
+        # directories: a consumer can keep a tracked wrapper alongside kit scripts.
+        search_paths=(. ':(top,exclude,literal).prdkit/.manifest' ':(top,exclude,literal).product-kit')
+        installed_paths="$(LC_ALL=C awk 'length($1) == 64 && $1 ~ /^[0-9a-f]+$/ { print substr($0, 67) }' "$MANIFEST")" || exit 1
+        while IFS= read -r rel; do
+            [ -z "$rel" ] || search_paths+=(":(top,exclude,literal)$rel")
+        done <<< "$installed_paths"
+        if references="$(git -C "$TARGET" grep --no-color -n -I -E -e 'render-agents\.sh|agent-definition-template\.md' \
+            --and --not -e '^[[:space:]]*#' -- "${search_paths[@]}")"; then
             printf 'Error: --without agent-tiers would remove files still referenced by tracked project files. Update these references or keep the subsystem:\n%s\n' "$references" >&2
             exit 1
         elif [ "$?" -ne 1 ]; then

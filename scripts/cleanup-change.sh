@@ -83,8 +83,9 @@ Run from the MAIN checkout, not from inside the worktree being removed.
 A worktree is removed non-forced by default: uncommitted or untracked changes
 refuse the removal until they are committed, stashed or discarded. Committed
 work is not checked for integration; the branch is never deleted. Ignored files
-move with the checkout. Evidence and retrospectives in .prdkit/cache/ are
-also copied to the main checkout.
+move with the checkout. Evidence, retrospectives and usage-enrichment inputs
+are also copied to the main checkout. Archive and remove any legacy ledger
+spool yourself before cleanup.
 
 Cleanup moves the entire registration (including index, reflogs and submodule
 stores) and any live checkout to the reported prdkit-retired directory. It
@@ -621,18 +622,13 @@ remove_worktree() { # path label locked
         esac
     fi
 
-    if [ -L "$WT/.prdkit" ]; then
-        refuse_with "linked .prdkit path" "Refusing to remove $WT: expected a local .prdkit/cache/ directory, not a linked .prdkit path."
+    if [ -L "$WT/.prdkit" ] || [ -L "$WT/.prdkit/ledger" ] ||
+        [ -L "$WT/.prdkit/ledger/events.jsonl" ] || [ -e "$WT/.prdkit/ledger/events.jsonl" ]; then
+        refuse_with "legacy ledger spool or linked ledger path" \
+            "Refusing to remove $WT: archive the legacy ledger spool if needed, then remove it or the linked ledger path before retrying."
         return 1
     fi
-    # Refuse obsolete recovery paths rather than moving or converting their data.
-    if [ -L "$WT/.prdkit/ledger" ] || [ -e "$WT/.prdkit/ledger" ] ||
-        [ -L "$WT/.prdkit/retrospective" ] || [ -e "$WT/.prdkit/retrospective" ]; then
-        refuse_with "unsupported recovery path" \
-            "Refusing to remove $WT: unsupported ledger or retrospective path; cleanup expects recovery copies in .prdkit/cache/evidence/ and .prdkit/cache/retrospectives/."
-        return 1
-    fi
-    if ! preserve cache/evidence || ! preserve cache/retrospectives; then
+    if ! preserve cache/evidence || ! preserve cache/retrospectives || ! preserve retrospective; then
         refuse_with "could not preserve its evidence at $CONFLICT" \
             "Refusing to remove $WT: could not preserve its evidence at $CONFLICT (a different file is already there, or the copy failed). Resolve it, then rerun."
         return 1
@@ -650,62 +646,26 @@ remove_worktree() { # path label locked
 
 # --- Remove every closed change's worktree ---------------------------------
 
-# A trusted close deletes the change record and writes its own entry. If that entry has
-# since been folded into the shared log, require the exact line from the closing commit.
+# Whether <id> is closed on a trusted ref: its record specs/changes/<id>.md is gone there and
+# the log has its entry, specs/log/<id>.md as close-change.sh writes it or a line in specs/log.md
+# ("- <date> <id>: ..."). Both facts are read from the trusted ref, never from the worktree's own
+# branch.
 CLOSED_REFS=""
-closed_on_trusted() ( # id -> 0 closed, 1 open/unrelated, 2 refused (reason on stdout)
-    local id="$1" ref entry record log close fold mode tip scratch
-    record="specs/changes/$id.md"; entry="specs/log/$id.md"
-    scratch="$(mktemp -d)" || { echo "Cannot allocate storage to verify $entry"; return 2; }
-    trap 'rm -f "$scratch/entry" "$scratch/shared"; rmdir "$scratch"' EXIT
+closed_on_trusted() { # id
+    local id="$1" ref
     while IFS= read -r ref; do
         [ -n "$ref" ] || continue
-        if ! spec_objects_local "$ROOT" ||
-            ! tip="$(git -C "$ROOT" ls-tree "$ref" -- "$record" "$entry" specs/log.md)"; then
-            printf 'Cannot read %s on %s; fetch its history and log objects before running --closed.\n' "$entry" "$ref"
-            return 2
+        GIT_NO_LAZY_FETCH=1 git -C "$ROOT" rev-parse --verify --quiet "$ref^{commit}" >/dev/null 2>&1 || continue
+        if GIT_NO_LAZY_FETCH=1 git -C "$ROOT" cat-file -e "$ref:specs/changes/$id.md" 2>/dev/null; then continue; fi
+        if spec_log_entries_at "$ROOT" "$ref" |
+            sed -n 's/^- [0-9-]* \([^ :]*\):.*/\1/p' | grep -Fqx -- "$id"; then
+            return 0
         fi
-        if grep -qF $'\t'"$record" <<< "$tip"; then continue; fi
-        mode="$(grep -F $'\t'"$entry" <<< "$tip")"
-        log="$(grep -F $'\t'specs/log.md <<< "$tip")"
-        if [ -z "$mode" ]; then
-            case "$log" in
-                '') continue ;;
-                '100644 blob '*|'100755 blob '*)
-                    if ! git -C "$ROOT" cat-file blob "$ref:specs/log.md" > "$scratch/shared"; then
-                        printf 'Cannot read specs/log.md on %s; fetch the log blob before running --closed.\n' "$ref"
-                        return 2
-                    fi
-                    grep -q "^- [0-9-]* $id:" "$scratch/shared" || continue ;;
-                *) continue ;;
-            esac
-        fi
-        if close="$(git -C "$ROOT" log -1 --format=%H "$ref" -- "$record")" &&
-            [ -n "$close" ] && git -C "$ROOT" cat-file -e "$close^:$record" 2>/dev/null &&
-            [[ "$(git -C "$ROOT" ls-tree "$close" -- "$entry")" == '100644 blob '* ]] &&
-            git -C "$ROOT" cat-file blob "$close:$entry" > "$scratch/entry" &&
-            spec_log_entry_valid "$scratch/entry" "$id"; then
-            if [ -n "$mode" ]; then
-                if [[ "$mode" == '100644 blob '* || "$mode" == '100755 blob '* ]] &&
-                    git -C "$ROOT" cat-file blob "$ref:$entry" > "$scratch/shared" &&
-                    spec_log_entry_valid "$scratch/shared" "$id"; then return 0; fi
-            elif verify_lf_file "$scratch/shared" &&
-                grep -Fxq -- "$(cat "$scratch/entry")" "$scratch/shared" &&
-                fold="$(git -C "$ROOT" log -1 --diff-filter=D --format=%H "$close..$ref" -- "$entry")" &&
-                [ -n "$fold" ] &&
-                git -C "$ROOT" cat-file blob "$fold:specs/log.md" > "$scratch/shared" &&
-                verify_lf_file "$scratch/shared" &&
-                grep -Fxq -- "$(cat "$scratch/entry")" "$scratch/shared"; then
-                return 0
-            fi
-        fi
-        printf 'Unsupported close on %s: expected %s from close-change.sh at the closing commit, or its exact folded line in specs/log.md.\n' "$ref" "$entry"
-        return 2
     done <<EOF
 $CLOSED_REFS
 EOF
     return 1
-)
+}
 
 # A worktree matches only as new-change.sh lays it out: the directory .worktrees/<id> of this
 # checkout, on the branch <id>, and <id> is closed. Anything else is left alone: a detached HEAD
@@ -719,11 +679,11 @@ worktree_closed() { # branch path
     [ "${path##*/}" = "$branch" ] || return 1
     parent="$(CDPATH="" cd "${path%/*}" 2>/dev/null && pwd -P)" || return 1
     [ "$parent" = "$WORKTREES_TOP" ] || return 1
-    GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 closed_on_trusted "$branch"
+    closed_on_trusted "$branch"
 }
 
 run_closed() {
-    local i path branch locked top msg result closure rc removed_n=0 skipped_n=0 open_n=0 failed=0
+    local i path branch locked top msg result removed_n=0 skipped_n=0 open_n=0 failed=0
     REMOVED=(); SKIPPED_PATH=(); SKIPPED_WHY=()
     CLOSED_REFS="$(spec_trusted_refs "$ROOT")"
     if [ -z "$CLOSED_REFS" ]; then
@@ -740,15 +700,8 @@ run_closed() {
         if [ "${ENT_BARE[$i]}" = true ] || [ "${ENT_PRUNABLE[$i]}" = true ]; then continue; fi
         top="$(CDPATH="" cd "$path" 2>/dev/null && pwd -P)" || top="$path"
         [ "$top" != "$ROOT_TOP" ] || continue
-        if closure="$(worktree_closed "$branch" "$path")"; then :
-        else
-            rc=$?
-            if [ "$rc" -eq 2 ]; then
-                failed=1; skipped_n=$((skipped_n + 1)); SKIPPED_PATH+=("$path"); SKIPPED_WHY+=("$closure")
-            else
-                open_n=$((open_n + 1))
-            fi
-            continue
+        if ! worktree_closed "$branch" "$path"; then
+            open_n=$((open_n + 1)); continue
         fi
         case "$CWD_PHYS/" in
             "$top"/*)

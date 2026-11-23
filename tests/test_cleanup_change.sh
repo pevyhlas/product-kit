@@ -467,11 +467,14 @@ printf 'Verdict: PASS\n' > "$EV/evidence/016-evidence/reviews/round-1/report.md"
 printf 'diff\n' > "$EV/evidence/016-evidence/reviews/round-1/package.diff"
 printf 'lessons\n' > "$EV/retrospectives/016-evidence.md"
 # Usage-enrichment input is gitignored too, so it is not dirt; it must not vanish with the worktree.
+mkdir -p "$PROJ/.worktrees/016-evidence/.prdkit/retrospective"
+printf '{"tokens":{"total":1}}\n' > "$PROJ/.worktrees/016-evidence/.prdkit/retrospective/016-evidence.enrich.json"
 run bash "$CLEAN" --json 016-evidence
 assert_eq 0 "$STATUS" "worktree removed"
-assert_contains "$OUTPUT" "preserved 3 evidence file(s)" "preservation reported"
+assert_contains "$OUTPUT" "preserved 4 evidence file(s)" "preservation reported"
 assert_eq "Verdict: PASS" "$(cat "$PROJ/.prdkit/cache/evidence/016-evidence/reviews/round-1/report.md" 2>/dev/null)" "review report kept"
 assert_eq "lessons" "$(cat "$PROJ/.prdkit/cache/retrospectives/016-evidence.md" 2>/dev/null)" "retrospective kept"
+assert_eq '{"tokens":{"total":1}}' "$(cat "$PROJ/.prdkit/retrospective/016-evidence.enrich.json" 2>/dev/null)" "enrichment input kept"
 
 it "linked evidence roots are refused for committed and forced checkouts"
 outside_cache="$(mktemp -d)"; track_tmp "$outside_cache"
@@ -500,9 +503,9 @@ assert_eq 1 "$STATUS"; assert_file "$path/.git"
 run test ! -e "$outside_cache/report"; assert_eq 0 "$STATUS"
 rm "$PROJ/.prdkit/cache/evidence/nested"
 
-it "every change's evidence survives removal; unsupported recovery paths block cleanup"
+it "every change's evidence survives removal; a legacy spool needs explicit archival"
 # new-change.sh run inside a worktree opens the next change there, so one worktree can hold
-# several changes' evidence, and cleanup must not discard unsupported recovery data.
+# several changes' evidence; the ledger spool is per checkout and gitignored too.
 git -C "$PROJ" worktree add -qb 018-first "$PROJ/.worktrees/018-first" >/dev/null 2>&1
 EV="$PROJ/.worktrees/018-first/.prdkit"
 mkdir -p "$EV/cache/evidence/018-first" "$EV/cache/evidence/019-second" "$EV/ledger" "$PROJ/.prdkit/ledger"
@@ -512,21 +515,20 @@ printf '{"event":"a"}\n' > "$PROJ/.prdkit/ledger/events.jsonl"
 printf '{"event":"a"}\n{"event":"b"}\n{"event":"c"}\n' > "$EV/ledger/events.jsonl"
 run bash "$CLEAN" 019-second
 assert_eq 1 "$STATUS" "no worktree named for the second change"
-run bash "$CLEAN" 018-first --force
-assert_eq 1 "$STATUS" "unsupported recovery data is not removed"
-assert_contains "$OUTPUT" 'cleanup expects recovery copies in .prdkit/cache/evidence/'
+run bash "$CLEAN" 018-first
+assert_eq 1 "$STATUS" "legacy spool retained for manual archival"
+assert_contains "$OUTPUT" "archive the legacy ledger spool"
 assert_eq '{"event":"a"}' "$(cat "$PROJ/.prdkit/ledger/events.jsonl")" "main spool unchanged"
 mv "$EV/ledger/events.jsonl" "$PROJ/.prdkit/ledger/archived.jsonl"
-rmdir "$EV/ledger"
 run bash "$CLEAN" 018-first
 assert_eq 0 "$STATUS" "worktree removed"
 assert_eq "first" "$(cat "$PROJ/.prdkit/cache/evidence/018-first/report.md" 2>/dev/null)" "its own evidence kept"
 assert_eq "second" "$(cat "$PROJ/.prdkit/cache/evidence/019-second/report.md" 2>/dev/null)" "the other change's evidence kept"
-it "an unsupported linked recovery path leaves the target unchanged"
+it "a linked legacy spool leaves the retained spool unchanged"
 git -C "$PROJ" worktree add -qb 021-spool "$PROJ/.worktrees/021-spool" >/dev/null 2>&1
 mkdir -p "$PROJ/.worktrees/021-spool/.prdkit/ledger"
 ln -s "$PROJ/.prdkit/ledger/archived.jsonl" "$PROJ/.worktrees/021-spool/.prdkit/ledger/events.jsonl"
-run bash "$CLEAN" 021-spool --force
+run bash "$CLEAN" 021-spool
 assert_eq 1 "$STATUS" "cleanup refuses a linked spool"
 assert_eq '{"event":"a"}' "$(cat "$PROJ/.prdkit/ledger/events.jsonl")" "main spool unchanged"
 
@@ -1041,8 +1043,9 @@ assert_file "$PROJ/.worktrees/$id/$rel" 'M4: source still available'
 assert_file "$PROJ/${rel%/*}.previous/report.txt" 'fixture rotated the published copy'
 
 # --- --closed: sweep every closed change's worktree ----------------------------------------------
-# Closed means the record was replaced with a per-change entry on the trusted integration
-# branch (origin/HEAD), never the worktree's own branch. A later fold preserves that evidence.
+# Closed means the record specs/changes/<id>.md is gone from, and the log (specs/log.md or the entry
+# file specs/log/<id>.md) has the line on, the trusted integration branch (origin/HEAD), never the
+# worktree's own branch.
 BRANCH="$(git -C "$PROJ" symbolic-ref --short HEAD)"
 for id in 060-closed-clean 061-open 062-closed-dirty 063-closed-locked 064-self-claimed 065-logged-record 066-never-logged; do
     git -C "$PROJ" worktree add -qb "$id" "$PROJ/.worktrees/$id" >/dev/null 2>&1
@@ -1072,24 +1075,17 @@ assert_contains "$OUTPUT" '"result":"refused"' "JSON result"
 run test -d "$PROJ/.worktrees/060-closed-clean"
 assert_eq 0 "$STATUS" "nothing was removed"
 
-# Close four records on trusted history and compact three of their entries.
+# The trusted branch records 060, 062, 063, 065, 067 as closed, 065 with its record still present,
+# 060 in its entry file.
 mkdir -p "$PROJ/specs/changes" "$PROJ/specs/log"
+{
+    printf -- '- 2026-11-10 067-closed-here: x\n- 2026-11-09 065-logged-record: x\n- 2026-11-08 063-closed-locked: x\n'
+    printf -- '- 2026-11-07 062-closed-dirty: x\n'
+} > "$PROJ/specs/log.md"
+printf -- '- 2026-11-06 060-closed-clean: x\n' > "$PROJ/specs/log/060-closed-clean.md"
 printf '# 061-open\n' > "$PROJ/specs/changes/061-open.md"
 printf '# 065-logged-record\n' > "$PROJ/specs/changes/065-logged-record.md"
-closed_ids=(067-closed-here 063-closed-locked 062-closed-dirty 060-closed-clean)
-for id in "${closed_ids[@]}"; do printf '# %s\n' "$id" > "$PROJ/specs/changes/$id.md"; done
-git -C "$PROJ" add specs && git -C "$PROJ" commit -qm 'open changes' || exit 1
-for id in "${closed_ids[@]}"; do
-    git -C "$PROJ" rm -q "specs/changes/$id.md" || exit 1
-    printf -- '- 2026-11-10 %s: x\n' "$id" > "$PROJ/specs/log/$id.md"
-done
-git -C "$PROJ" add specs && git -C "$PROJ" commit -qm 'close changes' || exit 1
-printf -- '- 2026-11-10 065-logged-record: x\n' > "$PROJ/specs/log.md"
-for id in "${closed_ids[@]:0:3}"; do
-    cat "$PROJ/specs/log/$id.md" >> "$PROJ/specs/log.md"
-    git -C "$PROJ" rm -q "specs/log/$id.md" || exit 1
-done
-git -C "$PROJ" add specs && git -C "$PROJ" commit -qm 'fold close entries' || exit 1
+git -C "$PROJ" add specs >/dev/null 2>&1; git -C "$PROJ" commit -qm 'close changes' >/dev/null 2>&1
 git -C "$PROJ" update-ref "refs/remotes/origin/$BRANCH" HEAD
 git -C "$PROJ" symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$BRANCH"
 
@@ -1156,14 +1152,11 @@ git -C "$PROJ" worktree add -qb feature-x "$PROJ/.worktrees/091-closed-other-bra
 git -C "$PROJ" worktree add -qb 092-closed-elsewhere "$OUTSIDE/092-closed-elsewhere" >/dev/null 2>&1
 git -C "$PROJ" worktree add -qb 093-closed-renamed "$PROJ/.worktrees/scratch" >/dev/null 2>&1
 git -C "$PROJ" worktree add -qb 094-closed-exact "$PROJ/.worktrees/094-closed-exact" >/dev/null 2>&1
-exact_ids=(090-closed-detached 091-closed-other-branch 092-closed-elsewhere 093-closed-renamed 094-closed-exact)
-for id in "${exact_ids[@]}"; do printf '# %s\n' "$id" > "$PROJ/specs/changes/$id.md"; done
-git -C "$PROJ" add specs && git -C "$PROJ" commit -qm 'open more changes' || exit 1
-for id in "${exact_ids[@]}"; do
-    git -C "$PROJ" rm -q "specs/changes/$id.md" || exit 1
-    printf -- '- 2026-11-11 %s: x\n' "$id" > "$PROJ/specs/log/$id.md"
-done
-git -C "$PROJ" add specs && git -C "$PROJ" commit -qm 'close more' || exit 1
+{
+    printf -- '- 2026-11-11 090-closed-detached: x\n- 2026-11-11 091-closed-other-branch: x\n'
+    printf -- '- 2026-11-11 092-closed-elsewhere: x\n- 2026-11-11 093-closed-renamed: x\n- 2026-11-11 094-closed-exact: x\n'
+} >> "$PROJ/specs/log.md"
+git -C "$PROJ" add specs >/dev/null 2>&1; git -C "$PROJ" commit -qm 'close more' >/dev/null 2>&1
 git -C "$PROJ" update-ref "refs/remotes/origin/$BRANCH" HEAD
 run bash "$CLEAN" --json --closed
 assert_eq 0 "$STATUS" "nothing refused"
@@ -1189,12 +1182,9 @@ rm -rf "$PROJ2/.worktrees/103-stale-sub"
 run bash -c 'cd "$1" && bash .prdkit/scripts/bash/new-change.sh --short-name separate "Separate change"' _ "$PROJ2"
 assert_eq 0 "$STATUS" "creating an unrelated change succeeds"
 assert_eq "$stale_tip" "$(git --git-dir="$store" --work-tree="$PROJ2" rev-parse 'HEAD^{commit}')" "new change leaves local-only module commit intact"
-mkdir -p "$PROJ2/specs/changes" "$PROJ2/specs/log"
-printf '# 070-sub-closed\n' > "$PROJ2/specs/changes/070-sub-closed.md"
+mkdir -p "$PROJ2/specs/changes"
+printf -- '- 2026-11-10 070-sub-closed: x\n' > "$PROJ2/specs/log.md"
 printf '# 071-sub-open\n' > "$PROJ2/specs/changes/071-sub-open.md"
-git -C "$PROJ2" add specs && git -C "$PROJ2" commit -qm 'open changes' || exit 1
-git -C "$PROJ2" rm -q specs/changes/070-sub-closed.md || exit 1
-printf -- '- 2026-11-10 070-sub-closed: x\n' > "$PROJ2/specs/log/070-sub-closed.md"
 git -C "$PROJ2" add specs >/dev/null 2>&1; git -C "$PROJ2" commit -qm 'close' >/dev/null 2>&1
 B2="$(git -C "$PROJ2" symbolic-ref --short HEAD)"
 git -C "$PROJ2" update-ref "refs/remotes/origin/$B2" HEAD
@@ -1217,30 +1207,5 @@ module_retained 103-stale-sub "$stale_tip" 'HEAD^{commit}'
 run test ! -e "$store"; assert_eq 0 "$STATUS" "old module store gone"
 run test ! -e "${store%/modules/*}"; assert_eq 0 "$STATUS" "old stale admin gone"
 assert_not_contains "$(git -C "$PROJ2" worktree list --porcelain)" 103-stale-sub
-
-it "--closed refuses a direct shared-log close and a replacement line that was not folded"
-unsupported_ids=(095-direct-shared 096-rewritten-shared)
-for id in "${unsupported_ids[@]}"; do printf '# %s\n' "$id" > "$PROJ/specs/changes/$id.md"; done
-git -C "$PROJ" add specs && git -C "$PROJ" commit -qm 'open more changes' || exit 1
-for id in "${unsupported_ids[@]}"; do
-    git -C "$PROJ" worktree add -qb "$id" "$PROJ/.worktrees/$id" || exit 1
-    git -C "$PROJ" rm -q "specs/changes/$id.md" || exit 1
-done
-printf -- '- 2026-11-11 095-direct-shared: direct shared-log close\n' >> "$PROJ/specs/log.md"
-printf -- '- 2026-11-11 096-rewritten-shared: the original line\n' > "$PROJ/specs/log/096-rewritten-shared.md"
-git -C "$PROJ" add specs && git -C "$PROJ" commit -qm 'close two ways' || exit 1
-git -C "$PROJ" rm -q specs/log/096-rewritten-shared.md || exit 1
-printf -- '- 2026-11-12 096-rewritten-shared: different from the original line\n' >> "$PROJ/specs/log.md"
-git -C "$PROJ" add specs && git -C "$PROJ" commit -qm 'substitute a shared-log entry' || exit 1
-git -C "$PROJ" update-ref "refs/remotes/origin/$BRANCH" HEAD || exit 1
-before="$(git -C "$PROJ" worktree list --porcelain)"
-run bash "$CLEAN" --json --closed
-assert_eq 1 "$STATUS"
-assert_contains "$OUTPUT" '"paths":[]' 'nothing removed'
-for id in "${unsupported_ids[@]}"; do
-    assert_contains "$OUTPUT" "expected specs/log/$id.md from close-change.sh"
-    assert_file "$PROJ/.worktrees/$id/specs/changes/$id.md"
-done
-assert_eq "$before" "$(git -C "$PROJ" worktree list --porcelain)" 'registrations untouched'
 
 finish

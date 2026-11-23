@@ -129,18 +129,36 @@ assert_contains "$(cat "$PROJ/.prdkit/templates/agent-definition-template.md")" 
 assert_contains "$OUTPUT" 'Kept customized optional template'
 if [ -e "$PROJ/.prdkit/scripts/bash/render-agents.sh" ]; then _no "renderer removed"; else _ok "renderer removed"; fi
 
-it "dropping agent tiers refuses a tracked CI reference before changing the install"
+it "dropping agent tiers refuses direct and wrapped CI calls but ignores comment-only mentions"
 PROJ="$(make_inited_project --with agent-tiers)"; track_tmp "$PROJ"
 mkdir -p "$PROJ/.github/workflows"
-printf '      - run: bash .prdkit/scripts/bash/render-agents.sh --check\n' > "$PROJ/.github/workflows/agents.yml"
+workflow=".github/workflows/agents.yml"
+wrapper=".prdkit/scripts/bash/project-check-agents.sh"
+for kind in direct wrapper; do
+    if [ "$kind" = direct ]; then
+        printf '      - run: bash .prdkit/scripts/bash/render-agents.sh --check\n' > "$PROJ/$workflow"
+        consumer="$workflow"
+    else
+        printf '      - run: bash %s\n' "$wrapper" > "$PROJ/$workflow"
+        printf '#!/usr/bin/env bash\nbash .prdkit/scripts/bash/render-agents.sh --check\n' > "$PROJ/$wrapper"
+        consumer="$wrapper"
+    fi
+    snapshot_upgrade_fixture "$PROJ" || exit 1
+    run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --without agent-tiers
+    assert_eq 1 "$STATUS" "$kind dependency refused: $OUTPUT"
+    assert_contains "$OUTPUT" "$consumer:"
+    assert_contains "$OUTPUT" 'Update these references or keep the subsystem'
+    assert_file "$PROJ/.prdkit/scripts/bash/render-agents.sh"
+    assert_contains "$(cat "$PROJ/.prdkit/.manifest")" 'options: agent-tiers'
+    assert_eq '' "$(git -C "$PROJ" status --porcelain)" 'no tracked or untracked changes'
+done
+printf '    # Previously used render-agents.sh; no active reference.\n' > "$PROJ/$workflow"
+printf '#!/usr/bin/env bash\n  # render-agents.sh is no longer needed.\n' > "$PROJ/$wrapper"
 snapshot_upgrade_fixture "$PROJ" || exit 1
 run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --without agent-tiers
-assert_eq 1 "$STATUS"
-assert_contains "$OUTPUT" '.github/workflows/agents.yml:1:'
-assert_contains "$OUTPUT" 'Update these references or keep the subsystem'
-assert_file "$PROJ/.prdkit/scripts/bash/render-agents.sh"
-assert_contains "$(cat "$PROJ/.prdkit/.manifest")" 'options: agent-tiers'
-assert_eq '' "$(git -C "$PROJ" status --porcelain)" 'no tracked or untracked changes'
+assert_eq 0 "$STATUS" "comment-only references do not block deselection: $OUTPUT"
+assert_file "$PROJ/$wrapper"
+assert_contains "$(cat "$PROJ/.prdkit/.manifest")" 'options: none'
 
 it "a manifest without options is refused rather than inferring a selection"
 PROJ="$(make_inited_project --with agent-tiers)"; track_tmp "$PROJ"

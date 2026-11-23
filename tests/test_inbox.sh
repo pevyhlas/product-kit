@@ -225,18 +225,15 @@ run bash "$STATUS_SH" --json
 assert_eq 1 "$STATUS"
 assert_contains "$OUTPUT" "**Answer**"
 
-it "a one-line owner item directly below a heading is not mistaken for metadata"
-cat > specs/inbox.md <<'MD'
-# Owner inbox
-
-### Release hold
-- 2026-10-30 owner "Do not release." → open
-MD
-for reader in "$DOCTOR" "$STATUS_SH"; do
-    run bash "$reader" --json
-    assert_eq 1 "$STATUS"
-    assert_contains "$OUTPUT" 'specs/inbox.md:4'
-    assert_contains "$OUTPUT" 'structured **Answer** fields'
+it "quoted and unquoted one-line owner items below a heading are not mistaken for metadata"
+for hold in '- 2026-10-30 owner "Do not release." → open' '- 2026-10-30 owner Do not release. -> open'; do
+    printf '# Owner inbox\n\n### Release hold\n%s\n' "$hold" > specs/inbox.md
+    for reader in "$DOCTOR" "$STATUS_SH"; do
+        run bash "$reader" --json
+        assert_eq 1 "$STATUS"
+        assert_contains "$OUTPUT" 'specs/inbox.md:4'
+        assert_contains "$OUTPUT" 'structured **Answer** fields'
+    done
 done
 
 finish

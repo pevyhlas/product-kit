@@ -14,10 +14,9 @@ change by change.
   review-migration flags, historical State verdict and receipt clearance paths, reviewer
   registration via the capabilities table, and compatibility readers for old install manifests,
   feature counters, programme checkpoints, inbox entries and agent tier maps.
-  Review and closed-worktree cleanup require a per-change close entry at the closing commit;
-  cleanup also recognizes a shared-log line folded from that entry. Agents must migrate an
-  older install manually; Product-Kit provides no migration tooling. Ordinary upgrades and
-  consumer data-migration guidance remain.
+  Review requires a per-change close entry at the closing commit. Agents must migrate an older
+  install manually; Product-Kit provides no migration tooling. Ordinary upgrades and consumer
+  data-migration guidance remain.
 
 ## [2.1.0] — 2026-11-23 — task parts, change tags and fail-closed verifiers
 

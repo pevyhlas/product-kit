@@ -865,10 +865,12 @@ spec_inbox() { # root
         /^[[:space:]]*$/ { next }
         {
             line = $0; sub(/^[[:space:]]*[-*][[:space:]]+/, "", line)
-            # In a headed item the old reader required the words to start with a quote.
-            # A date and actor alone can be plain prose in a structured Answer.
+            # A quoted item can appear in the body. At the metadata position, also
+            # reject an unquoted item with an explicit old disposition. A date and
+            # actor alone can be plain prose in a structured Answer.
             if (line ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9](T[0-9][0-9]:[0-9][0-9](:[0-9][0-9])?Z?)?[[:space:]]+(owner|agent)[[:space:]]+/ &&
-                (!item || line ~ /^[^[:space:]]+[[:space:]]+(owner|agent)[[:space:]]+"/)) {
+                (!item || line ~ /^[^[:space:]]+[[:space:]]+(owner|agent)[[:space:]]+"/ ||
+                 (want && line ~ /(→|->)[[:space:]]*(open|processing|folded|declined|deferred)([:[:space:]]|$)/))) {
                 unsupported = NR; exit 1
             }
             if ($0 ~ /^(\*\*Owner answer\*\*:|Owner answer[,:])/) { unsupported = NR; exit 1 }
