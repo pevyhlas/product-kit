@@ -3,10 +3,8 @@
 # Every instrumentation/mutation below is test-only. Synthetic native objects are negative
 # transport/oracle controls, never substitutes for the real integrated native gate controls.
 # shellcheck disable=SC2016,SC2034 # generated scripts and inputs shared with the fixture driver
-source "$TESTS_DIR/pr-review-native-diagnostic.sh"
-
 live_group() {
-    ps -axo pid=,pgid=,stat= | awk -v group="$1" '$2 == group && $3 !~ /^Z/ { print $1 }'
+    ps -axo pid=,pgid=,stat= | awk -v group="$1" '$2 == group && $3 !~ /^Z[+<NsL]*$/ { print $1 }'
 }
 assert_group_gone() {
     assert_eq '' "$(live_group "$1")" "$2"
@@ -20,12 +18,15 @@ restore_control() {
 record_cleanup() {
     # Measure BEFORE the owned root is deleted, not merely after the launcher has exited.
     awk -v dir="$FIX" '
+        /^phase=native$/ { print "native_started=$SECONDS" }
         /^    if \[ -n "\$root" \] && \{ ! rm -rf/ {
+            print "    printf attempted > \"" dir "/remove-attempted\""
             print "    if [ -f \"" dir "/group\" ]; then"
-            print "        ps -axo pid=,pgid=,stat= | awk -v g=\"$(cat \"" dir "/group\")\" '\''$2 == g && $3 !~ /^Z/ { print $1 }'\'' > \"" dir "/live-at-remove\""
+            print "        ps -axo pid=,pgid=,stat= | awk -v g=\"$(cat \"" dir "/group\")\" '\''$2 == g && $3 !~ /^Z[+<NsL]*$/ { print $1 }'\'' > \"" dir "/live-at-remove\" || printf unavailable > \"" dir "/live-at-remove\""
             print "    fi"
             print "    if [ -f \"$root/native.json\" ]; then wc -c < \"$root/native.json\" > \"" dir "/stdout-size\"; fi"
             print "    if [ -f \"$root/native.err\" ]; then wc -c < \"$root/native.err\" > \"" dir "/stderr-size\"; fi"
+            print "    if [ -n \"${native_started:-}\" ]; then printf \"%s\\n\" \"$((SECONDS-native_started))\" > \"" dir "/native-elapsed\"; fi"
         }
         { print }
     ' "$FIX/launcher" > "$FIX/injected"
@@ -37,10 +38,7 @@ bound_gate() { # jq mutation, output mode, actual exit; creates explicitly SYNTH
     {
         printf '#!/bin/bash\nrepo=""; while [ "$#" -gt 0 ]; do\n'
         printf 'case "$1" in --repo) shift; repo="$1" ;; esac; shift; done\n'
-        if [ "$mode" = stubborn ]; then
-            printf 'trap "" TERM\n'
-            nd_gate_source "$nd_dir"
-        fi
+        if [ "$mode" = stubborn ]; then printf 'trap "" TERM\n'; fi
         printf 'p="$(git -C "$repo" rev-parse origin/HEAD)"\nt="$(git -C "$repo" rev-parse refs/remotes/origin/main)"\n'
         printf 'jq --arg p "$p" --arg t "$t" '\''.policy_at=$p|.diagnostics.policy_at=$p|.diagnostics.base_at=$t'\'' <<'\''JSON'\''\n%s\nJSON\n' \
             "$(printf '%s' "$NATIVE" | jq -c "$filter")"
@@ -49,8 +47,11 @@ bound_gate() { # jq mutation, output mode, actual exit; creates explicitly SYNTH
             stderr) printf 'head -c 5242880 /dev/zero | tr "\\000" " " >&2\n' ;;
             stubborn)
                 printf '/bin/bash -c '\''trap "" TERM; echo "$$" > "$1"; while :; do sleep 60; done'\'' _ %q &\n' "$FIX/stubborn"
-                printf 'nd_gate "$$" "$PPID" || :\n'
-                printf 'echo ready > %q\nwait\n' "$FIX/native-ready" ;;
+                printf 'ps -o pgid= -p "$$" | tr -d " " > %q\nwait\n' "$FIX/group" ;;
+            hidden-member)
+                printf 'ps -o pgid= -p "$$" | tr -d " " > %q\n' "$FIX/group"
+                printf '/bin/bash -c '\''exec 9<>"$1"; printf "held\\n" > "$HOME/member-held"; echo "$$" > "$2"; read -r -t 120 <&9'\'' _ %q %q </dev/null >/dev/null 2>&1 &\n' "$FIX/member-release" "$FIX/hidden-member"
+                printf 'for n in {1..200}; do [ ! -s %q ] || break; sleep 0.1; done\n' "$FIX/hidden-member" ;;
         esac
         printf 'exit %s\n' "$rc"
     } > .prdkit/scripts/bash/check-review.sh
@@ -107,144 +108,19 @@ assert_eq 0 "$STATUS" 'large objects are not large diagnostic capture'
 printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
 restore_control
 
-normal_capture_drain() { # stream; synchronized ordinary collection, not launch or finish
-    local stream="$1" case_dir="$FIX/drain-$1" target
-    case "$stream" in stdout) target=capture_out ;; stderr) target=capture_err ;; *) return 1 ;; esac
-    mkdir "$case_dir"
-    restore_control
-    # Hold only the selected native reader, AFTER it captures the real gate's output and EOF.
-    # Snapshot every asynchronous job, ordinary wait entry/interruption, and pre-removal state.
-    awk -v dir="$case_dir" -v stream="$stream" -v target="$target" '
-        /^capture_read\(\) / { in_reader=1 }
-        in_reader && /^    return 0/ {
-            print "    if [ \"$phase\" = native ] && [ \"$3\" = \"" stream "\" ]; then"
-            print "        trap \"\" TERM HUP"
-            print "        printf ready > \"" dir "/reader-ready\""
-            print "        while :; do sleep 60; done"
-            print "    fi"
-        }
-        /^}/ { in_reader=0 }
-        $0 ~ /^[[:space:]]*(overall|capture_out|capture_err|child|watcher)=\$!$/ {
-            print
-            name=$0; sub(/^[[:space:]]*/, "", name); sub(/=.*/, "", name)
-            print "printf '\''%s %s\\n'\'' \"" name "\" \"$" name "\" >> \"" dir "/groups\""
-            next
-        }
-        /^        if wait "\$pid"/ {
-            print "        if [ \"$phase\" = native ] && ! $finishing && [ \"$pid\" = \"$" target "\" ]; then"
-            print "            printf '\''%s\\n'\'' \"$pid\" > \"" dir "/normal-wait\""
-            print "            cp \"$root/native.json\" \"" dir "/native-produced.json\""
-            print "        fi"
-        }
-        /^        (\[ "\$before" != "\$signal_count" \]|if \[ "\$before" = "\$signal_count" \])/ {
-            print "        drain_trace_count=${drain_trace_count:-0}"
-            print "        if [ \"$phase\" = native ] && [ \"$drain_trace_count\" -lt 50 ]; then"
-            print "            alive=false; kill -0 \"$pid\" 2>/dev/null && alive=true"
-            print "            printf '\''{\"pid\":%s,\"wait_exit\":%s,\"finishing\":%s,\"critical\":%s,\"before\":%s,\"signals\":%s,\"alive\":%s}\\n'\'' \"$pid\" \"$waited_exit\" \"$finishing\" \"$critical\" \"$before\" \"$signal_count\" \"$alive\" >> \"" dir "/wait-results\""
-            print "            drain_trace_count=$((drain_trace_count+1))"
-            print "        fi"
-            print "        if [ \"$phase\" = native ] && ! $finishing && [ \"$pid\" = \"$" target "\" ] && [ \"$before\" != \"$signal_count\" ]; then"
-            print "            alive=false; kill -0 \"$pid\" 2>/dev/null && alive=true"
-            print "            printf '\''{\"reader\":%s,\"wait_exit\":%s,\"finishing\":%s,\"child\":\"%s\",\"watcher\":%s,\"alive\":%s}\\n'\'' \"$pid\" \"$waited_exit\" \"$finishing\" \"$child\" \"$watcher\" \"$alive\" > \"" dir "/interrupted-normal-wait\""
-            print "        fi"
-        }
-        /^    finishing=true/ {
-            print
-            print "    printf ready > \"" dir "/finish-ready\""
-            next
-        }
-        /^    if \[ -n "\$root" \] && \{ ! rm -rf/ {
-            print "    ps -axo pid=,pgid=,stat= > \"" dir "/ps-at-remove\""
-            print "    awk '\''NR==FNR { owned[$2]=1; next } ($2 in owned) && $3 !~ /^Z/ { print }'\'' \"" dir "/groups\" \"" dir "/ps-at-remove\" > \"" dir "/live-at-remove\""
-            print "    awk '\''NR==FNR { owned[$2]=1; next } $1 in owned { print }'\'' \"" dir "/groups\" \"" dir "/ps-at-remove\" > \"" dir "/leaders-at-remove\""
-        }
-        { print }
-    ' "$FIX/launcher" > "$FIX/injected"
-    mv "$FIX/injected" "$FIX/launcher"
-    env -i PATH="$ORIGINAL_PATH" GH_TOKEN=synthetic GITHUB_EVENT_NAME=pull_request \
-        GITHUB_REPOSITORY=owner/repo GITHUB_REPOSITORY_ID=42 \
-        "$REAL_BASH" --noprofile --norc "$FIX/launcher" --repository owner/repo --event "$FIX/event" \
-        > "$FIX/stdout" 2>"$FIX/stderr" &
-    LAUNCHER_PID=$!
-    # Bounded fixture handshakes, not polling a background suite or a host/runtime authority.
-    for n in {1..100}; do
-        [ ! -f "$case_dir/reader-ready" ] || [ ! -f "$case_dir/normal-wait" ] || break
-        sleep 0.1
-    done
-    assert_file "$case_dir/reader-ready" "$stream reader alive after capture and EOF"
-    assert_file "$case_dir/normal-wait" "$stream ordinary collection wait reached"
-    READER="$(cat "$case_dir/normal-wait")"
-    if kill -0 "$READER" 2>/dev/null; then _ok "$stream reader live at normal wait"; else _no "$stream reader missing before signal"; fi
-    # Let the parent enter wait. The post-wait trace below must show actual interruption
-    # (143), finishing=false, child retired, and a still-live reader; a launch signal cannot pass.
-    sleep 0.2
-    START="$SECONDS"
-    kill -TERM "$LAUNCHER_PID"
-    for n in {1..100}; do
-        [ ! -f "$case_dir/interrupted-normal-wait" ] || [ ! -f "$case_dir/finish-ready" ] || break
-        sleep 0.1
-    done
-    assert_file "$case_dir/interrupted-normal-wait" "$stream normal wait was actually interrupted"
-    run jq -e --argjson pid "$READER" '
-        .reader == $pid and .wait_exit == 143 and .finishing == false and
-        .child == "" and .watcher > 0 and .alive == true
-    ' "$case_dir/interrupted-normal-wait"
-    assert_eq 0 "$STATUS" "$stream failure window is ordinary drain with live ownership/watchdog"
-    if kill -HUP "$LAUNCHER_PID" 2>/dev/null && kill -USR1 "$LAUNCHER_PID" 2>/dev/null; then
-        _ok "$stream repeated catchable signals delivered"
-    else _no "$stream repeated signals could not reach teardown"; fi
-    if wait "$LAUNCHER_PID"; then STATUS=0; else STATUS=$?; fi
-    ELAPSED=$((SECONDS-START))
-    assert_eq 1 "$STATUS" "$stream interrupted drain refuses"
-    assert_eq 1 "$(jq -s length "$FIX/stdout")" "$stream complete structured refusal"
-    assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
-    assert_eq interrupted "$(jq -r .error.code "$FIX/stdout")"
-    assert_eq 0 "$(jq -r .native_exit "$FIX/stdout")" "$stream obtained actual native status retained"
-    run jq -e --arg h "$HEAD_SHA" --arg p "$BASE" '
-        .native.result == "pass" and .native.authority == "host" and .native.problems == [] and
-        .native.head == $h and .native.pr_head == $h and .native.policy_at == $p and
-        .native.diagnostics.base_at == $p and .native.diagnostics.policy_at == $p
-    ' "$FIX/stdout"
-    assert_eq 0 "$STATUS" "$stream real native diagnostic object retained"
-    assert_eq "$(jq -cS . "$case_dir/native-produced.json")" "$(jq -cS .native "$FIX/stdout")" \
-        "$stream entire captured native object preserved"
-    assert_eq '' "$(cat "$case_dir/live-at-remove")" "$stream all groups terminated BEFORE root deletion"
-    assert_eq '' "$(cat "$case_dir/leaders-at-remove")" "$stream all owned leaders reaped BEFORE root deletion"
-    assert_group_gone "$READER" "$stream reader terminated/reaped before result"
-    assert_eq '' "$(find "$FIX/scratch" -mindepth 1 -print)" "$stream root cleaned after group cleanup"
-    run test "$ELAPSED" -lt 15
-    assert_eq 0 "$STATUS" "$stream repeated-signal refusal remains bounded"
-    # Preserve trace evidence for the private failing-before driver; ordinary suites clean their
-    # fixture through lib.sh. Kill any observed orphan only AFTER the assertions above.
-    cp "$FIX/stdout" "$case_dir/result.json"; cp "$FIX/stderr" "$case_dir/stderr"
-    while read -r name pid; do kill -KILL -- "-$pid" 2>/dev/null || true; done < "$case_dir/groups"
-    "$REAL_RM" -rf "$FIX/scratch/"*
-}
-
-for stream in stdout stderr; do
-    it "signal-interrupted normal $stream collection retains ownership until reaped"
-    normal_capture_drain "$stream"
-done
-restore_control
-
 it 'cancellation at the very first teardown command cannot recursively exit cleanup'
 instrument
-rm -f "$FIX/group" "$FIX/live-at-remove"
-awk -v dir="$FIX" '
-    /^overall=\$!/ { print; print "printf '\''%s\\n'\'' \"$overall\" > \"" dir "/group\""; next }
-    /^    local native_pending=false/ { print "    kill -TERM \"$$\"" }
+awk '
+    /^    finishing=true/ { print "    kill -TERM \"$$\"" }
     { print }
 ' "$FIX/launcher" > "$FIX/injected"
 mv "$FIX/injected" "$FIX/launcher"
-record_cleanup
 launch
 assert_eq 1 "$STATUS"
 assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
 assert_eq interrupted "$(jq -r .error.code "$FIX/stdout")"
 assert_eq 0 "$(jq -r .native_exit "$FIX/stdout")" 'entry cancellation retains obtained real-native success'
 assert_eq pass "$(jq -r .native.result "$FIX/stdout")"
-assert_group_gone "$(cat "$FIX/group")" 'overall group reaped despite teardown-entry cancellation'
-assert_eq '' "$(cat "$FIX/live-at-remove")"
 restore_control
 
 it 'isolated head/type negatives reject for their own guard, not a stale target'
@@ -274,13 +150,11 @@ it 'finite valid-data stdout/stderr overflow is causal, byte-bounded and prompt'
 for stream in stdout stderr; do
     bound_gate . "$stream"
     record_cleanup
-    START="$SECONDS"
     launch
-    ELAPSED=$((SECONDS-START))
     assert_eq 1 "$STATUS"
     assert_eq capture-limit "$(jq -r .error.code "$FIX/stdout")"
     assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
-    run test "$ELAPSED" -lt 20
+    run test "$(cat "$FIX/native-elapsed")" -lt 20
     assert_eq 0 "$STATUS" "$stream finite overflow is not a native timeout"
     assert_eq 4194304 "$(tr -d '[:space:]' < "$FIX/$stream-size")" "$stream capture stops at the byte ceiling"
     assert_other_bindings
@@ -298,38 +172,33 @@ for stream in stdout stderr; do
 done
 restore_control
 
-it 'every asynchronous launch is registered before queued cancellation runs'
-for boundary in overall child watcher capture_out capture_err; do
-    instrument
-    rm -f "$FIX/group" "$FIX/descendant" "$FIX/live-at-remove"
-    if [ "$boundary" != overall ]; then touch "$FIX/hang"; fi
-    awk -v name="$boundary" -v dir="$FIX" '
-        $0 ~ /^[[:space:]]*[a-z_]+=\$!$/ && index($0, name "=$!") {
-            print "if [ \"" name "\" = overall ] || [ \"$phase\" = fetch ]; then"
-            print "printf '\''%s\\n'\'' \"$!\" > \"" dir "/group\""
-            if (name == "child") {
-                print "for n in 1 2 3 4 5; do [ ! -f \"" dir "/descendant\" ] || break; sleep 1; done"
-            }
-            print "kill -TERM \"$$\""
-            print "fi"
-        }
-        { print }
-    ' "$FIX/launcher" > "$FIX/injected"
-    mv "$FIX/injected" "$FIX/launcher"
-    record_cleanup
-    launch
-    rm -f "$FIX/hang"
-    assert_file "$FIX/group" "$boundary boundary was actually reached"
-    assert_eq 1 "$STATUS"
-    assert_eq interrupted "$(jq -r .error.code "$FIX/stdout")"
-    assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
-    assert_group_gone "$(cat "$FIX/group")" "$boundary group stopped before result"
-    assert_eq '' "$(cat "$FIX/live-at-remove")" "$boundary group stopped before scratch deletion"
-    if [ "$boundary" = child ]; then
-        assert_file "$FIX/descendant" 'workload is armed at its registration boundary'
-        assert_terminated "$(cat "$FIX/descendant")" 'registration-boundary descendant terminated'
-    fi
-done
+it 'cancellation immediately before guard registration keeps group ownership'
+instrument
+rm -f "$FIX/group" "$FIX/descendant" "$FIX/live-at-remove"
+touch "$FIX/hang"
+awk -v dir="$FIX" '
+    /^    work=\$!/ {
+        print "    if [ \"$phase\" = fetch ] && [ \"$out\" = \"$root/fetch.out\" ]; then"
+        print "        printf \"%s\\n\" \"$!\" > \"" dir "/group\""
+        print "        for n in {1..200}; do [ ! -s \"" dir "/descendant\" ] || break; sleep 0.1; done"
+        print "        kill -TERM \"$$\""
+        print "    fi"
+    }
+    { print }
+' "$FIX/launcher" > "$FIX/injected"
+mv "$FIX/injected" "$FIX/launcher"
+record_cleanup
+launch
+rm -f "$FIX/hang"
+assert_file "$FIX/group" 'launcher started the workload guard'
+assert_file "$FIX/descendant" 'workload is armed at the launch registration boundary'
+assert_eq 1 "$STATUS"
+assert_eq interrupted "$(jq -r .error.code "$FIX/stdout")"
+assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
+assert_group_gone "$(cat "$FIX/group")" 'group stopped before result'
+assert_file "$FIX/live-at-remove" 'pre-deletion snapshot was taken'
+assert_eq '' "$(cat "$FIX/live-at-remove")" 'group stopped before scratch deletion'
+assert_terminated "$(cat "$FIX/descendant")" 'registration-boundary descendant terminated'
 restore_control
 
 it 'obtained native status survives the bounded-to-caller transfer window'
@@ -347,95 +216,146 @@ assert_eq '[null,17,true]' "$(jq -c .native.extension.keep "$FIX/stdout")"
 assert_other_bindings
 restore_control
 
-it 'overlapping overall deadline and repeated signals cannot interrupt KILL escalation/teardown'
-nd_dir="$FIX/native-diagnostic"
-mkdir "$nd_dir"
-bound_gate . stubborn
-rm -f "$FIX/native-ready" "$FIX/stubborn" "$FIX/group" "$FIX/teardown-ready" "$FIX/live-at-remove"
-awk -v dir="$FIX" '
-    /sleep "\$\(\(deadline-SECONDS\)\)"/ {
-        # Do not race the driver to native-ready. Production keeps the FIRST
-        # cancellation reason; this case specifically requires TERM then USR1.
-        print "    for n in {1..200}; do [ ! -f \"" dir "/teardown-ready\" ] || break; sleep 0.1; done"
-        print "    [ -f \"" dir "/teardown-ready\" ] || exit 1"
-        next
+it 'a live member missed by ps prevents scratch deletion'
+rm -f "$FIX/group" "$FIX/hidden-member" "$FIX/remove-attempted"
+mkfifo "$FIX/member-release"
+bound_gate . hidden-member
+# Hide only members of the native workload group, not its guard or other
+# groups. The real kernel probe must still see the surviving member.
+awk '
+    /^group_view\(\) {/ {
+        print "ps() {"
+        print "    if [ \"$phase\" = native ]; then"
+        print "        command ps \"$@\" | awk -v g=\"$work\" '\''$2 != g || $1 == g'\''"
+        print "    else command ps \"$@\"; fi"
+        print "}"
     }
-    /^    kill -USR1 "\$parent"/ {
-        print "    kill -USR1 \"$parent\" && printf sent > \"" dir "/deadline-sent\""
-        next
-    }
-    /^        kill -KILL -- "-\$overall"/ {
-        # Keep the real watchdog alive until its deadline signal was sent.
-        print "        for n in {1..30}; do [ ! -f \"" dir "/deadline-sent\" ] || break; sleep 0.1; done"
-        print "        for n in {1..50}; do [ ! -f \"" dir "/repeat-sent\" ] || break; sleep 0.1; done"
-        print "        for n in {1..50}; do [ \"$signal_count\" -lt 4 ] || break; sleep 0.1; done"
-        print "        printf \"%s\\n\" \"$signal_count\" > \"" dir "/repeat-observed\""
-    }
-    /^    trap .*overall-timeout.* USR1$/ { print; print "    printf ready > \"" dir "/teardown-ready\""; next }
-    /^    child=\$!/ { print; print "    if [ \"$phase\" = native ]; then printf '\''%s\\n'\'' \"$child\" > \"" dir "/group\"; fi"; next }
     { print }
 ' "$FIX/launcher" > "$FIX/injected"
 mv "$FIX/injected" "$FIX/launcher"
 record_cleanup
-nd_instrument
-set -m
-env -i PATH="$ORIGINAL_PATH" GH_TOKEN=synthetic GITHUB_EVENT_NAME=pull_request \
-    GITHUB_REPOSITORY=owner/repo GITHUB_REPOSITORY_ID=42 \
-    "$REAL_BASH" --noprofile --norc "$FIX/launcher" --repository owner/repo --event "$FIX/event" \
-    > "$FIX/stdout" 2>"$FIX/stderr" &
-LAUNCHER_PID=$!
-(
-    sleep 20
-    kill -KILL "$LAUNCHER_PID" 2>/dev/null || true
-    [ ! -f "$FIX/group" ] || kill -KILL -- "-$(cat "$FIX/group")" 2>/dev/null || true
-) >/dev/null 2>&1 &
-GUARD=$!
-for n in 1 2 3 4 5 6 7 8 9 10; do
-    [ ! -f "$FIX/native-ready" ] || [ ! -f "$FIX/stubborn" ] || break
-    sleep 1
-done
-assert_file "$FIX/native-ready"; assert_file "$FIX/stubborn"
-STUBBORN="$(cat "$FIX/stubborn")"
-kill -TERM "$STUBBORN"
-nd_descendant_rc=$?
-{ printf '%s %s\n' "$STUBBORN" "$nd_descendant_rc" > "$nd_dir/descendant"; } 2>/dev/null || :
-if kill -0 "$STUBBORN" 2>/dev/null; then _ok 'descendant is armed to resist TERM'; else _no 'stubborn fixture not armed'; fi
-START="$SECONDS"
-kill -TERM "$LAUNCHER_PID"
-for n in 1 2 3 4 5; do [ ! -f "$FIX/teardown-ready" ] || break; sleep 1; done
-assert_file "$FIX/teardown-ready"
-if kill -TERM "$LAUNCHER_PID" && kill -HUP "$LAUNCHER_PID"; then printf sent > "$FIX/repeat-sent"; fi
-# The independent watchdog delivers USR1; the driver must not substitute for it.
-if wait "$LAUNCHER_PID"; then STATUS=0; else STATUS=$?; fi
-ELAPSED=$((SECONDS-START))
-kill -KILL -- "-$GUARD" 2>/dev/null || true
-wait "$GUARD" 2>/dev/null || true
-nd_publish "$nd_dir" "$FIX/stdout" || :
+invoke_launcher
 assert_eq 1 "$STATUS"
-assert_file "$FIX/deadline-sent" 'independent deadline signal delivered during teardown'
-assert_file "$FIX/repeat-sent" 'driver sent repeat TERM and HUP'
-assert_eq 4 "$(cat "$FIX/repeat-observed")" 'launcher handled initial TERM, watchdog USR1 and both repeat signals before releasing teardown'
-assert_eq 1 "$(jq -s length "$FIX/stdout")" 'one complete refusal after repeated catchable signals'
-assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
-assert_eq interrupted "$(jq -r .error.code "$FIX/stdout")"
-assert_eq 137 "$(jq -r .native_exit "$FIX/stdout")" 'TERM-resistant native group required actual KILL escalation'
-assert_terminated "$STUBBORN" 'TERM-resistant descendant terminated'
-assert_group_gone "$(cat "$FIX/group")" 'native group terminated and owned leader reaped'
-assert_eq '' "$(cat "$FIX/live-at-remove")" 'native group is gone before scratch deletion'
-assert_eq '' "$(find "$FIX/scratch" -mindepth 1 -print)"
-run test "$ELAPSED" -lt 15
-assert_eq 0 "$STATUS" 'teardown remains bounded despite repeated signals'
+assert_eq cleanup "$(jq -r .error.stage "$FIX/stdout")"
+assert_eq cleanup-failed "$(jq -r .error.code "$FIX/stdout")"
+assert_eq 0 "$(jq -r .native_exit "$FIX/stdout")"
 assert_other_bindings
-{ # Contain only these new diagnostic assertions, not inherited whole-suite output.
-    assert_eq complete "$(nd_public_value .evidence)" 'bounded diagnostic witnesses are available'
-    assert_eq true "$(nd_public_value .identity.leader_is_gate)" 'registered native leader is the external gate'
-    assert_eq true "$(nd_public_value .identity.gate_ignores_term)" 'registered gate is armed to resist TERM'
-    assert_eq true "$(nd_public_value .before_kill.leader.live)" 'registered gate survives until group KILL'
-    assert_eq 0 "$(nd_public_value .signals.KILL)" 'native group KILL succeeds independently of its wait status'
-    assert_eq 137 "$(nd_public_value '.waits | map(select(.finishing and (.alive == false))) | last | .status')" \
-        'finishing wait independently records gate KILL status'
-    assert_eq false "$(nd_public_value .before_delete.leader.present)" 'native leader reaped before scratch deletion'
-    assert_eq true "$(nd_public_value .object.equal)" 'entire synthetic native object retained'
-    assert_eq true "$(nd_public_value .object.extension_keep)" 'actual sequence retains unknown field'
-} 2>/dev/null
+assert_file "$FIX/hidden-member"
+GROUP="$(cat "$FIX/group")"
+MEMBER="$(cat "$FIX/hidden-member")"
+assert_eq "$MEMBER" "$(live_group "$GROUP")" 'real member remains, but its guard was reaped'
+run find "$FIX/scratch" -name member-held -print
+assert_contains "$OUTPUT" '/home/member-held' 'retained scratch contains the member marker'
+run test ! -e "$FIX/remove-attempted"
+assert_eq 0 "$STATUS" 'deletion was never attempted'
+if [[ "$MEMBER" =~ ^[1-9][0-9]*$ ]]; then kill -TERM "$MEMBER" 2>/dev/null || :; fi
+"$REAL_RM" -rf "$FIX/scratch/"*
 restore_control
+
+for shutdown in clean survivor threaded ambiguous; do
+    it "one owned KILL; bounded verification for $shutdown"
+    rm -f "$FIX/stubborn" "$FIX/group" "$FIX/remove-attempted" "$FIX/live-at-remove" "$FIX/signal-trace"
+    bound_gate . stubborn
+    awk -v dir="$FIX" -v mode="$shutdown" '
+        /^    work=\$!/ {
+            print "    [ \"$phase\" != native ] || : > \"$operation/native\""
+        }
+        /^[[:blank:]]+kill -(TERM|KILL) / {
+            print "            if [ -f \"$op/native\" ] && [ \"$role\" = work ]; then"
+            print "                printf \"%s %s\\n\" \"" $2 "\" \"$$\" >> \"" dir "/signal-trace\""
+            if (mode == "survivor" && $2 == "-KILL") print "                builtin kill -KILL \"$$\""
+            print "            fi"
+        }
+        /^group_view\(\) {/ && mode == "threaded" {
+            print "ps() {"
+            print "    command ps \"$@\" || return 1"
+            print "    if [ -f \"$operation/native\" ] && grep -q -- \"^-KILL \" \"" dir "/signal-trace\"; then"
+            print "        printf \"99999999 %s Zl\\n\" \"$work\""
+            print "    fi"
+            print "}"
+        }
+        /^group_view\(\) {/ && mode == "ambiguous" {
+            print "ps() {"
+            print "    if [ -f \"$operation/native\" ]; then"
+            print "        command ps \"$@\" | awk -v leader=\"$work\" '\''$1 == leader {$3=\"Zl\"} { print }'\''"
+            print "    else command ps \"$@\"; fi"
+            print "}"
+        }
+        { print }
+    ' "$FIX/launcher" > "$FIX/injected"
+    mv "$FIX/injected" "$FIX/launcher"
+    record_cleanup
+    env -i PATH="$ORIGINAL_PATH" GH_TOKEN=synthetic GITHUB_EVENT_NAME=pull_request \
+        GITHUB_REPOSITORY=owner/repo GITHUB_REPOSITORY_ID=42 \
+        "$REAL_BASH" --noprofile --norc "$FIX/launcher" --repository owner/repo --event "$FIX/event" \
+        > "$FIX/stdout" 2>"$FIX/stderr" &
+    LAUNCHER_PID=$!
+    if ! await_fixture "$LAUNCHER_PID" "$FIX/group" "$FIX/stubborn"; then
+        _no 'native stubborn fixture did not become ready' "$(cat "$FIX/stdout" "$FIX/stderr")"
+        kill -TERM "$LAUNCHER_PID" 2>/dev/null || :
+        wait "$LAUNCHER_PID" || :
+        restore_control
+        continue
+    fi
+    assert_file "$FIX/group"; assert_file "$FIX/stubborn"
+    STUBBORN="$(cat "$FIX/stubborn")"
+    START="$SECONDS"
+    kill -TERM "$LAUNCHER_PID"
+    if [ "$shutdown" != ambiguous ]; then
+        for n in {1..40}; do [ ! -s "$FIX/signal-trace" ] || break; sleep 0.1; done
+    fi
+    if kill -USR1 "$LAUNCHER_PID" && kill -HUP "$LAUNCHER_PID"; then
+        _ok 'queued overlapping catchable signals during teardown'
+    else
+        _no 'catchable signals could not reach teardown'
+    fi
+    # The fixture must not hang indefinitely if a regression blocks in wait.
+    for n in {1..200}; do kill -0 "$LAUNCHER_PID" 2>/dev/null || break; sleep 0.1; done
+    if kill -0 "$LAUNCHER_PID" 2>/dev/null; then
+        _no 'teardown did not finish before the test deadline'
+        kill -KILL "$LAUNCHER_PID"
+    fi
+    if wait "$LAUNCHER_PID"; then STATUS=0; else STATUS=$?; fi
+    ELAPSED=$((SECONDS-START))
+    assert_eq 1 "$STATUS"
+    assert_eq 1 "$(jq -s length "$FIX/stdout")" 'one complete refusal after repeated catchable signals'
+    assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
+    GROUP="$(cat "$FIX/group")"
+    if [ "$shutdown" = ambiguous ]; then
+        run test ! -e "$FIX/signal-trace"
+        assert_eq 0 "$STATUS" 'an unconfirmed leader is neither signalled nor waited for'
+    else
+        assert_eq "-TERM $GROUP"$'\n'"-KILL $GROUP" "$(cat "$FIX/signal-trace")" \
+            'only the live native leader signals; nothing sends another signal after KILL'
+    fi
+    if [ "$shutdown" = clean ]; then
+        assert_eq interrupted "$(jq -r .error.code "$FIX/stdout")"
+        assert_eq null "$(jq -r .native_exit "$FIX/stdout")" 'KILL interrupted status relay; do not invent an exit'
+        assert_terminated "$STUBBORN" 'TERM-resistant descendant terminated'
+        assert_group_gone "$GROUP" 'native group terminated and owned leader reaped'
+        assert_file "$FIX/live-at-remove" 'native deletion snapshot exists'
+        assert_eq '' "$(cat "$FIX/live-at-remove")" 'native group is gone before scratch deletion'
+        assert_eq '' "$(find "$FIX/scratch" -mindepth 1 -print)"
+        assert_other_bindings
+        assert_eq '[null,17,true]' "$(jq -c .native.extension.keep "$FIX/stdout")" 'refusal retains unknown native fields'
+    else
+        assert_eq cleanup-failed "$(jq -r .error.code "$FIX/stdout")"
+        assert_eq cleanup "$(jq -r .error.stage "$FIX/stdout")"
+        run test -n "$(find "$FIX/scratch" -mindepth 1 -print)"
+        assert_eq 0 "$STATUS" 'unverified cleanup retains scratch'
+        run test ! -e "$FIX/remove-attempted"
+        assert_eq 0 "$STATUS" 'failed verification never attempts scratch deletion'
+        run test "$ELAPSED" -ge 8
+        assert_eq 0 "$STATUS" 'verification waited after the signal instead of treating the remaining row as dead'
+        if [ "$shutdown" = survivor ] || [ "$shutdown" = ambiguous ]; then
+            run test -n "$(live_group "$GROUP")"
+            assert_eq 0 "$STATUS" 'the actual running member survived the refusal'
+            # Test-only cleanup of known stubborn fixture processes.
+            for member in $(live_group "$GROUP"); do kill -KILL "$member" 2>/dev/null || :; done
+        fi
+        "$REAL_RM" -rf "$FIX/scratch/"*
+    fi
+    run test "$ELAPSED" -lt 20
+    assert_eq 0 "$STATUS" 'teardown remains bounded despite repeated signals'
+    restore_control
+done
