@@ -1,6 +1,6 @@
 # Review, merge and closing
 
-**Inputs**: a built change with its acceptance results, its record, PR and diff, the spec it
+**Inputs**: a change with its acceptance results, its record, PR and diff, the spec it
 touches, the reviewers registered in `.prdkit/memory/agents.md`, and project policy.
 **Writes**: the review package, reports and publisher-authored receipts on the PR, the final PR
 context, the log entry (`specs/log/<id>.md`) and the record's deletion.
@@ -28,6 +28,18 @@ checkout first with original source provenance, then attach or place the package
 reviewer's actual access boundary. Verify access before a costly review round. For uncommitted
 work send the tracked diff plus the untracked file contents, with their hashes. Without a
 trustworthy package, review is pending.
+
+For spec edits, judge each line at its edited level: [Levels](spec.md#levels),
+[What earns a line](spec.md#what-earns-a-line) and Left open ([Elements](spec.md#elements)).
+Send those rules with the prompt. Snapshot the installed prompt and `.prdkit/workflows/spec.md`
+with `--context` if the trusted copies are tracked at the reviewed head; otherwise attach both
+at dispatch.
+Use the `level` category for detail the edit adds at the wrong level or over budget.
+
+In a spec-only change, apply the existing severities to contradictions with constraints, decisions
+or non-goals; wrong or owner-unauthorized one-way doors; unobservable acceptance outcomes; missing
+bounds; and facts given a second home. Requests for step logic, field-level schemas or test
+procedures in L0–L2 or the change record are low (advisory); tag them `defer: implementing PR`.
 
 Critical and high findings block, medium blocks under `Rigor: full`, low is advisory. A failed
 tool run is not a product FAIL and an absent reviewer is not approval. Preserve each report
