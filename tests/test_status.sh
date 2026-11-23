@@ -104,18 +104,20 @@ cat > specs/changes/099-programme.md <<'MD'
 **Next**: continue
 MD
 for variant in untagged parent-tight opened-tight spaced; do
-    opened='**Opened**: 2026-10-16'
-    parent='**Parent**: 099-programme'
-    tags='["batch"]'
     case "$variant" in
-        untagged) tags=null ;;
-        parent-tight) parent="$parent·**Tags**: batch" ;;
-        opened-tight) opened="$opened·**Tags**: batch" ;;
-        spaced) parent="$parent · **Tags**: batch" ;;
+        untagged) header='**Opened**: 2026-10-16 · **Parent**: 099-programme · **Tier**: T1' ;;
+        parent-tight) header='**Opened**: 2026-10-16 · **Parent**: 099-programme·**Tags**: batch · **Tier**: T1' ;;
+        opened-tight) header='**Opened**: 2026-10-16·**Tags**: batch · **Parent**: 099-programme · **Tier**: T1' ;;
+        spaced) header='**Opened**: 2026-10-16 · **Parent**: 099-programme · **Tags**: batch · **Tier**: T1' ;;
     esac
-    printf '# Change: Child\n\n%s · %s · **Tier**: T1\n' "$opened" "$parent" > specs/changes/004-child.md
+    tags='["batch"]'
+    [ "$variant" != untagged ] || tags=null
+    printf '# Change: Child\n\n%s\n' "$header" > specs/changes/004-child.md
     run bash "$STATUS_SH" --json
-    assert_eq 0 "$STATUS" "$variant: status succeeds"
+    if ! assert_eq 0 "$STATUS" "$variant: status succeeds"; then
+        printf '       %s\n' "$OUTPUT"
+        continue
+    fi
     assert_eq "[\"099-programme\",\"2026-10-16\",1,$tags]" \
         "$(jq -c '.changes[] | select(.id == "004-child") | [.parent,.opened,.age_days,.tags]' <<< "$OUTPUT")" \
         "$variant: legacy fields and optional tags"
