@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # Kit-only PR check. Run from a clone containing both refs and their common history.
+# A worker can escape cleanup if its launcher exits before the timeout or cancellation
+# snapshot and the worker is reparented outside the suite's tracked process tree and groups.
+# If it holds a resource the head suite needs, that comparison reports a spurious head
+# failure, not a false pass. Re-run the check or fix the suite's own teardown.
 set -euo pipefail
 
 if [ "$#" -ne 3 ]; then

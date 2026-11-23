@@ -26,8 +26,9 @@ points small, operational contracts explicit, and examples generic.
   `# Threat model:` headers, quote the invariants in the PR and say which ones the
   change affects. The independent review checks the change against both blocks.
   A finding outside the stated threat model is at most Low unless the reviewer
-  shows a non-hostile sequence that triggers it. Follow [SECURITY.md](SECURITY.md)
-  for private vulnerability reporting.
+  shows a non-hostile sequence that triggers it.
+  A defect that can only cause a spurious failure (never a false pass) of a maintainer CI check is at most Low.
+  Follow [SECURITY.md](SECURITY.md) for private vulnerability reporting.
 - Note user-visible changes under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md). Leave
   `VERSION` alone: the maintainer decides when a change is released, and as which version
   (see Releases).
