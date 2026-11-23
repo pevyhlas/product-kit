@@ -28,14 +28,15 @@ Already-ready work goes straight to [implementation.md](implementation.md): do n
    no product/design justification? Explain omissions, shared work and safe intermediate states.
    Coverage is a reasoned assessment, not proof the product definition is complete.
 
-Keep a compact table in the programme's Tasks (or the bounded change for a single outcome):
+Keep a compact discovery table in the programme's Tasks:
 
 | Work | Outcome / canonical IDs | Design / parts | Stage / disposition | Depends on + required outcome | Completion checks |
 |------|-------------------------|----------------|---------------------|-------------------------------|-------------------|
 
-Use stable local keys while discovering work; link child change IDs when opened. Separate required
-now, later, optional and unresolved work. Detail only near-ready work; do not open ten worktrees
-just to describe ten candidates. No separate feature-spec hierarchy or global task-ID scheme.
+Link child change IDs when opened. Separate required now, later, optional and unresolved work.
+Detail only near-ready work; do not open ten worktrees just to describe ten candidates. In a bounded
+change, use outcome-level task lines per [implementation.md](implementation.md).
+No separate feature-spec hierarchy or global task-ID scheme.
 
 ## Programmes
 

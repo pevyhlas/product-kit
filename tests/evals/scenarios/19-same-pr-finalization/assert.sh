@@ -5,6 +5,7 @@ fail() { echo "ASSERT FAIL: $1"; exit 1; }
 test ! -e specs/changes/001-greeting.md || fail 'record left for a cleanup PR'
 git cat-file -e HEAD:specs/changes/001-greeting.md 2>/dev/null && fail 'deletion not committed'
 grep -qs '^- [0-9-]* 001-greeting:' specs/log/001-greeting.md || fail 'closed transaction missing per-change log entry'
+if grep -qs 'T001' specs/log.md specs/log/001-greeting.md; then fail 'delivered task was logged'; fi
 grep -Eiq 'runtime.*(unverif|unknown)|production.*(unverif|unknown)|unverif.*(runtime|production)' .eval-state/pr.md || fail 'PR lost runtime unknown'
 grep -q 'R-01' .eval-state/pr.md || fail 'PR lost canonical reference'
 grep -qi 'Welcome' .eval-state/pr.md || fail 'PR lost completion check context'

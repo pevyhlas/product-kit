@@ -27,8 +27,8 @@ Update client, and complete independent existing R-01 greeting. Do not deploy se
 ## Approach
 Baseline: $baseline. The old interface was v1/legacy_status. Optional scratch is unavailable.
 ## Tasks
-- [ ] T001 Create src/client.txt reading legacy_status. Depends on P2 interface deployed.
-- [ ] T002 Write Welcome with newline to src/greeting.txt (R-01), independent of P2.
+- [ ] T001 Client reads the legacy status; P2 interface deployed; deployed interface check
+- [ ] T002 Exact greeting is available (R-01); none; greeting content
 ## Acceptance
 | Item | Proves | Check | Attempts | Result |
 |------|--------|-------|----------|--------|

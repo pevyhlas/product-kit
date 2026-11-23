@@ -39,6 +39,4 @@ else
     result=$?
     [ "$result" -eq 124 ] || exit "$result"
 fi
-sed 's/\[ \] T001/[x] T001/' "$CHANGE_FILE" > "$CHANGE_FILE.tmp"
-mv "$CHANGE_FILE.tmp" "$CHANGE_FILE"
 git add -A && git commit -qm 'fixture: actual interrupted verification'
