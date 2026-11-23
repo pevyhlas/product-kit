@@ -49,7 +49,7 @@ while [ "$#" -gt 0 ]; do
             echo "  --json              Output in JSON format"
             echo "  --short-name <name> Short name (2-4 words) for the change id and branch"
             echo "  --number N          Change number (overrides auto-detection)"
-            echo "  --programme         Keep the outcome checkpoint scaffold for a programme or continuing queue"
+            echo "  --programme         Include the outcome checkpoint scaffold for a programme or continuing queue"
             echo "  --no-worktree       Create and switch to the branch in the current checkout"
             echo "                      instead of an isolated worktree; existing edits carry over"
             echo "  --no-branch         Create only the change record in the current checkout"
@@ -397,30 +397,93 @@ CHANGE_FILE="$CHANGES_DIR/$CHANGE_ID.md"
 mkdir -p "$CHANGES_DIR"
 TEMPLATE="$WORKTREE_PATH/.prdkit/templates/change-template.md"
 [ -f "$TEMPLATE" ] || TEMPLATE="$REPO_ROOT/.prdkit/templates/change-template.md"
+SCAFFOLD="$WORKTREE_PATH/.prdkit/scripts/bash/outcome-checkpoint.md"
+[ -f "$SCAFFOLD" ] || SCAFFOLD="$REPO_ROOT/.prdkit/scripts/bash/outcome-checkpoint.md"
+POINTER='<!-- Outcome checkpoint format: .prdkit/scripts/bash/outcome-checkpoint.md -->'
 if [ -e "$CHANGE_FILE" ] || [ -L "$CHANGE_FILE" ]; then
     echo "[prdkit] Error: $CHANGE_FILE already exists; it is never overwritten." >&2
     exit 1
 fi
 TODAY="${PRDKIT_TODAY:-$(date +%Y-%m-%d)}"
-write_record() {
+render_record() {
+    local last
     if [ -f "$TEMPLATE" ]; then
-        # Use the existing scaffold opener so retained project copies of the old template work too.
-        PK_INTENT="$INTENT" PK_TODAY="$TODAY" awk -v programme="$PROGRAMME" '
-            NR == 1 && /^# Change:/ { print "# Change: " ENVIRON["PK_INTENT"]; next }
-            programme != "true" && /^<!-- A programme or continuing follow-up queue \(/ {
-                print "<!-- Outcome checkpoint format: .prdkit/templates/change-template.md -->"
-                checkpoint = 1
+        # awk separates LF from the line text; track a missing final LF separately.
+        review_file_without_nul "$TEMPLATE" || return 1
+        last="$(tail -c 1 "$TEMPLATE" && printf .)" || return 1
+        LC_ALL=C PK_INTENT="$INTENT" PK_TODAY="$TODAY" PK_SCAFFOLD="$SCAFFOLD" PK_POINTER="$POINTER" \
+            awk -v programme="$PROGRAMME" -v last_lf="$([ "$last" = $'\n.' ] && echo 1 || echo 0)" '
+            function scaffold(    row, rc, n, file) {
+                file = ENVIRON["PK_SCAFFOLD"]
+                while ((rc = (getline row < file)) > 0) { print row; n++ }
+                if (rc < 0 || !n) exit 1
+                close(file)
             }
-            checkpoint { if (/-->/) checkpoint = 0; next }
-            /^\*\*Opened\*\*: <date>/ { sub(/<date>/, ENVIRON["PK_TODAY"]) }
-            { print }
-        ' "$TEMPLATE" > "$CHANGE_FILE"
+            function ending(i) { return (i < NR || last_lf) ? "\n" : "" }
+            { lines[NR] = $0 }
+            END {
+                pointer = ENVIRON["PK_POINTER"]
+                for (i = 1; i <= NR; i++) {
+                    text = lines[i]
+                    sub(/\r$/, "", text)
+                    if (text ~ /^##? /) {
+                        if (state) state_end = i
+                        state = (text ~ /^## State[ \t]*$/)
+                        if (state) state_end = NR + 1
+                    }
+                    if (text == pointer && !slot) slot = i
+                    if (state && text ~ /^### Outcome checkpoint[ \t]*$/) has_block = 1
+                }
+                # Use the stock pointer as the insertion slot; otherwise stay in State.
+                add = (programme == "true" && !has_block)
+                at = slot ? slot : state_end
+                for (i = 1; i <= NR; i++) {
+                    text = lines[i]
+                    if (add && i == at) {
+                        scaffold()
+                        if (i == slot) continue
+                    }
+                    if (programme != "true" &&
+                        text ~ /^<!-- (A programme or continuing follow-up queue \(|For a programme\/continuing follow-up queue,)/) {
+                        for (j = i; j <= NR && !index(lines[j], "-->"); j++) {}
+                        if (j <= NR) {
+                            # Strip only the recognized comment, not bytes after its closing marker.
+                            i = j
+                            text = substr(lines[i], index(lines[i], "-->") + 3)
+                            if (!slot && !wrote_pointer) {
+                                printf "%s%s%s", pointer, (text ~ /\r$/ ? "\r" : ""), \
+                                    (text != "" && text != "\r" ? "\n" : ending(i))
+                                wrote_pointer = 1
+                            }
+                            if (text != "" && text != "\r") printf "%s%s", text, ending(i)
+                            continue
+                        }
+                    }
+                    if (i == 1 && text ~ /^# Change:/)
+                        text = "# Change: " ENVIRON["PK_INTENT"] (text ~ /\r$/ ? "\r" : "")
+                    if (text ~ /^\*\*Opened\*\*: <date>/) sub(/<date>/, ENVIRON["PK_TODAY"], text)
+                    printf "%s%s", text, ending(i)
+                }
+                if (add && (!at || at > NR)) {
+                    if (NR && !last_lf) print ""
+                    if (!at) print "\n## State\n"
+                    scaffold()
+                }
+            }
+        ' "$TEMPLATE"
     else
-        printf '# Change: %s\n\n**Opened**: %s\n' "$INTENT" "$TODAY" > "$CHANGE_FILE"
+        printf '# Change: %s\n\n**Opened**: %s\n' "$INTENT" "$TODAY" || return 1
+        if $PROGRAMME; then verify_lf_file "$SCAFFOLD" && printf '\n## State\n\n' && cat "$SCAFFOLD"; fi
     fi
 }
+# Render before opening the record: a missing or unreadable input must not leave a partial record.
+# The sentinel protects any trailing newlines from command substitution.
+if ! RECORD="$(render_record && printf .)"; then
+    echo "[prdkit] Error: could not render the change record; check the change template and the installed outcome checkpoint snippet." >&2
+    exit 1
+fi
 # Refuse a file/symlink created after the existence check, including by an external writer.
-if ! (set -C; write_record); then
+if ! (set -C; printf '%s' "${RECORD%.}" > "$CHANGE_FILE"); then
     echo "[prdkit] Error: could not create $CHANGE_FILE; existing records are never overwritten." >&2
     exit 1
 fi

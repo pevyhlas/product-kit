@@ -16,8 +16,8 @@ uncommitted `specs/` paths left behind (`UNCARRIED_SPECS`); record the owner dir
 context the change needs in the worktree. Use `--no-branch` for project-authorized
 existing-branch delivery: it creates only the numbered record in the current checkout. Pass the
 change ID explicitly to later helpers when it differs from the branch. Add `--programme` only
-when opening a programme parent or continuing follow-up queue; it keeps the template's commented
-outcome checkpoint scaffold instead of the one-line pointer.
+when opening a programme parent or continuing follow-up queue; it includes the commented outcome
+checkpoint scaffold even if a customized change template omits it.
 
 For a product/programme, use [planning.md](planning.md) to discover work across intent and design.
 For ready work, use [implementation.md](implementation.md). One implementation change normally

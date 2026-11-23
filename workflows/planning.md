@@ -49,7 +49,7 @@ place; no amendment journals. Children and the parent close per [review.md](revi
 ## Protect the outcome
 
 For a programme or a sequence of follow-ups, keep an **outcome checkpoint** in the existing
-parent's State, using the format in [change-template.md](../templates/change-template.md).
+parent's State, using the format in `.prdkit/scripts/bash/outcome-checkpoint.md`.
 Children link it rather than copying a second tracker; a standalone small change can keep its
 outcome and selection in prose. Define the check for each enabling step in Tasks before starting
 it: a reviewed interface, working source path or deployed service can be a real intermediate
@@ -57,7 +57,7 @@ advance without claiming the final user outcome.
 
 Scope linked progress evidence to what it proves: source, deployed or user-validated. Record
 `none` only if the history shows no advance. Count integrated children since the latest evidenced
-advance as a nonnegative integer. Keep the template's positive progress limit unless the
+advance as a nonnegative integer. Keep the scaffold's positive progress limit unless the
 owner/project sets another (cite its source in Allocation). Reassess at that count or an existing
 timebox/investment boundary, whichever comes first.
 
