@@ -71,8 +71,11 @@ require_consumer_root "$root" check-adoption.sh
 if $require_source; then
     work="$(mktemp -d)" || exit 1
     trap 'rm -rf "$work"' EXIT
-    install_source_verify "$root" "$head" "$work" > "$work/findings"
     findings=()
+    if ! install_source_verify "$root" "$head" "$work" > "$work/findings" ||
+        ! verify_lf_file "$work/findings" allow-empty; then
+        findings+=("Pinned-source installation proof did not complete")
+    fi
     while IFS= read -r finding; do [ -z "$finding" ] || findings+=("$finding"); done < "$work/findings"
     result=fail; proof=failed
     if [ "${#findings[@]}" -eq 0 ]; then result=pass; proof=verified; fi
@@ -95,12 +98,9 @@ MANIFEST="$root/.prdkit/.manifest"
 # Section-scoped key lookup: only the ## Configuration section is config, so
 # documented examples elsewhere in the file can never shadow the real values.
 config_value() {
-    local key="$1" section
+    local key="$1"
     [ -f "$CONFIG" ] || return 0
-    section="$(sed -n '/^##[[:space:]]*Configuration/,/^##[[:space:]]/p' "$CONFIG" 2>/dev/null)"
-    printf '%s\n' "$section" \
-        | grep -E "^-?[[:space:]]*${key}:" | head -1 \
-        | sed -E 's/^-?[[:space:]]*'"$key"':[[:space:]]*//' | tr -d '\r' || true
+    install_config_value "$CONFIG" "$key"
 }
 
 hash_file() {
@@ -113,9 +113,14 @@ checked=0
 note() { checked=$((checked + 1)); }
 fail() { findings+=("$1"); }
 
-PIN="$(config_value 'adoption-pin')"
-MANIFEST_SHA="$(config_value 'adoption-manifest-sha256')"
-SOURCE="$(config_value 'adoption-source')"
+if [ -e "$CONFIG" ] || [ -L "$CONFIG" ]; then
+    if [ ! -f "$CONFIG" ] || ! verify_lf_file "$CONFIG"; then
+        fail "Invalid adoption configuration: expected non-empty LF-terminated text"
+    fi
+fi
+PIN="$(config_value 'adoption-pin')" || fail "Unable to read a unique adoption-pin restriction"
+MANIFEST_SHA="$(config_value 'adoption-manifest-sha256')" || fail "Unable to read a unique adoption-manifest-sha256 restriction"
+SOURCE="$(config_value 'adoption-source')" || fail "Unable to read a unique adoption-source restriction"
 SOURCE="${SOURCE:-.product-kit}"
 case "$SOURCE" in
     /*|*..*) echo "adoption-source must be a repo-relative path without '..': $SOURCE" >&2; exit 2 ;;
@@ -141,13 +146,18 @@ note
 if [ ! -f "$MANIFEST" ]; then
     fail "No install manifest at .prdkit/.manifest (run the installer)"
 else
-    manifest_version="$(sed -n 's/^version:[[:space:]]*//p' "$MANIFEST" | head -1)"
+    manifest_version="$(install_manifest_value "$MANIFEST" version)" || manifest_version=''
     [ -n "$manifest_version" ] || fail "Manifest records no version line"
     if [ -f "$root/$SOURCE/VERSION" ]; then
         note
-        kit_version="$(tr -d '[:space:]' < "$root/$SOURCE/VERSION")"
-        [ "$manifest_version" = "$kit_version" ] ||
-            fail "Manifest version $manifest_version does not match kit source $kit_version (re-run init.sh --upgrade)"
+        if verify_lf_file "$root/$SOURCE/VERSION" &&
+            version_lines="$(wc -l < "$root/$SOURCE/VERSION")" && [ "$version_lines" -eq 1 ] &&
+            IFS= read -r kit_version < "$root/$SOURCE/VERSION"; then
+            [ "$manifest_version" = "$kit_version" ] ||
+                fail "Manifest version $manifest_version does not match kit source $kit_version (re-run init.sh --upgrade)"
+        else
+            fail 'Invalid kit source VERSION: expected one LF-terminated version line'
+        fi
     fi
     if [ -n "$MANIFEST_SHA" ]; then
         note
@@ -159,12 +169,14 @@ fi
 
 # --- Installed command surface (manifest-driven: no submodule checkout needed) ---
 note
-while IFS= read -r finding; do
-    [ -z "$finding" ] || fail "$finding"
-done < <(install_findings "$root")
-mode="$(sed -n 's/^mode:[[:space:]]*//p' "$MANIFEST" 2>/dev/null | head -1 || true)"
+if rows="$(verify_lines install_findings "$root")"; then
+    while IFS= read -r finding; do [ -z "$finding" ] || fail "$finding"; done <<< "$rows"
+else
+    fail 'Installation inventory did not complete'
+fi
+mode="$(install_manifest_value "$MANIFEST" mode 2>/dev/null || true)"
 mode="${mode:-symlink}"
-harnesses="$(sed -n 's/^harnesses:[[:space:]]*//p' "$MANIFEST" 2>/dev/null | head -1 || true)"
+harnesses="$(install_manifest_value "$MANIFEST" harnesses 2>/dev/null || true)"
 manifest_commands() { # harness -> expected basenames recorded in the manifest
     awk -v prefix=".$1/commands/" '
         length($1) == 64 && $1 ~ /^[0-9a-f]+$/ && index($2, prefix) == 1 { print substr($2, length(prefix) + 1) }
@@ -178,9 +190,13 @@ for harness in $(printf '%s' "$harnesses" | tr ',' ' '); do
     esac
     note
     expected=()
+    if ! commands="$(verify_lines manifest_commands "$harness")"; then
+        fail "Unable to inventory installed commands for harness '$harness'"
+        continue
+    fi
     while IFS= read -r name; do
         [ -n "$name" ] && expected+=("$name")
-    done < <(manifest_commands "$harness")
+    done <<< "$commands"
     if [ "${#expected[@]}" -eq 0 ]; then
         fail "Manifest records no installed commands for harness '$harness'"
         continue
@@ -218,9 +234,11 @@ done
 # Static tier-map checks always; projection drift (including missing projections) once the
 # tier map declares a shared `Tier baseline:` — the opt-in to rendered, resolvable models.
 note
-while IFS= read -r finding; do
-    [ -z "$finding" ] || fail "$finding"
-done < <(agent_tier_findings "$root" --include-missing)
+if rows="$(verify_lines agent_tier_findings "$root" --include-missing)"; then
+    while IFS= read -r finding; do [ -z "$finding" ] || fail "$finding"; done <<< "$rows"
+else
+    fail 'Agent tier inventory did not complete'
+fi
 
 # --- Internal bootstrap must not leak into the install ---
 note

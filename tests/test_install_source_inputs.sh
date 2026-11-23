@@ -51,7 +51,7 @@ done
 cp "$_SCRATCH_CWD/manifest" "$MANIFEST"
 
 it 'accepted configuration headings retain each explicit restriction in both lanes'
-for heading in '##Configuration' '## Configuration' $'##\tConfiguration' '##Configuration — local' $'##Configuration\r'; do
+for heading in '##Configuration' '## Configuration' $'##\tConfiguration' '##Configuration — local'; do
     for restriction in matching pin hash; do
         {
             printf '# Config\n%s\n' "$heading"
@@ -73,8 +73,10 @@ for heading in '##Configuration' '## Configuration' $'##\tConfiguration' '##Conf
 done
 printf '# Config\n##Configuration\r\n- adoption-pin: %s\r\n' "$KIT_PIN" > "$CONFIG"
 fixture_commit
-fixture_check --head HEAD
-assert_eq 0 "$STATUS" 'CRLF configuration remains effective'
+fixture_reject
+assert_contains "$OUTPUT" 'expected non-empty LF-terminated text' 'CRLF configuration is rejected'
+fixture_reject --head HEAD
+assert_contains "$OUTPUT" 'expected non-empty LF-terminated text' 'committed CRLF configuration is rejected too'
 printf '# Config\n- adoption-pin: decoy\n## Configuration\n## Meaning\n- adoption-pin: decoy\n' > "$CONFIG"
 fixture_commit
 fixture_check --head HEAD
