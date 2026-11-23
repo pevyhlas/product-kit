@@ -50,30 +50,38 @@ replay_membership() {
 }
 
 stop_tagged_workers() {
-    local until=$((SECONDS + grace + reap_limit)) signal=TERM row pid rc found
+    local until=$((SECONDS + grace + reap_limit)) signal=TERM row pid rc found last_tagged verified=0
     [ -n "$run_tag" ] || return 0
     while :; do
         replay_candidates "$scratch/before" || { echo 'Process census unavailable.' >&2; return 1; }
-        : > "$scratch/clean"
+        : > "$scratch/unknown"
         found=false
         while IFS= read -r row; do
             pid=${row%% *}
             rc=0
             replay_membership "$platform" "$pid" "$run_tag" /proc || rc=$?
             case "$rc" in
-                0) kill "-$signal" -- "$pid" 2>/dev/null || :; found=true ;;
-                1) printf '%s\n' "$row" >> "$scratch/clean" ;;
-                # An unreadable PID may have exited. The second census decides.
+                0) kill "-$signal" -- "$pid" 2>/dev/null || :; found=true; last_tagged=$pid
+                   printf '%s\n' "$row" >> "$scratch/unknown" ;;
+                1) : ;; # positively untagged
+                *) printf '%s\n' "$row" >> "$scratch/unknown" ;;
             esac
         done < "$scratch/before"
         replay_candidates "$scratch/after" || { echo 'Process census unavailable.' >&2; return 1; }
-        # A fork during the scan can introduce a new PID even if its parent has
-        # exited. Only accept if *every* remaining identity was verified clean.
-        LC_ALL=C awk 'FILENAME == ARGV[1] { clean[$0]; next } !($0 in clean) { print $1 }' \
-            "$scratch/clean" "$scratch/after" > "$scratch/unverified" || return 1
-        if [ ! -s "$scratch/unverified" ]; then run_tag=''; return 0; fi
+        # An unreadable identity that has disappeared or become a zombie is
+        # stopped. Do not require unrelated processes to stop forking. Repeat
+        # the *whole* inventory before accepting, including newly orphaned PIDs.
+        LC_ALL=C awk 'FILENAME == ARGV[1] { unknown[$0]; next } $0 in unknown { print $1 }' \
+            "$scratch/unknown" "$scratch/after" > "$scratch/unverified" || return 1
+        if [ ! -s "$scratch/unverified" ] && [ "$found" = false ]; then
+            if [ "$verified" = 1 ]; then run_tag=''; return 0; fi
+            verified=1
+            continue
+        fi
+        verified=0
         if [ "$SECONDS" -ge "$until" ]; then
             while read -r pid; do echo "Cannot verify isolation for PID $pid." >&2; done < "$scratch/unverified"
+            if [ ! -s "$scratch/unverified" ]; then echo "Could not verify shutdown after signaling PID $last_tagged." >&2; fi
             return 1
         fi
         if [ "$found" = true ] && [ "$signal" = TERM ]; then
