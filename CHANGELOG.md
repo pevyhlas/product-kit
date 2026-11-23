@@ -14,6 +14,12 @@ change by change.
   checked references. Status and doctor validate the references without shortening the
   scope or end condition in the row. No migration needed.
 
+### Changed
+
+- Spec-only reviews judge edits at their spec level and defer test procedures to the
+  implementing PR. Acceptance names observable outcomes; review gates are unchanged.
+  No migration needed.
+
 ## [2.1.0] — 2026-11-23 — task parts, change tags and fail-closed verifiers
 
 ### Added
