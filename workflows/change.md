@@ -40,7 +40,8 @@ edited in the same PR. Sections of one file; skip a section that has nothing rea
 4. **Approach**: approved design references and spec/code baseline, then only real execution choices:
    options, the pick, why; one that binds later work goes to its L1/L2 home.
 5. **Tasks**: a short checklist for resuming, or stable local tasks with contribution, dependencies
-   and checks per [implementation.md](implementation.md). No extra plan for a tiny fix.
+   and checks per [implementation.md](implementation.md). Optionally prefix a task with a part
+   from the change header; see [spec.md](spec.md#optional-change-metadata). No extra plan for a tiny fix.
 6. **Checks**: before building, a few lines: every edit passes the line test, touched IDs agree
    with L0 and L1, every new Q and I is enforced.
 7. **Acceptance**: the bounded PR obligations map to canonical R, Q, B or I and the check that proves

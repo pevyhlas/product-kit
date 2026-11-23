@@ -201,6 +201,16 @@ record "\`T1\`" "$(verdict code PASS "$CLEAN")"
 run bash "$CHECK"
 assert_eq 0 "$STATUS" "a tier in backticks reads the same"
 
+it "a label inside a Tags value cannot supply a tier claim or floor"
+record T1 "$(verdict code PASS "$CLEAN")"
+awk 'NR == 2 { print "**Tags**: sample **Tier**: T3" } { print }' \
+    specs/changes/001-greet.md > specs/changes/001.tmp
+mv specs/changes/001.tmp specs/changes/001-greet.md
+git commit -qa --amend --no-edit >/dev/null
+run bash "$CHECK" --json
+assert_eq 0 "$STATUS"
+assert_not_contains "$OUTPUT" 'more than one review tier'
+
 it "an L0 edit is T3 whatever the first claim"
 record T1 "$(verdict code PASS "$CLEAN")"
 mkdir -p specs/product; echo '# Requirements' > specs/product/requirements.md

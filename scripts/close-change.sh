@@ -9,7 +9,8 @@
 #
 # Usage: close-change.sh --pr <url> [--base <rev>] [--date YYYY-MM-DD] [-m <message>] <change-id> "<log text>"
 #   <log text> follows "- <date> <id>: " on the entry: "<intent> — <IDs> — <disposition> — <PR>",
-#   at most 300 characters. The entry is its own file, specs/log/<id>.md, so two branches that
+#   at most 300 characters. Omit **Tags**: the helper appends valid header tags itself.
+#   The entry is its own file, specs/log/<id>.md, so two branches that
 #   each close a change never conflict; compaction folds entries into specs/log.md (compact.md).
 #   Exit 0 closed and check-review.sh passes at the new head, 1 refused or failing, 2 usage.
 #
@@ -38,6 +39,7 @@ while [ "$#" -gt 0 ]; do
                 shift 2; continue ;;
             --help|-h)
                 printf '%s\n' "$usage" \
+                    "Omit **Tags** from the description; the helper appends header tags." \
                     "Publishing the entry requires hard-link support in specs/log/." \
                     "The closing commit uses the checkout's ambient Git identity." \
                     "For an agent identity, set GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL for this invocation." \
@@ -54,7 +56,10 @@ is_change_id "$id" && [ -n "$text" ] && [ -n "$pr" ] || { echo "$usage" >&2; exi
 [ -n "$day" ] || day="$(spec_today)"
 spec_is_date "$day" || { echo "--date takes YYYY-MM-DD (got: $day)" >&2; exit 2; }
 refuse() { echo "close-change.sh: $*" >&2; exit 1; }
-case "$text" in *$'\n'*|*$'\r'*) refuse "the log text is one line" ;; esac
+case "$text" in
+    *$'\n'*|*$'\r'*) refuse "the log text is one line" ;;
+    *'**Tags**:'*) refuse "omit **Tags** from the description; it is reserved for header tags" ;;
+esac
 [[ "$text" =~ [^[:space:]] ]] || refuse "the log text must contain a description"
 # Characters, not bytes: UTF-8 continuation bytes do not count, whatever the locale.
 max=300; length="$(printf '%s' "$text" | LC_ALL=C tr -d '\200-\277' | wc -c | tr -d ' ')"
@@ -76,6 +81,13 @@ git -C "$root" diff --quiet HEAD -- "$path" ||
 verify_lf_file "$root/$path" || refuse "invalid record $path: expected non-empty LF-terminated text"
 record_oid="$(verify_lines git -C "$root" rev-parse --verify "HEAD:$path")" ||
     refuse "cannot identify record $path at HEAD"
+tag_row="$(verify_lines spec_change_metadata "$root/$path" tags)" ||
+    refuse "cannot read tags from $path"
+IFS="$SPEC_SEP" read -r tag_kind tags tag_line tag_issue <<< "$tag_row"
+[ "$tag_kind" = tags ] || refuse "incomplete tag metadata from $path"
+[ -z "$tag_issue" ] || refuse "$path:$tag_line: $tag_issue"
+# Escape emphasis and the GFM bare-link prefix in otherwise safe, literal tag values.
+tags="${tags//_/\\_}"; tags="${tags//www./www\\.}"
 record_hash="$(verify_lines git -C "$root" hash-object --no-filters -- "$root/$path")" ||
     refuse "cannot hash record $path"
 [[ "$record_oid" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ && "$record_hash" = "$record_oid" ]] ||
@@ -152,7 +164,7 @@ check_paths
         }
         trap cleanup_stage EXIT
         set -C
-        cat <<< "- $day $id: $text" > "./$id.md" || exit 1
+        cat <<< "- $day $id: $text${tags:+ · **Tags**: $tags}" > "./$id.md" || exit 1
         # Pin the publishing cwd separately. A moved stage can make its source
         # disappear, but can never redirect the destination to its new parent.
         (

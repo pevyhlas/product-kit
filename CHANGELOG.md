@@ -17,6 +17,10 @@ change by change.
   process scan makes the comparison inconclusive and cannot count as regression evidence.
 - Cleanup and close tests now run against seeded combinations of local Git states and
   check that commits and working files survive. The generator is test-only.
+- Changes can group tasks by part and carry lowercase tags into the close log. Parts can
+  declare one level of subparts. Doctor checks task assignments and parent links, and status
+  reports the optional data without treating it as acceptance. Opening a change checks tags
+  from customized templates before creating the record. No migration needed.
 
 ### Changed
 

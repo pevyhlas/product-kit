@@ -17,6 +17,126 @@ assert_contains "$OUTPUT" "No spec yet" "missing spec named"
 assert_contains "$OUTPUT" "No open changes." "no changes"
 assert_contains "$OUTPUT" "No DEPLOY records — what is live is unknown." "live state unknown, not assumed"
 assert_contains "$OUTPUT" "None: no open changes, holds or owner questions." "no longest pole"
+run bash "$STATUS_SH" --json
+assert_eq 'null' "$(jq -c '.part_parents' <<< "$OUTPUT")" "unstated parents are null"
+
+it "optional change metadata reports assignments separately from acceptance"
+mkdir -p specs/changes specs/parts
+cat > specs/changes/001-metadata.md <<'MD'
+# Change: Metadata
+
+**Opened**: 2026-10-16
+**Parts**: P2, P2.1, P3
+**Tags**: cleanup,small batch, cli-v2_1.0
+**Tier**: T1
+**Parent**: none
+
+## Intent
+**Tags**: not the header
+- [x] (P2) Not in Tasks
+
+## Tasks
+- [x] (P2.1) First
+- [ ] (P2.1) Second
+  - [X] (P2) Third
+- [ ] Unassigned
+<!--
+- [x] (P2) Example
+-->
+~~~~
+~~~
+- [x] (P2) Another example
+~~~~
+
+## Acceptance
+| A1 | behavior | the check | 1 | PASS |
+MD
+printf '# P2 Core\n' > specs/parts/p2-core.md
+printf '# P2.1 Index\n\n**What it is**: a subpart · **Parent**: P2\n' > specs/parts/p2.1-index.md
+printf '# Change: Legacy\n\n## Tasks\n- [ ] Untagged\n' > specs/changes/002-legacy.md
+run bash "$STATUS_SH" --json
+assert_eq 0 "$STATUS"
+assert_eq '["cleanup","small batch","cli-v2_1.0"]' "$(jq -c '.changes[] | select(.id == "001-metadata") | .tags' <<< "$OUTPUT")"
+assert_eq '[{"part":"P2.1","checked":1,"total":2},{"part":"P2","checked":1,"total":1}]' \
+    "$(jq -c '.changes[] | select(.id == "001-metadata") | .tasks_by_part' <<< "$OUTPUT")"
+assert_eq '{"checked":0,"total":1}' "$(jq -c '.changes[] | select(.id == "001-metadata") | .unassigned_tasks' <<< "$OUTPUT")"
+assert_eq '1' "$(jq '.changes[] | select(.id == "001-metadata") | .acceptance.passed' <<< "$OUTPUT")"
+assert_eq '[null,null,{"checked":0,"total":1}]' \
+    "$(jq -c '.changes[] | select(.id == "002-legacy") | [.tags,.tasks_by_part,.unassigned_tasks]' <<< "$OUTPUT")"
+assert_eq '[{"id":"P2.1","parent":"P2"}]' "$(jq -c '.part_parents' <<< "$OUTPUT")"
+run bash "$STATUS_SH"
+assert_contains "$OUTPUT" "tags: cleanup, small batch, cli-v2_1.0"
+assert_contains "$OUTPUT" "tasks: P2.1 1/2 checked"
+assert_not_contains "$OUTPUT" "tasks: P3"
+assert_contains "$OUTPUT" "P2.1 (parent: P2)"
+run bash .prdkit/scripts/bash/read-spec.sh specs/changes/001-metadata.md
+assert_contains "$OUTPUT" "**Tags**: cleanup,small batch, cli-v2_1.0"
+assert_contains "$OUTPUT" "- [x] (P2.1) First"
+run bash .prdkit/scripts/bash/read-spec.sh specs/parts/p2.1-index.md
+assert_contains "$OUTPUT" "**Parent**: P2"
+rm specs/changes/{001-metadata,002-legacy}.md specs/parts/{p2-core,p2.1-index}.md
+
+it "tag prose cannot override change workflow fields"
+cat > specs/changes/003-boundaries.md <<'MD'
+# Change: Field boundaries
+**Opened**: 2026-10-16 · **Tier**: T1 · **Parent**: none
+**Tags**: cleanup **Parent**: 099-programme **Opened**: 2000-01-01
+## Notes
+Example note.
+MD
+run bash "$STATUS_SH" --json
+assert_eq 0 "$STATUS"
+assert_eq '["none","2026-10-16",null]' "$(jq -c '.changes[0] | [.parent,.opened,.tags]' <<< "$OUTPUT")"
+assert_not_contains "$OUTPUT" '099-programme'
+printf '**Parent**: 098-notes\n' >> specs/changes/003-boundaries.md
+run bash "$STATUS_SH" --json
+assert_eq '098-notes' "$(jq -r '.changes[0].parent' <<< "$OUTPUT")" "ordinary non-tag lines retain legacy behavior"
+rm specs/changes/003-boundaries.md
+
+it "inline tags preserve the programme link and opened date"
+cat > specs/changes/099-programme.md <<'MD'
+# Change: Programme
+**Opened**: 2026-10-10
+**Parent**: none
+
+## State
+**Waiting on**: nothing
+**Next**: continue
+MD
+for variant in untagged parent-tight opened-tight spaced; do
+    case "$variant" in
+        untagged) header='**Opened**: 2026-10-16 · **Parent**: 099-programme · **Tier**: T1' ;;
+        parent-tight) header='**Opened**: 2026-10-16 · **Parent**: 099-programme·**Tags**: batch · **Tier**: T1' ;;
+        opened-tight) header='**Opened**: 2026-10-16·**Tags**: batch · **Parent**: 099-programme · **Tier**: T1' ;;
+        spaced) header='**Opened**: 2026-10-16 · **Parent**: 099-programme · **Tags**: batch · **Tier**: T1' ;;
+    esac
+    tags='["batch"]'
+    [ "$variant" != untagged ] || tags=null
+    printf '# Change: Child\n\n%s\n' "$header" > specs/changes/004-child.md
+    run bash "$STATUS_SH" --json
+    if ! assert_eq 0 "$STATUS" "$variant: status succeeds"; then
+        printf '       %s\n' "$OUTPUT"
+        continue
+    fi
+    assert_eq "[\"099-programme\",\"2026-10-16\",1,$tags]" \
+        "$(jq -c '.changes[] | select(.id == "004-child") | [.parent,.opened,.age_days,.tags]' <<< "$OUTPUT")" \
+        "$variant: legacy fields and optional tags"
+    assert_eq '["099-programme"]' "$(jq -c '[.outcome_progress[].id]' <<< "$OUTPUT")" \
+        "$variant: programme outcome row remains visible"
+done
+rm specs/changes/{004-child,099-programme}.md
+
+it "duplicate header fields are errors even when no tasks have assignments"
+for label in Parts Journeys Tags; do
+    printf '# Change: Ambiguous\n\n**%s**: first\n**%s**: second\n' "$label" "$label" > specs/changes/003-ambiguous.md
+    run bash "$STATUS_SH" --json
+    assert_eq 1 "$STATUS"
+    assert_contains "$OUTPUT" "Duplicate $label field"
+    run bash .prdkit/scripts/bash/doctor.sh --json
+    assert_eq 1 "$STATUS"
+    assert_contains "$(jq -r '.findings[]' <<< "$OUTPUT")" "Duplicate $label field"
+done
+rm specs/changes/003-ambiguous.md
 
 mkdir -p specs/parts specs/changes specs/product
 it "a past-date hold still blocks until the owner lifts that specific hold"
@@ -418,6 +538,29 @@ run bash "$P2/.prdkit/scripts/bash/status.sh"
 assert_eq 1 "$(printf '%s\n' "$OUTPUT" | sed -n '/^In flight$/,/^Live$/p' | grep -c '001-greet — Warmer greeting')" "one in-flight row for the id"
 assert_not_contains "$OUTPUT" "stale copy" "the worktree copy wins"
 rm -f specs/changes/001-greet.md
+
+it "task parts use the inventory of the checkout containing the winning record"
+mkdir -p specs/parts .worktrees/001-greet/specs/parts
+printf '# P9 Root only\n' > specs/parts/p9-root.md
+printf '# P8 Child only\n' > .worktrees/001-greet/specs/parts/p8-child.md
+probe=.worktrees/001-greet/specs/changes/001-greet.md
+cp "$probe" "$_SCRATCH_CWD/original-change"
+cat > "$probe" <<'MD'
+# Change: Warmer greeting
+**Parts**: P8, P9
+## Tasks
+- [x] (P8) Known in the worktree
+- [x] (P9) Not known in the worktree
+MD
+run bash "$P2/.prdkit/scripts/bash/status.sh" --json
+assert_eq 0 "$STATUS"
+assert_eq '[{"part":"P8","checked":1,"total":1}]' "$(jq -c '.changes[0].tasks_by_part' <<< "$OUTPUT")"
+assert_eq '[{"part":"P9","line":5,"reason":"unknown"}]' "$(jq -c '.changes[0].invalid_task_parts' <<< "$OUTPUT")"
+run bash "$P2/.prdkit/scripts/bash/status.sh"
+assert_contains "$OUTPUT" "unknown task part P9"
+assert_not_contains "$OUTPUT" "tasks: P9"
+mv "$_SCRATCH_CWD/original-change" "$probe"
+rm specs/parts/p9-root.md .worktrees/001-greet/specs/parts/p8-child.md
 
 it "a change the root's log records as closed is not open, though an older worktree carries it"
 printf -- '- 2026-10-19 001-greet: warmer greeting — R-01 — #1\n' > specs/log.md

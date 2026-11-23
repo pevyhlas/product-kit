@@ -59,6 +59,30 @@ assert_eq 0 "$STATUS" "acronym slug generation succeeds"
 assert_contains "$OUTPUT" '"CHANGE_ID":"006-build-ui-tools"' "short uppercase UI retained"
 assert_not_contains "$OUTPUT" 'bad substitution' "no Bash 4-only expansion"
 
+it "invalid template tags cannot create a record, branch or worktree"
+TAG_PROJ="$(make_inited_project)"; track_tmp "$TAG_PROJ"
+TAG_PROJ="$(cd "$TAG_PROJ" && pwd -P)"
+cd "$TAG_PROJ" || exit 1
+tag_script=.prdkit/scripts/bash/new-change.sh
+tag_template=.prdkit/templates/change-template.md
+printf '# Change: template\n\n**Opened**: <date> ·**Tags**: cli/v2 · **Tier**: T1\n' > "$tag_template"
+git add "$tag_template" && git commit -qm "invalid template tags" || exit 1
+printf '# Change: template\n\n**Tags**: cli-v2_1.0, small batch\n' > "$tag_template"
+run bash "$tag_script" --number 51 --short-name "invalid-tags" "desc"
+assert_eq 1 "$STATUS" "isolated changes validate the committed template, not the local edit"
+assert_contains "$OUTPUT" "Malformed Tags"
+assert_not_contains "$(git branch --list)" "051-invalid-tags"
+assert_eq absent "$([ -e .worktrees/051-invalid-tags ] && echo present || echo absent)"
+run bash "$tag_script" --no-branch --number 52 --short-name "valid-tags" "desc"
+assert_eq 0 "$STATUS" "record-only changes use the local template"
+assert_contains "$(cat specs/changes/052-valid-tags.md)" '**Tags**: cli-v2_1.0, small batch'
+printf '# Change: template\n\n**Tags**: cli/v2\n' > "$tag_template"
+run bash "$tag_script" --no-branch --number 53 --short-name "invalid-local-tags" "desc"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "Malformed Tags"
+assert_eq absent "$([ -e specs/changes/053-invalid-local-tags.md ] && echo present || echo absent)"
+cd "$PROJ" || exit 1
+
 it "an empty intent or a non-numeric --number is rejected"
 run bash "$SCRIPT" --json --short-name "x"
 assert_eq 1 "$STATUS" "missing intent exits non-zero"
@@ -305,6 +329,37 @@ for heading in '### Outcome checkpoint' '## Example output' '### Outcome checkpo
     assert_eq 0 "$STATUS" "the scaffold is in State outside $START / $heading"
     N=$((N + 1))
 done
+
+it "--programme validates real header tags after rendering LF text and skipping fenced examples"
+render_tagged_fixture() { # line ending; omit the final terminator
+    printf '%s%s' '# Change: Example template' "$1" \
+        '**Opened**: <date>' "$1" '```markdown' "$1" '**Tags**: fenced/example' "$1" '```' "$1" \
+        '**Tags**: release-notes, batch_1.0' "$1" '## State' "$1" \
+        '```markdown' "$1" '### Outcome checkpoint' "$1" '```' "$1" "$POINTER" "$1"
+    printf '%s' '**Next**: Verify the change  '
+}
+render_tagged_fixture $'\r\n' > "$TEMPLATE"
+run env PRDKIT_TODAY=2026-10-17 bash .prdkit/scripts/bash/new-change.sh --programme --no-branch \
+    --number 9 --short-name tagged "Tagged programme"
+assert_eq 0 "$STATUS" "valid header tags are accepted; fenced example is ignored"
+{
+    render_tagged_fixture $'\n'
+    printf '\n'
+} | awk -v pointer="$POINTER" -v snippet="$SNIPPET" '
+    NR == 1 { print "# Change: Tagged programme"; next }
+    NR == 2 { print "**Opened**: 2026-10-17"; next }
+    $0 == pointer { while ((getline row < snippet) > 0) print row; next }
+    { print }
+' > .git/expected
+run cmp -s .git/expected specs/changes/009-tagged.md
+assert_eq 0 "$STATUS" "exact scaffold, fence, spacing and final LF are preserved"
+sed 's/release-notes/release\/notes/' "$TEMPLATE" > .git/invalid-tag-template
+cp .git/invalid-tag-template "$TEMPLATE"
+run bash .prdkit/scripts/bash/new-change.sh --programme --no-worktree --number 10 --short-name bad-tags "Invalid programme"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'Malformed Tags'
+assert_eq absent "$([ -e specs/changes/010-bad-tags.md ] && echo present || echo absent)"
+assert_not_contains "$(git branch --list)" '010-bad-tags'
 
 # --- Numbering across every claimed identity -----------------------------------------------
 PROJ2="$(make_inited_project)"; track_tmp "$PROJ2"
