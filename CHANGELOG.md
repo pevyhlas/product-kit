@@ -10,6 +10,9 @@ change by change.
 
 ### Added
 
+- Holds and waivers can keep long verbatim owner quotes in `specs/authority.md` using
+  checked references. Status and doctor validate the references without shortening the
+  scope or end condition in the row. No migration needed.
 - Changes can group tasks by part and carry lowercase tags into the close log. Parts can
   declare one level of subparts. Doctor checks task assignments and parent links, and status
   reports the optional data without treating it as acceptance. Opening a change checks tags
