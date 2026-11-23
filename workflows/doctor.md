@@ -23,6 +23,10 @@ close, duplicate inbox identities/fields/option keys and mismatched answer revis
 the rest are advisories that `--strict` fails. The kit's `scripts/init.sh --check` reports
 installation drift. Never repair during diagnosis or read a clean report as readiness.
 
+For a checked `ref=` reason, doctor reports the verified row's scope and end condition
+(`authority_records` in JSON, when present), not the quote. A broken reference is a malformed
+record, reported at its line in `specs/records.md`.
+
 Text and JSON (`budget_excess_reading_lines`, a nonnegative integer) report the total
 reading lines over budget: sum `max(reading lines - budget, 0)` over the files checked
 for reading budgets, not the number of advisories or the files' whole lengths. The same

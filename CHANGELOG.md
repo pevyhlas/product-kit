@@ -8,6 +8,12 @@ change by change.
 
 ## [Unreleased]
 
+### Added
+
+- Holds and waivers can keep long verbatim owner quotes in `specs/authority.md` using
+  checked references. Status and doctor validate the references without shortening the
+  scope or end condition in the row. No migration needed.
+
 ### Changed
 
 - Spec-only reviews judge edits at their spec level and defer test procedures to the
