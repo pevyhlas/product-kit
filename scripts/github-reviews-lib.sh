@@ -17,22 +17,56 @@ github_review_policy() {
     RC_ERROR="Cannot read trusted review policy at ${at:-origin/HEAD}"
     [ -n "$at" ] || return 1
     config="$(git -C "$root" show "$at:.prdkit/memory/config.md" | review_text_stream)" || return 1
-    fields="$(printf '%s\n' "$config" | awk "$SPEC_SKIP_AWK"'
-        function fail(reason) { print reason; exit 1 }
-        { if (spec_skip($0)) next }
-        /^## / { active=($0=="## Configuration"); next }
-        active && /^- review-(host|publishers|owner|publisher-isolation|lenses):/ {
+    fields="$(printf '%s\n' "$config" | LC_ALL=C awk '
+        function fail(reason, key) {
+            print reason ((key in line) ? " (config.md line " line[key] ")" : "")
+            exit 1
+        }
+        # Mask comments and fenced examples before looking for assignments. Preserve
+        # original lines for validation; the recognition copy never supplies a value.
+        function visible(s,   text,i,mark,rest) {
+            if (!comment && match(s,/^[[:space:]]*(```+|~~~+)/)) {
+                rest=substr(s,RLENGTH+1)
+                mark=substr(s,1,RLENGTH); sub(/^[[:space:]]*/, "", mark)
+                if (!fence && (substr(mark,1,1)=="~" || rest !~ /`/)) { fence=mark; return "" }
+                if (fence && index(mark,fence)==1 && rest ~ /^[[:space:]]*$/) { fence=""; return "" }
+            }
+            if (fence) return ""
+            while (length(s)) {
+                if (comment) {
+                    i=index(s,"-->"); if (!i) return text
+                    s=substr(s,i+3); comment=0
+                } else {
+                    i=index(s,"<!--"); if (!i) return text s
+                    text=text substr(s,1,i-1) " "; s=substr(s,i+4); comment=1
+                }
+            }
+            return text
+        }
+        function normalized(s) {
+            gsub(/`/, "", s)
+            # Unicode White_Space in UTF-8, in the C byte locale.
+            gsub(/[[:space:]]|\302[\205\240]|\341\232\200|\342\200[\200-\212\250\251\257]|\342\201\237|\343\200\200/, " ", s)
+            gsub(/\305\277/, "s", s) # long s also case-folds to an ASCII key letter
+            return tolower(s)
+        }
+        { text=visible($0); if (text=="") next }
+        text ~ /^## / { active=(text=="## Configuration"); next }
+        active {
+            ntext=normalized(text)
+            if (match(ntext,/review-(lenses|publishers)/) && substr(ntext,RSTART+RLENGTH) ~ /[:=]/) {
+                key=substr(ntext,RSTART,RLENGTH)
+                if (text!=$0 || index($0,"- " key ":")!=1)
+                    malformed="Invalid " key " key at config.md line " NR ": expected - " key ": <value>"
+            }
+        }
+        active && text==$0 && /^- review-(host|publishers|owner|publisher-isolation|lenses):/ {
             key=$0; sub(/:.*/, "", key); sub(/^- /,"",key)
             sub(/^[^:]*:[[:space:]]*/,""); sub(/[[:space:]]+$/,"")
-            values[key]=$0; count[key]++; next
-        }
-        # A noncanonical assignment must not silently disable lenses or the union check.
-        active && tolower($0) ~ /^[[:space:]]*[-*+][[:space:]]*review-(lenses|publishers)[[:space:]]*[:=]/ {
-            malformed=tolower($0); sub(/^[[:space:]]*[-*+][[:space:]]*/, "", malformed)
-            sub(/[[:space:]]*[:=].*/, "", malformed)
+            values[key]=$0; count[key]++; line[key]=NR
         }
         END {
-            if (malformed) fail("Invalid " malformed " key: expected - " malformed ": <value>")
+            if (malformed) fail(malformed)
             pub=values["review-publishers"]; lenses=values["review-lenses"]
             if (count["review-host"]!=1 || values["review-host"]!="github" ||
                 count["review-owner"]!=1 || values["review-owner"]!~/^user:[1-9][0-9]*([[:space:]]*,[[:space:]]*user:[1-9][0-9]*)*$/) {
@@ -41,21 +75,21 @@ github_review_policy() {
             }
             if (count["review-publishers"] || !count["review-lenses"]) {
                 if (count["review-publishers"]!=1 || pub!~/^(bot|user):[1-9][0-9]*([[:space:]]*,[[:space:]]*(bot|user):[1-9][0-9]*)*$/)
-                    fail("Trusted policy requires review-host: github, numeric review-publishers and numeric review-owner")
+                    fail("Trusted policy requires review-host: github, numeric review-publishers and numeric review-owner", "review-publishers")
             }
             if (count["review-lenses"]) {
-                if (count["review-lenses"]!=1 || !length(lenses)) fail("Expected one nonempty review-lenses mapping")
+                if (count["review-lenses"]!=1 || !length(lenses)) fail("Expected one nonempty review-lenses mapping", "review-lenses")
                 gsub(/[[:space:]]*,[[:space:]]*/, ",", lenses)
                 n=split(lenses, entries, ",")
                 for (i=1;i<=n;i++) {
                     if (entries[i]!~/^[a-z0-9][a-z0-9_.-]*=(bot|user):[1-9][0-9]*(\|(bot|user):[1-9][0-9]*)*$/)
-                        fail("Invalid review-lenses entry: " entries[i])
+                        fail("Invalid review-lenses entry: " entries[i], "review-lenses")
                     split(entries[i], pair, "=")
-                    if (area[pair[1]]++) fail("Duplicate review-lenses area: " pair[1])
+                    if (area[pair[1]]++) fail("Duplicate review-lenses area: " pair[1], "review-lenses")
                     m=split(pair[2], ids, "[|]")
                     for (j=1;j<=m;j++) {
                         id=ids[j]; num=id; sub(/^[^:]+:/,"",num)
-                        if ((num in typed) && typed[num]!=id) fail("Conflicting review-lenses account types: " id)
+                        if ((num in typed) && typed[num]!=id) fail("Conflicting review-lenses account types: " id, "review-lenses")
                         typed[num]=id
                         if (!(id in mapped)) union=union (length(union)?",":"") id
                         mapped[id]=1
@@ -64,10 +98,10 @@ github_review_policy() {
                 if (count["review-publishers"]) {
                     gsub(/[[:space:]]/, "", pub); n=split(pub, ids, ",")
                     for (i=1;i<=n;i++) {
-                        if (!(ids[i] in mapped)) fail("review-publishers differs from the review-lenses union")
+                        if (!(ids[i] in mapped)) fail("review-publishers differs from the review-lenses union", "review-publishers")
                         listed[ids[i]]=1
                     }
-                    for (id in mapped) if (!(id in listed)) fail("review-publishers differs from the review-lenses union")
+                    for (id in mapped) if (!(id in listed)) fail("review-publishers differs from the review-lenses union", "review-publishers")
                 }
                 pub=union
             }

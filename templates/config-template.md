@@ -58,3 +58,8 @@ Use separate IDs if separate Apps perform the reviews. You may omit `review-publ
 with lenses; if present it must list exactly the same set of typed accounts as the
 mapping. T3 requires a `design` mapping and a distinct owner approval. Without lenses
 the publisher list and tier minimums work as before.
+
+In `## Configuration`, write either key exactly as shown. Outside comments and
+fenced examples, a mention of `review-lenses` or `review-publishers` with a `:`
+or `=` later on the same line is treated as an attempted assignment. Formatting
+such as backticks around the key causes a policy error naming the line.
