@@ -369,7 +369,7 @@ assert_eq 0 "$STATUS" "$OUTPUT"
 assert_eq true "$(jq -r '.diagnostics | .edges == [] and (.latest[0] | .provenance == "legacy-only" and .end_covered == false)' <<< "$OUTPUT")" 'the legacy PASS supplies no coverage'
 run bash "$CHECK" --pr "$PR" 002-docs
 assert_eq 0 "$STATUS" "$OUTPUT"
-assert_contains "$OUTPUT" 'tier T0 needs no independent review' 'reports the docs-only exemption'
+assert_contains "$OUTPUT" 'tier T0 needs no independent review. All changes outside the change record and validated closing metadata passed the trusted T0 path check (review-t0-paths).' 'reports the docs-only exemption and the scope of the path check'
 assert_contains "$OUTPUT" '1 recorded verdict(s), none blocking. Review coverage was not required.' 'does not claim the legacy PASS covers the head'
 
 it "a renamed carrier cannot drop another identity's FAIL, and foreign PASS never covers"

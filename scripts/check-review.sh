@@ -546,7 +546,7 @@ elif [ "$result" = pass ]; then
     if $record_only; then
         printf 'PASS %s at %s: since %s it carries only the record and the log; %s recorded verdict(s), none blocking; no covering receipt needed on this PR.\n' "$id" "$head" "$base_ref" "${#rows[@]}"
     elif [ "$tier" = T0 ]; then
-        printf 'PASS %s at %s: tier T0 needs no independent review (every changed path is docs only under the trusted review-t0-paths). %s recorded verdict(s), none blocking. Review coverage was not required.\n' "$id" "$head" "${#rows[@]}"
+        printf 'PASS %s at %s: tier T0 needs no independent review. All changes outside the change record and validated closing metadata passed the trusted T0 path check (review-t0-paths). %s recorded verdict(s), none blocking. Review coverage was not required.\n' "$id" "$head" "${#rows[@]}"
     else
         printf 'PASS %s at %s: %s, Rigor %s; %s recorded verdict(s) cover this head.\n' "$id" "$head" "$tier" "$rigor" "${#rows[@]}"
     fi
