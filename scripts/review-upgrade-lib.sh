@@ -76,7 +76,7 @@ upgrade_plain_guard() (
     # A version edited on the upgrade branch cannot waive the legacy inventory.
     if git -C "$TARGET" show "$UP_POLICY_AT:.prdkit/.manifest" > "$work/prior-manifest" 2>/dev/null; then
         case "$(install_manifest_value "$work/prior-manifest" version):$(install_manifest_value "$MANIFEST" version)" in
-            2.0.*:2.0.*) return 0 ;;
+            2.*:2.*) return 0 ;;
         esac
     fi
     upgrade_record_lines "$TARGET" "$UP_POLICY_AT" "$work/trusted" "$work/a" || return 1
@@ -101,8 +101,8 @@ upgrade_plain_guard() (
 
 upgrade_preflight() {
     local version entry
-    version="$(install_manifest_value "$MANIFEST" version)" || { echo 'P1: target must hold a 1.x or 2.0 manifest; nothing was written.' >&2; return 1; }
-    case "$version" in 1.*|2.0|2.0.*) ;; *) echo 'P1: target must hold a 1.x or 2.0 manifest; nothing was written.' >&2; return 1 ;; esac
+    version="$(install_manifest_value "$MANIFEST" version)" || { echo 'P1: target must hold a 1.x or 2.x manifest; nothing was written.' >&2; return 1; }
+    case "$version" in 1.*|2.*) ;; *) echo 'P1: target must hold a 1.x or 2.x manifest; nothing was written.' >&2; return 1 ;; esac
     spec_objects_local "$TARGET" || return 1
     [ -n "$UP_POLICY_AT" ] || { echo 'No trusted integration base: establish origin/HEAD with its history fetched.' >&2; return 1; }
     upgrade_checkout_clean || return 1

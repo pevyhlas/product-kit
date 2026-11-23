@@ -85,11 +85,11 @@ for name in $helpers; do
 done
 
 it "upgrade removes retired kit files and keeps an edited retired template"
-if [[ "$(cat "$PK_ROOT/VERSION")" == 2.0.* ]]; then
+if [[ "$(cat "$PK_ROOT/VERSION")" == 2.* ]]; then
     cp "$PK_ROOT/VERSION" "$PROJ/.product-kit/VERSION"
     run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --upgrade"
-    assert_eq 1 "$STATUS" "a 0.x manifest cannot upgrade directly to 2.0"
-    assert_contains "$OUTPUT" "target must hold a 1.x or 2.0 manifest" "1.x staging required"
+    assert_eq 1 "$STATUS" "a 0.x manifest cannot upgrade directly to 2.x"
+    assert_contains "$OUTPUT" "target must hold a 1.x or 2.x manifest" "1.x staging required"
     printf '1.5.0\n' > "$PROJ/.product-kit/VERSION"
 fi
 run bash -c "cd '$PROJ' && bash .product-kit/scripts/init.sh --upgrade"
