@@ -31,19 +31,26 @@ root="$(get_repo_root)"
 require_consumer_root "$root" read-spec.sh
 file="$root/$path"
 [ -f "$file" ] || { printf 'No source file: %s\n' "$path" >&2; exit 2; }
-if [ "$mode" = raw ]; then cat "$file"; exit 0; fi
 snapshot="$(mktemp)"
 trap 'rm -f "$snapshot"' EXIT
 cat "$file" > "$snapshot"
+cmp -s "$file" "$snapshot" || { printf 'Incomplete spec snapshot: %s\n' "$path" >&2; exit 1; }
+if [ "$mode" = raw ]; then cat "$snapshot"; exit 0; fi
+if ! verify_lf_file "$snapshot"; then
+    printf 'Invalid spec text: %s (expected non-empty LF-terminated text; use --raw to inspect it)\n' "$path" >&2
+    exit 1
+fi
+expected_lines="$(wc -l < "$snapshot")"
+expected_bytes="$(wc -c < "$snapshot")"
 head="$(GIT_NO_LAZY_FETCH=1 git -C "$root" rev-parse --verify HEAD 2>/dev/null)" || head=uncommitted
 blob="$(git -C "$root" hash-object --no-filters -- "$snapshot")"
 printf 'Source: %s head=%s content_blob=%s (working-tree bytes; not a committed-snapshot claim)\n' "$path" "$head" "$blob"
-spec_navigation "$snapshot" stats
-spec_navigation "$snapshot" diagnostics >&2
+spec_navigation "$snapshot" stats '' "$expected_lines" "$expected_bytes"
+spec_navigation "$snapshot" diagnostics '' "$expected_lines" "$expected_bytes" >&2
 if [ "$mode" = compact ]; then
-    spec_navigation "$snapshot" compact
+    spec_navigation "$snapshot" compact '' "$expected_lines" "$expected_bytes"
 elif [ "$mode" = target ]; then
-    if ! spec_navigation "$snapshot" target "$target"; then
+    if ! spec_navigation "$snapshot" target "$target" "$expected_lines" "$expected_bytes"; then
         printf 'No validated navigation target for %s; use --raw to inspect the source.\n' "$target" >&2
         exit 1
     fi

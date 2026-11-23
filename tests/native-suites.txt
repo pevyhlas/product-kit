@@ -47,4 +47,5 @@ test_review_package_lock.sh
 test_review_package_lock_safety.sh
 test_review_package_completion.sh
 test_delivery_checkpoint.sh
+test_fail_closed_verifiers.sh
 test_release.sh

@@ -18,6 +18,13 @@ change by change.
 - Cleanup and close tests now run against seeded combinations of local Git states and
   check that commits and working files survive. The generator is test-only.
 
+### Fixed
+
+- Adoption (including pinned-source proof), delivery, doctor, status, and change-close
+  preflight fail rather than treating an incomplete inventory as clean. Parsed spec input
+  and line-oriented verifier evidence require LF line endings and a final newline;
+  `read-spec.sh --raw` still returns the original bytes.
+
 ### Documentation
 
 - Document safety invariants and threat models in the worktree, close, publication, adoption,
