@@ -10,6 +10,13 @@ SCRIPT="$PROJ/.prdkit/scripts/bash/new-change.sh"
 MAIN_BRANCH="$(git -C "$PROJ" branch --show-current)"
 cd "$PROJ" || exit 1
 
+it "explicit numbering in an empty project emits no error diagnostic"
+run bash -c 'exec bash "$1" --json --no-branch --number 7 --short-name fresh-number desc 2>.git/fresh-number.err' _ "$SCRIPT"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '"CHANGE_ID":"007-fresh-number"'
+assert_eq "[prdkit] Continue all work for this change inside: $PROJ" "$(cat .git/fresh-number.err)" 'stderr only contains the normal location notice'
+rm -f specs/changes/007-fresh-number.md
+
 it "first change is numbered 001 and isolated in a worktree"
 run env PRDKIT_TODAY=2026-10-17 bash "$SCRIPT" --json --short-name "user-auth" "Add user authentication"
 assert_eq 0 "$STATUS" "script exits 0"
@@ -430,7 +437,7 @@ cd "$sparse_project" || exit 1
 sparse_new="$sparse_project/.prdkit/scripts/bash/new-change.sh"
 mkdir -p specs
 # shellcheck disable=SC2016 # Markdown code span
-printf '**Last 0.x feature**: none\n**Log condensed through**: none; also 030-033, 035; those entries: `git show abc1234:specs/log.md`.\n' > specs/archive.md
+printf '**Last 0.x feature**: none\n**Log condensed through**: none; also 030-033, 035; those entries: `git show abc1234:specs/log.md`.\n**Allocated through**: 035\n' > specs/archive.md
 for num in 30 31 33 35; do
     run bash "$sparse_new" --no-branch --number "$num" --short-name never-reuse "desc"
     assert_eq 1 "$STATUS" "cannot reuse sparse number $num"
@@ -458,6 +465,7 @@ git symbolic-ref refs/remotes/origin/HEAD "$custom_ref"
 trusted_edit "$custom_ref" specs/archive.md <<'MD' || exit 1
 **Last 0.x feature**: none
 **Log condensed through**: 020; also 050; those entries: `git show abc1234:specs/log.md`.
+**Allocated through**: 052
 MD
 for num in 20 31 50; do
     run bash "$sparse_new" --no-branch --number "$num" --short-name union "desc"
@@ -466,7 +474,7 @@ for num in 20 31 50; do
 done
 run bash "$sparse_new" --json --no-branch --short-name union-next "desc"
 assert_eq 0 "$STATUS" 'automatic allocation works with different integration tips'
-assert_contains "$OUTPUT" '"CHANGE_ID":"051-union-next"' 'the maximum number across both tips determines allocation'
+assert_contains "$OUTPUT" '"CHANGE_ID":"053-union-next"' 'the persisted floor on another tip determines allocation'
 git symbolic-ref --delete refs/remotes/origin/HEAD
 git update-ref -d "$custom_ref"
 git update-ref -d "$archive_ref"
@@ -497,7 +505,7 @@ assert_contains "$OUTPUT" '"CHANGE_ID":"091-fetched-next"' 'automatic numbering 
 rm -f specs/changes/{091,014}-fetched-next.md
 git update-ref -d refs/remotes/origin/main
 
-it "successive compactions cannot reopen a lower sparse number, even in a shallow clone"
+it "successive compactions cannot reissue the highest allocated number, even in a shallow clone"
 pass_project="$(make_inited_project)" || exit 1
 track_tmp "$pass_project"
 cd "$pass_project" || exit 1
@@ -507,18 +515,18 @@ printf -- '- 2026-10-01 005-first: original close\n' > specs/log.md
 git add -A && git commit -qm 'first folded snapshot' || exit 1
 snapshot="$(git rev-parse HEAD)"
 # shellcheck disable=SC2016 # Markdown code span
-printf '**Last 0.x feature**: none\n**Log condensed through**: 002; also 005; those entries: `git show %s:specs/log.md`.\n' "$snapshot" > specs/archive.md
+printf '**Last 0.x feature**: none\n**Log condensed through**: 002; also 005; those entries: `git show %s:specs/log.md`.\n**Allocated through**: 005\n' "$snapshot" > specs/archive.md
 printf -- '- 2026-10-02 compaction: first pass\n' > specs/log.md
 git add specs && git commit -qm 'index first sparse close' || exit 1
 first_pass="$(git rev-parse HEAD)"
 run bash "$pass_new" --no-branch --number 005 --short-name reused "desc"
 assert_contains "$OUTPUT" 'reserved by the condensed log index'
-printf -- '- 2026-10-03 006-second: next close\n' > specs/log.md
+printf -- '- 2026-10-03 004-second: older change closes later\n' > specs/log.md
 git add specs/log.md && git commit -qm 'second folded snapshot' || exit 1
 snapshot="$(git rev-parse HEAD)"
-# Simulate a bad pass which forgets to carry 005 forward in the index.
+# A bad pass forgets to carry 005 forward in the index, but keeps the allocation floor.
 # shellcheck disable=SC2016 # Markdown code span
-printf '**Last 0.x feature**: none\n**Log condensed through**: 002; also 006; those entries: `git show %s:specs/log.md`.\n' "$snapshot" > specs/archive.md
+printf '**Last 0.x feature**: none\n**Log condensed through**: 002; also 004; those entries: `git show %s:specs/log.md`.\n**Allocated through**: 005\n' "$snapshot" > specs/archive.md
 printf -- '- 2026-10-04 compaction: second pass\n' > specs/log.md
 git add specs && git commit -qm 'second pass omits first close' || exit 1
 shallow_pass="$(mktemp -d)"; track_tmp "$shallow_pass"
@@ -531,10 +539,11 @@ for checkout in "$pass_project" "$shallow_pass"; do
     cd "$checkout" || exit 1
     run bash "$pass_new" --no-branch --number 005 --short-name reused "desc"
     assert_eq 1 "$STATUS" 'the omitted sparse member is below the current floor'
-    assert_contains "$OUTPUT" 'high-water mark 006'
+    assert_contains "$OUTPUT" 'high-water mark 005'
     assert_eq absent "$([ -e specs/changes/005-reused.md ] && echo present || echo absent)"
+    rm -f specs/changes/005-reused.md # Test the automatic path independently.
     run bash "$pass_new" --json --no-branch --short-name after-pass "desc"
-    assert_contains "$OUTPUT" '"CHANGE_ID":"007-after-pass"' 'automatic allocation still uses the maximum plus one'
+    assert_contains "$OUTPUT" '"CHANGE_ID":"006-after-pass"' 'automatic allocation uses the persisted floor plus one'
 done
 cd "$PROJ2" || exit 1
 

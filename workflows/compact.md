@@ -99,6 +99,8 @@ cutoff, condense any older closed entries as an exact sparse set. Keep archive s
 for notable outcomes and lessons. For example:
 
 > **Log condensed through**: 002; also 004-061, 063; those entries: `git show <sha>:specs/log.md`.
+>
+> **Allocated through**: 065
 
 Use `none` when there is no cutoff. To use cutoff-only form, omit `; also 004-061, 063`
 from the example. Both forms put the Git pointer after `; those entries:`. The sparse field
@@ -109,12 +111,19 @@ planned numbers, such as 003 and 062 here. After the backticked pointer, an opti
 or prose introduced by a period or semicolon and a space is allowed, not another field
 (for example, `; also see the migration notes` is prose, not a set).
 
+On its own line, write `**Allocated through**: N` (one to nine decimal digits). Record
+the largest allocated ID known at the pass: take the maximum of the previous floor,
+the existing cutoff and archived IDs, live log and change record IDs, and every ID
+being folded. Never lower this value or derive it from the rewritten sparse list.
+The floor reserves numbers for allocation; it does not mark changes closed. Legacy
+cutoff-only archives may omit it until the next pass.
+
 Allocation and close check the working archive,
 `HEAD`, and the locally available tips of `main`, `master`, `origin/main`, `origin/master`,
 and the branch identified by `origin/HEAD` (remote-tracking and local, if present),
 without fetching. Allocation also checks the other worktrees' working archives. Explicit
-allocation must exceed the largest number in the checked archives, live logs, per-change
-log files and change records, even when the requested number is a gap. Automatic
+allocation must exceed the maximum of the checked floors, cutoffs, sparse IDs, live logs,
+per-change log files and change records, even when the requested number is a gap. Automatic
 allocation starts above that mark and accounts for planned and other reservations too. Status,
 doctor, and the bounds CLI report against the current checkout's archive; update a stale
 checkout before using them to assess current integration history.
@@ -131,9 +140,12 @@ pass, carry every earlier sparse number forward in the index. It may move under 
 but must never become a gap. Verify that its entry is still retrievable. If
 the new pointer would lose earlier entries, carry them forward from the previous snapshot
 into the new Git snapshot only. Keep earlier cutoff-only pointers for any older history that
-predates the snapshot. Doctor checks that every sparse number has an entry in the pointed
-folded log. A missing commit fails in a full clone; in a shallow clone it is reported as
-unavailable history, not as verified. Fetch the history and rerun doctor.
+predates the snapshot. Doctor requires an allocation floor for sparse indexes, checks
+it covers every indexed ID, and rejects a decrease when the previous committed floor
+is available locally (HEAD for working edits, otherwise the first parent). Doctor also
+checks that every sparse number has an entry in the pointed folded log. A missing snapshot
+commit fails in a full clone; in a shallow clone it is reported as unavailable history,
+not as verified. Fetch the history and rerun doctor.
 
 A first `specs/archive.md` starts from `archive-template.md` (`Last 0.x feature: none`), so
 numbering works. End each pass with `- <date> compaction: <what changed>` as the newest entry

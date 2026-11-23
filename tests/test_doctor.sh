@@ -729,7 +729,7 @@ done
 git add specs/log.md; git commit -qm 'close changes and snapshot the folded log'
 folded_sha="$(git rev-parse HEAD)"
 # shellcheck disable=SC2016 # Markdown code span
-printf '# Archive\n\n**Last 0.x feature**: none\n\n**Log condensed through**: 002; also 004-006, 010; those entries: `git show %s:specs/log.md`; also see the migration notes\n' "$folded_sha" > specs/archive.md
+printf '# Archive\n\n**Last 0.x feature**: none\n\n**Log condensed through**: 002; also 004-006, 010; those entries: `git show %s:specs/log.md`; also see the migration notes\n**Allocated through**: 010\n' "$folded_sha" > specs/archive.md
 archive_sha="$(sed -n 's/.*git show \([0-9a-f]*\):specs\/log.md.*/\1/p' specs/archive.md)"
 assert_contains "$(git show "$archive_sha:specs/log.md")" '005-fifth: historical evidence for 005-fifth' "a member in the middle of a range is retrievable by ID"
 pass='- 2026-10-12 compaction: condensed older closes'
@@ -833,21 +833,33 @@ rm specs/archive.md
 it "doctor verifies every sparse number in the local snapshot, and distinguishes shallow history"
 # Use the real compaction snapshot; 007 is unused, and no live file can prove it.
 # shellcheck disable=SC2016 # Markdown code span
-printf '**Log condensed through**: 002; also 004-007, 010; those entries: `git show %s:specs/log.md`.\n' "$folded_sha" > specs/archive.md
+printf '**Log condensed through**: 002; also 004-007, 010; those entries: `git show %s:specs/log.md`.\nAllocated through: 010\n' "$folded_sha" > specs/archive.md
 run bash "$DOCTOR" --json
 assert_eq 1 "$STATUS" 'unused number inside the claimed range is a finding'
 assert_contains "$OUTPUT" 'is missing closed number(s) 007' 'reports the missing part of the range'
 # shellcheck disable=SC2016 # Markdown code span
-printf '**Log condensed through**: 002; also 004-999999999; those entries: `git show %s:specs/log.md`.\n' "$folded_sha" > specs/archive.md
+printf '**Log condensed through**: 002; also 004-999999999; those entries: `git show %s:specs/log.md`.\nAllocated through: 999999999\n' "$folded_sha" > specs/archive.md
 run bash "$DOCTOR" --json
 assert_contains "$OUTPUT" 'is missing closed number(s) 007-008' 'even a large range is compared as runs'
 # shellcheck disable=SC2016 # Markdown code span
-printf '**Log condensed through**: 002; also 005; those entries: `git show deadbeef:specs/log.md`.\n' > specs/archive.md
+printf '**Log condensed through**: 002; also 005; those entries: `git show deadbeef:specs/log.md`.\nAllocated through: 005\n' > specs/archive.md
 run bash "$DOCTOR" --json
 assert_eq 1 "$STATUS" 'unresolvable SHA fails in the full clone'
 assert_contains "$OUTPUT" 'specs/archive.md:1: cannot resolve sparse snapshot deadbeef to a commit'
 # shellcheck disable=SC2016 # Markdown code span
 printf '**Log condensed through**: 002; also 005; those entries: `git show %s:specs/log.md`.\n' "$folded_sha" > specs/archive.md
+run bash "$DOCTOR" --json
+assert_eq 1 "$STATUS" 'a sparse index needs an allocation floor'
+assert_contains "$OUTPUT" 'specs/archive.md:1: a sparse index requires an Allocated through line'
+printf 'Allocated through: five\n' >> specs/archive.md
+run bash "$DOCTOR" --json
+assert_eq 1 "$STATUS" 'a malformed allocation floor is refused'
+assert_contains "$OUTPUT" 'specs/archive.md:2: expected Allocated through: followed by one to nine decimal digits'
+sed -i.bak '$s/five/004/' specs/archive.md; rm specs/archive.md.bak
+run bash "$DOCTOR" --json
+assert_eq 1 "$STATUS" 'the floor cannot be less than the largest indexed ID'
+assert_contains "$OUTPUT" 'specs/archive.md:2: Allocated through is below the highest indexed number 5'
+sed -i.bak '$s/004/006/' specs/archive.md; rm specs/archive.md.bak
 git add specs/archive.md; git commit -qm 'publish archive with older snapshot'
 shallow="$(mktemp -d)"; track_tmp "$shallow"
 git clone -q --depth 1 "file://$PROJ" "$shallow" || exit 1
@@ -865,6 +877,13 @@ printf '**Log condensed through**: 002\n\n  also: 005; %s\n' "$pointer" > "$shal
 run shallow_doctor --json
 assert_eq 1 "$STATUS" 'a shallow clone never downgrades malformed syntax to missing history'
 assert_contains "$(jq -r '.findings[]' <<< "$OUTPUT")" 'specs/archive.md:3:'
+sed -i.bak '$s/006/005/' specs/archive.md; rm specs/archive.md.bak
+for state in working committed; do
+    if [ "$state" = committed ]; then git add specs/archive.md && git commit -qm 'lower the floor' || exit 1; fi
+    run bash "$DOCTOR" --json
+    assert_eq 1 "$STATUS" "$state decrease is refused even though every indexed number is covered"
+    assert_contains "$OUTPUT" 'specs/archive.md:2: Allocated through decreased from 6 to 5'
+done
 git reset -q --hard "$before_sparse"
 
 it "a renamed change record is not a closed one"

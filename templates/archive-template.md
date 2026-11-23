@@ -4,12 +4,15 @@
 What still binds lives in the spec, never here. Agents read this file on demand (a history
 question, before re-trying a direction), never by default. Each entry is a few lines; its
 details stay in git at the base. Past the budget, condense older entries harder.
-new-change.sh reads the Base, Last and Log lines to never reuse an old number.
+new-change.sh reads this archive for number reservations.
 Optional sparse closes above the cutoff: insert `; also 004-061, 063` before
 `; those entries:`. Only closed numbers, in ascending, non-overlapping ranges
 or as single numbers. Keep the sparse field and the `git show` pointer on this
 same line. Every indexed close must be in the pointed folded log; none remains
-in the live log or an open or planned change. See compact.md. -->
+in the live log or an open or planned change. Compaction also writes a separate
+`**Allocated through**: 063` line, taking the maximum of the previous floor and
+the allocated IDs known at the pass (including every folded ID). Never lower
+it or infer it from the rewritten sparse list. See compact.md. -->
 
 **Base**: `<full commit sha>`, main before the cutover (<YYYY-MM-DD>). Details:
 `git show <sha>:<path>`; history: `git log -- <path>`.

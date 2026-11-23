@@ -249,7 +249,8 @@ spec_archive_last() { # root
     return 0
 }
 # One normalized row: cutoff (0 for none), then sparse lo-hi pairs, without expanding
-# ranges. Doctor also reads the sparse pointer and its source line for snapshot proof.
+# ranges. Details also carry the sparse pointer and the independent allocation floor,
+# each with its source line. The floor does not imply a close.
 spec_archive_log_index() { # root [diagnostic-path]
     local row
     row="$(spec_archive_log_details "$@")" || return 1
@@ -258,7 +259,7 @@ spec_archive_log_index() { # root [diagnostic-path]
 spec_archive_log_details() { _spec_archive_log_file "$1/specs/archive.md" "${2:-specs/archive.md}"; }
 
 _spec_archive_log_file() { # file diagnostic-path [diagnostic-context]
-    local parsed expected end index pointer line context="${3:-}"
+    local parsed expected end index pointer line floor floor_line context="${3:-}"
     if [ ! -e "$1" ] && [ ! -L "$1" ]; then echo 0; return 0; fi
     if [ ! -f "$1" ] || ! review_file_without_nul "$1"; then
         printf '%s: cannot read condensed log index (expected text)%s\n' "$2" "$context" >&2
@@ -334,6 +335,14 @@ _spec_archive_log_file() { # file diagnostic-path [diagnostic-context]
                 after = 0
             }
             sub(/^([-[:space:]*_`#|>:=]|—|–)+/, "", s)
+            if (!pending && tolower(s) ~ /^allocated through([[:space:]*_:=-]|$)/) {
+                if (floor_line) fail("duplicate Allocated through field")
+                s = substr(s, 18)
+                if (!sub(/^[ \t*_]*:[ \t]*/, "", s) || !number(trim(s)))
+                    fail("expected Allocated through: followed by one to nine decimal digits")
+                floor = trim(s) + 0; floor_line = NR
+                next
+            }
             if (tolower(s) ~ /^log condensed through([-[:space:]*_`#|>:=]|—|–|$)/) {
                 if (seen++) fail("duplicate Log condensed through field")
                 label_line = NR
@@ -350,14 +359,16 @@ _spec_archive_log_file() { # file diagnostic-path [diagnostic-context]
             if (bad) exit 1
             if (NR != expected) fail("incomplete archive read (expected " expected + 0 " lines, checked " NR ")")
             if (pending) { print label_line ": expected a cutoff number or none"; exit 1 }
-            print cutoff + 0 ranges "\037" (pointer != "" ? pointer : "-") "\037" value_line + 0
+            print cutoff + 0 ranges "\037" (pointer != "" ? pointer : "-") "\037" value_line + 0 \
+                  "\037" (floor_line ? floor : "-") "\037" floor_line + 0
         }
     ' "$1")" || {
         printf '%s:%s%s\n' "$2" "${parsed:- cannot read condensed log index}" "$context" >&2
         return 1
     }
-    IFS="$SPEC_SEP" read -r index pointer line <<< "$parsed"
-    if ! [[ "$index" =~ ^[0-9]+(\ [0-9]+-[0-9]+)*$ && "$line" =~ ^[0-9]+$ ]]; then
+    IFS="$SPEC_SEP" read -r index pointer line floor floor_line <<< "$parsed"
+    if ! [[ "$index" =~ ^[0-9]+(\ [0-9]+-[0-9]+)*$ && "$line" =~ ^[0-9]+$ &&
+        "$floor" =~ ^(-|[0-9]+)$ && "$floor_line" =~ ^[0-9]+$ ]]; then
         printf '%s: incomplete condensed log index%s\n' "$2" "$context" >&2
         return 1
     fi
@@ -384,17 +395,25 @@ _spec_regular_blob_at() { # root rev path -> blob ID, empty when absent
     printf '%s\n' "${meta##* }"
 }
 
-spec_archive_log_index_at() ( # root commit
-    local path=specs/archive.md blob tmp parsed
+spec_archive_log_details_at() ( # root commit
+    local path=specs/archive.md blob tmp
     spec_objects_local "$1" || { printf 'Cannot read %s at %s without risking a lazy fetch\n' "$path" "$2" >&2; return 1; }
     blob="$(_spec_regular_blob_at "$1" "$2" "$path")" || return 1
     if [ -z "$blob" ]; then echo 0; return 0; fi
     tmp="$(mktemp)" || return 1
     trap 'rm -f "$tmp"' EXIT
     _spec_archive_git -C "$1" cat-file blob "$blob" > "$tmp" || return 1
-    parsed="$(_spec_archive_log_file "$tmp" "$path" " (at $2)")" || return 1
-    printf '%s\n' "${parsed%%"$SPEC_SEP"*}"
+    _spec_archive_log_file "$tmp" "$path" " (at $2)"
 )
+
+spec_archive_log_previous() { # root -> at most one earlier committed archive
+    local rev=HEAD
+    spec_objects_local "$1" || return 0
+    # Compare working edits to HEAD, or a clean checkout to the first parent.
+    if _spec_archive_git -C "$1" diff --quiet HEAD -- specs/archive.md 2>/dev/null; then rev=HEAD^; fi
+    _spec_archive_git -C "$1" rev-parse --verify --quiet "$rev^{commit}" >/dev/null 2>&1 || return 0
+    spec_archive_log_details_at "$1" "$rev" 2>/dev/null || return 0
+}
 
 spec_integration_tips() ( # root -> distinct local commit IDs, no fetch
     local root="$1" target refs rev ref seen=" " candidates=()
@@ -420,12 +439,14 @@ spec_integration_tips() ( # root -> distinct local commit IDs, no fetch
     return 0
 )
 
-spec_archive_log_integration() { # root [frozen tips] -> distinct commit index rows
-    local tips rev
-    if [ "$#" -eq 2 ]; then tips="$2"; else tips="$(spec_integration_tips "$1")" || return 1; fi
+spec_archive_log_integration() { # root [frozen tips [details]] -> distinct commit rows
+    local tips rev row
+    if [ "$#" -ge 2 ]; then tips="$2"; else tips="$(spec_integration_tips "$1")" || return 1; fi
     while IFS= read -r rev; do
         [ -n "$rev" ] || continue
-        spec_archive_log_index_at "$1" "$rev" || return 1
+        row="$(spec_archive_log_details_at "$1" "$rev")" || return 1
+        if [ "${3:-}" != details ]; then row="${row%%"$SPEC_SEP"*}"; fi
+        printf '%s\n' "$row" || return 1
     done <<< "$tips"
 }
 

@@ -338,7 +338,7 @@ git checkout -q 013-guard; git branch -q -D 013-logged
 it "an archived number cannot close again, even from a branch missing the archive"
 git checkout -q -b 013-archived HEAD~1
 # shellcheck disable=SC2016 # Markdown code span
-printf '**Log condensed through**: 002; also 010-013; those entries: `git show abc1234:specs/log.md`.\n' > specs/archive.md
+printf '**Log condensed through**: 002; also 010-013; those entries: `git show abc1234:specs/log.md`.\nAllocated through: 013\n' > specs/archive.md
 run bash "$B/close-change.sh" 013-guard "again — R-01 — #6"
 assert_eq 1 "$STATUS" "the working archive refuses a second close"
 assert_contains "$OUTPUT" "013-guard is already closed"

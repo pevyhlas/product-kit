@@ -12,9 +12,10 @@ change by change.
 
 - Compaction can index closed changes even after an earlier change stays open. Add exact
   closed-number ranges to the archive's **Log condensed through** line and retrieve the full
-  entries from Git. Explicit change numbering must exceed the largest allocated number
-  visible in the archive, logs or change records; it no longer fills older gaps. No
-  archive migration needed.
+  entries from Git. A separate **Allocated through** line preserves the allocation floor if
+  a sparse member is omitted. Explicit numbering must exceed that floor and the highest ID
+  visible in the checked archive indexes, logs and change records. Existing cutoff-only
+  archives do not need migration.
 - Holds and waivers can keep long verbatim owner quotes in `specs/authority.md` using
   checked references. Status and doctor validate the references without shortening the
   scope or end condition in the row. No migration needed.

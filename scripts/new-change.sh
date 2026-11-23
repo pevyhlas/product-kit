@@ -191,14 +191,14 @@ archive_unreadable() {
     return 0
 }
 
-list_archive_indexes() {
+list_archive_details() {
     local checkouts checkout
     checkouts="$(set -o pipefail; list_checkouts | sort -u)" || return 1
     while IFS= read -r checkout; do
-        spec_archive_log_index "$checkout" "$checkout/specs/archive.md" || return 1
+        spec_archive_log_details "$checkout" "$checkout/specs/archive.md" || return 1
     done <<< "$checkouts"
     [ "$HAS_GIT" = true ] || return 0
-    spec_archive_log_integration "$REPO_ROOT" "$INTEGRATION_TIPS"
+    spec_archive_log_integration "$REPO_ROOT" "$INTEGRATION_TIPS" details
 }
 
 list_committed_claims() {
@@ -216,11 +216,12 @@ claimed_numbers() {
 }
 
 allocated_high_water() {
-    local highest=0 line name number
-    while IFS= read -r line; do
-        name="${line##* }"; number="${name##*-}"
+    local highest=0 line name number index floor
+    while IFS="$SPEC_SEP" read -r index _ _ floor _; do
+        name="${index##* }"; number="${name##*-}"
         [ "$number" -gt "$highest" ] && highest="$number"
-    done <<< "$ARCHIVE_INDEXES"
+        if [ -n "$floor" ] && [ "$floor" != - ] && [ "$floor" -gt "$highest" ]; then highest="$floor"; fi
+    done <<< "$ARCHIVE_DETAILS"
     while IFS= read -r line; do
         case "$line" in
             "change record "*|"closed change "*|"per-change log "*|"committed "*) ;;
@@ -322,7 +323,7 @@ AUTO_NUMBER=false
 acquire_number_lock
 INTEGRATION_TIPS=""
 if [ "$HAS_GIT" = true ]; then INTEGRATION_TIPS="$(spec_integration_tips "$REPO_ROOT")"; fi
-ARCHIVE_INDEXES="$(list_archive_indexes)"
+ARCHIVE_DETAILS="$(list_archive_details)"
 COMMITTED_CLAIMS="$(list_committed_claims)"
 CLAIMS="$(claimed_numbers)${COMMITTED_CLAIMS:+$'\n'$COMMITTED_CLAIMS}"
 HIGH_WATER="$(allocated_high_water)"
@@ -364,7 +365,7 @@ while IFS= read -r checkout; do
 done < <(list_checkouts)
 
 if [ "$AUTO_NUMBER" = false ]; then
-    while IFS= read -r index; do
+    while IFS="$SPEC_SEP" read -r index _; do
         spec_archive_log_covers "$index" "$NUM" || continue
         cutoff="${index%% *}"
         if [ "$((10#$NUM))" -le "$cutoff" ]; then
@@ -373,7 +374,7 @@ if [ "$AUTO_NUMBER" = false ]; then
             printf '[prdkit] Error: change number %s is reserved by the condensed log index in specs/archive.md; omit --number or use a number above %03d.\n' "$NUM" "$HIGH_WATER" >&2
         fi
         exit 1
-    done <<< "$ARCHIVE_INDEXES"
+    done <<< "$ARCHIVE_DETAILS"
     if [ "$((10#$NUM))" -le "$HIGH_WATER" ]; then
         printf '[prdkit] Error: change number %s is at or below the allocated high-water mark %03d; omit --number or use a number above %03d.\n' "$NUM" "$HIGH_WATER" "$HIGH_WATER" >&2
         exit 1
@@ -382,6 +383,7 @@ if [ "$AUTO_NUMBER" = false ]; then
     # holders. The new change's own planned marker does not count.
     HOLDERS=""
     while IFS= read -r held_line; do
+        [ -n "$held_line" ] || continue
         held="${held_line##* }"
         case "$held_line" in
             "planned in the spec $NUM-$SLUG"|"planned in the spec $NUM-") continue ;;

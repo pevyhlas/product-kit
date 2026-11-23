@@ -167,7 +167,22 @@ budget_fix 150 "remove lifted holds, expired waivers, and DEPLOY and ATTEST line
 # Share status's log-order and entry-file accounting; compaction is due at ten closes.
 archive_verified=true
 if archive_details="$(spec_archive_log_details "$root" 2>&1)"; then
-    IFS="$SPEC_SEP" read -r archive_index archive_pointer archive_line <<< "$archive_details"
+    IFS="$SPEC_SEP" read -r archive_index archive_pointer archive_line allocation_floor floor_line <<< "$archive_details"
+    archive_max="${archive_index##* }"; archive_max="${archive_max##*-}"
+    if [ "${allocation_floor:-"-"}" = - ]; then
+        if [ "$archive_index" != "${archive_index%% *}" ]; then
+            findings+=("specs/archive.md:$archive_line: a sparse index requires an Allocated through line")
+        fi
+        allocation_floor=0
+    elif [ "$allocation_floor" -lt "$archive_max" ]; then
+        findings+=("specs/archive.md:$floor_line: Allocated through is below the highest indexed number $archive_max")
+    fi
+    previous_archive="$(spec_archive_log_previous "$root")"
+    IFS="$SPEC_SEP" read -r _ _ _ previous_floor _ <<< "$previous_archive"
+    if [ -n "$previous_floor" ] && [ "$previous_floor" != - ] && [ "$allocation_floor" -lt "$previous_floor" ]; then
+        if [ "${floor_line:-0}" -eq 0 ]; then floor_line="${archive_line:-0}"; fi
+        findings+=("specs/archive.md:$((floor_line > 0 ? floor_line : 1)): Allocated through decreased from $previous_floor to $allocation_floor")
+    fi
     if [ -n "$archive_pointer" ] && [ "$archive_pointer" != - ]; then
         if archive_proof="$(spec_archive_log_proof "$root" "$archive_index" "$archive_pointer")"; then :
         elif [ "$?" -eq 2 ]; then advisories+=("specs/archive.md:$archive_line: $archive_proof")
