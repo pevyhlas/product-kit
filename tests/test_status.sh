@@ -93,6 +93,37 @@ run bash "$STATUS_SH" --json
 assert_eq '098-notes' "$(jq -r '.changes[0].parent' <<< "$OUTPUT")" "ordinary non-tag lines retain legacy behavior"
 rm specs/changes/003-boundaries.md
 
+it "inline tags preserve the programme link and opened date"
+cat > specs/changes/099-programme.md <<'MD'
+# Change: Programme
+**Opened**: 2026-10-10
+**Parent**: none
+
+## State
+**Waiting on**: nothing
+**Next**: continue
+MD
+for variant in untagged parent-tight opened-tight spaced; do
+    opened='**Opened**: 2026-10-16'
+    parent='**Parent**: 099-programme'
+    tags='["batch"]'
+    case "$variant" in
+        untagged) tags=null ;;
+        parent-tight) parent="$parent·**Tags**: batch" ;;
+        opened-tight) opened="$opened·**Tags**: batch" ;;
+        spaced) parent="$parent · **Tags**: batch" ;;
+    esac
+    printf '# Change: Child\n\n%s · %s · **Tier**: T1\n' "$opened" "$parent" > specs/changes/004-child.md
+    run bash "$STATUS_SH" --json
+    assert_eq 0 "$STATUS" "$variant: status succeeds"
+    assert_eq "[\"099-programme\",\"2026-10-16\",1,$tags]" \
+        "$(jq -c '.changes[] | select(.id == "004-child") | [.parent,.opened,.age_days,.tags]' <<< "$OUTPUT")" \
+        "$variant: legacy fields and optional tags"
+    assert_eq '["099-programme"]' "$(jq -c '[.outcome_progress[].id]' <<< "$OUTPUT")" \
+        "$variant: programme outcome row remains visible"
+done
+rm specs/changes/{004-child,099-programme}.md
+
 it "duplicate header fields are errors even when no tasks have assignments"
 for label in Parts Journeys Tags; do
     printf '# Change: Ambiguous\n\n**%s**: first\n**%s**: second\n' "$label" "$label" > specs/changes/003-ambiguous.md

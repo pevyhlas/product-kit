@@ -45,7 +45,7 @@ SPEC_METADATA_SKIP_AWK='function metadata_skip(line,    marker, ending) {
 # Read new metadata only at the start of a field, never inside its prose. When a legacy
 # reader needs the same line, remove only Tags and leave other fields and delimiters intact.
 SPEC_HEADER_AWK='function metadata_trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
-function metadata_header(s,   label, value, rest, field, kept, original, has_tags, indent, sep, nextsep) {
+function metadata_header(s,   label, value, rest, field, kept, original, has_tags, indent, sep, nextsep, gap) {
     original = s
     match(s, /^ ? ? ?/); indent = substr(s, 1, RLENGTH); s = substr(s, RLENGTH + 1)
     while (match(s, /^\*\*[^*]+\*\*:/)) {
@@ -58,10 +58,13 @@ function metadata_header(s,   label, value, rest, field, kept, original, has_tag
         }
         header[label] = metadata_trim(value); fields[label]++; field_line[label] = NR
         if (label != "Tags") {
+            # Only normalize newly joined boundaries: legacy readers split on a spaced dot.
+            if (gap) sep = " · "
             kept = kept (kept != "" ? sep : indent) field value
-            sep = nextsep
+            sep = nextsep; gap = 0
+        } else {
+            has_tags = 1; gap = 1
         }
-        else has_tags = 1
         s = rest
     }
     if (has_tags) return kept
