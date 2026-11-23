@@ -2,7 +2,7 @@
 # new-change.sh — Open a change: number it, create specs/changes/<id>.md from the change
 # template, and (by default) put its branch in an isolated worktree under .worktrees/.
 #
-# Usage: new-change.sh [--json] [--short-name <name>] [--number N] [--no-worktree|--no-branch] <intent>
+# Usage: new-change.sh [--json] [--short-name <name>] [--number N] [--programme] [--no-worktree|--no-branch] <intent>
 #
 # --no-worktree (or an already linked worktree) branches in place, carrying
 # existing local edits onto the new branch.
@@ -24,11 +24,12 @@ source "$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 # shellcheck source=/dev/null
 source "$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/spec-lib.sh"
 
-usage() { echo "Usage: $0 [--json] [--short-name <name>] [--number N] [--no-worktree|--no-branch] <intent>"; }
+usage() { echo "Usage: $0 [--json] [--short-name <name>] [--number N] [--programme] [--no-worktree|--no-branch] <intent>"; }
 
 JSON_MODE=false
 NO_WORKTREE=false
 NO_BRANCH=false
+PROGRAMME=false
 SHORT_NAME=""
 CHANGE_NUMBER=""
 ARGS=()
@@ -37,6 +38,7 @@ while [ "$#" -gt 0 ]; do
         --json) JSON_MODE=true ;;
         --no-worktree) NO_WORKTREE=true ;;
         --no-branch) NO_BRANCH=true ;;
+        --programme) PROGRAMME=true ;;
         --) shift; ARGS+=("$@"); break ;;
         --short-name|--number)
             if [ "$#" -lt 2 ] || [[ "$2" == --* ]]; then echo "Error: $1 requires a value" >&2; exit 1; fi
@@ -47,6 +49,7 @@ while [ "$#" -gt 0 ]; do
             echo "  --json              Output in JSON format"
             echo "  --short-name <name> Short name (2-4 words) for the change id and branch"
             echo "  --number N          Change number (overrides auto-detection)"
+            echo "  --programme         Include the outcome checkpoint scaffold for a programme or continuing queue"
             echo "  --no-worktree       Create and switch to the branch in the current checkout"
             echo "                      instead of an isolated worktree; existing edits carry over"
             echo "  --no-branch         Create only the change record in the current checkout"
@@ -394,24 +397,99 @@ CHANGE_FILE="$CHANGES_DIR/$CHANGE_ID.md"
 mkdir -p "$CHANGES_DIR"
 TEMPLATE="$WORKTREE_PATH/.prdkit/templates/change-template.md"
 [ -f "$TEMPLATE" ] || TEMPLATE="$REPO_ROOT/.prdkit/templates/change-template.md"
+SCAFFOLD="$WORKTREE_PATH/.prdkit/scripts/bash/outcome-checkpoint.md"
+[ -f "$SCAFFOLD" ] || SCAFFOLD="$REPO_ROOT/.prdkit/scripts/bash/outcome-checkpoint.md"
+POINTER='<!-- Outcome checkpoint format: .prdkit/scripts/bash/outcome-checkpoint.md -->'
 if [ -e "$CHANGE_FILE" ] || [ -L "$CHANGE_FILE" ]; then
     echo "[prdkit] Error: $CHANGE_FILE already exists; it is never overwritten." >&2
     exit 1
 fi
 TODAY="${PRDKIT_TODAY:-$(date +%Y-%m-%d)}"
-write_record() {
+render_record() {
+    local snippet=""
+    if $PROGRAMME && [ -f "$SCAFFOLD" ] && verify_lf_file "$SCAFFOLD"; then snippet="$SCAFFOLD"; fi
     if [ -f "$TEMPLATE" ]; then
-        PK_INTENT="$INTENT" PK_TODAY="$TODAY" awk '
-            NR == 1 && /^# Change:/ { print "# Change: " ENVIRON["PK_INTENT"]; next }
-            /^\*\*Opened\*\*: <date>/ { sub(/<date>/, ENVIRON["PK_TODAY"]) }
-            { print }
-        ' "$TEMPLATE" > "$CHANGE_FILE"
+        review_file_without_nul "$TEMPLATE" || return 1
+        LC_ALL=C PK_INTENT="$INTENT" PK_TODAY="$TODAY" PK_SCAFFOLD="$snippet" PK_POINTER="$POINTER" \
+            awk -v programme="$PROGRAMME" "$SPEC_SKIP_AWK"'
+            function scaffold(    row, rc, n, file) {
+                file = ENVIRON["PK_SCAFFOLD"]
+                if (file == "") exit 1
+                while ((rc = (getline row < file)) > 0) { print row; n++ }
+                if (rc < 0 || !n) exit 1
+                close(file)
+            }
+            {
+                # Emit LF text even for CRLF templates or a missing final terminator.
+                sub(/\r$/, "")
+                lines[NR] = $0
+                # Recognize the kit comments only when not already inside an example.
+                outside = !fence && !comment
+                hidden = spec_skip($0)
+                if (outside && $0 == ENVIRON["PK_POINTER"]) {
+                    if (state && !slot) slot = NR
+                    wrote_pointer = 1
+                }
+                if (outside && /^<!-- (A programme or continuing follow-up queue \(|For a programme\/continuing follow-up queue,)/) {
+                    legacy = NR
+                    legacy_heading = 0
+                }
+                if (legacy && !fence && $0 == "### Outcome checkpoint") legacy_heading = 1
+                if (legacy && !comment) {
+                    legacy_end[legacy] = NR
+                    if (state && legacy_heading) has_block = 1
+                    legacy = 0
+                }
+                if (!hidden && /^## /) state = ($0 == "## State")
+                if (!hidden && state && $0 == "### Outcome checkpoint") has_block = 1
+                # A safe slot follows a line that leaves neither a comment nor a fence open.
+                if (!fence && !comment) {
+                    safe = NR + 1
+                    if (state) state_end = safe
+                }
+            }
+            END {
+                # Use the stock pointer as the insertion slot; otherwise stay in State.
+                at = slot ? slot : state_end ? state_end : safe ? safe : 1
+                if (programme != "true" || has_block) at = 0
+                for (i = 1; i <= NR + 1; i++) {
+                    if (i == at) {
+                        if (!state_end) print "\n## State\n"
+                        scaffold()
+                        if (i == slot) continue
+                    }
+                    if (i > NR) break
+                    if (programme != "true" && (i in legacy_end)) {
+                        # Strip only the recognized comment, not bytes after its closing marker.
+                        i = legacy_end[i]
+                        text = substr(lines[i], index(lines[i], "-->") + 3)
+                        if (!wrote_pointer) {
+                            print ENVIRON["PK_POINTER"]
+                            wrote_pointer = 1
+                        }
+                        if (text != "") print text
+                        continue
+                    }
+                    text = lines[i]
+                    if (i == 1 && text ~ /^# Change:/) text = "# Change: " ENVIRON["PK_INTENT"]
+                    if (text ~ /^\*\*Opened\*\*: <date>/) sub(/<date>/, ENVIRON["PK_TODAY"], text)
+                    print text
+                }
+            }
+        ' "$TEMPLATE"
     else
-        printf '# Change: %s\n\n**Opened**: %s\n' "$INTENT" "$TODAY" > "$CHANGE_FILE"
+        printf '# Change: %s\n\n**Opened**: %s\n' "$INTENT" "$TODAY" || return 1
+        if $PROGRAMME; then [ -n "$snippet" ] && printf '\n## State\n\n' && cat "$snippet"; fi
     fi
 }
+# Render before opening the record: a missing or unreadable input must not leave a partial record.
+# The sentinel protects any trailing newlines from command substitution.
+if ! RECORD="$(render_record && printf .)" || [[ "$RECORD" != *$'\n.' || "$RECORD" == *$'\r'* ]]; then
+    echo "[prdkit] Error: could not render the change record; check the change template and the installed outcome checkpoint snippet." >&2
+    exit 1
+fi
 # Refuse a file/symlink created after the existence check, including by an external writer.
-if ! (set -C; write_record); then
+if ! (set -C; printf '%s' "${RECORD%.}" > "$CHANGE_FILE"); then
     echo "[prdkit] Error: could not create $CHANGE_FILE; existing records are never overwritten." >&2
     exit 1
 fi
