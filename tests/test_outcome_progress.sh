@@ -18,6 +18,7 @@ cat > "$record" <<'MD'
 ## State
 **Step**: build
 **Waiting on**: provider provisioning
+### Outcome checkpoint
 **Outcome**: Owner's "answer" through the new path — R-01
 **Milestone**: A2 integrated answer; source contract check is its prerequisite
 **Critical path**: source contract -> integration -> provider pass

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Test-only observer for the synthetic stubborn case. Never sourced/installed by the product.
+# Test-only reader for legacy native-case-v1 diagnostics. The old Bash watchdog no longer runs.
 # Raw records belong to lib.sh's ephemeral fixture. Only nd_summary's fixed projection is printed.
-# shellcheck disable=SC2016,SC2034,SC2154 # generated code; nd_dir/phase/child are fixture/launcher state
+# shellcheck disable=SC2034,SC2154 # nd_dir/phase are fixture state
 
 nd_append() {
     nd_count=$((${nd_count:-0}+1))
@@ -21,20 +21,6 @@ nd_terminal() {
     # Only a successful atomic promotion makes the terminal count/error state available.
     if ! { printf '%s %s\n' "${nd_count:-0}" "${nd_failed:-false}" > "$nd_dir/terminal.tmp" &&
         mv "$nd_dir/terminal.tmp" "$nd_dir/terminal"; } 2>/dev/null; then nd_failed=true; fi
-    return 0
-}
-nd_gate() {
-    local disposition rc ignored=null
-    if disposition="$(trap -p TERM)"; then rc=0; else rc=$?; fi
-    if [ "$rc" -eq 0 ]; then
-        case "$disposition" in "trap -- '' SIGTERM"|"trap -- '' TERM") ignored=true ;; *) ignored=false ;; esac
-    fi
-    { printf '%s %s %s\n' "$1" "$2" "$ignored" > "$nd_dir/gate"; } 2>/dev/null || :
-    return 0
-}
-nd_owned() {
-    [ "$phase" = native ] || return 0
-    { printf '%s %s %s %s %s %s\n' "$@" > "$nd_dir/owned"; } 2>/dev/null || nd_failed=true
     return 0
 }
 nd_snapshot() { # fixed stage; raw ps is filtered/capped before it reaches a fixture file
@@ -71,7 +57,7 @@ nd_snapshot() { # fixed stage; raw ps is filtered/capped before it reaches a fix
                 ",\"live\":" (live[pid] ? "true" : "false") \
                 ",\"in_group\":" (pid in seen ? (group[pid]==leader ? "true" : "false") : "null") "}"
         }
-        {seen[$1]=1; group[$1]=$3; live[$1]=($4!~/^Z/); parent[$1]=$2
+        {seen[$1]=1; group[$1]=$3; live[$1]=($4!~/^Z[+<NsL]*$/); parent[$1]=$2
          if($3==leader && live[$1]) members++
          if(($1==leader || $1==a || $1==b || $1==c || $1==d) && live[$1]) owned_live++}
         END {
@@ -84,87 +70,6 @@ nd_snapshot() { # fixed stage; raw ps is filtered/capped before it reaches a fix
     ' "$snapshot")" || data="{\"kind\":\"snapshot\",\"stage\":\"$1\",\"available\":false}"
     nd_append "$data"
     return 0
-} 2>/dev/null
-nd_wait() { # original wait result and flags are arguments, captured before diagnostic commands
-    [ "$phase" = native ] && [ "$1" = "$child" ] || return 0
-    local alive=false
-    kill -0 "$1" 2>/dev/null && alive=true
-    nd_append "{\"kind\":\"wait\",\"status\":$2,\"before\":$3,\"generation\":$4,\"critical\":$5,\"finishing\":$6,\"alive\":$alive,\"native_exit\":$7}"
-    return 0
-}
-nd_signal() {
-    [ "$phase" = native ] || return 0
-    nd_append "{\"kind\":\"signal\",\"signal\":\"$1\",\"rc\":$2}"
-    return 0
-}
-nd_transfer() {
-    [ "$phase" = native ] || return 0
-    nd_append "{\"kind\":\"transfer\",\"native_exit\":$1,\"group_exit\":$2,\"pending\":$3}"
-    return 0
-}
-nd_predelete() {
-    [ "$phase" = native ] || return 0
-    nd_snapshot remove
-    # This copy cannot authorize product acceptance; unavailable/oversize is explicit.
-    if head -c 4194305 "$1" > "$nd_dir/produced" 2>/dev/null; then
-        if [ "$(wc -c < "$nd_dir/produced")" -gt 4194304 ]; then
-            nd_failed=true
-            { printf overflow > "$nd_dir/overflow"; } 2>/dev/null || :
-        fi
-    else
-        nd_failed=true
-        { printf error > "$nd_dir/copy-error"; } 2>/dev/null || :
-    fi
-    nd_terminal
-    return 0
-} 2>/dev/null
-nd_gate_source() {
-    printf 'nd_dir=%q\n' "$1"
-    declare -f nd_gate
-}
-nd_instrument() {
-    # Definitions and calls stay OUTSIDE the bounded workload subshell, whose tail stays exact.
-    {
-        printf 'nd_dir=%q\n' "$nd_dir"
-        printf 'nd_count=0; nd_failed=false\n'
-        declare -f nd_append nd_terminal nd_owned nd_snapshot nd_wait nd_signal nd_transfer nd_predelete
-    } > "$nd_dir/functions"
-    awk -v functions="$nd_dir/functions" '
-        /^phase=bootstrap;/ {while((getline line < functions)>0) print line; close(functions)}
-        /^cancel_group\(\)/ {cancel=1}
-        /^}/ {cancel=0}
-        cancel && /^    local pid=/ {print; print "    local nd_rc"; next}
-        cancel && /kill -TERM --/ {
-            print "        nd_snapshot term || :"
-            print "        if kill -TERM -- \"-$pid\" 2>/dev/null; then nd_rc=0; else nd_rc=$?; fi"
-            print "        nd_signal TERM \"$nd_rc\" || :"
-            next
-        }
-        cancel && /kill -KILL --/ {
-            print "        nd_snapshot kill || :"
-            print "        if kill -KILL -- \"-$pid\" 2>/dev/null; then nd_rc=0; else nd_rc=$?; fi"
-            print "        nd_signal KILL \"$nd_rc\" || :"
-            next
-        }
-        /^        if wait "\$pid"/ {
-            print
-            print "        nd_wait \"$pid\" \"$waited_exit\" \"$before\" \"$signal_count\" \"$critical\" \"$finishing\" \"$native_exit\" || :"
-            next
-        }
-        /^    watcher=\$!/ {
-            print
-            print "    nd_owned \"$$\" \"$child\" \"$capture_out\" \"$capture_err\" \"$watcher\" \"$overall\" || :"
-            next
-        }
-        /^    if \$native_pending; then/ {
-            print
-            print "    nd_transfer \"$native_exit\" \"$group_exit\" \"$native_pending\" || :"
-            next
-        }
-        /^    if \[ -n "\$root" \] && \{ ! rm -rf/ {print "    nd_predelete \"$root/native.json\" || :"}
-        {print}
-    ' "$FIX/launcher" > "$nd_dir/launcher"
-    mv "$nd_dir/launcher" "$FIX/launcher"
 } 2>/dev/null
 nd_read() { # bounded raw input; missing/error are not false or zero
     local file="$1" cap="$2" size value

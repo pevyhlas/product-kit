@@ -29,6 +29,23 @@ change by change.
   lines without checking them off or logging them; an optional `Drops:` line distinguishes
   dropped tasks. Keep execution details in the ignored plan or PR.
 
+### Removed (breaking)
+
+- Removed kit migration guides and cutover/restructure instructions, installer retirement and
+  review-migration flags, historical State verdict and receipt clearance paths, reviewer
+  registration via the capabilities table, and compatibility readers for old install manifests,
+  feature counters, programme checkpoints, inbox entries and agent tier maps.
+  Review requires a per-change close entry at the closing commit. Agents must migrate an older
+  install manually; Product-Kit provides no migration tooling. Ordinary upgrades and consumer
+  data-migration guidance remain.
+
+### Fixed
+
+- PR review launcher groups now have live guard leaders that signal only their own groups.
+  The launcher checks for surviving members without waiting for a leader and confirms the
+  groups are absent at the kernel level before deleting scratch. If it cannot verify shutdown
+  or output drain, it refuses and retains scratch.
+
 ## [2.1.0] — 2026-11-23 — task parts, change tags and fail-closed verifiers
 
 ### Added

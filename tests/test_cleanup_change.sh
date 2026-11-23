@@ -459,6 +459,9 @@ git -C "$PROJ" worktree remove --force "$PROJ/.worktrees/014-current" >/dev/null
 it "review and check evidence in the worktree's ignored cache survives removal"
 # The documented close -> merge -> cleanup sequence: the review package and retrospective live
 # only in the worktree's gitignored cache, which `git worktree remove` would delete silently.
+# Model a checkout that already ignores its local enrichment and spool data; a
+# fresh install no longer adds these rules.
+printf '\n/.prdkit/retrospective/\n/.prdkit/ledger/\n' >> "$PROJ/.git/info/exclude"
 git -C "$PROJ" add -A >/dev/null 2>&1; git -C "$PROJ" commit -qm installed >/dev/null 2>&1  # .gitignore covers .prdkit/cache/
 git -C "$PROJ" worktree add -qb 016-evidence "$PROJ/.worktrees/016-evidence" >/dev/null 2>&1
 EV="$PROJ/.worktrees/016-evidence/.prdkit/cache"

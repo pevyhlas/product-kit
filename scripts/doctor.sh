@@ -14,8 +14,6 @@ source "$SCRIPT_DIR/agent-tiers-lib.sh"
 source "$SCRIPT_DIR/spec-lib.sh"
 source "$SCRIPT_DIR/diagnostics-lib.sh"
 source "$SCRIPT_DIR/review-policy-lib.sh"
-source "$SCRIPT_DIR/review-fingerprint-lib.sh"
-source "$SCRIPT_DIR/review-legacy-lib.sh"
 json=false; strict=false; inventory=false
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -47,21 +45,16 @@ if rows="$(verify_lines install_findings "$root")"; then
 else
     findings+=("Installation inventory did not complete")
 fi
-installed_version="$(install_manifest_value "$root/.prdkit/.manifest" version 2>/dev/null)" || installed_version=''
-case "$installed_version" in
-    2.*|3.*)
-        if $has_head; then
-            if rows="$(verify_lines review_legacy_record_findings "$root")"; then
-                while IFS= read -r advisory; do
-                    [ -z "$advisory" ] || advisories+=("$advisory")
-                done <<< "$rows"
-            else
-                findings+=("Legacy 1.x scan unavailable: incomplete local evidence")
-            fi
-        fi ;;
-esac
 for file in "$root"/specs/changes/*.md; do
     [ -f "$file" ] || continue
+    if ! review_record_format "$file"; then
+        findings+=("${file#"$root"/}: expected LF-terminated change Markdown with no **Review** field in State; current reviews are prdkit.review.v3 host receipts")
+        continue
+    fi
+    if ! checkpoint_problem="$(spec_change_progress "$file" 2>&1)"; then
+        findings+=("$checkpoint_problem")
+        continue
+    fi
     rows="$(verify_lines spec_change_progress "$file" false advisories)"
     while IFS= read -r advisory; do
         [ -z "$advisory" ] || advisories+=("${file#"$root"/}: $advisory")
@@ -72,37 +65,7 @@ for file in .prdkit/workflows/protocol.md .prdkit/workflows/change.md .prdkit/wo
 done
 
 # --- Layout --------------------------------------------------------------------------------------
-layout="$(spec_layout "$root")"
-case "$layout" in
-    0.x) advisories+=("0.x layout — run the cutover (.prdkit/workflows/compact.md) before 1.0 workflows apply") ;;
-    both) advisories+=("Two canons: 1.0 spec files beside 0.x folders (specs/product-spec, specs/targets or specs/features); finish the cutover: condense them into the spec and specs/archive.md, turn a feature the owner keeps open into a change record, and git rm them (.prdkit/workflows/compact.md)") ;;
-esac
-# No raw archive on main: it surfaces in searches beside the current spec. Git keeps the files.
-if $in_git; then
-    rows="$(verify_lines git -C "$root" ls-files -- specs/archive/)"
-    archived=0
-    while IFS= read -r file; do [ -z "$file" ] || archived=$((archived + 1)); done <<< "$rows"
-    [ "${archived:-0}" -eq 0 ] || advisories+=("Archive on main: specs/archive/ tracks $archived file(s); condense them into specs/archive.md and remove them from main with git rm; git keeps them (.prdkit/workflows/compact.md)")
-fi
-# specs/archive.md records the base commit and the last 0.x feature; new-change.sh reserves the
-# old feature numbers from both. A base a shallow clone lacks is not judged.
-if [ -f "$root/specs/archive.md" ]; then
-    last="$(spec_archive_last "$root")"; archive_problems=""
-    [ -n "$last" ] || archive_problems="no readable **Last 0.x feature** line (a number, or none)"
-    if [ "$last" != 0 ]; then
-        tokens="$(spec_archive_base_tokens "$root")"
-        if [ -z "$tokens" ]; then
-            archive_problems="${archive_problems:+$archive_problems and }no **Base** commit"
-        elif $in_git && [ "$(git -C "$root" rev-parse --is-shallow-repository 2>/dev/null)" != true ]; then
-            resolved=false
-            while IFS= read -r token; do
-                if git -C "$root" rev-parse --verify --quiet "$token^{commit}" >/dev/null 2>&1; then resolved=true; break; fi
-            done <<< "$tokens"
-            $resolved || archive_problems="${archive_problems:+$archive_problems and }a **Base** commit that is not in this repository ($(printf '%s\n' "$tokens" | sed -n 1p))"
-        fi
-    fi
-    [ -z "$archive_problems" ] || advisories+=("Archive: specs/archive.md has $archive_problems; new-change.sh reserves the old 0.x feature numbers from them (.prdkit/templates/archive-template.md)")
-fi
+if ! layout_problem="$(spec_require_layout "$root" 2>&1)"; then findings+=("$layout_problem"); fi
 mixed="$(spec_mixed_forms "$root")"
 [ -z "$mixed" ] || advisories+=("Two spec forms: specs/SPEC.md beside $mixed; keep one form — split SPEC.md fully in one change and delete it, or fold the split files back (.prdkit/workflows/spec.md)")
 
@@ -208,7 +171,7 @@ else
 fi
 
 # --- IDs ---------------------------------------------------------------------------------------
-items="$(verify_lines spec_items "$root")"
+items="$(verify_lines spec_items "$root" --skip-invalid-journey-ids)"
 rows="$(printf '%s\n' "$items" | awk -F "$SEP" 'NF { if ($1 in at) print "Duplicate ID " $1 ": defined at " at[$1] " and " $7; else at[$1] = $7 }')"
 while IFS= read -r problem; do [ -z "$problem" ] || findings+=("$problem"); done <<< "$rows"
 parts="$(verify_lines spec_part_headings "$root")"
@@ -235,23 +198,11 @@ rows="$(
     while IFS= read -r file; do
         [ -n "$file" ] || continue
         awk -v file="$file" "$SPEC_SKIP_AWK"'{ if (spec_skip($0)) next }
-            /^[[:space:]]*[-*][[:space:]]+\*\*J-[0-9][[:space:]*]/ { next }
             /^[[:space:]]*[-*][[:space:]]+\*\*(P[0-9]+(\.[0-9]+)*\.)?[JRQCDNBI]-/ && !/^[[:space:]]*[-*][[:space:]]+\*\*(P[0-9]+(\.[0-9]+)?\.[BI]|[JRQCDN])-[0-9][0-9]+[[:space:]*]/ { print file ":" NR }
             /^#[[:space:]]+J-/ && !/^#[[:space:]]+J-[0-9][0-9]+[[:space:]]/ { print file ":" NR }
             /^##?#?[[:space:]]+D-/ && !/^##?#?[[:space:]]+D-[0-9][0-9]+[[:space:]]/ { print file ":" NR }' "$root/$file" || exit 1
     done <<< "$listed")"
 while IFS= read -r where; do [ -z "$where" ] || findings+=("Malformed ID at $where: IDs are J-, R-, Q-, C-, N-, D- or <part>.B-/<part>.I- with two or more digits"); done <<< "$rows"
-# The 1.0 product template wrote journeys as one-digit `- **J-1 ...**` bullets; the Restructure
-# renumbers them.
-oldj=""
-rows="$(
-    while IFS= read -r file; do
-        [ -n "$file" ] || continue
-        awk -v file="$file" "$SPEC_SKIP_AWK"'{ if (spec_skip($0)) next }
-            /^[[:space:]]*[-*][[:space:]]+\*\*J-[0-9][[:space:]*]/ { print file ":" NR }' "$root/$file" || exit 1
-    done <<< "$listed")"
-while IFS= read -r where; do [ -z "$where" ] || oldj="${oldj:+$oldj, }$where"; done <<< "$rows"
-[ -z "$oldj" ] || advisories+=("One-digit journey IDs at $oldj (the 1.0 form): the Restructure in .prdkit/workflows/compact.md renumbers them to J-01")
 
 cite_files=()
 test_files="$(verify_lines spec_test_files "$root")"
@@ -707,14 +658,18 @@ while IFS="$SEP" read -r line type name who scope _ _ _ until check reason; do
             fi ;;
     esac
 done <<< "$rows"
-open_count=0; oldest=""; undisposed=0; unparsed=""; oneline=0; resolved=0; processing=0
-rows="$(verify_lines spec_inbox "$root")"
+open_count=0; oldest=""; undisposed=0; unparsed=""; resolved=0; processing=0
+if ! rows="$(verify_lines spec_inbox "$root" 2>&1)"; then
+    inbox_error="${rows%%$'\n'*}"
+    case "$inbox_error" in
+        'Unsupported inbox entry at '*) ;;
+        *) inbox_error="Invalid specs/inbox.md" ;;
+    esac
+    findings+=("$inbox_error: expected headed items with a date, actor and disposition, and structured **Answer** fields (inbox-template.md)")
+    rows=""
+fi
 while IFS="$SEP" read -r line date who state _ _ _ _ _ _ problems; do
     [ -n "$line" ] || continue
-    if [ "$state" != unparsed ]; then
-        heading="$(sed -n "${line}p" "$root/specs/inbox.md" | cut -c1-4)"
-        [ "$heading" = "### " ] || oneline=$((oneline + 1))
-    fi
     case "$state" in
         open) open_count=$((open_count + 1)); { [ -n "$oldest" ] && [[ ! "$date" < "$oldest" ]]; } || oldest="$date" ;;
         processing) processing=$((processing + 1)) ;;
@@ -734,15 +689,13 @@ done <<< "$rows"
 [ "$resolved" -eq 0 ] || advisories+=("Owner inbox: $resolved resolved-state item(s) retained; verify canonical decisions, provenance and remaining obligations, then remove them (spec.md, Resolve owner answers)")
 [ "$undisposed" -eq 0 ] || advisories+=("Owner inbox: $undisposed item(s) without an open, processing, folded, declined or deferred disposition")
 [ -z "$unparsed" ] || advisories+=("Owner inbox: specs/inbox.md line(s) $unparsed are not inbox items (a '### <title>' heading, then '*<YYYY-MM-DD> · <owner|agent> · <disposition>*'), so status skips them")
-[ "$oneline" -eq 0 ] || advisories+=("Owner inbox: $oneline item(s) in the one-line form; rewrite each as a heading with its meta line and options (.prdkit/templates/inbox-template.md)")
 
 # --- Local machine paths: tracked docs, specs and agent context use repo-relative paths -------
 # A machine's own path (/home/<user>, /Users/<user>, C:\Users\<user>) is flagged; a generic ~/
-# default is not, nor is a `>` quote: owner words stay verbatim. 0.x folders and a leftover
-# specs/archive/, each its own advisory until removed, keep their history as it was.
+# default is not, nor is a `>` quote: owner words stay verbatim.
 path_files=()
 if $in_git; then
-    rows="$(verify_lines git -C "$root" ls-files -- '*.md' ':(exclude)specs/archive/**' ':(exclude)specs/features/**' ':(exclude)specs/authority.md' \
+    rows="$(verify_lines git -C "$root" ls-files -- '*.md' ':(exclude)specs/authority.md' \
         ':(exclude).prdkit/templates/**' ':(exclude).prdkit/workflows/**' ':(exclude).product-kit/**')"
 else
     rows="$listed"
@@ -849,48 +802,6 @@ fi
 # --- Agent context and agent definitions ---------------------------------------------------------
 rows="$(verify_lines context_budget_advisories "$root")"
 while IFS= read -r advisory; do [ -z "$advisory" ] || advisories+=("$advisory"); done <<< "$rows"
-# Agent context loads on every turn: a path into 0.x folders or an archive the cutover removed
-# sends agents to files that are gone; history questions go to specs/archive.md. Only a plain
-# repo-relative path counts, `./` and an `@` import too: not one after ":", "/" or a word
-# character (a git show pointer, a URL or absolute path, another repository's owner/repo), not
-# a placeholder or glob (<, *, {), not a bare folder (a rule such as "never recreate
-# specs/features/"). A function: bash 3.2 misparses case patterns inside a process substitution.
-context_0x_paths() { # file
-    local token path tokens
-    tokens="$(grep -oE '(\./|[^[:space:]])?specs/(archive|product-spec|targets|features)/[^[:space:]]*' "$1")" ||
-        { [ "$?" -eq 1 ] || return 1; }
-    printf '%s\n' "$tokens" |
-        while IFS= read -r token; do
-            case "$token" in
-                specs/*) path="$token" ;;
-                ./specs/*) path="${token#./}" ;;
-                *) path="${token#?}"; case "${token%"$path"}" in :|/|[[:alnum:]_]) continue ;; esac ;;
-            esac
-            while :; do
-                case "$path" in
-                    *'`'|*'*'|*.|*,|*';'|*:|*')'|*']'|*'"'|*"'"|*'!'|*'?'|*'>') path="${path%?}" ;;
-                    *) break ;;
-                esac
-            done
-            case "$path" in *'<'*|*'*'*|*'{'*) continue ;; esac
-            path="${path%%[!A-Za-z0-9._/-]*}"
-            case "$path" in specs/archive/|specs/product-spec/|specs/targets/|specs/features/) ;; *) printf '%s\n' "$path" ;; esac
-        done | LC_ALL=C sort -u
-}
-stale_paths=""
-for name in $CONTEXT_AGENT_FILES; do
-    [ -f "$root/$name" ] || continue
-    if $in_git; then
-        tracked="$(verify_lines git -C "$root" ls-files -- "$name")"
-        [ -n "$tracked" ] || continue
-    fi
-    rows="$(verify_lines context_0x_paths "$root/$name")"
-    while IFS= read -r path; do
-        [ -n "$path" ] || continue
-        [ -e "$root/$path" ] || stale_paths="${stale_paths:+$stale_paths, }$name: $path"
-    done <<< "$rows"
-done
-[ -z "$stale_paths" ] || advisories+=("Agent context names removed 0.x paths ($stale_paths); point it at the current spec, and history questions at specs/archive.md; qualify paths in other repositories as owner/repo:path (.prdkit/workflows/compact.md)")
 roster="$root/.prdkit/memory/agents.md"
 tiers_used=false
 [ ! -d "$root/.prdkit/agent-library" ] || tiers_used=true

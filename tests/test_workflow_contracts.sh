@@ -45,7 +45,7 @@ it "review is independent, tiered and never empty"
 assert_contains "$protocol" '| T0 | docs only, no behavior change | none |' "T0"
 assert_contains "$protocol" '| T3 | L0 edit or L1 one-way door | design review plus the owner |' "T3"
 assert_contains "$review" 'Never dispatch a round with no source change' "no empty re-review"
-for suite in review_fingerprint review_receipts review_gate review_legacy_scan review_legacy_gate review_owner publish_review; do
+for suite in review_fingerprint review_receipts review_gate review_record_format review_owner publish_review; do
     assert_eq 1 "$(grep -cxF "test_$suite.sh" "$TESTS_DIR/native-suites.txt" || true)" "$suite is in the native macOS allowlist"
 done
 assert_contains "$review" 'did not implement' "independent reviewer"
@@ -134,16 +134,11 @@ assert_not_contains "$all" 'Only the owner writes HOLD' "agents record owner-dec
 assert_contains "$(flat "$T/records-template.md")" 'never invent one' "agents never invent holds"
 assert_not_contains "$all" '(proposed)' "no proposed constraints"
 
-it "cutover condenses old canon, removes it from main, and never picks between contradictions"
+it "compaction preserves current canon and keeps history off the default load path"
 compact="$(flat "$W/compact.md")"
-assert_contains "$compact" 'do not' "contradictions are not resolved by the agent"
-assert_contains "$compact" '**Still binds**' "binding rules, decisions and facts go into the spec"
-assert_contains "$compact" '**Worth remembering**' "directions tried go into the archive digest"
-assert_contains "$compact" 'Then `git rm` them all; git keeps them.' "no raw archive on main"
-assert_not_contains "$compact" '`git mv`' "nothing is moved under an archive folder"
-assert_contains "$compact" 'becomes a change record' "no leftover 0.x feature"
+assert_contains "$compact" 'never by dropping items' "preserve current canon"
+assert_contains "$compact" 'Log condensed through' "preserve numbering after log compaction"
 assert_contains "$protocol" '`specs/archive.md` only on demand' "the archive is read on demand"
 assert_not_contains "$protocol" '`specs/archive/`' "no archive folder on the load table"
-assert_contains "$(flat "$T/archive-template.md")" 'never by default' "the template says agents do not load it"
 
 finish

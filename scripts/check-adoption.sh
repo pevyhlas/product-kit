@@ -174,8 +174,8 @@ if rows="$(verify_lines install_findings "$root")"; then
 else
     fail 'Installation inventory did not complete'
 fi
+if ! layout_problem="$(spec_require_layout "$root" 2>&1)"; then fail "$layout_problem"; fi
 mode="$(install_manifest_value "$MANIFEST" mode 2>/dev/null || true)"
-mode="${mode:-symlink}"
 harnesses="$(install_manifest_value "$MANIFEST" harnesses 2>/dev/null || true)"
 manifest_commands() { # harness -> expected basenames recorded in the manifest
     awk -v prefix=".$1/commands/" '

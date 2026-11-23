@@ -6,7 +6,7 @@ cd "$PROJ" || exit 1
 mkdir -p .prdkit/agents .opencode/agents
 cat > .prdkit/agents/reviewer.md <<'EOF'
 ---
-tier: high
+tier: deep
 harnesses: [opencode]
 ---
 Review.
@@ -15,15 +15,17 @@ cat >> .prdkit/memory/agents.md <<'EOF'
 
 | Review | reviewer | test |
 
-| Tier | OpenCode model | OpenCode variant |
-|---|---|---|
-| high | synthetic/base | medium |
+Tier baseline: agent-library tiers.json@abcdef0
 
 | Scope | Harness | Model | Variant | Reason |
 |---|---|---|---|---|
-| tier:high | opencode | synthetic/tier | high | test |
+| tier:deep | opencode | synthetic/tier | high | test |
 | agent:reviewer | opencode | synthetic/agent | low | test |
 EOF
+mkdir -p .prdkit/agent-library
+printf '%s\n' '{"deep":{"opencode":{"model":"synthetic/base","variant":"medium"}}}' > .prdkit/agent-library/tiers.json
+source "$PK_ROOT/scripts/install-lib.sh"
+printf 'library-ref: abcdef0\nsha256: %s\n' "$(install_hash_stream < .prdkit/agent-library/tiers.json)" > .prdkit/agent-library/tiers.json.ref
 bash .prdkit/scripts/bash/render-agents.sh >/dev/null
 printf '\nProject customization.\n' >> .prdkit/templates/change-template.md
 before="$(git status --porcelain --untracked-files=all)"
@@ -36,7 +38,7 @@ assert_eq 0 "$STATUS" 'parent Git discovery cannot masquerade as a kit source re
 run jq -e '.configuration.files[] | select(.path == ".prdkit/templates/change-template.md") | .owner == "project" and .effective == "project-copy" and .state == "customized" and .recorded_sha256 != .actual_sha256' <<< "$json"
 assert_eq 0 "$STATUS" 'customized project copy wins over pristine seed'
 run jq -e '.configuration.agents[] | select(.agent == "reviewer") | .resolved_model == "synthetic/agent" and .winning_rule == "override agent:reviewer" and .projected_model == .resolved_model' <<< "$json"
-assert_eq 0 "$STATUS" 'agent override beats tier override and literal map'
+assert_eq 0 "$STATUS" 'agent override beats tier override and baseline'
 run jq -e 'all(.configuration.harnesses[]; .version == null and .native_loading == "unknown" and .execution == "unknown" and .structured_capture == "unknown" and .events == "unknown" and .independent_review_access == "unknown")' <<< "$json"
 assert_eq 0 "$STATUS" 'installation never becomes runtime capability evidence'
 run jq -e '(.configuration.harnesses | map(select(.configured)) | map(.harness)) == ["claude", "agents"]' <<< "$json"

@@ -122,78 +122,37 @@ list_checkouts() {
     return 0
 }
 
-# Numbered identities already claimed: open change records, closed changes in the log, 0.x
-# feature folders (on disk before the cutover; in git after it: at the base commit
-# specs/archive.md records, and removed in recent history), the last 0.x feature, changes the
-# spec's `planned:` markers name, and local and remote branches. The archive's closed-number
-# index and integration-tip records/logs are loaded separately under the lock.
+# Claims: open and closed records, planned markers and branches. Archive indexes and
+# integration-tip records/logs are loaded separately under the lock.
 list_claimed() {
-    list_spec_claims
+    list_spec_claims || return 1
     if [ "$HAS_GIT" = true ]; then
-        git for-each-ref --format='local branch %(refname:strip=2)' refs/heads 2>/dev/null
-        git for-each-ref --format='remote branch %(refname:strip=3)' refs/remotes 2>/dev/null
+        git for-each-ref --format='local branch %(refname:strip=2)' refs/heads || return 1
+        git for-each-ref --format='remote branch %(refname:strip=3)' refs/remotes || return 1
     fi
     return 0
 }
 
 list_spec_claims() {
-    local checkout path name last token base
+    local checkout path name entries planned
     while IFS= read -r checkout; do
+        spec_require_layout "$checkout" || return 1
         for path in "$checkout"/specs/changes/[0-9]*.md; do
             [ -f "$path" ] && { name="${path##*/}"; echo "change record ${name%.md}"; }
         done
-        # Number allocation must reserve old log IDs even when a verifier now rejects
-        # their formatting. Never treat a legacy CRLF log as an empty claim inventory.
-        spec_log_entries "$checkout" legacy-claims |
-            sed -n 's/^- [0-9-]* \([0-9][0-9][0-9]*-[a-z0-9-]*\):.*/closed change \1/p'
-        for path in "$checkout"/specs/log/[0-9]*.md; do
-            [ -f "$path" ] && [ ! -L "$path" ] || continue
-            name="${path##*/}"; name="${name%.md}"
-            if is_change_id "$name"; then echo "per-change log $name"; fi
-        done
-        spec_planned_changes "$checkout" | sed 's/^/planned in the spec /'
-        if [ -f "$checkout/specs/archive.md" ]; then
-            last="$(spec_archive_last "$checkout")"
-            case "$last" in ''|0) ;; *) printf 'specs/archive.md, 0.x features through %03d-\n' "$last" ;; esac
-            if [ "$HAS_GIT" = true ]; then
-                while IFS= read -r token; do
-                    base="$(git -C "$checkout" rev-parse --verify --quiet "$token^{commit}" 2>/dev/null)" || continue
-                    spec_features_at "$checkout" "$base" | sed 's/^/feature folder at the archive base /'
-                    break
-                done < <(spec_archive_base_tokens "$checkout")
-            fi
-        fi
-        for path in "$checkout"/specs/features/[0-9]* "$checkout"/specs/features/_archive/[0-9]* \
-                    "$checkout"/specs/archive/[0-9]* "$checkout"/specs/archive/*/[0-9]* \
-                    "$checkout"/specs/archive/*/_archive/[0-9]*; do
-            [ -d "$path" ] && echo "feature folder ${path##*/}"
-        done
-    done < <(list_checkouts)
-    if [ "$HAS_GIT" = true ]; then
-        spec_removed_features "$REPO_ROOT" | sed 's/^/feature folder removed from main /'
-    fi
-    return 0
-}
-
-# A specs/archive.md from which neither a base commit here nor a last 0.x feature can be read.
-archive_unreadable() {
-    local checkout token
-    while IFS= read -r checkout; do
-        [ -f "$checkout/specs/archive.md" ] || continue
-        [ -z "$(spec_archive_last "$checkout")" ] || continue
-        if [ "$HAS_GIT" = true ]; then
-            while IFS= read -r token; do
-                git -C "$checkout" rev-parse --verify --quiet "$token^{commit}" >/dev/null 2>&1 && continue 2
-            done < <(spec_archive_base_tokens "$checkout")
-        fi
-        echo "$checkout/specs/archive.md"
-    done < <(list_checkouts | sort -u)
+        entries="$(spec_log_entries "$checkout")" || return 1
+        sed -n 's/^- [0-9-]* \([0-9][0-9][0-9]*-[a-z0-9-]*\):.*/closed change \1/p' <<< "$entries" || return 1
+        planned="$(spec_planned_changes "$checkout")" || return 1
+        while IFS= read -r name; do
+            [ -z "$name" ] || printf 'planned in the spec %s\n' "$name"
+        done <<< "$planned"
+    done <<< "$CHECKOUTS"
     return 0
 }
 
 list_archive_details() {
     local checkouts checkout
-    checkouts="$(set -o pipefail; list_checkouts | sort -u)" || return 1
+    checkouts="$(sort -u <<< "$CHECKOUTS")" || return 1
     while IFS= read -r checkout; do
         spec_archive_log_details "$checkout" "$checkout/specs/archive.md" || return 1
     done <<< "$checkouts"
@@ -210,9 +169,9 @@ list_committed_claims() {
 }
 
 claimed_numbers() {
-    list_claimed | while IFS= read -r line; do
+    while IFS= read -r line; do
         case "${line##* }" in [0-9][0-9][0-9]*-*) echo "$line" ;; esac
-    done
+    done <<< "$CLAIMS"
 }
 
 allocated_high_water() {
@@ -224,7 +183,7 @@ allocated_high_water() {
     done <<< "$ARCHIVE_DETAILS"
     while IFS= read -r line; do
         case "$line" in
-            "change record "*|"closed change "*|"per-change log "*|"committed "*) ;;
+            "change record "*|"closed change "*|"committed "*) ;;
             *) continue ;;
         esac
         name="${line##* }"; number=$((10#${name%%-*}))
@@ -321,32 +280,21 @@ AUTO_NUMBER=false
 # Both automatic and explicit allocation must see a complete, valid archive index from
 # every checkout. Keep the lock through record creation; a malformed index cannot be overridden.
 acquire_number_lock
+CHECKOUTS="$(list_checkouts)" || exit 1
 INTEGRATION_TIPS=""
 if [ "$HAS_GIT" = true ]; then INTEGRATION_TIPS="$(spec_integration_tips "$REPO_ROOT")"; fi
 ARCHIVE_DETAILS="$(list_archive_details)"
 COMMITTED_CLAIMS="$(list_committed_claims)"
+CLAIMS="$(list_claimed)" || exit 1
 CLAIMS="$(claimed_numbers)${COMMITTED_CLAIMS:+$'\n'$COMMITTED_CLAIMS}"
 HIGH_WATER="$(allocated_high_water)"
 if [ -z "$CHANGE_NUMBER" ]; then
-    # Never reuse a 0.x feature number silently. With no feature folder anywhere to read, stop on
-    # a specs/archive.md that yields no number, and warn in a shallow clone without one: its
-    # history is cut short.
-    if ! list_spec_claims | grep -q -e '^feature folder ' -e '^specs/archive.md, 0.x '; then
-        UNREADABLE="$(archive_unreadable | sed -n 1p)"
-        if [ -n "$UNREADABLE" ]; then
-            echo "[prdkit] Error: $UNREADABLE names no **Base** commit in this repository and no readable **Last 0.x feature** line (a number, or none), and git history shows no removed 0.x feature folder, so an old feature number could be reused. Fix it (.prdkit/templates/archive-template.md) or pass --number." >&2
-            exit 1
-        fi
-        if [ ! -f "$REPO_ROOT/specs/archive.md" ] && [ "$HAS_GIT" = true ] &&
-            [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = true ]; then
-            echo "[prdkit] Warning: shallow clone: 0.x feature folders removed from main are not in its history, so their numbers are not reserved; fetch the full history or pass --number." >&2
-        fi
-    fi
     CHANGE_NUMBER="$(next_number)"; AUTO_NUMBER=true
 fi
 NUM="$(printf '%03d' "$((10#$CHANGE_NUMBER))")"
 if [ "$AUTO_NUMBER" = true ]; then
-    # A concurrent run may have claimed the number since it was computed: bump past it.
+    # Refresh branch claims in case a branch was created outside the numbering lock.
+    CLAIMS="$(list_claimed)" || exit 1
     while OWNER="$(number_owner "$NUM")"; do
         NEXT="$(printf '%03d' "$((10#$NUM + 1))")"
         echo "[prdkit] Notice: change number $NUM taken by $OWNER, using $NEXT" >&2
@@ -362,7 +310,7 @@ while IFS= read -r checkout; do
         echo "[prdkit] Error: $checkout/specs/changes/$CHANGE_ID.md already exists; it is never overwritten." >&2
         exit 1
     fi
-done < <(list_checkouts)
+done <<< "$CHECKOUTS"
 
 if [ "$AUTO_NUMBER" = false ]; then
     while IFS="$SPEC_SEP" read -r index _; do
@@ -379,15 +327,14 @@ if [ "$AUTO_NUMBER" = false ]; then
         printf '[prdkit] Error: change number %s is at or below the allocated high-water mark %03d; omit --number or use a number above %03d.\n' "$NUM" "$HIGH_WATER" "$HIGH_WATER" >&2
         exit 1
     fi
-    # Branch, planned and legacy 0.x reservations can still be overridden; name their
-    # holders. The new change's own planned marker does not count.
+    # Branch and planned reservations can still be overridden; name their holders.
+    # The new change's own planned marker does not count.
     HOLDERS=""
     while IFS= read -r held_line; do
         [ -n "$held_line" ] || continue
         held="${held_line##* }"
         case "$held_line" in
             "planned in the spec $NUM-$SLUG"|"planned in the spec $NUM-") continue ;;
-            "specs/archive.md, 0.x features through "*) [ "$((10#$NUM))" -le "$((10#${held%-}))" ] || continue ;;
             *) [ "$((10#${held%%-*}))" -eq "$((10#$NUM))" ] || continue ;;
         esac
         case "; $HOLDERS; " in *"; $held_line; "*) continue ;; esac
@@ -437,19 +384,12 @@ render_record() {
                 # Recognize the kit comments only when not already inside an example.
                 outside = !fence && !comment
                 hidden = spec_skip($0)
+                if (outside && /^<!-- (A programme or continuing follow-up queue \(|For a programme\/continuing follow-up queue,)/)
+                    obsolete = 1
+                if (obsolete && !fence && $0 == "### Outcome checkpoint") unsupported = 1
+                if (!comment) obsolete = 0
                 if (outside && $0 == ENVIRON["PK_POINTER"]) {
                     if (state && !slot) slot = NR
-                    wrote_pointer = 1
-                }
-                if (outside && /^<!-- (A programme or continuing follow-up queue \(|For a programme\/continuing follow-up queue,)/) {
-                    legacy = NR
-                    legacy_heading = 0
-                }
-                if (legacy && !fence && $0 == "### Outcome checkpoint") legacy_heading = 1
-                if (legacy && !comment) {
-                    legacy_end[legacy] = NR
-                    if (state && legacy_heading) has_block = 1
-                    legacy = 0
                 }
                 if (!hidden && /^## /) state = ($0 == "## State")
                 if (!hidden && state && $0 == "### Outcome checkpoint") has_block = 1
@@ -460,6 +400,7 @@ render_record() {
                 }
             }
             END {
+                if (unsupported) exit 2
                 # Use the stock pointer as the insertion slot; otherwise stay in State.
                 at = slot ? slot : state_end ? state_end : safe ? safe : 1
                 if (programme != "true" || has_block) at = 0
@@ -470,17 +411,6 @@ render_record() {
                         if (i == slot) continue
                     }
                     if (i > NR) break
-                    if (programme != "true" && (i in legacy_end)) {
-                        # Strip only the recognized comment, not bytes after its closing marker.
-                        i = legacy_end[i]
-                        text = substr(lines[i], index(lines[i], "-->") + 3)
-                        if (!wrote_pointer) {
-                            print ENVIRON["PK_POINTER"]
-                            wrote_pointer = 1
-                        }
-                        if (text != "") print text
-                        continue
-                    }
                     text = lines[i]
                     if (i == 1 && text ~ /^# Change:/) text = "# Change: " ENVIRON["PK_INTENT"]
                     if (text ~ /^\*\*Opened\*\*: <date>/) sub(/<date>/, ENVIRON["PK_TODAY"], text)
@@ -495,12 +425,17 @@ render_record() {
 }
 prepare_record() ( # optional pinned start commit for a fresh worktree
     set -o pipefail
-    local template scaffold="" tag_row line issue
+    local template scaffold="" tag_row line issue render_status=0
     template="$(record_input "$TEMPLATE" "$RECORD_TMP/template" "${1:-}")" || exit 1
     if $PROGRAMME; then
         scaffold="$(record_input "$SCAFFOLD" "$RECORD_TMP/scaffold" "${1:-}")" || exit 1
     fi
-    if ! render_record "$template" "$scaffold" > "$RENDERED_RECORD" || ! verify_lf_file "$RENDERED_RECORD"; then
+    render_record "$template" "$scaffold" > "$RENDERED_RECORD" || render_status=$?
+    if [ "$render_status" -eq 2 ]; then
+        echo "[prdkit] Error: Unsupported change template scaffold; use the current outcome checkpoint pointer: $POINTER" >&2
+        exit 1
+    fi
+    if [ "$render_status" -ne 0 ] || ! verify_lf_file "$RENDERED_RECORD"; then
         echo "[prdkit] Error: could not render the change record; check the change template and the installed outcome checkpoint snippet." >&2
         exit 1
     fi
