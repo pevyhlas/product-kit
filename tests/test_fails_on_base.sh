@@ -263,4 +263,114 @@ if child_stopped; then _ok 'cancellation stopped the later job-controlled worker
     fi
 fi
 
+it "escaped base services cannot answer a head health check"
+g checkout -q --detach "$BASE" || exit 1
+mkdir -p "$FIXTURE/tests/helpers" || exit 1
+printf 'exit 78\n' > "$FIXTURE/scripts/start"
+cat > "$FIXTURE/tests/helpers/health.py" <<'PY'
+import os
+import socket
+import sys
+from pathlib import Path
+
+os.chdir(os.environ["REPLAY_TEST_RESOURCE"])
+with socket.socket(socket.AF_UNIX) as sock:
+    sock.settimeout(15)
+    if sys.argv[1] == "serve":
+        sock.bind("endpoint")
+        sock.listen()
+        Path("ready").write_text(str(os.getpid()))
+        client, _ = sock.accept()
+        with client:
+            client.sendall(b"ok")
+    else:
+        sock.connect("endpoint")
+        assert sock.recv(2) == b"ok"
+PY
+cat > "$FIXTURE/tests/helpers/launch.sh" <<'TEST'
+set -m
+python3 -I tests/helpers/health.py serve </dev/null >/dev/null 2>&1 &
+TEST
+cat > "$FIXTURE/tests/test_health.sh" <<'TEST'
+if [ "$(cat scripts/value)" = old ]; then
+    bash tests/helpers/launch.sh || exit 1
+    while [ ! -f "$REPLAY_TEST_RESOURCE/ready" ]; do sleep 0.1; done
+    case "$REPLAY_STALE_MODE" in
+        timeout) sleep 12 ;;
+        failure) exit 17 ;;
+        success) exit 0 ;;
+    esac
+else
+    bash scripts/start || :
+    python3 -I tests/helpers/health.py probe
+fi
+TEST
+printf 'fixed\n' > "$FIXTURE/scripts/value"
+HEALTH_HEAD="$(commit 'stale service cannot stand in for failed head startup')" || exit 1
+for mode in timeout failure success; do
+    rm -f "$REPLAY_TEST_RESOURCE"/{endpoint,ready}
+    REPLAY_STALE_MODE="$mode" PRDKIT_REPLAY_SUITE_SECONDS=3 compare "$BASE" "$HEALTH_HEAD" 'fix: verify service startup'
+    assert_eq 1 "$STATUS" "$mode: head without its own service must fail"
+    assert_contains "$OUTPUT" 'Head: FAIL (exit 1).' "$mode: head never receives a stale reply"
+    assert_contains "$OUTPUT" '0 of 1 changed test suite(s)' "$mode: not evidence"
+    assert_file "$REPLAY_TEST_RESOURCE/ready" "$mode: base listener actually started"
+done
+
+it "membership readers distinguish missing data, other tokens and zombies"
+if [ -f "$PK_ROOT/scripts/maintainer/replay-workers.sh" ]; then
+    source "$PK_ROOT/scripts/maintainer/replay-workers.sh"
+    mkdir -p "$FIXTURE/proc/42"
+    printf 'OTHER=tag\nTAG=1\0TAG=10\0' > "$FIXTURE/proc/42/environ"
+    run replay_membership Linux 42 TAG=1 "$FIXTURE/proc"; assert_eq 1 "$STATUS"
+    printf 'TAG=1\0' >> "$FIXTURE/proc/42/environ"
+    run replay_membership Linux 42 TAG=1 "$FIXTURE/proc"; assert_eq 0 "$STATUS"
+    run replay_membership Linux 43 TAG=1 "$FIXTURE/proc"; assert_eq 2 "$STATUS"
+    # shellcheck disable=SC2329 # Called through the sourced platform reader.
+    ps() {
+        case "$1" in
+            -ww) echo 'command --arg TAG=1' ;;
+            -Eww) echo "command --arg TAG=1${env_suffix:-}" ;;
+            *) printf ' %s  42  Z+ Sat Nov 21 10:00:00 2026\n %s  %s S Sat Nov 21 10:00:01 2026\n' "$EUID" "$EUID" "$$" ;;
+        esac
+    }
+    env_suffix=' OTHER=1 TAG=1' run replay_membership Darwin 42 TAG=1 ''; assert_eq 0 "$STATUS"
+    env_suffix=' OTHER=1 TAG=10' run replay_membership Darwin 42 TAG=1 ''; assert_eq 1 "$STATUS"
+    run replay_membership Darwin 42 TAG=1 ''; assert_eq 2 "$STATUS"
+    scratch="$FIXTURE"
+    run replay_census "$FIXTURE/live"; assert_eq 0 "$STATUS"
+    assert_eq "$$ Sat Nov 21 10:00:01 2026" "$(cat "$FIXTURE/live")"
+    unset -f ps
+
+    it "an unreadable live candidate prevents head execution and cannot count"
+    mkdir "$FIXTURE/ps-stub"
+    real_ps=$(command -v ps)
+    export REPLAY_REAL_PS="$real_ps" REPLAY_PID_MARKER="$_SCRATCH_CWD/candidate"
+    cat > "$FIXTURE/ps-stub/ps" <<'STUB'
+#!/usr/bin/env bash
+case "$*" in
+    '-A -o uid=,pid=,stat=,lstart=')
+        "$REPLAY_REAL_PS" "$@" || exit 1
+        if [ -f "$REPLAY_PID_MARKER" ]; then
+            printf '%s 99999999 S Sat Nov 21 10:00:01 2026\n' "$EUID"
+        fi ;;
+    *' -p 99999999 '*) exit 1 ;;
+    *) exec "$REPLAY_REAL_PS" "$@" ;;
+esac
+STUB
+    chmod +x "$FIXTURE/ps-stub/ps"
+    g checkout -q --detach "$BASE" || exit 1
+    printf 'fixed\n' > "$FIXTURE/scripts/value"
+    cat > "$FIXTURE/tests/test_visibility.sh" <<'TEST'
+if [ "$(cat scripts/value)" = old ]; then : > "$REPLAY_PID_MARKER"; exit 1; fi
+: > "$REPLAY_PID_MARKER.head"
+TEST
+    VISIBILITY="$(commit 'unavailable process environment')" || exit 1
+    PATH="$FIXTURE/ps-stub:$PATH" compare "$BASE" "$VISIBILITY" 'fix: require isolation'
+    assert_eq 2 "$STATUS"
+    assert_contains "$OUTPUT" 'INCONCLUSIVE (base isolation)'
+    assert_contains "$OUTPUT" 'PID 99999999'
+    assert_not_contains "$OUTPUT" '1 of 1'
+    if [ -e "$REPLAY_PID_MARKER.head" ]; then _no 'head ran without isolation'; else _ok 'head never ran'; fi
+fi
+
 finish

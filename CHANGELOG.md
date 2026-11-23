@@ -13,6 +13,8 @@ change by change.
 - Pull request CI shows which changed test suites fail before the fix and pass on the PR head.
   Conventional `fix` titles require at least one such suite; other titles are advisory.
   The comparison bounds each run, isolates temporary files, and writes results as suites finish.
+  It checks for surviving tagged workers before comparing snapshots; unverified isolation
+  is inconclusive and cannot count as regression evidence.
 - Cleanup and close tests now run against seeded combinations of local Git states and
   check that commits and working files survive. The generator is test-only.
 

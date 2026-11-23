@@ -117,7 +117,9 @@ including scripts, templates, workflows and commands, stays at the merge base fo
 base run. The job summary shows both results and includes failure output; a missing
 base dependency counts as a base failure. Each base and head run gets its own temporary
 directory and up to five minutes. A timed-out base run counts as a failure; the head runs
-after the base's processes have stopped, including workers in separate process groups.
+after the base's processes have stopped, including reparented workers that inherited its
+run tag. A surviving base service could otherwise answer a head health check. An unreadable
+candidate process or unverified stop makes the comparison inconclusive and stops the replay.
 Rows are written as suites finish. The comparison has a 40-minute budget; it labels suites
 it could not start in both snapshots as not run and does not count them as evidence.
 Titles such as `fix:`, `fix(scope):`, `fix!:` and `fix(scope)!:` need at least one suite that

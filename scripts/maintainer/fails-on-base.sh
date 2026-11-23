@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Kit-only PR check. Run from a clone containing both refs and their common history.
-# A worker can escape cleanup if its launcher exits before the timeout or cancellation
-# snapshot and the worker is reparented outside the suite's tracked process tree and groups.
-# If it holds a resource the head suite needs, that comparison reports a spurious head
-# failure, not a false pass. Re-run the check or fix the suite's own teardown.
+# Workers can outlive their launchers and answer another snapshot's health check.
+# Require verified cleanup of inherited run tags before accepting regression evidence.
+# A worker that deliberately clears its inherited environment is outside the threat model.
 set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/replay-workers.sh"
 
 if [ "$#" -ne 3 ]; then
     echo "Usage: bash scripts/maintainer/fails-on-base.sh <base-ref> <head-ref> <pr-title>" >&2
@@ -30,10 +30,13 @@ suite_limit="$(limit_seconds "${PRDKIT_REPLAY_SUITE_SECONDS:-300}" 300 PRDKIT_RE
 budget="$(limit_seconds "${PRDKIT_REPLAY_BUDGET_SECONDS:-2400}" 2400 PRDKIT_REPLAY_BUDGET_SECONDS)"
 grace=2
 reap_limit=5
-pair_seconds=$((2 * (suite_limit + grace + reap_limit + 1)))
+# Reserve time for both the tree stop and the independent token scan.
+pair_seconds=$((2 * (suite_limit + 2 * (grace + reap_limit) + 1)))
 deadline=$((SECONDS + budget))
 
 scratch="$(mktemp -d)"
+platform=$(uname -s)
+run_tag=''
 suite_pid='' timer_pid='' interrupted=0 changing_jobs=false owned_pids=''
 supervisor_pid=$$
 stop_group() {
@@ -100,6 +103,7 @@ cleanup() {
     if ! stop_suite; then
         printf 'Could not stop the suite process tree.\n' >&2
     fi
+    if ! stop_tagged_workers; then printf 'INCONCLUSIVE: run isolation unverified.\n' >&2; fi
     rm -rf "$scratch"
 }
 interrupt() {
@@ -154,6 +158,11 @@ run_test() {
         return 0
     fi
     tmp="$(mktemp -d "$scratch/run.XXXXXX")"
+    # A unique variable name preserves the outer run's tag in nested replays.
+    local nonce
+    nonce=$(openssl rand -hex 24)
+    [[ $nonce =~ ^[0-9a-f]{48}$ ]] || exit 2
+    run_tag="PRDKIT_REPLAY_${nonce}=1"
     rm -f "$scratch/timed-out"
     changing_jobs=true
     (
@@ -161,6 +170,7 @@ run_test() {
         cd "$root"
         unset GITHUB_STEP_SUMMARY
         export TMPDIR="$tmp" TMP="$tmp" TEMP="$tmp"
+        export "${run_tag?}"
         exec bash "$path"
     ) </dev/null >"$log" 2>&1 &
     suite_pid=$!
@@ -179,15 +189,21 @@ run_test() {
     wait "$suite_pid" 2>/dev/null || status=$?
     changing_jobs=true
     stop_group "$timer_pid"; timer_pid=''
+    if ! stop_suite; then
+        printf '\nINCONCLUSIVE: could not stop the process tree for PID %s.\n' "$suite_pid" >&3
+        exit 2
+    fi
     if [ -f "$scratch/timed-out" ]; then
-        if ! stop_suite; then
-            printf '\nComparison stopped: could not stop the timed-out suite process tree.\n' >&3
-            exit 2
-        fi
         result="FAIL (timed out after ${limit}s)"
     else
-        stop_group "$suite_pid"; suite_pid=''
         if [ "$status" -ne 0 ]; then result="FAIL (exit $status)"; else result=PASS; fi
+    fi
+    # This also gates the transition from base to head after a normal base exit.
+    if ! stop_tagged_workers 2>"$scratch/isolation-error"; then
+        printf -- '- <code>%s</code> — INCONCLUSIVE (%s isolation); comparison stopped, not counted.\n' \
+            "$label" "${root##*/}" >&3
+        cat "$scratch/isolation-error" >&3
+        exit 2
     fi
     changing_jobs=false
     if [ "$interrupted" -ne 0 ]; then exit "$interrupted"; fi
@@ -198,6 +214,11 @@ count=0
 reproduced=0
 skipped=0
 if [ -s "$scratch/changed" ]; then
+    case "$platform" in Linux|Darwin) ;; *) echo 'INCONCLUSIVE: unsupported process inventory.' >&3; exit 2 ;; esac
+    replay_census "$scratch/preexisting" || { echo 'INCONCLUSIVE: process census unavailable.' >&3; exit 2; }
+    # lstart has one-second resolution. No process born after this barrier can
+    # share a pre-token identity, even if the kernel reuses its PID.
+    sleep 1
     snapshot base "$base"
     snapshot head "$head"
     # Replace, rather than merge, tests/ so removed or renamed test fixtures cannot leak in.
