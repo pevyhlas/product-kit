@@ -19,12 +19,7 @@ github_review_policy() {
     [ -n "$at" ] || return 1
     config="$(git -C "$root" show "$at:.prdkit/memory/config.md" | review_text_stream)" || return 1
     config="$(printf '%s\n' "$config" | spec_review_config_section 2>&1)" || { RC_ERROR="$config"; return 1; }
-    fields="$(printf '%s\n' "$config" | LC_ALL=C awk '
-        function spaces(s) {
-            # Unicode White_Space in UTF-8, in the C byte locale.
-            gsub(/[[:space:]]|\302[\205\240]|\341\232\200|\342\200[\200-\212\250\251\257]|\342\201\237|\343\200\200/, " ", s)
-            return s
-        }
+    fields="$(printf '%s\n' "$config" | LC_ALL=C awk "$SPEC_REVIEW_SPACES_AWK"'
         function normalized(s) {
             gsub(/`/, "", s)
             gsub(/\305\277/, "s", s) # long s also case-folds to an ASCII key letter

@@ -207,6 +207,16 @@ assert_eq "$TARGET" "$(printf '%s' "$OUTPUT" | jq -r .native.diagnostics.base_at
 assert_eq "$POLICY" "$(printf '%s' "$OUTPUT" | jq -r .native.policy_at)"
 assert_eq "$POLICY" "$(printf '%s' "$OUTPUT" | jq -r .native.diagnostics.policy_at)"
 assert_eq $'loaded\nloaded' "$(cat "$FIX/p-navigation")" 'both parser and native gate source navigation only from P'
+it 'malformed policy reports its source lines when checking an additional target'
+git checkout -q --detach "$BASE"
+printf '## Configuration\n' >> .prdkit/memory/config.md
+git commit -qam 'duplicate policy heading'; git branch -f main HEAD
+git checkout -q feat/carrier
+bindings "$HEAD_SHA" feat/carrier integration
+launch; assert_eq 1 "$STATUS"
+assert_eq 'invalid-policy' "$(jq -r .error.code "$FIX/stdout")"
+assert_contains "$(cat "$FIX/stderr")" 'Duplicate Configuration headings at config.md lines 2 and 8'
+assert_eq null "$(jq -c .native "$FIX/stdout")"
 git branch -f main "$BASE"
 bindings "$HEAD_SHA"
 

@@ -1014,10 +1014,16 @@ spec_default_branch() { # root
     printf '%s\n' "$base"
 }
 
+# Unicode White_Space in UTF-8; use in the C byte locale on BSD and older awk.
+SPEC_REVIEW_SPACES_AWK='function spaces(s) {
+    gsub(/[[:space:]]|\302[\205\240]|\341\232\200|\342\200[\200-\212\250\251\257]|\342\201\237|\343\200\200/, " ", s)
+    return s
+}'
+
 # Validate the whole raw config before emitting policy. Blank prefix lines preserve
 # assignment line numbers. An absent level-two Configuration heading emits no policy.
 spec_review_config_section() {
-    LC_ALL=C awk '
+    LC_ALL=C awk -v diagnostic="${1:-/dev/stderr}" "$SPEC_REVIEW_SPACES_AWK"'
         function scan(raw,following,n,   s,title,level) {
             s=raw; sub(/\r$/, "", s); sub(/^ ? ? ?/, "", s)
             if (match(s,/^#+/) && RLENGTH<=6 && substr(s,RLENGTH+1) ~ /^([ \t]|$)/) {
@@ -1026,6 +1032,7 @@ spec_review_config_section() {
                 level=(index(following,"=") ? 1 : 2); title=raw
             }
             if (level) {
+                title=spaces(title)
                 sub(/[[:space:]]+$/, "", title); sub(/#+$/, "", title)
                 gsub(/^[[:space:]]+|[[:space:]]+$/, "", title)
                 if (tolower(title)=="configuration") {
@@ -1035,9 +1042,7 @@ spec_review_config_section() {
                 if (start && !stop && n>start && level<=2) stop=n
             }
             if (!stop && !marker) {
-                s=raw
-                # Non-ASCII Unicode White_Space, bytewise for BSD and older awk.
-                gsub(/\302[\205\240]|\341\232\200|\342\200[\200-\212\250\251\257]|\342\201\237|\343\200\200/, " ", s)
+                s=spaces(raw)
                 if (s ~ /<!--|-->/ || s ~ /^[[:space:]]*(```|~~~)/) marker=n
             }
             if (start && !stop && n>start) body[n]=raw
@@ -1047,11 +1052,11 @@ spec_review_config_section() {
         END {
             if (NR) scan(previous,"",NR)
             if (duplicate) {
-                print "Duplicate Configuration headings at config.md lines " first " and " duplicate > "/dev/stderr"; exit 1
+                print "Duplicate Configuration headings at config.md lines " first " and " duplicate > diagnostic; exit 1
             }
             if (!start) exit
             if (marker) {
-                print "config.md line " marker ": comments and fenced blocks are not allowed before or within the policy section" > "/dev/stderr"; exit 1
+                print "config.md line " marker ": comments and fenced blocks are not allowed before or within the policy section" > diagnostic; exit 1
             }
             for (i=1;i<(stop ? stop : NR+1);i++) print body[i]
         }'
@@ -1061,8 +1066,9 @@ spec_review_config_section() {
 # then each ref named by `review-integration-branches` in the committed config at that target,
 # never the worktree's own. One full ref per line; blank when origin/HEAD does not resolve to a
 # commit, in which case nothing is trusted.
-spec_trusted_refs() { # root [--tips: include a frozen commit after each ref]
-    local root="$1" default sha policy configured candidate tip seen
+spec_trusted_refs() { # root [--tips | --policy-errors FILE]
+    local root="$1" default sha policy configured candidate tip seen diagnostic=/dev/null
+    if [ "${2:-}" = --policy-errors ]; then diagnostic="$3"; fi
     default="$(git -C "$root" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
     case "$default" in refs/remotes/*) ;; *) return 0 ;; esac
     sha="$(git -C "$root" rev-parse --verify --quiet "$default^{commit}" || true)"
@@ -1070,7 +1076,11 @@ spec_trusted_refs() { # root [--tips: include a frozen commit after each ref]
     if [ "${2:-}" = --tips ]; then printf '%s\t%s\n' "$default" "$sha"; else printf '%s\n' "$default"; fi
     seen="$default"
     policy="$(git -C "$root" show "$sha:.prdkit/memory/config.md" 2>/dev/null || true)"
-    policy="$(printf '%s\n' "$policy" | spec_review_config_section 2>/dev/null)" || return 0
+    if ! policy="$(printf '%s\n' "$policy" | spec_review_config_section "$diagnostic" 2>/dev/null)"; then
+        # Ordinary discovery retains the default ref; strict binding must refuse.
+        if [ "${2:-}" = --policy-errors ]; then return 1; fi
+        return 0
+    fi
     configured="$(printf '%s\n' "$policy" | awk '
         /^- review-integration-branches:/ {
             n++; value = $0; sub(/^- review-integration-branches:[[:space:]]*/, "", value)

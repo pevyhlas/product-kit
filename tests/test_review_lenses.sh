@@ -189,6 +189,26 @@ for heading in ' ## Configuration' '  ## configuration ###' $'   ##\tCONFIGURATI
     done
 done
 
+it 'Unicode title padding preserves unique fields and cannot hide a duplicate'
+source .prdkit/scripts/bash/spec-lib.sh
+cd "$_SCRATCH_CWD" || exit 1
+for pad in $'\302\240' $'\342\200\257' $'\343\200\200'; do
+    for heading in "## ${pad}Configuration${pad}##${pad}" "${pad}Configuration${pad}"$'\n---'; do
+        printf '%s\n' "$heading" "$separate" > heading.fixture
+        result="$(spec_review_config_section < heading.fixture)"
+        assert_contains "$result" "$separate"
+        printf '%s\n' '## Meaning' '## Configuration' "$publishers" >> heading.fixture
+        last_heading=$(($(wc -l < heading.fixture)-1))
+        reader_exit=0; spec_review_config_section < heading.fixture > section.out 2> section.err || reader_exit=$?
+        assert_eq 1 "$reader_exit"
+        assert_eq '' "$(cat section.out)" 'no fields emitted from either section'
+        assert_contains "$(cat section.err)" "config.md lines 1 and $last_heading"
+    done
+    result="$(printf '%s\n' "##${pad}Configuration" "$publishers" "${pad}## Configuration" "$separate" | spec_review_config_section)"
+    assert_eq '' "$result" 'Unicode whitespace is neither ATX indentation nor a marker separator'
+done
+cd "$project" || exit 1
+
 it 'a noncanonical publisher assignment cannot silently evade the union check'
 review APPROVED 1004
 for key in '-  review-publishers:' '- REVIEW-PUBLISHERS:' $'-\treview-publishers:' '- review-publishers =' \
