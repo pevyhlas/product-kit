@@ -1064,6 +1064,9 @@ spec_records() { # root
                 else if (f[i] != "" && stray == "") stray = f[i]
             if (type !~ /^(HOLD|WAIVER|ATTEST|DEPLOY)$/) { bad("not a HOLD, WAIVER, ATTEST or DEPLOY record"); next }
             if (name == "" || index(name, "=") || name !~ /^[A-Za-z0-9][A-Za-z0-9._-]*$/) { bad(type " needs an id or app name first"); next }
+            if ((type == "HOLD" || type == "WAIVER") && ("ref" in kv)) {
+                bad(type " " name ": put ref= after the reason separator ( — )"); next
+            }
             if (type == "HOLD") { need = "owner scope since until"; date = kv["since"]; until = kv["until"]; who = kv["owner"] }
             else if (type == "WAIVER") { need = "owner check scope expires"; date = ""; until = kv["expires"]; who = kv["owner"] }
             else if (type == "ATTEST") { need = "by what env version date"; date = kv["date"]; until = ""; who = kv["by"] }

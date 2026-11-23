@@ -13,6 +13,11 @@ change by change.
 - Holds and waivers can keep long verbatim owner quotes in `specs/authority.md` using
   checked references. Status and doctor validate the references without shortening the
   scope or end condition in the row. No migration needed.
+
+## [2.1.0] — 2026-11-23 — task parts, change tags and fail-closed verifiers
+
+### Added
+
 - Changes can group tasks by part and carry lowercase tags into the close log. Parts can
   declare one level of subparts. Doctor checks task assignments and parent links, and status
   reports the optional data without treating it as acceptance. Opening a change checks tags
@@ -33,6 +38,8 @@ change by change.
 
 ### Fixed
 
+- `init.sh --upgrade` accepts any 2.x install and skips the 1.x review transition for it. It
+  previously refused installs newer than 2.0, so a 2.1 install could not upgrade.
 - Adoption (including pinned-source proof), delivery, doctor, status, and change-close
   preflight fail rather than treating an incomplete inventory as clean. Parsed spec input
   and line-oriented verifier evidence require LF line endings and a final newline;

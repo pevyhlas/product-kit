@@ -305,6 +305,36 @@ for broken in missing-file missing-anchor duplicate-anchor edited bad-ref; do
 done
 rm "$PROJ/authority.saved" specs/authority.md specs/records.md
 
+it "HOLD and WAIVER references must follow the reason separator"
+for kind in HOLD WAIVER; do
+    case "$kind" in
+        HOLD) row='HOLD H-09 owner=owner scope=production since=2026-10-01 until=owner confirmation'; anchor=H-09 ;;
+        WAIVER) row='WAIVER W-09 owner=owner check=freshness scope=test expires=2026-10-31'; anchor=W-09 ;;
+    esac
+    printf '# Records\n\n%s ref=specs/authority.md#%s@000000000000\n' "$row" "$anchor" > specs/records.md
+    for reader in "$STATUS_SH" "$DOCTOR"; do
+        for mode in text json; do
+            if [ "$mode" = json ]; then run bash "$reader" --json; else run bash "$reader"; fi
+            assert_eq 1 "$STATUS" "$kind with missing separator fails in ${reader##*/} ($mode)"
+            assert_contains "$OUTPUT" "Malformed record at specs/records.md:3: $kind $anchor: put ref= after the reason separator ( — )"
+        done
+    done
+done
+
+it "reserving ref does not change inline reasons or unrelated record fields"
+cat > specs/records.md <<'MD'
+HOLD H-09 owner=owner scope=production since=2026-10-01 until=owner confirmation xref=legacy — "Leave ref=legacy alone" (owner note)
+WAIVER W-09 owner=owner check=freshness scope=test expires=2026-10-31 — "Also keep ref=legacy" (owner note)
+ATTEST A-09 by=owner what=reviewed env=test version=abc date=2026-10-17 ref=legacy
+MD
+run bash "$STATUS_SH" --json
+assert_eq 0 "$STATUS"
+assert_eq '["\"Leave ref=legacy alone\" (owner note)","\"Also keep ref=legacy\" (owner note)"]' \
+    "$(jq -c '[.holds[].reason]' <<< "$OUTPUT")"
+run bash "$DOCTOR" --json
+assert_eq 0 "$STATUS"
+rm specs/records.md
+
 it "the owner inbox: open lines with age, lines without a disposition"
 cat > specs/inbox.md <<'MD'
 # Owner inbox
