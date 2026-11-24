@@ -41,8 +41,8 @@ change by change.
   1. Pause merges. The 3.0 gate ignores 2.x receipts, so an unsettled receipt failure stops
      blocking. Settle every one under the old gate first. To carry one over instead, an
      account the 3.0 policy lists (`review-publishers`, `review-lenses` or `review-owner`),
-     other than the PR author, must request changes on each affected open PR, and the new gate must report it as
-     blocking before merges resume.
+     other than the PR author, must request changes on each affected open PR, and the new
+     gate must report it as blocking before merges resume.
   2. In one change on the trusted default branch, bump the kit pin, run `init.sh --upgrade`,
      set `review-host`, `review-publishers` and `review-owner` as described in
      `.prdkit/templates/config-template.md`, and drop `review-publisher-isolation`. Switch the
