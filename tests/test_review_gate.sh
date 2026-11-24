@@ -3,19 +3,16 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 source "$PK_ROOT/scripts/common.sh"
 source "$PK_ROOT/scripts/spec-lib.sh"
-source "$PK_ROOT/scripts/review-fingerprint-lib.sh"
 STATUS=0
 PROJ="$(make_inited_project)"; track_tmp "$PROJ"
 cd "$PROJ" || exit 1
-CHECK="$PROJ/.prdkit/scripts/bash/check-review.sh"
-CLOSE="$PROJ/.prdkit/scripts/bash/close-change.sh"
-cat >> .prdkit/memory/config.md <<'EOF'
+CHECK="${TEST_REVIEW_GATE:-$PROJ/.prdkit/scripts/bash/check-review.sh}"
+cat > .prdkit/memory/config.md <<'EOF'
 
 ## Configuration
 - review-host: github
-- review-publishers: bot:1001
-- review-owner: user:1003
-- review-publisher-isolation: required
+- review-publishers: bot:1001, user:1002, user:1003, user:1004
+- review-owner: user:1003, user:1005
 - review-t0-paths: docs/
 EOF
 printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n| second | reviewer |\n' >> .prdkit/memory/agents.md
@@ -31,81 +28,100 @@ printf '# Change: reviewed\n**Tier**: T1\n## State\n' > specs/changes/001-review
 printf 'implementation\n' > source.txt
 git add -A; git commit -qm implementation
 HEAD_SHA="$(git rev-parse HEAD)"
-FP="$(review_fingerprint "$PROJ" 001-reviewed "$BASE" "$HEAD_SHA")"
 PR=https://github.com/owner/repo/pull/7
 use_gh_stub
 fx_pr 7 "$HEAD_SHA"
-payload() { # PR [jq edit]
-    jq -cn --argjson pr "$1" --arg head "$HEAD_SHA" --arg base "$BASE" --arg fp "$FP" '
-        {schema:"prdkit.review.v3",id:"00000000000000000000000000000001",repo:"owner/repo",pr:$pr,
-         change:"001-reviewed",reviewer:"code",from:"start",to:$fp,head:$head,since:"",base:"refs/remotes/origin/main",base_at:$base,
-         verdict:"PASS",critical:0,high:0,medium:0,low:0,report:"https://example.invalid/report"}' | jq -c "${2:-.}"
+online() { run bash "$CHECK" --json --pr "$PR" 001-reviewed; }
+
+publisher_review() { # state commit [override object]
+    fx_review 7 'Independent review.' "$(jq -cn --arg state "$1" --arg head "$2" --argjson extra "${3:-null}" '{state:$state,commit:{oid:$head}} * ($extra // {})')"
 }
-publish() { local body; body="$(payload "$1" "${2:-.}")"; fx_review "$1" "$(printf '<!-- prdkit-review\n%s\n-->\n' "$body")" "${3:-}"; }
-online() { run bash "$CHECK" --json --pr "$PR" "$@" 001-reviewed; }
-
-it 'a current record requires an independent host receipt'
-online
-assert_eq 1 "$STATUS"
-assert_contains "$OUTPUT" 'needs a recorded independent review'
-assert_contains "$OUTPUT" '"receipts":0'
-publish 7
-online --save-receipts .git/receipts
-assert_eq 0 "$STATUS" "$OUTPUT"
+dismiss_review() { # GitHub updates the original review, not a separate timeline entry.
+    local f="$GH_STUB_DIR/reviews/7.json"
+    jq --arg id "$1" 'map(if (.fullDatabaseId|tostring)==$id then .state="DISMISSED" else . end)' "$f" > "$f.new" && mv "$f.new" "$f"
+}
+it 'only native approvals from an allowed non-author account count'
+fx_review 7 'Verdict: PASS'
+online; assert_eq 1 "$STATUS" 'review body is not approval'
+fx_owner_review 7 APPROVED "$HEAD_SHA" '{"author":{"databaseId":1009}}'
+fx_owner_review 7 APPROVED "$HEAD_SHA" '{"author":{"databaseId":1002}}'
+online; assert_eq 1 "$STATUS" 'even an allowlisted PR author never counts'
+fx_review 7 'reviewed' '{"state":"APPROVED"}'
+online; assert_eq 0 "$STATUS" "eligible publisher: $OUTPUT"
+git show "$BASE:.prdkit/memory/config.md" | { cat; echo '- review-publisher-isolation: shared'; } |
+    trusted_edit refs/remotes/origin/main .prdkit/memory/config.md
+online; assert_eq 1 "$STATUS" 'retired receipt policy fails closed'
+assert_contains "$OUTPUT" 'review-publisher-isolation is unsupported'
+git update-ref refs/remotes/origin/main "$BASE"; online
 assert_contains "$OUTPUT" '"authority":"host"'
-assert_contains "$OUTPUT" '"result":"pass"'
-assert_contains "$OUTPUT" '"receipt":"https://github.com/owner/repo/pull/7#pullrequestreview-1001"'
-assert_not_contains "$OUTPUT" report_verification
+assert_contains "$OUTPUT" '"reviewer":1001'
 
-it 'a merged predecessor on the same head branch does not make the gate unavailable'
-fx_closed_pr 6 "$HEAD_SHA" '{"merged_at":"2026-01-03T00:00:00Z"}'
-publish 6 '.verdict="FAIL"'
-online
-assert_eq 0 "$STATUS" "$OUTPUT"
-assert_contains "$OUTPUT" '"authority":"host"'
-assert_contains "$OUTPUT" '"carried_blockers":0'
-rm "$GH_STUB_DIR/pulls/6.json" "$GH_STUB_DIR/reviews/6.json"
+it 'only the latest submitted review by that account on the exact head decides'
+for state in CHANGES_REQUESTED DISMISSED COMMENTED; do
+    printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
+    publisher_review APPROVED "$HEAD_SHA"; online; assert_eq 0 "$STATUS" 'publisher qualifies at T1'
+    publisher_review "$state" "$BASE"; online
+    if [ "$state" = CHANGES_REQUESTED ]; then assert_eq 1 "$STATUS" 'later objection on another SHA blocks'
+    else assert_eq 0 "$STATUS" 'other commits cannot revoke a positive approval'; fi
+    publisher_review "$state" "$HEAD_SHA" '{"submittedAt":"2026-02-01T00:00:00Z"}'
+    publisher_review APPROVED "$HEAD_SHA" # earlier submission time, despite appearing last
+    online; assert_eq 1 "$STATUS" "$state overrides earlier approval"
+done
+publisher_review APPROVED "$HEAD_SHA" '{"submittedAt":"2026-02-02T00:00:00Z"}'; online; assert_eq 0 "$STATUS" 'independent approved publisher still counts'
+fx_review 7 draft '{"state":"PENDING","submittedAt":null}'; online; assert_eq 0 "$STATUS" 'draft is not submitted'
 
-it 'an invalid authenticated receipt remains host evidence and blocks'
-publish 7 '.id="00000000000000000000000000000002"|.to="fp1:0000000000000000000000000000000000000000000000000000000000000000"'
-online
-assert_eq 1 "$STATUS"
-assert_contains "$OUTPUT" '"authority":"host"'
-assert_contains "$OUTPUT" '"invalid_receipts":1'
-jq '.[0:1]' "$GH_STUB_DIR/reviews/7.json" > "$GH_STUB_DIR/keep.json"
-mv "$GH_STUB_DIR/keep.json" "$GH_STUB_DIR/reviews/7.json"
+it 'one publisher cannot outvote another publisher on the same head'
+second='{"author":{"databaseId":1004}}'
+publisher_review CHANGES_REQUESTED "$HEAD_SHA" "$second"
+GH_STUB_PAGE_SIZE=1 online; assert_eq 1 "$STATUS" 'T1 objection blocks despite an independent approval'
+assert_contains "$OUTPUT" '"blocking":[{"reviewer":1004,'
+run bash "$CHECK" --pr "$PR" 001-reviewed
+block_id="$(jq -r 'last.fullDatabaseId' "$GH_STUB_DIR/reviews/7.json")"
+assert_contains "$OUTPUT" "publisher 1004 (review $block_id on $HEAD_SHA)"
+publisher_review APPROVED "$HEAD_SHA" "$second"; online; assert_eq 0 "$STATUS" 'objector later approves'
+assert_contains "$OUTPUT" '"blocking":[]'
 
-it 'snapshots are jq-free preview passes, never host authority'
-: > "$GH_STUB_DIR/requests"
-run bash "$CHECK" --json --receipts .git/receipts 001-reviewed
-assert_eq 3 "$STATUS" "$OUTPUT"
-assert_contains "$OUTPUT" '"authority":"snapshot"'
-assert_contains "$OUTPUT" '"result":"preview"' 'a successful snapshot is not a JSON pass'
-assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
+it 'pushing even a metadata-only commit requires fresh approval'
+git commit -q --allow-empty -m 'new exact head'; online; assert_eq 1 "$STATUS" 'unpublished descendant cannot pass'
+HEAD_SHA="$(git rev-parse HEAD)"; fx_pr 7 "$HEAD_SHA"; online; assert_eq 1 "$STATUS" 'old commit cannot approve new head'
+fx_pr 7 ''; online; assert_eq 1 "$STATUS" 'empty PR head is an error'; assert_contains "$OUTPUT" '"authority":"unavailable"'
+fx_pr 7 "$HEAD_SHA"
 
-run bash "$CHECK" --receipts .git/receipts 001-reviewed
-assert_contains "$OUTPUT" PREVIEW
-assert_contains "$OUTPUT" fetched=
-run bash "$CHECK" --json 001-reviewed
-assert_eq 1 "$STATUS" 'no source grants no coverage'
-assert_contains "$OUTPUT" '"authority":"none"'
-assert_contains "$OUTPUT" '"result":"preview"' 'even a failing structure-only check is a preview'
-assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
+it 'every page must be complete and advance even after an eligible approval'
+printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
+publisher_review APPROVED "$HEAD_SHA"
+publisher_review CHANGES_REQUESTED "$HEAD_SHA" '{"submittedAt":"2026-02-01T00:00:00Z"}'
+GH_STUB_PAGE_SIZE=1 online; assert_eq 1 "$STATUS" 'second page revokes'
+assert_contains "$(cat "$GH_STUB_DIR/requests")" 'after=cursor-1'
+publisher_review APPROVED "$HEAD_SHA" '{"submittedAt":"2026-02-02T00:00:00Z"}'
+GH_STUB_PAGE_SIZE=1 online; assert_eq 0 "$STATUS" 'last page restores approval'
+GH_STUB_FAIL=graphql:PrdkitReviews online; assert_eq 1 "$STATUS" 'API failure'; assert_contains "$OUTPUT" '"authority":"unavailable"'
+query='query PrdkitReviews { fixture }'
+route="$GH_STUB_DIR/routes/graphql_PrdkitReviews-7.json"
+GH_STUB_PAGE_SIZE=1 gh api graphql -f query="$query" -F number=7 > "$GH_STUB_DIR/first"
+for edit in '.' '.data.repository.pullRequest.reviews.pageInfo.hasNextPage=false' \
+    '.data.repository.pullRequest.reviews.pageInfo.endCursor=null' \
+    '.data.repository.pullRequest.reviews.nodes[0].author.databaseId=null' \
+    '.errors=[{"message":"partial"}]'; do
+    jq "$edit" "$GH_STUB_DIR/first" > "$route"
+    online; assert_eq 1 "$STATUS" 'non-advancing cursor, partial count or API errors fail closed'
+    assert_contains "$OUTPUT" '"authority":"unavailable"'
+done
+rm "$route"
+it 'change-local configuration cannot grant the PR reviewer permission'
+git show "$BASE:.prdkit/memory/config.md" | sed 's/bot:1001, user:1002, user:1003/bot:1009/' |
+    trusted_edit refs/remotes/origin/main .prdkit/memory/config.md
+printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"; fx_review 7 'Reviewed.' '{"state":"APPROVED"}'
+online; assert_eq 1 "$STATUS" 'publisher removed at the trusted tip'
+assert_contains "$OUTPUT" 'requires an independent review-publishers'
+git update-ref refs/remotes/origin/main "$BASE"
 
-it 'offline gate modes use only standard tools; either missing online tool fails unavailable'
 TOOLS="$(mktemp -d)"; track_tmp "$TOOLS"
 sha_tool=sha256sum; command -v sha256sum >/dev/null 2>&1 || sha_tool=shasum
-for cmd in bash dirname basename git sed awk tr head tail grep cat mktemp rm mv mkdir wc sort od "$sha_tool"; do
+for cmd in bash dirname basename git sed awk tr head tail grep cat mktemp rm mv mkdir wc sort "$sha_tool"; do
     ln -s "$(command -v "$cmd")" "$TOOLS/$cmd"
 done
 : > "$GH_STUB_DIR/requests"
-run env PATH="$TOOLS" bash "$CHECK" --json --receipts .git/receipts 001-reviewed
-assert_eq 3 "$STATUS" "$OUTPUT"
-assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
-run env PATH="$TOOLS" bash "$CHECK" --json 001-reviewed
-assert_eq 1 "$STATUS" 'structure-only mode cannot invent missing coverage'
-assert_contains "$OUTPUT" '"authority":"none"'
-assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
 for missing in gh jq; do
     if [ "$missing" = gh ]; then ln -s "$(command -v jq)" "$TOOLS/jq"
     else rm -f "$TOOLS/jq"; ln -s "$GH_STUB_DIR/bin/gh" "$TOOLS/gh"; fi
@@ -116,211 +132,102 @@ for missing in gh jq; do
     assert_eq '' "$(cat "$GH_STUB_DIR/requests")"
 done
 
-it 'contradictory source modes are usage errors'
-run bash "$CHECK" --pr "$PR" --receipts .git/receipts 001-reviewed
-assert_eq 2 "$STATUS"
-run bash "$CHECK" --save-receipts .git/receipts 001-reviewed
-assert_eq 2 "$STATUS"
-
-it 'missing tools, offline and partial API responses are unavailable, not empty lists'
-for setting in GH_STUB_OFFLINE=true GH_STUB_PARTIAL=pulls/7; do
-    run env "$setting" bash "$CHECK" --json --pr "$PR" 001-reviewed
-    assert_eq 1 "$STATUS"
-    assert_contains "$OUTPUT" '"authority":"unavailable"'
-done
-run env 'GH_STUB_FAIL=pulls?state=closed&head=owner%3Afeature' bash "$CHECK" --json --pr "$PR" 001-reviewed
-assert_eq 1 "$STATUS" 'a failed closed-source listing is not an empty successful list'
-assert_contains "$OUTPUT" '"authority":"unavailable"'
-assert_contains "$OUTPUT" 'could not enumerate closed source PRs completely'
-printf 'previous snapshot\n' > .git/unavailable-snapshot
-run env GH_STUB_OFFLINE=true bash "$CHECK" --json --pr "$PR" --save-receipts .git/unavailable-snapshot 001-reviewed
-assert_eq 1 "$STATUS"
-assert_eq 'previous snapshot' "$(cat .git/unavailable-snapshot)" 'an unavailable read never replaces a snapshot with less evidence'
-
-it 'shared policy is surfaced in JSON and warns in human output'
-git show "$BASE:.prdkit/memory/config.md" | sed 's/isolation: required/isolation: shared/' |
-    trusted_edit refs/remotes/origin/main .prdkit/memory/config.md
-fx_pr 7 "$(git rev-parse HEAD)" '{"user":{"id":1001},"author":{"databaseId":1001,"__typename":"Bot","login":"publisher[bot]"}}'
-online
-assert_eq 0 "$STATUS" "$OUTPUT"
-assert_contains "$OUTPUT" '"publisher_isolation":"shared"'
-run bash "$CHECK" --pr "$PR" 001-reviewed
-assert_contains "$OUTPUT" "not the reviewer's independence"
-run bash "$CHECK" --receipts .git/receipts 001-reviewed
-assert_eq 3 "$STATUS"
-assert_contains "$OUTPUT" 'Publisher isolation is shared'
-git update-ref refs/remotes/origin/main "$BASE"
-
-it 'PR base and head are checked; an unpushed record-only closing commit is permitted'
-fx_pr 7 "$(git rev-parse HEAD)" '{"base":{"ref":"other"}}'
-online
-assert_eq 1 "$STATUS"
-assert_contains "$OUTPUT" 'the PR merges into other, not --base main'
-printf '**Step**: verified\n' >> specs/changes/001-reviewed.md
-git commit -qam 'record verification'
-fx_pr 7 "$(git rev-parse HEAD)"
-PR_HEAD="$(git rev-parse HEAD)"
-
-it 'online --head must descend from the PR head, not merely carry equal content'
-TWIN="$(printf 'equal-content sibling\n' | git commit-tree "$(git rev-parse "$PR_HEAD^{tree}")" -p "$BASE")"
-for unrelated in "$TWIN" "$HEAD_SHA"; do
-    assert_eq "$FP" "$(review_fingerprint "$PROJ" 001-reviewed "$BASE" "$unrelated")" 'fixture has identical reviewed content'
-    online --head "$unrelated"
-    assert_eq 1 "$STATUS" 'equal content cannot replace PR history'
-    assert_contains "$OUTPUT" '"authority":"unavailable"'
-    assert_contains "$OUTPUT" '"result":"preview"'
-    assert_contains "$OUTPUT" 'is not a local ancestor of --head'
-done
-
-it 'an unavailable PR-head object produces clean preview JSON and a fetch remedy'
-fx_pr 7 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-online
-assert_eq 1 "$STATUS"
-assert_eq preview "$(printf '%s' "$OUTPUT" | jq -r .result)" 'Git diagnostics do not corrupt the JSON channel'
-assert_contains "$OUTPUT" '"authority":"unavailable"'
-assert_contains "$OUTPUT" 'fetch the PR head'
-fx_pr 7 "$PR_HEAD"
-
-it 'a descendant with unpublished code still fails content binding'
-printf 'unreviewed\n' >> source.txt; git commit -qam 'unpublished code'
-online
-assert_eq 1 "$STATUS"
-assert_contains "$OUTPUT" 'PR head does not match the content'
-git reset -q --hard "$PR_HEAD"
-run bash "$CLOSE" 001-reviewed 'done'
-assert_eq 2 "$STATUS" 'closing without --pr is a usage error'
-before="$(git rev-parse HEAD)"
-run bash "$CLOSE" --pr "$PR" 001-reviewed 'done'
-assert_eq 0 "$STATUS" "$OUTPUT"
-assert_eq "$before" "$(git rev-parse HEAD^)" 'one local closing commit'
-online
-assert_eq 0 "$STATUS" "$OUTPUT"
-assert_contains "$OUTPUT" '"head_is_pr_head":false'
-assert_contains "$OUTPUT" "\"pr_head\":\"$PR_HEAD\""
-
-it 'a shared-log-only close requires a per-change entry at deletion'
-git checkout -qb shared-log-close "$PR_HEAD"
-git rm -q specs/changes/001-reviewed.md
-printf -- '- 2026-01-03 001-reviewed: closed\n' >> .prdkit/history/log.md
-git commit -qam 'close without a per-change entry'
-online
-assert_eq 1 "$STATUS"
-assert_contains "$OUTPUT" 'current per-change entry format'
-
-it 'a current close can be compacted without changing its own fingerprint'
-git checkout -q "$PR_HEAD"
-git rm -q specs/changes/001-reviewed.md
-mkdir -p .prdkit/history/log
-printf -- '- 2026-01-03 001-reviewed: closed\n' > .prdkit/history/log/001-reviewed.md
-git add .prdkit/history/log; git commit -qm close
-CLOSE_ENTRY="$(git rev-parse HEAD)"
-cat .prdkit/history/log/001-reviewed.md >> .prdkit/history/log.md
-git rm -q .prdkit/history/log/001-reviewed.md; git commit -qam compact
-online
-assert_eq 0 "$STATUS" "$OUTPUT"
-assert_eq "$FP" "$(jq -r .fingerprint <<< "$OUTPUT")" 'the compacted close retains the reviewed fingerprint'
-
-it 'compaction is not closing metadata'
-git checkout -q "$CLOSE_ENTRY"
-cat .prdkit/history/log/001-reviewed.md >> .prdkit/history/log.md
-git rm -q .prdkit/history/log/001-reviewed.md
-printf -- '- 2026-01-04 compaction: retain current entries\n' >> .prdkit/history/log.md
-git commit -qam 'compact the shared log'
-fx_pr 7 "$PR_HEAD"
-online
-assert_eq 1 "$STATUS" 'compaction also changes the reviewed fingerprint'
-assert_contains "$OUTPUT" 'PR head does not match the content'
-git checkout -q 001-reviewed
-
-it 'record-only and T0 exempt coverage, never blocker enumeration'
-git update-ref refs/remotes/origin/main "$before"
-printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
-online
-assert_eq 0 "$STATUS" "$OUTPUT"
-assert_contains "$OUTPUT" '"record_only":true'
+it 'offline structure is a preview and cannot approve'
 run bash "$CHECK" --json 001-reviewed
-assert_eq 3 "$STATUS"
-fx_closed_pr 6 "$HEAD_SHA"
-publish 6 '.verdict="FAIL"'
-online
-assert_eq 1 "$STATUS" 'record-only carried FAIL still blocks'
-assert_contains "$OUTPUT" '"carried_blockers":1'
+assert_eq 3 "$STATUS" "$OUTPUT"
+assert_contains "$OUTPUT" '"result":"preview"'
+for retired in --receipts --save-receipts; do
+    run bash "$CHECK" "$retired" snapshot 001-reviewed
+    assert_eq 2 "$STATUS"
+    assert_contains "$OUTPUT" "Unknown option: $retired"
+done
+
+it 'the direct gate refuses two best merge bases even with an eligible approval'
+other="$(git commit-tree "$BASE^{tree}" -p "$BASE" -m 'independent target commit')"
+target_tip="$(git commit-tree "$HEAD_SHA^{tree}" -p "$other" -p "$HEAD_SHA" -m 'target merges feature')"
+feature_tip="$(git commit-tree "$HEAD_SHA^{tree}" -p "$HEAD_SHA" -p "$other" -m 'feature merges target')"
+git update-ref refs/remotes/origin/main "$target_tip"
+git checkout -q --detach "$feature_tip"
+assert_eq 2 "$(git merge-base --all origin/main HEAD | wc -l | tr -d ' ')" 'fixture has two best ancestors'
+fx_pr 7 "$feature_tip"; publisher_review APPROVED "$feature_tip"
+online; assert_eq 1 "$STATUS" 'approval does not resolve an ambiguous review range'
+assert_contains "$OUTPUT" 'multiple merge bases'
+run bash "$CHECK" --json 001-reviewed
+assert_eq 1 "$STATUS" 'ambiguous structure cannot pass preview either'
+assert_contains "$OUTPUT" 'multiple merge bases'
+it 'each effective tier enforces its own minimum; an overlapping account is owner only'
 git update-ref refs/remotes/origin/main "$BASE"
-git checkout -qb 002-docs "$BASE"
-mkdir -p specs/changes docs
-printf '# Docs\n**Tier**: T0\n## State\n' > specs/changes/002-docs.md
-printf 'documentation\n' > docs/guide.md
-git add -A; git commit -qm docs
-use_gh_stub; fx_pr 7 "$(git rev-parse HEAD)"
-run bash "$CHECK" --json 002-docs
-assert_eq 3 "$STATUS" 'T0 without a source is only a preview'
-run bash "$CHECK" --json --pr "$PR" 002-docs
-assert_eq 0 "$STATUS" "$OUTPUT"
-publish 7 '.change="002-docs"|.verdict="FAIL"|.to="none"|.head="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"'
-run bash "$CHECK" --json --pr "$PR" 002-docs
-assert_eq 1 "$STATUS" 'T0 FAIL blocks online'
-assert_contains "$OUTPUT" 'blocking verdict stands'
-
-it 'an unsupported State verdict blocks even T0 with no host verdicts'
-git checkout -qb unsupported-state
-printf '**Review**: round 1 · historical range · code · PASS\n' >> specs/changes/002-docs.md
-git commit -qam 'unsupported record format'
-use_gh_stub; fx_pr 7 "$(git rev-parse HEAD)"
-run bash "$CHECK" --json --save-receipts .git/t0-receipts --pr "$PR" 002-docs
-assert_eq 1 "$STATUS"
-assert_contains "$OUTPUT" 'current reviews are prdkit.review.v3 host receipts'
-run bash "$CHECK" --json --receipts .git/t0-receipts 002-docs
-assert_eq 1 "$STATUS"
-assert_contains "$OUTPUT" 'current reviews are prdkit.review.v3 host receipts'
-run bash "$CHECK" --json 002-docs
-assert_eq 1 "$STATUS"
-assert_contains "$OUTPUT" 'current reviews are prdkit.review.v3 host receipts'
-
-it "a renamed carrier cannot drop another identity's FAIL, and foreign PASS never covers"
-git checkout -qb 003-original "$BASE"
-mkdir -p specs/changes
-printf '# Original\n**Tier**: T1\n## State\n' > specs/changes/003-original.md
-printf implementation > source.txt; git add -A; git commit -qm original
-use_gh_stub; fx_pr 7 "$(git rev-parse HEAD)"
-PUB="$PROJ/.prdkit/scripts/bash/publish-review.sh"
-run bash "$PUB" 003-original --pr "$PR" --reviewer code --verdict FAIL --counts 0,0,0,0 --report https://example.invalid/report --head HEAD
-assert_eq 0 "$STATUS" "$OUTPUT"
-git rm -q specs/changes/003-original.md
-mkdir -p specs/changes
-printf '# Carrier\n**Tier**: T1\n## State\n' > specs/changes/004-carrier.md
-mkdir -p .prdkit/history/log; printf -- '- 2026-01-01 003-original: moved to carrier\n' > .prdkit/history/log/003-original.md
-git add -A; git commit -qm carrier
-fx_pr 7 "$(git rev-parse HEAD)"
-printf '| security | reviewer |\n' >> .git/registry-fragment
-{ git show "$BASE:.prdkit/memory/agents.md"; cat .git/registry-fragment; } |
-    trusted_edit refs/remotes/origin/main .prdkit/memory/agents.md
-run bash "$PUB" 004-carrier --pr "$PR" --reviewer security --verdict PASS --counts 0,0,0,0 --report https://example.invalid/report --head HEAD
-assert_eq 0 "$STATUS" "$OUTPUT"
-run bash "$CHECK" --json --pr "$PR" 004-carrier
-assert_eq 1 "$STATUS" 'another reviewer covers the carrier but cannot clear the original FAIL'
-assert_contains "$OUTPUT" 'code 003-original blocking verdict stands'
-run bash "$PUB" 004-carrier --pr "$PR" --reviewer code --verdict PASS --counts 0,0,0,0 --report https://example.invalid/report --head HEAD
-assert_eq 0 "$STATUS" "$OUTPUT"
-run bash "$CHECK" --json --pr "$PR" 004-carrier
-assert_eq 0 "$STATUS" "$OUTPUT"
-printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
-run bash "$PUB" 003-original --pr "$PR" --reviewer code --verdict PASS --counts 0,0,0,0 --report https://example.invalid/report --head HEAD
-assert_eq 0 "$STATUS" "$OUTPUT"
-run bash "$CHECK" --json --pr "$PR" 004-carrier
-assert_eq 1 "$STATUS" 'foreign PASS supplies no carrier coverage'
-assert_contains "$OUTPUT" 'needs a recorded independent review'
-
-# Restore the T0 closing fixture for its independent preview-exit test.
-git checkout -q 002-docs
-use_gh_stub; fx_pr 7 "$(git rev-parse HEAD)"
-
-it 'close-change refuses a preview from its gate without changing source'
-# Deliberately replace the gate only in this disposable project to inject its exit contract.
-printf '#!/usr/bin/env bash\nprintf "PREVIEW\\n"\nexit 3\n' > "$CHECK"
-before="$(git rev-parse HEAD)"
-run bash "$CLOSE" --pr "$PR" 002-docs 'done'
-assert_eq 1 "$STATUS"
-assert_contains "$OUTPUT" 'publish the remaining verdicts first'
-assert_eq "$before" "$(git rev-parse HEAD)"
-assert_file specs/changes/002-docs.md
+for level in T0 T1 T2 T3; do
+    git checkout -q --detach "$BASE"
+    mkdir -p specs/changes docs
+    printf '# Change\n**Tier**: %s\n## State\n' "$level" > specs/changes/001-reviewed.md
+    echo doc > docs/page.md
+    git add -A; git commit -qm "$level"
+    h="$(git rev-parse HEAD)"; fx_pr 7 "$h"
+    printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
+    online
+    if [ "$level" = T0 ]; then
+        assert_eq 0 "$STATUS" 'T0 needs no positive approval'
+        assert_contains "$OUTPUT" '"reviews":[]'
+        GH_STUB_FAIL=graphql:PrdkitReviews online; assert_eq 1 "$STATUS" 'T0 still requires a complete host read'
+        publisher_review CHANGES_REQUESTED "$h" '{"author":{"databaseId":1002}}'
+        publisher_review CHANGES_REQUESTED "$h" '{"author":{"databaseId":1009}}'
+        online; assert_eq 0 "$STATUS" 'author and unlisted objections do not block T0'
+        publisher_review CHANGES_REQUESTED "$h"; online; assert_eq 1 "$STATUS" 'eligible objection blocks T0'
+        assert_contains "$OUTPUT" '"blocking":[{"reviewer":1001,'
+        dismiss_review "$(jq -r 'last.fullDatabaseId' "$GH_STUB_DIR/reviews/7.json")"
+        online; assert_eq 0 "$STATUS" 'dismissed objection no longer blocks T0'
+        assert_contains "$OUTPUT" '"reviews":[]'
+        assert_contains "$OUTPUT" '"blocking":[]'
+        echo 'unrelated rewrite' > .prdkit/history/log.md; git commit -qam 'shared log is not automatically exempt'
+        fx_pr 7 "$(git rev-parse HEAD)"; online; assert_eq 1 "$STATUS" 'T0 must qualify structurally'
+        assert_contains "$OUTPUT" 'T0 is docs only'
+        continue
+    fi
+    assert_eq 1 "$STATUS" "$level without approval fails"
+    fx_owner_review 7 APPROVED "$h"; online
+    assert_eq 1 "$STATUS" "$level owner-only approval is not independent"
+    assert_contains "$OUTPUT" 'requires an independent review-publishers'
+    printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
+    publisher_review APPROVED "$h"; online
+    if [ "$level" != T3 ]; then assert_eq 0 "$STATUS" "$level independent approval suffices"; continue; fi
+    assert_eq 1 "$STATUS" 'publisher alone cannot approve T3'
+    assert_contains "$OUTPUT" 'also requires a review-owner'
+    fx_owner_review 7 APPROVED "$BASE"; online; assert_eq 1 "$STATUS" 'older owner approval cannot qualify'
+    fx_owner_review 7 APPROVED "$h"; online; assert_eq 0 "$STATUS" 'distinct publisher and owner approve T3'
+    fx_owner_review 7 CHANGES_REQUESTED "$h" '{"author":{"databaseId":1005}}'
+    online; assert_eq 1 "$STATUS" 'another owner objects despite both T3 approvals'
+    assert_contains "$OUTPUT" '"blocking":[{"reviewer":1005,'
+    dismiss_review "$(jq -r 'last.fullDatabaseId' "$GH_STUB_DIR/reviews/7.json")"
+    fx_pr 7 "$h" '{"author":{"databaseId":1003}}'; online; assert_eq 1 "$STATUS" 'PR author cannot approve as owner'
+    fx_pr 7 "$h"
+    fx_owner_review 7 DISMISSED "$h"; online; assert_eq 1 "$STATUS" 'dismissal removes the owner approval'
+    fx_owner_review 7 APPROVED "$h"; publisher_review CHANGES_REQUESTED "$h"
+    online; assert_eq 1 "$STATUS" 'owner cannot compensate for publisher revocation'
+done
+it 'objections survive a push until their own dismissal or the objector approves the new head'
+for level in T0 T1; do
+    git checkout -q --detach "$BASE"
+    mkdir -p specs/changes
+    printf '# Change\n**Tier**: %s\n## State\n' "$level" > specs/changes/001-reviewed.md
+    git add -A; git commit -qm "$level record"
+    old="$(git rev-parse HEAD)"; fx_pr 7 "$old"
+    f="$GH_STUB_DIR/reviews/7.json"; printf '[]\n' > "$f"
+    publisher_review CHANGES_REQUESTED "$old"; objection="$(jq -r 'last.fullDatabaseId' "$f")"
+    git commit -q --allow-empty -m 'new PR head'; h="$(git rev-parse HEAD)"; fx_pr 7 "$h"
+    online; assert_eq 1 "$STATUS" "$level push alone cannot clear an objection"
+    assert_contains "$OUTPUT" "\"blocking\":[{\"reviewer\":1001,\"review\":\"$objection\",\"role\":\"publisher\",\"commit\":\"$old\"}]"
+    publisher_review APPROVED "$h" "$second"; online; assert_eq 1 "$STATUS" "$level another publisher cannot clear it"
+    publisher_review APPROVED "$old"; publisher_review COMMENTED "$h"; online
+    assert_eq 1 "$STATUS" "$level old-head approval and new-head comment cannot clear it"
+    publisher_review DISMISSED "$h"; online; assert_eq 1 "$STATUS" "$level unrelated dismissal cannot clear it"
+    publisher_review CHANGES_REQUESTED "$h"; newer="$(jq -r 'last.fullDatabaseId' "$f")"
+    dismiss_review "$newer"; online; assert_eq 1 "$STATUS" "$level dismissing only the newer objection leaves the original"
+    cp "$f" "$f.before"
+    dismiss_review "$objection"; online; assert_eq 0 "$STATUS" "$level dismissal of the objection itself clears it"
+    mv "$f.before" "$f"
+    publisher_review APPROVED "$h"; GH_STUB_PAGE_SIZE=1 online
+    assert_eq 0 "$STATUS" "$level later exact-head approval by the objector clears it across pages"
+    assert_contains "$OUTPUT" '"blocking":[]'
+done
 finish

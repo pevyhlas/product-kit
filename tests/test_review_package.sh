@@ -9,7 +9,6 @@
 #   - revision and usage errors exit non-zero
 #   - --since needs BASE to be the change's current merge base with a trusted integration branch,
 #     accepts an earlier head a squash or rebase left out of HEAD's history, and the JSON carries
-#     the content fingerprints publish-review.sh binds
 
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -217,25 +216,7 @@ assert_not_contains "$(cat "$pkg/delta.patch")" 'more from the base' "and nothin
 assert_not_contains "$(cat "$pkg/delta.patch")" "commit $MERGE2" "the resolving merge stays out of the delta"
 assert_contains "$(cat "$pkg/index.md")" "check merge $MERGE2 in the full diff" "index names the resolving merge"
 
-it "A blob that cannot be read leaves the fingerprint empty, never a valid-looking one"
-fb="$(setup_fixture_repo)"; track_tmp "$fb"
-FBMAIN="$(git -C "$fb" symbolic-ref --short HEAD)"; FBBASE="$(git -C "$fb" rev-parse HEAD)"
-git -C "$fb" checkout -q -b 010-blob
-echo more >> "$fb/seed.txt"; git -C "$fb" commit -q -am more; FBHEAD="$(git -C "$fb" rev-parse HEAD)"
-trust_at "$fb" "$FBMAIN" "$FBBASE"
-out="$(cd "$fb" && bash "$SCRIPT" 010-blob "$FBBASE")"
-assert_contains "$out" '"FINGERPRINT":"fp1:' "control: the fingerprint is computed"
-BLOBFAKE="$(mktemp -d)"; track_tmp "$BLOBFAKE"
-# shellcheck disable=SC2016  # the stub's own variables, expanded when it runs
-printf '#!/bin/sh\nc=\nfor a in "$@"; do [ "$a" = cat-file ] && c=1; [ -n "$c" ] && [ "$a" = blob ] && exit 128; done\nexec "%s" "$@"\n' "$(command -v git)" > "$BLOBFAKE/git"
-chmod +x "$BLOBFAKE/git"
-out="$(cd "$fb" && PATH="$BLOBFAKE:$PATH" bash "$SCRIPT" 010-blob "$FBBASE")"
-assert_contains "$out" '"FINGERPRINT":""' "a failed blob read prints no fingerprint"
-assert_contains "$(cat "$(pkg_of "$out")/index.md")" "Content fingerprint: none: a changed file's content cannot be read between ${FBBASE:0:12} and $FBHEAD." "index.md says why"
-
 it "A --since outside HEAD's history is accepted: a squash or rebase leaves the reviewed head behind"
-# Formerly refused. Content fingerprints keep a verdict across a squash or rebase, so the narrow
-# delta must start at the reviewed head even when HEAD no longer descends from it.
 sq="$(setup_fixture_repo)"; track_tmp "$sq"
 q() { git -C "$sq" "$@"; }
 SQMAIN="$(q symbolic-ref --short HEAD)"
@@ -262,9 +243,6 @@ assert_contains "$(cat "$pkg/delta.patch")" '+again' "rebase: the delta holds th
 assert_not_contains "$(cat "$pkg/delta.patch")" '+fix' "rebase: and not what was reviewed before it"
 assert_not_contains "$(cat "$pkg/delta.patch")" 'base nine' "rebase: nor what the new base brought"
 assert_contains "$(cat "$pkg/index.md")" "the automatic merge of" "rebase: the delta is against the automatic merge"
-assert_contains "$out" '"FINGERPRINT":"fp1:' "the head's content fingerprint is printed"
-assert_contains "$out" '"SINCE_FINGERPRINT":"fp1:' "and the earlier head's"
-assert_contains "$(cat "$pkg/index.md")" "Content fingerprint: fp1:" "index.md names them"
 run bash -c 'cd "$1" && bash "$2" 009-squash HEAD~1 --since HEAD' _ "$sq" "$SCRIPT"
 assert_eq 1 "$STATUS" 'HEAD itself is no earlier head'
 assert_contains "$OUTPUT" "--since must be an earlier reviewed head, not HEAD" 'refusal explained'
@@ -321,6 +299,32 @@ assert_eq 1 "$STATUS" "an origin/HEAD that resolves to no commit trusts nothing"
 out="$(cd "$bm" && bash "$SCRIPT" 001-x "$M" "$H")"
 assert_contains "$out" "\"BASE_SHA\":\"$M\"" "without --since the package still builds"
 assert_contains "$(cat "$(pkg_of "$out")/diff.patch")" 'evil' "and carries the whole range"
+
+it "--since refuses two best merge bases before allocating a review round"
+# Mb merged X and M. The target independently merges the same parents in reverse.
+cross_target="$(b commit-tree "$Mb^{tree}" -p "$M" -p "$X" -m 'parallel merge')"
+trust_at "$bm" "$BMAIN" "$cross_target"
+assert_eq 2 "$(b merge-base --all "$cross_target" "$H" | wc -l | tr -d ' ')" 'criss-cross fixture'
+# Pass the very base a single-result lookup would choose.
+cd_run 010-cross "$(b merge-base "$cross_target" "$H")" "$H" --since "$R"
+assert_eq 1 "$STATUS" "ambiguous focused package refused" || :
+assert_contains "$OUTPUT" "multiple merge bases" "refusal explains the ambiguous start" || :
+assert_eq absent "$([ -e "$bm/.prdkit/cache/evidence/010-cross" ] && echo present || echo absent)" "no round allocated" || :
+
+it "--since can use a unique integration base despite an ambiguous default"
+b checkout -q --detach "$cross_target"
+mkdir -p "$bm/.prdkit/memory"
+printf '## Configuration\n- review-integration-branches: origin/integration\n' > "$bm/.prdkit/memory/config.md"
+b add .prdkit/memory/config.md; b commit -qm 'configure integration on default'
+trust_at "$bm" main "$(b rev-parse HEAD)"
+# R precedes X, so neither of the default ref's two best bases (X and M) is R.
+b update-ref refs/remotes/origin/integration "$R"
+b checkout -q 001-x
+cd_run 010-integration "$R" "$H" --since "$X"
+assert_eq 0 "$STATUS" "unique configured ref builds: $OUTPUT" || :
+if [ "$STATUS" = 0 ]; then
+    assert_eq refs/remotes/origin/integration "$(cut -f4 "$(pkg_of "$OUTPUT")/completed.tsv")" 'round records the matching ref'
+fi
 
 it "--since accepts the merge base with a configured integration branch"
 b checkout -q "$BMAIN"

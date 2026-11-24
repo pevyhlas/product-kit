@@ -11,11 +11,15 @@ grep -q 'R-01' .eval-state/pr.md || fail 'PR lost canonical reference'
 grep -qi 'Welcome' .eval-state/pr.md || fail 'PR lost completion check context'
 grep -Eiq 'after.*deploy|future.*deploy|next.*(check|observ)' .eval-state/pr.md || fail 'PR lost follow-up observation trigger'
 test "$(git symbolic-ref --short HEAD)" = "$(cat .eval-state/branch)" || fail 'moved to another branch'
+handoff="$(grep '^Closing approval:' .eval-state/pr.md || true)"
+test "$handoff" = "Closing approval: pending at $(git rev-parse HEAD)" || fail 'closing approval must be pending on the exact head'
 source "$PK_ROOT/tests/evals/fixture.sh"
 test -z "$(git diff "$(cat .eval-state/start)" -- "${FIXTURE_CANON[@]}")" || fail 'canonical promise or maturity changed'
 source "$PK_ROOT/tests/lib.sh"
 cd "$FIXTURE"
 use_gh_stub "$FIXTURE/.eval-state/host"
 fx_pr 7 "$(git rev-parse HEAD)" "$(jq -cn --arg base "$(git symbolic-ref --short refs/remotes/origin/HEAD | sed 's|^origin/||')" '{base:{ref:$base}}')"
-bash .prdkit/scripts/bash/check-review.sh --pr https://github.com/owner/repo/pull/7 001-greeting >/dev/null || fail 'same-PR close fails the review gate'
+if bash .prdkit/scripts/bash/check-review.sh --pr https://github.com/owner/repo/pull/7 001-greeting >/dev/null; then fail 'unapproved closing head passed'; fi
+fx_review 7 'Independent review.' '{"state":"APPROVED"}'
+bash .prdkit/scripts/bash/check-review.sh --pr https://github.com/owner/repo/pull/7 001-greeting >/dev/null || fail 'same-PR close breaks review compatibility'
 echo 'ASSERT PASS: same-PR close with explicit runtime unknown and intact canon'

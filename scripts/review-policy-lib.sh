@@ -69,7 +69,8 @@ review_record_history() ( # root id base head work -> first diagnostic, if any
     set -o pipefail
     spec_objects_local "$root" &&
         [ "$(git -C "$root" rev-parse --is-shallow-repository)" = false ] &&
-        start="$(review_merge_base "$root" "$base" "$head")" || return 1
+        start="$(git -C "$root" merge-base --all "$base" "$head")" &&
+        [[ -n "$start" && "$start" != *$'\n'* ]] || return 1
     entry="$(git -C "$root" ls-tree "$start" -- "specs/changes/$id.md")" || return 1
     : > "$work/record-blobs" || return 1
     case "$entry" in
@@ -102,7 +103,7 @@ review_record_history() ( # root id base head work -> first diagnostic, if any
         git -C "$root" cat-file blob "$blob" > "$work/record-text" || return 1
         if review_record_format "$work/record-text"; then continue
         elif [ "$?" -eq 2 ]; then
-            printf 'Unsupported **Review** field in change record history (blob %s): current reviews are prdkit.review.v3 host receipts, not State text.\n' "$blob"
+            printf 'Unsupported **Review** field in change record history (blob %s): current reviews are native GitHub reviews, not State text.\n' "$blob"
             return 0
         else
             printf 'Invalid change record text in history (blob %s): expected LF-terminated Markdown.\n' "$blob"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # close-change.sh — Close a reviewed change in its own PR with one commit: refuse unless
 # check-review.sh passes at HEAD, then write the change's log entry and delete its record.
-# Run it once the required receipts are published and before the final push, so required checks
+# Run it once the current head is approved and before the final push, so required checks
 # run once on the closed head. It commits in the current checkout only; it never pushes, merges
 # or removes a worktree (cleanup-change.sh does that after merge, or --closed for every closed change).
 # The closing commit uses the checkout's ambient Git identity. To use an agent identity, set
@@ -12,10 +12,10 @@
 #   The entire row is at most 200 characters. Omit **Tags**: the helper appends valid header tags.
 #   The entry is its own file, .prdkit/history/log/<id>.md, so two branches that
 #   each close a change never conflict; compaction folds entries into .prdkit/history/log.md (compact.md).
-#   Exit 0 closed and check-review.sh passes at the new head, 1 refused or failing, 2 usage.
+#   Exit 0 closed locally; rerun the gate on the new head, 1 refused or failing, 2 usage.
 #
 # Invariants:
-# Require an online gate pass before writing and again before reporting success.
+# Require an online gate pass before writing. Local close does not authorize the new head.
 # Refuse a dirty record, pre-existing staged changes and symlinked close paths at preflight.
 # Publish a complete per-change log entry without replacing an existing entry. An entry
 # write failure stops before staging, deleting the record or committing.
@@ -153,7 +153,7 @@ fi
 check() { PRDKIT_CLOSE_CHECK_HISTORY=1 bash "$SCRIPT_DIR/check-review.sh" --pr "$pr" --repo "$root" --head HEAD ${base_args[@]+"${base_args[@]}"} "$id" 2>&1; }
 if ! out="$(verify_lines check)" || [ -z "$out" ]; then
     printf '%s\n' "$out" >&2
-    refuse "check-review.sh does not pass at HEAD; publish the remaining verdicts first"
+    refuse "check-review.sh does not pass at HEAD; resolve its problems and meet the tier's approval minimum first"
 fi
 check_paths
 # The process cwd pins a directory just like a directory descriptor. Verify
@@ -211,10 +211,5 @@ git -C "$root" rm -q -- "$path"
 git -C "$root" commit -q -m "${message:-$id: close (log entry, record deleted)}" ||
     refuse "the commit failed; the record deletion and the log entry are staged"
 
-head="$(git -C "$root" rev-parse --short HEAD)"
-if out="$(verify_lines check)" && [ -n "$out" ]; then
-    printf 'Closed %s in %s.\n%s\n' "$id" "$head" "$out"
-else
-    printf '%s\n' "$out" >&2
-    refuse "closed $id in $head, but check-review.sh fails there"
-fi
+head="$(git -C "$root" rev-parse HEAD)"
+printf 'Closed %s in %s. Push this commit, obtain the approvals required for its tier, and rerun check-review.sh before merging.\n' "$id" "$head"

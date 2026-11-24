@@ -7,15 +7,13 @@ printf '%s\n' "$*" >> "$GH_STUB_DIR/requests"
 [ "${GH_STUB_OFFLINE:-false}" != true ] || exit 1
 [ "${1:-}" = api ] || { echo 'gh stub: expected api' >&2; exit 2; }
 shift
-method=GET; endpoint=""; query=""; filter=""; paginate=false; input=""
-owner=owner; name=repo; number=1; after=""; body=""; event=COMMENT
+endpoint=""; query=""; filter=""; paginate=false
+owner=owner; name=repo; number=1; after=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         graphql) endpoint=graphql ;;
-        --method|-X) shift; method="$1" ;;
         --paginate) paginate=true ;;
         --jq|-q) shift; filter="$1" ;;
-        --input) shift; input="$1" ;;
         --header|-H) shift ;;
         --hostname) shift; [ "$1" = github.com ] || exit 1 ;;
         --field|-F|--raw-field|-f)
@@ -25,7 +23,6 @@ while [ "$#" -gt 0 ]; do
                 query) query="$value" ;;
                 owner) owner="$value" ;; name) name="$value" ;;
                 number|pr) number="$value" ;; endCursor|after) after="$value" ;;
-                body) body="$value" ;; event) event="$value" ;;
                 *) echo "gh stub: unknown field $key" >&2; exit 2 ;;
             esac ;;
         --*) echo "gh stub: unknown option $1" >&2; exit 2 ;;
@@ -57,7 +54,6 @@ fi
 if [ -f "$override" ]; then emit < "$override"; exit; fi
 if [ "$endpoint" = graphql ]; then
     case "$operation" in
-        PrdkitViewer) jq '{data:{viewer:(. + {__typename:"User"})}}' "$GH_STUB_DIR/publisher.json" | emit ;;
         PrdkitReviews)
             [ "$owner/$name" = owner/repo ] || exit 1
             pr="$GH_STUB_DIR/pulls/$number.json"
@@ -82,7 +78,7 @@ if [ "$endpoint" = graphql ]; then
                         state:(if $p.merged_at!=null then "MERGED" else ($p.state|ascii_upcase) end),
                         headRefOid:$p.head.sha, headRefName:$p.head.ref, baseRefName:$p.base.ref,
                         createdAt:$p.created_at, merged:($p.merged_at != null),
-                        reviews:{nodes:$reviews[0][$offset:($offset+$size)],
+                        reviews:{totalCount:($reviews[0]|length),nodes:$reviews[0][$offset:($offset+$size)],
                             pageInfo:{hasNextPage:$more,endCursor:$cursor}}}}}}' | emit
                 if [ "${GH_STUB_PARTIAL:-}" = "$route" ] || [ "${GH_STUB_PARTIAL:-}" = "$endpoint" ]; then break; fi
                 if ! $paginate || ! $more; then break; fi
@@ -96,85 +92,6 @@ case "${GH_STUB_PARTIAL:-}" in
     "$route"|"$endpoint"|"$alias_route") printf '%s\n' '{"incomplete":'; exit ;;
 esac
 case "$route" in
-    pulls\?state=open\&per_page=100)
-        open_files=("$GH_STUB_DIR"/pulls/*.json)
-        if [ -f "${open_files[0]}" ]; then
-            jq -s '[.[] | select(.state == "open")]' "${open_files[@]}" | emit
-        else printf '[]\n' | emit; fi ;;
-    pulls\?state=closed\&head=*)
-        jq -s --arg head "${route#*head=}" '[.[] | (.head.label // "owner:feature") as $label |
-            select(.state == "closed" and ($label == $head or (($label | @uri) == $head)))]' \
-            "$GH_STUB_DIR"/pulls/*.json | emit ;;
-    pulls/[0-9]*/reviews/[0-9]*/events)
-        number="${route#pulls/}"; number="${number%%/*}"; review_id="${route%/events}"; review_id="${review_id##*/}"
-        [ "$method" = POST ] && jq -e '.event=="COMMENT"' "$input" >/dev/null || exit 1
-        overrides="${GH_STUB_POST_OVERRIDES:-}"; [ -n "$overrides" ] || overrides='{}'
-        jq --arg id "$review_id" --argjson overrides "$overrides" --slurpfile request "$input" '
-            map(if (.fullDatabaseId|tostring)==$id and .state=="PENDING" then
-                (.state="COMMENTED" | .body=$request[0].body) * $overrides else . end)' "$GH_STUB_DIR/reviews/$number.json" > "$GH_STUB_DIR/next.json"
-        mv "$GH_STUB_DIR/next.json" "$GH_STUB_DIR/reviews/$number.json"
-        cp "$input" "$GH_STUB_DIR/submit-request.json"
-        echo '{}' ;;
-    pulls/[0-9]*/reviews/[0-9]*)
-        number="${route#pulls/}"; number="${number%%/*}"; review_id="${route##*/}"
-        # REST intentionally exposes no lastEditedAt/editor/edit marker (probe §9.2).
-        jq -e --arg id "$review_id" '.[] | select((.fullDatabaseId | tostring) == $id) |
-            {id:.fullDatabaseId,html_url:.url,body,state,submitted_at:.submittedAt,commit_id:.commit.oid,
-             user:{id:.author.databaseId,login:.author.login,type:.author.__typename}}' \
-            "$GH_STUB_DIR/reviews/$number.json" | emit ;;
-    pulls/[0-9]*/reviews)
-        number="${route#pulls/}"; number="${number%%/*}"
-        if [ "$method" = POST ]; then
-            if [ -n "$input" ]; then
-                if [ "$input" = - ]; then payload="$(cat)"; else payload="$(cat "$input")"; fi
-                body="$(printf '%s' "$payload" | jq -er .body)"
-                event="$(printf '%s' "$payload" | jq -r '.event // "PENDING"')"
-            fi
-            [ "$event" = COMMENT ] || [ "$event" = PENDING ] || exit 1
-            if [ -n "$input" ]; then printf '%s\n' "$payload" > "$GH_STUB_DIR/post-request.json"
-            else jq -n --arg body "$body" --arg event "$event" '{event:$event,body:$body}' > "$GH_STUB_DIR/post-request.json"; fi
-            # COMMENT reviews are accepted on closed PRs too (probe §9.6).
-            [ -f "$GH_STUB_DIR/pulls/$number.json" ] || exit 1
-            next_id="$(jq -s '[.[][] | .fullDatabaseId | tonumber] | (max // 1000) + 1' "$GH_STUB_DIR"/reviews/*.json)"
-            # Fixtures can rewind a review list, but a new POST never reuses an assigned host id.
-            if [ -f "$GH_STUB_DIR/last-post-id" ] && [ "$next_id" -le "$(cat "$GH_STUB_DIR/last-post-id")" ]; then
-                next_id=$(( $(cat "$GH_STUB_DIR/last-post-id") + 1 ))
-            fi
-            printf '%s\n' "$next_id" > "$GH_STUB_DIR/last-post-id"
-            post_overrides="${GH_STUB_POST_OVERRIDES:-}"; [ -n "$post_overrides" ] || post_overrides='{}'
-            jq -n --slurpfile reviews "$GH_STUB_DIR/reviews/$number.json" \
-                --slurpfile pr "$GH_STUB_DIR/pulls/$number.json" --slurpfile author "$GH_STUB_DIR/publisher.json" \
-                --argjson id "$next_id" --arg event "$event" \
-                --argjson overrides "$post_overrides" \
-                --arg body "$body" --argjson number "$number" --arg time "${GH_STUB_NOW:-2026-01-02T12:00:00Z}" '
-                 ({fullDatabaseId:($id|tostring),url:("https://github.com/owner/repo/pull/"+($number|tostring)+"#pullrequestreview-"+($id|tostring)),
-                 body:$body,state:(if $event=="PENDING" then "PENDING" else "COMMENTED" end),submittedAt:$time,lastEditedAt:null,editor:null,
-                  author:$author[0],commit:{oid:$pr[0].head.sha}} * (if $event=="PENDING" then {} else $overrides end))' > "$GH_STUB_DIR/posted.json"
-            jq --slurpfile review "$GH_STUB_DIR/posted.json" '. + $review' "$GH_STUB_DIR/reviews/$number.json" > "$GH_STUB_DIR/next.json"
-            mv "$GH_STUB_DIR/next.json" "$GH_STUB_DIR/reviews/$number.json"
-            [ "${GH_STUB_LOSE_RESPONSE:-false}" != true ] || exit 1
-            jq '{id:.fullDatabaseId,body,state,submitted_at:.submittedAt,commit_id:.commit.oid,
-                 user:{id:.author.databaseId,login:.author.login,type:.author.__typename}}' "$GH_STUB_DIR/posted.json" | emit
-        else
-            jq '[.[] | {id:.fullDatabaseId,body,state,submitted_at:.submittedAt,commit_id:.commit.oid,
-                user:{id:.author.databaseId,login:.author.login,type:.author.__typename}}]' "$GH_STUB_DIR/reviews/$number.json" | emit
-        fi ;;
     pulls/[0-9]*) emit < "$GH_STUB_DIR/$route.json" ;;
-    activity\?*|activity)
-        # The real endpoint defaults to newest first; direction=asc is explicit.
-        if [[ "$endpoint" = *direction=asc* ]]; then activity_order='sort_by(.timestamp,.id)'
-        else activity_order='sort_by(.timestamp,.id)|reverse'; fi
-        total="$(jq length "$GH_STUB_DIR/activity.json")"
-        size="${GH_STUB_ACTIVITY_PAGE_SIZE:-100}"; offset=0; page=1
-        while :; do
-            printf 'page activity page=%s offset=%s\n' "$page" "$offset" >> "$GH_STUB_DIR/requests"
-            if [ "${GH_STUB_FAIL:-}" = "activity-page-$page" ]; then exit 1; fi
-            jq --argjson offset "$offset" --argjson size "$size" \
-                "$activity_order | .[\$offset:(\$offset+\$size)]" "$GH_STUB_DIR/activity.json" | emit
-            offset=$((offset+size)); page=$((page+1))
-            if ! $paginate || [ "$offset" -ge "$total" ]; then break; fi
-        done ;;
-    users/*) emit < "$GH_STUB_DIR/users/${route#users/}.json" ;;
-    issues/comments/[0-9]*) emit < "$GH_STUB_DIR/$route.json" ;;
     *) echo "gh stub: no fixture route $route" >&2; exit 1 ;;
 esac

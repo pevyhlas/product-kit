@@ -26,7 +26,7 @@ phase=bootstrap; error_code=interrupted; root=""; operation=""
 work=""; reader_out=""; reader_err=""
 guarded_pgids=()
 finishing=false; pending_signal=""; groups_verified=true
-native=null; native_exit=null; transport=refused; status=1
+native=null; native_exit=null; transport=refused; status=1; policy_error=""
 deadline=$((SECONDS+600))
 
 # All output is buffered until owned processes are gone and private scratch is deleted.
@@ -89,6 +89,7 @@ finish() {
         printf '{"launcher":"complete","error":null,"native_exit":%s,"native":%s}\n' "$native_exit" "$native"
     else
         printf 'check-pr-review: %s/%s\n' "$phase" "$error_code" >&2
+        if [ "$error_code" = invalid-policy ] && [ -n "$policy_error" ]; then printf '%s\n' "$policy_error" >&2; fi
         printf '{"launcher":"refused","error":{"stage":"%s","code":"%s"},"native_exit":%s,"native":%s}\n' \
             "$phase" "$error_code" "$native_exit" "$native"
     fi
@@ -113,8 +114,8 @@ done
 case "${repository#*/}" in .|..|*.git) refuse bootstrap usage 2 ;; esac
 [ -n "$event" ] && [ -f "$event" ] && [ ! -L "$event" ] || refuse bootstrap usage 2
 case "$event" in /*) ;; *) event="$PWD/$event" ;; esac
-[ "${GITHUB_EVENT_NAME:-}" = pull_request ] &&
-    [ "${GITHUB_REPOSITORY:-}" = "$repository" ] &&
+case "${GITHUB_EVENT_NAME:-}" in pull_request|pull_request_review) ;; *) refuse bootstrap context ;; esac
+[ "${GITHUB_REPOSITORY:-}" = "$repository" ] &&
     [[ "${GITHUB_REPOSITORY_ID:-}" =~ ^[1-9][0-9]*$ ]] || refuse bootstrap context
 [ -n "${GH_TOKEN:-}" ] || refuse bootstrap credential
 
@@ -396,7 +397,7 @@ branch() {
 }
 
 # REST resources are singular, not lists: there is no pagination to silently truncate here.
-# The native adapter owns complete receipt, activity and closed-source pagination.
+# The native adapter owns complete review pagination.
 read_bindings() {
     local prefix="$1" default_encoded target_encoded
     api "repos/$repository" "$root/$prefix.repo"
@@ -443,11 +444,15 @@ read_bindings() {
 phase=binding
 bounded 120 "$root/event" "$root/event.err" cat -- "$event" || refuse binding event-read
 one_object "$root/event" || refuse binding event-json
-jq -e --arg repo "$repository" --arg rid "$GITHUB_REPOSITORY_ID" '
-    (.action == "opened" or .action == "reopened" or .action == "synchronize" or
-     .action == "edited" or .action == "ready_for_review" or .action == "converted_to_draft") and
-    (.number|type) == "number" and .number > 0 and (.number|floor) == .number and
-    .number == .pull_request.number and .repository.full_name == $repo and
+jq -e --arg repo "$repository" --arg rid "$GITHUB_REPOSITORY_ID" --arg event "$GITHUB_EVENT_NAME" '
+    (if $event == "pull_request" then
+        (.action | IN("opened","reopened","synchronize","edited","ready_for_review","converted_to_draft")) and
+        .number == .pull_request.number
+     else
+        (.action | IN("submitted","dismissed")) and
+        (has("number") == false or .number == .pull_request.number)
+     end) and
+    (.pull_request.number | type == "number" and . > 0 and floor == .) and .repository.full_name == $repo and
     (.repository.id|tostring) == $rid and .pull_request.base.repo.full_name == $repo and
     (.pull_request.base.repo.id|tostring) == $rid and
     (.pull_request.head.ref|type) == "string" and (.pull_request.base.ref|type) == "string" and
@@ -456,7 +461,7 @@ jq -e --arg repo "$repository" --arg rid "$GITHUB_REPOSITORY_ID" '
     (.pull_request.head.sha|test("^[0-9a-f]{40}$")) and
     (.pull_request.base.sha|test("^[0-9a-f]{40}$"))
 ' "$root/event" >/dev/null || refuse binding event
-pr="$(jq -r .number "$root/event")"
+pr="$(jq -r .pull_request.number "$root/event")"
 [[ "$pr" =~ ^[1-9][0-9]*$ ]] || refuse binding pr
 sha "$(jq -r .pull_request.base.sha "$root/event")" || refuse binding event-base
 read_bindings before
@@ -509,8 +514,7 @@ bounded 120 "$root/fsck.out" "$root/fsck.err" git -C "$objects" fsck --full --no
 
 extract() {
     local file entry mode kind blob path
-    for file in check-review.sh common.sh spec-lib.sh spec-navigation-lib.sh review-policy-lib.sh review-fingerprint-lib.sh \
-        review-coverage-lib.sh review-receipts-lib.sh review-owner-lib.sh; do
+    for file in check-review.sh common.sh spec-lib.sh spec-navigation-lib.sh review-policy-lib.sh github-reviews-lib.sh; do
         path=".prdkit/scripts/bash/$file"
         entry="$(git -C "$objects" ls-tree "$policy" -- "$path")" || return 1
         read -r mode kind blob path <<< "$entry"
@@ -528,7 +532,11 @@ bounded 120 "$root/extract.out" "$root/extract.err" /bin/bash --noprofile --norc
 # Source ONLY the two enumerated, policy-bound native parsers; never adjacent caller files.
 source "$root/trusted/common.sh"
 source "$root/trusted/spec-lib.sh"
-spec_trusted_refs "$objects" > "$root/approved"
+if ! spec_trusted_refs "$objects" --policy-errors "$root/policy-error" > "$root/approved"; then
+    # Only the trusted reader's line-numbered message, never raw tool stderr.
+    [ ! -s "$root/policy-error" ] || policy_error="$(cat "$root/policy-error")"
+    refuse binding invalid-policy
+fi
 grep -qxF "$canonical" "$root/approved" || refuse binding unapproved-target
 
 select_carrier() {
@@ -599,8 +607,22 @@ if [ "$native_exit" -eq 0 ]; then
         .pr == $pr and .head == $h and .pr_head == $h and .head_is_pr_head == true and
         .base == $ref and .base_trusted == true and .policy_at == $p and
         .diagnostics.head == $h and .diagnostics.base_ref == $ref and .diagnostics.base_at == $t and
-        .diagnostics.policy_at == $p and .diagnostics.receipt_ready == true and
-        .diagnostics.host_content_bound == true
+        .diagnostics.policy_at == $p and .blocking == [] and (.reviews | type == "array") and
+        all(.reviews[]; (.reviewer|type=="number" and .>0 and floor==.) and (.role|IN("publisher","owner"))) and
+        ([.reviews[].reviewer] | length == (unique|length)) and
+        (if has("areas") then
+            .reviews as $reviews | .tier as $tier |
+            (.areas|type=="array" and length>0) and
+            all(.areas[]; . as $a |
+                (.area|type=="string") and
+                ((.reviewer==null and .review==null) or
+                 ((.review|type=="string") and any($reviews[]; .role=="publisher" and
+                     .reviewer==$a.reviewer and .review==$a.review)))) and
+            ($tier=="T0" or any(.areas[]; .review!=null and ($tier!="T3" or .area=="design")))
+         else true end) and
+        (.tier == "T0" or
+         ((.tier | IN("T1","T2","T3")) and any(.reviews[]; .role=="publisher") and
+          (.tier != "T3" or any(.reviews[]; .role=="owner"))))
     ' "$root/native.json" >/dev/null || refuse native inconsistent-result
 else
     jq -e --argjson rc "$native_exit" '

@@ -84,7 +84,7 @@ fi
 for file in "$root"/specs/changes/*.md; do
     [ -f "$file" ] || continue
     if ! review_record_format "$file"; then
-        findings+=("${file#"$root"/}: expected LF-terminated change Markdown with no **Review** field in State; current reviews are prdkit.review.v3 host receipts")
+        findings+=("${file#"$root"/}: expected LF-terminated change Markdown with no **Review** field in State; current reviews are native GitHub reviews")
         continue
     fi
     if ! checkpoint_problem="$(spec_change_progress "$file" 2>&1)"; then
