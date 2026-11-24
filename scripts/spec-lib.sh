@@ -166,27 +166,39 @@ spec_require_history_layout() { # root [--head] -> physical paths, index (includ
             _spec_history_move_required "$1"; return 1
         fi
     done
-    if git -C "$1" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    if [ "$(git -C "$1" rev-parse --is-inside-work-tree 2>/dev/null)" = true ]; then
         old="$(verify_lines git -C "$1" ls-files -- ':(top)specs/log.md' ':(top)specs/log' ':(top)specs/archive.md')" ||
             { echo "Cannot check the Git index for old history paths at $1" >&2; return 1; }
         [ -z "$old" ] || { _spec_history_move_required "$1"; return 1; }
         [ "${2:-}" = --head ] || return 0
         # A staged deletion does not establish that the history has moved.
         if head="$(_spec_archive_git -C "$1" rev-parse --verify --quiet HEAD)"; then
-            spec_require_history_tips "$1" "$head" "HEAD of $1; restore any staged deletions before moving" || return 1
+            spec_require_history_head "$1" "$head" || return "$?"
         elif [ "$?" -ne 1 ]; then
             echo "Cannot identify HEAD for the history check at $1" >&2
             return 1
         fi
     fi
 }
+spec_require_history_head() ( # root, frozen HEAD
+    if [ "${SPEC_HISTORY_VIEW_ROOT:-}" != "$1" ]; then
+        spec_open_history_view "$1" || return 1
+        trap spec_close_history_view EXIT
+    fi
+    spec_require_history_tips "$1" "$2" "HEAD of $1; restore any staged deletions before moving"
+)
 spec_require_history_tips() { # root, frozen tips [diagnostic context]
     local rev old
     while IFS= read -r rev; do
         [ -n "$rev" ] || continue
-        spec_objects_local "$1" || { echo "Cannot check $rev for old history paths without risking a lazy fetch" >&2; return 1; }
-        old="$(verify_lines _spec_archive_git -C "$1" ls-tree --name-only "$rev" -- specs/log.md specs/log specs/archive.md)" ||
-            { echo "Cannot check $rev for old history paths" >&2; return 1; }
+        if ! old="$(verify_lines _spec_history_git "$1" ls-tree --name-only "$rev" -- specs/log.md specs/log specs/archive.md)"; then
+            if [ "${SPEC_HISTORY_VIEW_ROOT:-}" = "$1" ] && [ -n "$SPEC_HISTORY_VIEW" ]; then
+                echo "Legacy history layout unchecked at $rev: the local object store could not supply the tree on this partial clone's older Git" >&2
+                return 2
+            fi
+            echo "Cannot check $rev for old history paths" >&2
+            return 1
+        fi
         [ -z "$old" ] || { _spec_history_move_required "${3:-commit $rev; update stale branches and refs after moving}"; return 1; }
     done <<< "$2"
 }
@@ -397,11 +409,56 @@ _spec_archive_git() {
     GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1 git "$@"
 }
 
+# Older Git has no no-lazy-fetch switch. Read frozen IDs through an empty repo
+# with the original object store as an alternate, but no promisor remotes.
+SPEC_HISTORY_VIEW=""; SPEC_HISTORY_VIEW_ROOT=""
+_spec_history_view_git() (
+    unset GIT_DIR GIT_COMMON_DIR GIT_WORK_TREE GIT_OBJECT_DIRECTORY GIT_CONFIG GIT_CONFIG_PARAMETERS
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=0 GIT_ALLOW_PROTOCOL='' _spec_archive_git "$@"
+)
+spec_open_history_view() { # root; caller owns the lifetime of the optional view
+    local objects format
+    SPEC_HISTORY_VIEW=""; SPEC_HISTORY_VIEW_ROOT=""
+    if spec_objects_local "$1"; then
+        SPEC_HISTORY_VIEW_ROOT="$1"
+        return 0
+    elif [ "$?" -ne 2 ]; then return 1; fi
+    objects="$(git -C "$1" rev-parse --path-format=absolute --git-path objects)" || return 1
+    format="$(git -C "$1" rev-parse --show-object-format)" || return 1
+    SPEC_HISTORY_VIEW="$(mktemp -d)" || return 1
+    if ! _spec_history_view_git init --quiet --bare --template= --object-format="$format" "$SPEC_HISTORY_VIEW" ||
+        ! printf '%s\n' "$objects" > "$SPEC_HISTORY_VIEW/objects/info/alternates"; then
+        spec_close_history_view
+        return 1
+    fi
+    SPEC_HISTORY_VIEW_ROOT="$1"
+}
+spec_close_history_view() {
+    [ -z "${SPEC_HISTORY_VIEW:-}" ] || rm -rf -- "$SPEC_HISTORY_VIEW"
+    SPEC_HISTORY_VIEW=""; SPEC_HISTORY_VIEW_ROOT=""
+}
+_spec_history_git() { # root command ...
+    local root="$1"; shift
+    if [ "${SPEC_HISTORY_VIEW_ROOT:-}" = "$root" ]; then
+        if [ -n "$SPEC_HISTORY_VIEW" ]; then
+            _spec_history_view_git --git-dir="$SPEC_HISTORY_VIEW" "$@"
+            return
+        fi
+    else
+        spec_objects_local "$root" || return 1
+    fi
+    _spec_archive_git -C "$root" "$@"
+}
+
 _spec_regular_blob_at() { # root rev path -> blob ID, empty when absent
     local path="$3" row meta
-    row="$(verify_lines _spec_archive_git -C "$1" ls-tree "$2" -- ":(literal)$path")" || return 1
+    row="$(verify_lines _spec_history_git "$1" ls-tree "$2" -- ":(literal)$path")" || return 1
     [ -n "$row" ] || return 0
     meta="${row%%$'\t'*}"
+    if [ "${4:-}" = --skip-symlink ] &&
+        [[ "${row#*$'\t'}" = "$path" && "$meta" =~ ^120000\ blob\ [0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+        return 0
+    fi
     if ! [[ "${row#*$'\t'}" = "$path" && "$meta" =~ ^100(644|755)\ blob\ [0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
         printf '%s at %s: expected a regular file\n' "$path" "$2" >&2
         return 1
@@ -411,12 +468,11 @@ _spec_regular_blob_at() { # root rev path -> blob ID, empty when absent
 
 spec_archive_log_details_at() ( # root commit
     local path=.prdkit/history/archive.md blob tmp
-    spec_objects_local "$1" || { printf 'Cannot read %s at %s without risking a lazy fetch\n' "$path" "$2" >&2; return 1; }
     blob="$(_spec_regular_blob_at "$1" "$2" "$path")" || return 1
     if [ -z "$blob" ]; then echo 0; return 0; fi
     tmp="$(mktemp)" || return 1
     trap 'rm -f "$tmp"' EXIT
-    _spec_archive_git -C "$1" cat-file blob "$blob" > "$tmp" || return 1
+    _spec_history_git "$1" cat-file blob "$blob" > "$tmp" || return 1
     _spec_archive_log_file "$tmp" "$path" " (at $2)"
 )
 
@@ -430,8 +486,7 @@ spec_archive_log_previous() { # root -> at most one earlier committed archive
 }
 
 spec_integration_tips() ( # root -> distinct local commit IDs, no fetch
-    local root="$1" target refs rev ref refname default="" blob policy configured seen=" " candidates=()
-    spec_objects_local "$root" || return 1
+    local root="$1" target refs rev ref refname default="" configured seen=" " candidates=()
     target="$(_spec_archive_git -C "$root" symbolic-ref --quiet refs/remotes/origin/HEAD)" ||
         { [ "$?" -eq 1 ] || return 1; }
     case "$target" in
@@ -456,10 +511,7 @@ spec_integration_tips() ( # root -> distinct local commit IDs, no fetch
     # tip, never from the checkout or from a configured branch itself.
     case "$target" in refs/remotes/*) ;; *) return 0 ;; esac
     [ -n "$default" ] || return 0
-    blob="$(_spec_regular_blob_at "$root" "$default" .prdkit/memory/config.md)" || return 1
-    [ -n "$blob" ] || return 0
-    policy="$(_spec_archive_git -C "$root" cat-file blob "$blob")" || return 1
-    configured="$(spec_configured_integration_refs <<< "$policy")" || return 1
+    configured="$(spec_trusted_refs "$root" --at "$target" "$default")" || return 1
     while IFS= read -r ref; do
         [ -n "$ref" ] || continue
         # Do not re-read refs already frozen above.
@@ -468,7 +520,7 @@ spec_integration_tips() ( # root -> distinct local commit IDs, no fetch
         while read -r rev refname; do
             # A configured ref can be absent; a match beneath it is not a match.
             [ "$refname" = "$ref" ] || continue
-            rev="$(_spec_archive_git -C "$root" rev-parse --verify "$rev^{commit}")" || return 1
+            rev="$(_spec_history_git "$root" rev-parse --verify "$rev^{commit}")" || return 1
             case "$seen" in *" $rev "*) continue ;; esac
             seen="$seen$rev "; printf '%s\n' "$rev" || return 1
         done <<< "$refs"
@@ -489,8 +541,7 @@ spec_archive_log_integration() { # root [frozen tips [details]] -> distinct comm
 
 spec_number_claims_at() ( # root commit -> allocated log and record numbers, no fetch
     local paths blob
-    spec_objects_local "$1" || return 1
-    paths="$(verify_lines _spec_archive_git -C "$1" ls-tree "$2" -- specs/changes/ .prdkit/history/log/)" || return 1
+    paths="$(verify_lines _spec_history_git "$1" ls-tree "$2" -- specs/changes/ .prdkit/history/log/)" || return 1
     LC_ALL=C awk '
         $1 ~ /^100(644|755)$/ && $2 == "blob" &&
         $4 ~ /^(specs\/changes|\.prdkit\/history\/log)\/[0-9][0-9][0-9][0-9]*-[a-z0-9-]+\.md$/ && NF == 4 {
@@ -500,7 +551,7 @@ spec_number_claims_at() ( # root commit -> allocated log and record numbers, no 
     blob="$(_spec_regular_blob_at "$1" "$2" .prdkit/history/log.md)" || return 1
     [ -n "$blob" ] || return 0
     set -o pipefail
-    _spec_archive_git -C "$1" cat-file blob "$blob" |
+    _spec_history_git "$1" cat-file blob "$blob" |
         sed -n 's/^- [0-9-]* \([0-9][0-9][0-9]*-[a-z0-9-]*\):.*/committed log \1/p'
 )
 
@@ -1733,15 +1784,23 @@ spec_configured_integration_refs() {
 # then each ref named by `review-integration-branches` in the committed config at that target,
 # never the worktree's own. One full ref per line; blank when origin/HEAD does not resolve to a
 # commit, in which case nothing is trusted.
-spec_trusted_refs() { # root [--tips: include a frozen commit after each ref]
+spec_trusted_refs() { # root [--tips | --at <frozen-default-ref> <commit>]
     local root="$1" default sha policy configured candidate tip seen
-    default="$(git -C "$root" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
-    case "$default" in refs/remotes/*) ;; *) return 0 ;; esac
-    sha="$(git -C "$root" rev-parse --verify --quiet "$default^{commit}" || true)"
-    [ -n "$sha" ] || return 0
+    if [ "${2:-}" = --at ]; then
+        default="$3"; sha="$4"
+    else
+        default="$(git -C "$root" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
+        case "$default" in refs/remotes/*) ;; *) return 0 ;; esac
+        sha="$(git -C "$root" rev-parse --verify --quiet "$default^{commit}" || true)"
+        [ -n "$sha" ] || return 0
+    fi
     if [ "${2:-}" = --tips ]; then printf '%s\t%s\n' "$default" "$sha"; else printf '%s\n' "$default"; fi
     seen="$default"
-    policy="$(git -C "$root" show "$sha:.prdkit/memory/config.md" 2>/dev/null || true)"
+    if [ "${2:-}" = --at ]; then
+        policy="$(_spec_trusted_integration_policy "$root" "$sha")" || return 1
+    else
+        policy="$(_spec_trusted_integration_policy "$root" "$sha" 2>/dev/null)" || policy=""
+    fi
     configured="$(spec_configured_integration_refs <<< "$policy")" || return 1
     while IFS= read -r candidate; do
         [ -n "$candidate" ] || continue
@@ -1754,9 +1813,16 @@ spec_trusted_refs() { # root [--tips: include a frozen commit after each ref]
     done <<< "$configured"
 }
 
+_spec_trusted_integration_policy() { # root frozen default commit
+    local blob
+    # A symlink is customization, not policy. Neither follow it nor parse the link target.
+    blob="$(_spec_regular_blob_at "$1" "$2" .prdkit/memory/config.md --skip-symlink)" || return 1
+    [ -z "$blob" ] || _spec_history_git "$1" cat-file blob "$blob"
+}
+
 # Reading an object a partial clone lacks would fetch it from the promisor remote. Git 2.45+
 # refuses under GIT_NO_LAZY_FETCH; with an older Git, callers skip object reads in a partial clone.
-spec_objects_local() { # root
+spec_objects_local() { # root -> 0 safe in place, 1 probe error, 2 old Git in a partial clone
     local value status entries partial=false version
     if value="$(git -C "$1" config --get extensions.partialclone 2>/dev/null)"; then
         [ -n "$value" ] || return 1
@@ -1780,7 +1846,7 @@ spec_objects_local() { # root
     $partial || return 0
     version="$(git version 2>/dev/null)" || return 1
     [[ "$version" =~ ^git[[:space:]]version[[:space:]]([0-9]+)\.([0-9]+) ]] || return 1
-    [ "$((10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]}))" -ge 2045 ]
+    [ "$((10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]}))" -ge 2045 ] || return 2
 }
 
 # Records committed at <rev> with no child or outcome checkpoint keeping them open.

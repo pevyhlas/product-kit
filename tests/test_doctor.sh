@@ -54,6 +54,67 @@ for legacy in specs/log.md specs/log specs/archive.md; do
     rm "$legacy"
 done
 
+it "older Git checks local history in partial clones without contacting a promisor"
+partial="$(mktemp -d)" || exit 1
+track_tmp "$partial"
+git -C "$PROJ" config uploadpack.allowFilter true || exit 1
+if git clone -q --filter=blob:none "file://$PROJ" "$partial/clone" &&
+    [ "$(git -C "$partial/clone" config --bool --get remote.origin.promisor)" = true ]; then
+    mkdir "$partial/bin"
+    export PARTIAL_REAL_GIT PARTIAL_TRANSPORT
+    PARTIAL_REAL_GIT="$(command -v git)"; PARTIAL_TRANSPORT="$partial/transport"
+    cat > "$partial/bin/git" <<'SH'
+#!/bin/sh
+case "$1" in
+    version) echo 'git version 2.39.5'; exit 0 ;;
+    --git-dir=*)
+        if [ "${PARTIAL_TREE_UNAVAILABLE:-}" = yes ] && [ "$2" = ls-tree ]; then
+            echo 'fixture: local tree unavailable' >&2
+            exit 1
+        fi ;;
+esac
+exec "$PARTIAL_REAL_GIT" "$@"
+SH
+    cat > "$partial/sentinel" <<'SH'
+#!/bin/sh
+echo 'promisor transport attempted' >> "$PARTIAL_TRANSPORT"
+exit 1
+SH
+    chmod +x "$partial/bin/git" "$partial/sentinel"
+    git -C "$partial/clone" config remote.origin.uploadpack "$partial/sentinel"
+    partial_run() {
+        local script="$1"; shift
+        (cd "$partial/clone" && PATH="$partial/bin:$PATH" bash ".prdkit/scripts/bash/$script" "$@")
+    }
+    run partial_run doctor.sh --json
+    assert_eq 0 "$STATUS" "clean partial checkout still passes on older Git"
+    assert_eq '{}' "$(jq '.trace | with_entries(select(.value != 0))' <<< "$OUTPUT")"
+    run partial_run new-change.sh --json --no-branch --short-name partial "desc"
+    assert_eq 0 "$STATUS" "local committed history is sufficient to allocate"
+    assert_contains "$OUTPUT" '"CHANGE_ID":"001-partial"'
+    rm -f "$partial/clone/specs/changes/001-partial.md"
+    PARTIAL_TREE_UNAVAILABLE=yes run partial_run doctor.sh --json
+    assert_eq 0 "$STATUS" "unavailable legacy-tree evidence is advisory"
+    assert_contains "$OUTPUT" 'Legacy history layout unchecked at'
+    assert_eq 0 "$(jq '.findings | length' <<< "$OUTPUT")"
+    assert_eq 0 "$(jq '.trace["code-path"]' <<< "$OUTPUT")" "doctor still runs its trace checks"
+    PARTIAL_TREE_UNAVAILABLE=yes run partial_run new-change.sh --json --no-branch --short-name refused "desc"
+    assert_eq 1 "$STATUS" "missing committed evidence cannot free a number"
+    assert_not_contains "$OUTPUT" 'CHANGE_ID'
+    printf -- '- 2026-10-17 001-done: closed\n' > "$partial/clone/specs/log.md"
+    git -C "$partial/clone" add specs/log.md &&
+        git -C "$partial/clone" -c user.name=test -c user.email=t@example.com commit -qm 'legacy log' &&
+        git -C "$partial/clone" rm -q specs/log.md || exit 1
+    run partial_run doctor.sh --json
+    assert_eq 1 "$STATUS" "a staged deletion cannot hide a legacy path in a local tree"
+    assert_contains "$OUTPUT" 'git mv specs/log.md .prdkit/history/log.md'
+    assert_not_contains "$OUTPUT" 'Legacy history layout unchecked'
+    run test ! -e "$PARTIAL_TRANSPORT"
+    assert_eq 0 "$STATUS" "the promisor transport was never called"
+else
+    _ok "blob-filtered clones unavailable; skipped"
+fi
+
 it "canon cannot cite a pending close, the folded log or the archive"
 cat >> specs/product.md <<'MD'
 

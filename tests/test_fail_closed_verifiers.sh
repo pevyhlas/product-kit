@@ -226,6 +226,17 @@ git add one.txt && git commit -qm example || exit 1
 VERIFY_HEAD="$(git rev-parse HEAD)" || exit 1
 export VERIFY_HEAD
 
+it 'allocation refuses an unreadable committed integration config instead of dropping trusted tips'
+git update-ref refs/remotes/origin/main main &&
+    git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main || exit 1
+VERIFY_CONFIG_OID="$(git rev-parse main:.prdkit/memory/config.md)" || exit 1
+fault config-fail-commit bash "$B/new-change.sh" --json --no-branch --short-name lost-policy desc
+failed 'allocation: truncated config producer'
+assert_contains "$OUTPUT" 'could not identify local integration tips'
+assert_eq '' "$(git status --porcelain)" 'no record allocated'
+git symbolic-ref --delete refs/remotes/origin/HEAD &&
+    git update-ref -d refs/remotes/origin/main || exit 1
+
 it 'status and doctor refuse incomplete worktree inventories'
 for mode in worktrees-fail worktrees-empty worktrees-eof worktrees-crlf; do
     for verifier in status doctor; do

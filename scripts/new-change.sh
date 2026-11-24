@@ -110,14 +110,18 @@ generate_slug() {
 # Every checkout that can hold a claimed number: this one, worktrees under
 # .worktrees/, and every worktree git knows about. Paths may repeat or not exist.
 list_checkouts() {
-    local wt line worktrees
+    local wt line worktrees checkout="" bare=false
     echo "$REPO_ROOT"
     for wt in "$REPO_ROOT/.worktrees"/*; do [ -d "$wt" ] && echo "$wt"; done
     if [ "$HAS_GIT" = true ]; then
         worktrees="$(spec_worktrees "$REPO_ROOT")" || return 1
         while IFS= read -r line; do
-            case "$line" in "worktree "*) echo "${line#worktree }" ;; esac
-        done <<< "$worktrees"
+            case "$line" in
+                "worktree "*) checkout="${line#worktree }"; bare=false ;;
+                bare) bare=true ;;
+                "") if [ -n "$checkout" ] && ! $bare; then printf '%s\n' "$checkout"; fi ;;
+            esac
+        done <<< "$worktrees"$'\n'
     fi
     return 0
 }
@@ -226,6 +230,7 @@ create_exclusive() { ( set -C; printf '%s %s\n' "$$" "$HOST_NAME" > "$1" ) 2>/de
 release_number_lock() { [ -z "$NUMBER_LOCK" ] || rm -f "$NUMBER_LOCK"; NUMBER_LOCK=""; }
 cleanup_open() {
     release_number_lock
+    spec_close_history_view
     if [ -n "$RECORD_TMP" ]; then
         rm -f "$RECORD_TMP"/{template,scaffold,record}
         rmdir "$RECORD_TMP"
@@ -280,7 +285,11 @@ AUTO_NUMBER=false
 # Both automatic and explicit allocation must see a complete, valid archive index from
 # every checkout. Keep the lock through record creation; a malformed index cannot be overridden.
 acquire_number_lock
-CHECKOUTS="$(list_checkouts)" || exit 1
+CHECKOUTS="$(list_checkouts | awk '!seen[$0]++')" || exit 1
+if [ "$HAS_GIT" = true ]; then
+    spec_open_history_view "$REPO_ROOT" ||
+        { echo "[prdkit] Error: could not set up local integration history reads" >&2; exit 1; }
+fi
 while IFS= read -r checkout; do
     spec_require_history_layout "$checkout" --head || exit 1
 done <<< "$CHECKOUTS"

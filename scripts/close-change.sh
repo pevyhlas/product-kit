@@ -62,7 +62,7 @@ case "$text" in
 esac
 [[ "$text" =~ [^[:space:]] ]] || refuse "the log text must contain a description"
 root="$(git rev-parse --show-toplevel 2>/dev/null)" || refuse "not inside a Git checkout"
-spec_require_history_layout "$root" --head || exit 1
+spec_require_history_layout "$root" || exit 1
 spec_objects_local "$root" || refuse "local Git cannot guarantee reads without fetching missing objects"
 export GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1
 tips="$(spec_integration_tips "$root")" || refuse "could not identify integration tips"

@@ -456,8 +456,40 @@ run bash "$SCRIPT2" --json --no-branch --short-name trusted-next "desc"
 assert_eq 0 "$STATUS"
 assert_contains "$OUTPUT" '"CHANGE_ID":"092-trusted-next"'
 rm -f specs/changes/092-trusted-next.md
+
+it "a tracked config symlink does not establish trust or block allocation"
+git checkout -qb linked-config || exit 1
+mv .prdkit/memory/config.md .prdkit/memory/shared-config.md
+printf '\n## Configuration\n- review-integration-branches: origin/develop\n' >> .prdkit/memory/shared-config.md
+ln -s shared-config.md .prdkit/memory/config.md
+git add .prdkit/memory && git commit -qm 'link the memory config' && git update-ref "$primary" HEAD || exit 1
+printf -- '- 2026-10-17 093-done: closed\n' | trusted_edit "$secondary" specs/log.md || exit 1
+run bash "$SCRIPT2" --json --no-branch --short-name config-link "desc"
+assert_eq 0 "$STATUS" "the policy reader does not follow the config symlink"
+assert_contains "$OUTPUT" '"CHANGE_ID":"001-config-link"'
+rm -f specs/changes/001-config-link.md
+git checkout -q "$MAIN_BRANCH" || exit 1
 git symbolic-ref --delete refs/remotes/origin/HEAD &&
-    git update-ref -d "$primary" && git update-ref -d "$secondary" || exit 1
+    git update-ref -d "$primary" && git update-ref -d "$secondary" && git branch -qD linked-config || exit 1
+
+it "a bare common repo is not a checkout even when its HEAD has legacy history"
+bare_fixture="$(mktemp -d)" || exit 1
+track_tmp "$bare_fixture"
+git clone -q --bare "$PROJ2" "$bare_fixture/common.git" &&
+    git -C "$bare_fixture/common.git" worktree add -qb linked "$bare_fixture/linked" "$MAIN_BRANCH" || exit 1
+(
+    cd "$bare_fixture/linked" || exit 1
+    git config user.name test && git config user.email t@example.com &&
+        git branch archived-maintenance &&
+        printf -- '- 2026-10-17 001-done: closed\n' | trusted_edit refs/heads/archived-maintenance specs/log.md
+) || exit 1
+git -C "$bare_fixture/common.git" symbolic-ref HEAD refs/heads/archived-maintenance || exit 1
+assert_eq false "$(git -C "$bare_fixture/common.git" rev-parse --is-inside-work-tree)"
+mkdir -p "$bare_fixture/common.git/specs"
+: > "$bare_fixture/common.git/specs/log.md"
+run bash -c 'cd "$1" && bash .prdkit/scripts/bash/new-change.sh --json --no-branch --short-name bare-linked desc' _ "$bare_fixture/linked"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '"CHANGE_ID":"001-bare-linked"'
 
 it "a stray numbered branch raises the next number"
 git -C "$PROJ2" branch 007-stray-branch

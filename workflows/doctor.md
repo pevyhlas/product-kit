@@ -36,6 +36,8 @@ of zero excess. Byte-based agent context budgets are separate.
 Compaction due is an advisory at ten closes since the latest compaction
 line, in either log order, plus every pending `.prdkit/history/log/<id>.md` entry. If the folded
 log cannot be read, doctor reports a finding instead of a count.
+On older Git in a partial clone, doctor warns if the legacy history paths cannot be
+checked in HEAD using local objects. Working paths and the index are still checked.
 
 The "Merged without closing" advisory needs the default-branch ref and its tree and blob
 objects locally, not full history. CI checkouts should fetch full history (for example,
