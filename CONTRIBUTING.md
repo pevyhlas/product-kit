@@ -148,6 +148,11 @@ text, and the upstream Spec Kit notice in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_N
 
 ## Releases
 
+Versions stay on 3.x.y. A release with a breaking change bumps the minor number (3.1.0) and
+records it under `Changed (breaking)` or `Removed (breaking)`; any other release bumps the patch
+(3.0.1). The major number moves only when the owner names a major reason, never for a
+routine breaking change. The release tooling only requires the numeric `X.Y.Z` tuple to increase.
+
 Releases are automatic and come only from main. The maintainer makes the release pull request;
 merging one that bumps `VERSION` is the release decision. Do not create release tags or GitHub
 releases by hand.
@@ -165,7 +170,7 @@ releases by hand.
    tag `vX.Y.Z` on that commit, with message `Product Kit - vX.Y.Z`, and a GitHub release with
    the same title. The body is the CHANGELOG section plus a generated Verification block: merged
    commit, gating CI run, release PR and publishing run. The release is marked latest only if
-   it is the highest semver tag.
+   it is the numerically highest `vX.Y.Z` tag.
 3. Any other push to main (docs, CI, a fix without a version bump) releases nothing. An
    existing tag is never moved or recreated. A release commit whose tag already points
    elsewhere fails the workflow; release a new version instead. A release commit whose version

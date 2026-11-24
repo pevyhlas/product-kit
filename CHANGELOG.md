@@ -1,12 +1,20 @@
 # Changelog
 
 All notable changes to Product-Kit are documented here. The format is loosely based on
-[Keep a Changelog](https://keepachangelog.com/), and Product-Kit uses semantic versioning.
+[Keep a Changelog](https://keepachangelog.com/). From 3.0.0, Product-Kit stays on 3.x.y unless
+the owner names a major reason: a breaking change bumps the minor number (3.1.0) and anything else
+bumps the patch (3.0.1), so read the `Changed (breaking)` and `Removed (breaking)` sections of
+every minor release before upgrading.
 
 Pre-0.1.0 history is condensed into the design decisions it produced rather than replayed
 change by change.
 
 ## [Unreleased]
+
+### Changed
+
+- Versioning is documented as 3.x.y in the changelog, CONTRIBUTING and the kit's constitution:
+  breaking changes bump the minor number, not the major.
 
 ## [3.0.0] — 2026-11-24 — native GitHub review gate and optional UI design summary
 
