@@ -72,6 +72,9 @@ change by change.
 
 ### Fixed
 
+- Opening a change in a partial clone reads the pinned template without fetching and
+  stops before creating a worktree if the template object is missing. Review still
+  recognizes integration branches configured in a locally available policy on older Git.
 - PR review launcher groups now have live guard leaders that signal only their own groups.
   The launcher checks for surviving members without waiting for a leader and confirms the
   groups are absent at the kernel level before deleting scratch. If it cannot verify shutdown

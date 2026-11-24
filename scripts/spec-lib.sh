@@ -1813,12 +1813,16 @@ spec_trusted_refs() { # root [--tips | --at <frozen-default-ref> <commit>]
     done <<< "$configured"
 }
 
-_spec_trusted_integration_policy() { # root frozen default commit
+_spec_trusted_integration_policy() ( # root frozen default commit
     local blob
+    if [ "${SPEC_HISTORY_VIEW_ROOT:-}" != "$1" ]; then
+        spec_open_history_view "$1" || return 1
+        trap spec_close_history_view EXIT
+    fi
     # A symlink is customization, not policy. Neither follow it nor parse the link target.
     blob="$(_spec_regular_blob_at "$1" "$2" .prdkit/memory/config.md --skip-symlink)" || return 1
     [ -z "$blob" ] || _spec_history_git "$1" cat-file blob "$blob"
-}
+)
 
 # Reading an object a partial clone lacks would fetch it from the promisor remote. Git 2.45+
 # refuses under GIT_NO_LAZY_FETCH; with an older Git, callers skip object reads in a partial clone.

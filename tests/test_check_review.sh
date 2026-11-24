@@ -173,6 +173,29 @@ assert_contains "$OUTPUT" '"base_trusted":true' "develop is still a trusted base
 git update-ref -d refs/remotes/origin/develop
 git update-ref "refs/remotes/origin/$DEFAULT" "$TRUSTED_TIP"
 
+it "the trusted-ref reader includes locally configured refs on older partial-clone Git"
+mkdir "$_SCRATCH_CWD/old-git" || exit 1
+REVIEW_REAL_GIT="$(command -v git)"; export REVIEW_REAL_GIT
+cat > "$_SCRATCH_CWD/old-git/git" <<'SH'
+#!/bin/sh
+if [ "$1" = version ]; then echo 'git version 2.39.5'; exit 0; fi
+exec "$REVIEW_REAL_GIT" "$@"
+SH
+chmod +x "$_SCRATCH_CWD/old-git/git" &&
+    git config remote.origin.promisor true &&
+    git update-ref refs/remotes/origin/develop "$TRUSTED_TIP" || exit 1
+read_trusted_refs() (
+    source .prdkit/scripts/bash/spec-lib.sh
+    PATH="$_SCRATCH_CWD/old-git:$PATH" GIT_ALLOW_PROTOCOL='' GIT_TRACE="$_SCRATCH_CWD/trusted.trace" \
+        spec_trusted_refs "$PWD"
+)
+run read_trusted_refs
+assert_eq 0 "$STATUS"
+assert_eq "refs/remotes/origin/$DEFAULT"$'\n'refs/remotes/origin/develop "$OUTPUT"
+assert_not_contains "$(cat "$_SCRATCH_CWD/trusted.trace")" 'built-in: git fetch '
+git config --unset remote.origin.promisor &&
+    git update-ref -d refs/remotes/origin/develop || exit 1
+
 it "the trusted constitution must name exactly one well-formed Rigor, even with no findings"
 record T1 "$(verdict code PASS "$CLEAN")"
 for rigor_lines in '' '- **Rigor**: light\n- **Rigor**: light\n' '- **Rigor**: light/full\n' '- **Rigor**: light1\n' \

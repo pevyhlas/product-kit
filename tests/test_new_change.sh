@@ -70,6 +70,7 @@ it "invalid template tags cannot create a record, branch or worktree"
 TAG_PROJ="$(make_inited_project)"; track_tmp "$TAG_PROJ"
 TAG_PROJ="$(cd "$TAG_PROJ" && pwd -P)"
 cd "$TAG_PROJ" || exit 1
+git add -A && git commit -qm installed || exit 1
 tag_script=.prdkit/scripts/bash/new-change.sh
 tag_template=.prdkit/templates/change-template.md
 printf '# Change: template\n\n**Opened**: <date> ·**Tags**: cli/v2 · **Tier**: T1\n' > "$tag_template"
@@ -89,6 +90,54 @@ assert_eq 1 "$STATUS"
 assert_contains "$OUTPUT" "Malformed Tags"
 assert_eq absent "$([ -e specs/changes/053-invalid-local-tags.md ] && echo present || echo absent)"
 cd "$PROJ" || exit 1
+
+it "a missing pinned template object refuses sparse allocation without a promisor fetch"
+partial="$(mktemp -d)" || exit 1
+track_tmp "$partial"
+git -C "$TAG_PROJ" config uploadpack.allowFilter true || exit 1
+if git clone -q --filter=blob:none --no-checkout "file://$TAG_PROJ" "$partial/clone" &&
+    [ "$(git -C "$partial/clone" config --bool --get remote.origin.promisor)" = true ]; then
+    (
+        cd "$partial/clone" || exit 1
+        git sparse-checkout set specs .prdkit/scripts .prdkit/memory &&
+            git checkout -q "$(git symbolic-ref --short HEAD)" &&
+            git init -q --bare --template= "$partial/local.git" &&
+            git rev-parse --path-format=absolute --git-path objects > "$partial/local.git/objects/info/alternates" || exit 1
+    ) || exit 1
+    template_oid="$(git -C "$TAG_PROJ" rev-parse "HEAD:$tag_template")" || exit 1
+    run git --git-dir="$partial/local.git" cat-file -e "$template_oid"
+    assert_eq 1 "$STATUS" "the committed template blob is actually absent"
+
+    # Exercise the pre-2.45 fallback even on runners with newer Git.
+    mkdir "$partial/bin" || exit 1
+    PARTIAL_REAL_GIT="$(command -v git)"; export PARTIAL_REAL_GIT
+    cat > "$partial/bin/git" <<'SH'
+#!/bin/sh
+if [ "$1" = version ]; then echo 'git version 2.39.5'; exit 0; fi
+exec "$PARTIAL_REAL_GIT" "$@"
+SH
+    chmod +x "$partial/bin/git" || exit 1
+    run_sparse_allocator() (
+        cd "$partial/clone" || exit 1
+        PATH="$1" GIT_ALLOW_PROTOCOL='' GIT_TRACE="$partial/trace" \
+            bash .prdkit/scripts/bash/new-change.sh --json --short-name missing-template desc
+    )
+    before="$(git -C "$partial/clone" worktree list --porcelain)"
+    for git_path in "$partial/bin:$PATH" "$PATH"; do
+        : > "$partial/trace"
+        run run_sparse_allocator "$git_path"
+        assert_eq 1 "$STATUS"
+        assert_contains "$OUTPUT" "cannot read $tag_template at"
+        assert_contains "$OUTPUT" 'make the committed file available locally'
+        assert_not_contains "$(cat "$partial/trace")" 'built-in: git fetch '
+        assert_eq "$before" "$(git -C "$partial/clone" worktree list --porcelain)"
+        assert_eq "$MAIN_BRANCH" "$(git -C "$partial/clone" branch --list --format='%(refname:short)')"
+        assert_eq absent "$([ -e "$partial/clone/.worktrees" ] && echo present || echo absent)"
+        assert_eq '' "$(git -C "$partial/clone" status --short)" 'no record or other change was made'
+    done
+else
+    _ok 'blob-filtered clones unavailable; skipped'
+fi
 
 it "an empty intent or a non-numeric --number is rejected"
 run bash "$SCRIPT" --json --short-name "x"

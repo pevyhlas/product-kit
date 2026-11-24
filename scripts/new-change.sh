@@ -367,15 +367,35 @@ POINTER='<!-- Outcome checkpoint format: .prdkit/scripts/bash/outcome-checkpoint
 TODAY="${PRDKIT_TODAY:-$(date +%Y-%m-%d)}"
 RECORD_TMP="$(mktemp -d)"
 RENDERED_RECORD="$RECORD_TMP/record"
+stage_record_input() { # project-relative path, temp path, pinned start commit
+    local path="$1" staged="$2" rev="$3" entry oid type parent rows meta name
+    local paths=("$path")
+    entry="$(_spec_history_git "$REPO_ROOT" cat-file --batch-check --follow-symlinks <<< "$rev:$path")" || return 1
+    read -r oid type _ <<< "$entry"
+    if [ "$type" = blob ]; then
+        _spec_history_git "$REPO_ROOT" cat-file blob "$oid" > "$staged"
+    elif [ "$type" = missing ]; then
+        # Batch mode reports both absent paths and missing objects as "missing".
+        # Keep the fallback only if the tree shows no entry or unresolved symlink.
+        parent="$path"
+        while [[ "$parent" = */* ]]; do
+            parent="${parent%/*}"
+            paths+=("$parent")
+        done
+        rows="$(verify_lines _spec_history_git "$REPO_ROOT" ls-tree -t "$rev" -- "${paths[@]}")" || return 1
+        while IFS=$'\t' read -r meta name; do
+            if [ "$name" = "$path" ] || [[ "$meta" = '120000 '* ]]; then return 1; fi
+        done <<< "$rows"
+    fi
+}
 record_input() { # project-relative path, temp path, optional pinned start commit
-    local path="$1" staged="$2" entry oid type
+    local path="$1" staged="$2"
     if [ -n "${3:-}" ]; then
-        entry="$(printf '%s\n' "$3:$path" | git cat-file --batch-check --follow-symlinks)" || return 1
-        read -r oid type _ <<< "$entry"
-        if [ "$type" = blob ]; then
-            git cat-file blob "$oid" > "$staged" || return 1
-            path="$staged"
+        if ! stage_record_input "$path" "$staged" "$3"; then
+            printf '[prdkit] Error: cannot read %s at %s from local Git objects; make the committed file available locally and retry.\n' "$path" "$3" >&2
+            return 1
         fi
+        [ ! -f "$staged" ] || path="$staged"
     fi
     printf '%s\n' "$path"
 }
