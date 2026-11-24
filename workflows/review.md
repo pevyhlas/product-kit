@@ -94,7 +94,9 @@ Required live gates still block. Non-gating runtime observations need no cleanup
 Before final review: reconcile the approved spec delta with actual behavior. Remove only built
 `planned` markers; preserve unbuilt intent and hypotheses. Known unmet required work needs an
 explicit disposition and durable follow-up reference; never erase it with the plan. Cancellation
-withdraws, defers or rebinds unfinished planned intent instead of making it look built. Post
+withdraws, defers or rebinds unfinished planned intent instead of making it look built. If the
+project uses `specs/design.md`, fold durable owner UI decisions and corrections into **Decisions**
+as dated, sourced one-liners. Post
 scope/design references, useful implementation context, actual verification/review evidence and
 unknowns on the same PR using `.prdkit/templates/pr-summary-template.md`; do not depend on
 intermediate commits surviving squash. Remove any tracked auxiliary execution files before this

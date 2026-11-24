@@ -189,6 +189,10 @@ review_context_build() {
     for path in specs/product.md specs/architecture.md; do
         context_span "$HEAD_SHA" "$path" 1 all canon "protocol-required canon"
     done
+    path=specs/design.md
+    if [ -f "$CTX_TMP/material/$path" ]; then
+        context_span "$HEAD_SHA" "$path" 1 all canon "optional L1 UI design"
+    fi
     # Parts across interfaces cannot be inferred semantically from paths. Conservatively supply
     # the committed part canon rather than silently dropping a cross-interface obligation.
     while IFS= read -r path; do

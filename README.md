@@ -43,7 +43,7 @@ Product-Kit keeps the answer in one short spec inside the repository: the proble
 | **Engineering** | ✅ Architecture and decisions, with the alternatives that were rejected, in one place. Spec, code and tests change in one pull request, with review sized to risk. |
 | **QA**          | ✅ User journeys with scenarios, variations and success criteria. Tests cite the IDs they prove; done needs evidence.     |
 | **Agents**      | ✅ Short, current context to work from, and written rules on what they may do.                                           |
-| **Design**      | ⚠️ User journeys, personas and the surfaces they use, but no visual design or UI specs.                                 |
+| **Design**      | ✅ Optional one-page UI spec for the owner's direction, composition, copy and lasting decisions.                          |
 
 ## How it works
 
@@ -259,6 +259,7 @@ L0  specs/product.md            one page: stage, pains, personas, core loop, jou
     specs/product/lifecycle.md  the stage now: Idea, Demo, MVP, previews, GA, Sunset, Retired
 L1  specs/architecture.md       one page: diagram, parts and why, core loop, key decisions
     specs/architecture/         decisions (D) and topics: security, observability, data, ...
+    specs/design.md             optional UI spec: direction, composition, copy, decisions
 L2  specs/parts/<part>.md       one box: why it exists, components, behaviors, invariants
     code and tests              the exact implementation; tests cite the IDs they prove
 ```

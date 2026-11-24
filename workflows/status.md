@@ -27,6 +27,7 @@ Answer the owner's question first, in plain words, with the title next to every 
    Children link their parent; standalone changes without a checkpoint have no outcome row.
    A parent referenced by a child stays visible as unknown even if its record/checkpoint is missing.
 2. **True now**: requirements, qualities and parts with maturity, `planned` and unenforced items.
+   For UI questions, read the optional L1 `specs/design.md` if present.
 3. **In flight**: open changes from every registered worktree, with where each lives, step,
    age, attempts and what each waits on; reviewed records merged without closing; unmerged branches.
 4. **Live**: the latest `DEPLOY` record per app and environment (`rev=none`: nothing deployed);

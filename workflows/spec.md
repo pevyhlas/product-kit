@@ -1,8 +1,9 @@
 # Writing and editing the spec
 
 **Inputs**: the change's intent, current spec files, code and tests, observed facts.
-**Writes**: the files in Layout, or `specs/SPEC.md`: one form at a time (a split moves
-everything in one change and deletes `SPEC.md`).
+**Writes**: the files in Layout, or `specs/SPEC.md`: one core form at a time (a split moves
+the combined spec in one change and deletes `SPEC.md`). The optional UI summary can stand
+beside either form.
 **Result**: a spec an owner reads quickly, that states current truth and narrows what matters.
 
 ## Layout
@@ -18,16 +19,18 @@ everything in one change and deletes `SPEC.md`).
 | `specs/product/non-goals.md` | L0 | N- items | 150 | `non-goals/<area>.md`, 150 each |
 | `specs/product/lifecycle.md` | L0 | the current and next stage; per stage its goal, audience, environment, promise and exit criteria (`lifecycle-template.md`) | 150 | `lifecycle/<stage>.md`, 150 each; Now and Next stay |
 | `specs/architecture.md` | L1 summary | the overview, read at a glance: one sentence, the system diagram, parts and why each exists, the core loop's path, key decisions, key areas in a line each, risks, left open | 100 | detail moves to a topic or a part; a line and a link stay |
+| `specs/design.md` | L1 summary (optional UI) | Direction, Composition, Copy and Decisions (`design-template.md`); cite the J-/Q- IDs it serves | 100 | tighten the summary and link longer decisions; implementation values live in code |
 | `specs/architecture/<topic>.md` | L1 | one topic in detail: `security`, `observability`, `data`, `interfaces`, `why-it-works`, `environments`, `operations` (`architecture-topics-template.md`) | 300 each | `architecture/<topic>/<area>.md`, 300 each |
 | `specs/architecture/decisions.md` | L1 | D- decisions, a `## D-NN <title>` section each (`decision-template.md`) | 300 | `architecture/decisions/<area>.md`, 300 each; one long decision gets `specs/decisions/D-NN.md` |
 | `specs/architecture/retired.md` | L1 | the `## Retired` list: parts that went and IDs that moved, a line each; linked from `architecture.md` | 300 | `architecture/retired/<area>.md`, each under `## Retired` |
 | `specs/parts/p<n>-<slug>.md` | L2 summary | one part: why it exists, components with their behaviors and invariants, interfaces, failure, budgets | 200 each | a component moves to `parts/p<n>-<slug>/<component>.md` |
 | `specs/parts/p<n>-<slug>/<component>.md` | L2 | one component, once its part outgrows its budget | 200 each | it is two components |
-| `specs/SPEC.md` | L0–L2 | all of the above in one file, for a small project | 300 | the layout above, in one change |
+| `specs/SPEC.md` | L0–L2 | the combined spec in one file, for a small project | 300 | the layout above, in one change |
 
 Each level opens with a one-page summary that links its detail: `product.md`, `architecture.md`,
-each part file. A topic with little to say stays a short section of its summary until the summary
-passes its budget; then it moves to its own file. Each file starts from its template in
+optional `design.md` for projects with a UI, and each part file. A topic with little to say stays
+a short section of its summary until the summary passes its budget; then it moves to its own
+file. Each file starts from its template in
 `.prdkit/templates/`: the one its row names, or `product-template.md`, `journey-template.md`,
 `requirements-template.md`, `qualities-template.md`, `constraints-template.md`,
 `non-goals-template.md`, `architecture-template.md`, `part-template.md` and, for `SPEC.md`,
@@ -40,8 +43,9 @@ pieces beside it (two areas, `lifecycle/<stage>-<part>.md`, `decisions/D-NN-<par
 piece opens with its parent's title (`# P<n> <part> — <component>`; a decision piece
 `# <title> — <part> (D-NN)`, so it does not define the ID twice), the parent keeps one line
 and a link per piece, and IDs never change. Doctor checks that every link resolves, that every
-spec file is reached from `product.md` or `architecture.md` through links (a folder link reaches
-the files directly in it; a retired file is exempt), and that `observed.md` links its pieces.
+spec file in the split layout is reached from a summary (`product.md`, `architecture.md` or
+optional `design.md`) through links (a folder link reaches the files directly in it; a retired
+file is exempt), and that `observed.md` links its pieces.
 The spec is current canon only; never cite `.prdkit/history/`. Read its archive only on
 demand for past directions, lessons or outcomes ([compact.md](compact.md)). Links in the archive
 must resolve too; a Git locator (`git show <sha>:<path>`) is code, not a link.
@@ -95,7 +99,7 @@ The compact view is neither a replacement specification nor a hash/review input.
 | Level | Answers | Never contains |
 |-------|---------|----------------|
 | L0 product | what problem, for whom, what users do and see, what must be true | technology (except an owner-sourced C-), code names, file paths |
-| L1 architecture | how the parts make the journeys work, and why that works | field-level schemas, step-by-step logic |
+| L1 architecture and optional UI design | how the parts and UI make the journeys work, and why that works | field-level schemas, step-by-step logic, implementation values |
 | L2 part | what this part guarantees | step-by-step logic, copied schemas |
 
 L0 may name the surfaces users touch (a phone app, a web page, an agent): they are part of the

@@ -41,6 +41,62 @@ assert_contains "$OUTPUT" '"findings":[],"advisories":[],"trace":{"code-path":0,
 assert_contains "$OUTPUT" '"readiness":"not-evaluated"' "never a readiness claim"
 assert_eq 0 "$(printf '%s\n' "$OUTPUT" | jq '.budget_excess_reading_lines')" "no reading-budget excess"
 
+it "the optional design summary is a link root and has no findings when well formed"
+mkdir -p specs/product
+cat > specs/design.md <<'MD'
+# UI design
+## Direction
+> Owner: "Keep the next step easy to find."
+## Composition
+Q-01 still holds for [the part](parts/p1-web.md).
+## Copy
+## Decisions
+- 2026-10-16 — See [decision](decisions/D-01.md).
+MD
+run bash "$DOCTOR" --strict --json
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq 0 "$(jq '.advisories | length' <<< "$OUTPUT")" "design participates as a separate summary"
+
+it "the optional design summary cannot link to tracked history"
+mkdir -p .prdkit/history
+printf '# Archive\n' > .prdkit/history/archive.md
+printf '\n[Past direction](../.prdkit/history/archive.md)\n' >> specs/design.md
+run bash "$DOCTOR" --json
+assert_eq 1 "$STATUS" "a resolved history link still fails"
+assert_contains "$OUTPUT" "specs/design.md:10: spec links to history (.prdkit/history/archive.md)"
+rm .prdkit/history/archive.md
+
+it "doctor checks active design headings, links, citations and the 100-reading-line budget"
+cat > specs/design.md <<'MD'
+# UI design
+## Direction
+<!--
+## Composition
+-->
+~~~
+## Copy
+~~~
+   ## Decisions ##
+[Missing](../missing.md). J-99.
+MD
+# Ten source lines above, one 9,100-character line reads as 91.
+printf '%09100d\n' 0 >> specs/design.md
+run bash "$DOCTOR" --json
+assert_eq 0 "$STATUS" "shape problems are advisories"
+design_advice="$(jq -r '.advisories[]' <<< "$OUTPUT")"
+assert_contains "$design_advice" "specs/design.md: missing '## Composition' heading"
+assert_contains "$design_advice" "specs/design.md: missing '## Copy' heading"
+assert_not_contains "$design_advice" "missing '## Decisions' heading"
+assert_not_contains "$design_advice" "missing '## Direction' heading"
+assert_contains "$design_advice" "Link at specs/design.md:10 points to missing.md, which does not exist"
+assert_contains "$design_advice" "ID J-99 is cited at specs/design.md:10 but defined nowhere"
+assert_contains "$design_advice" "Budget: specs/design.md has 11 lines that read as 101 at 100 characters a line"
+assert_eq 1 "$(jq '.budget_excess_reading_lines' <<< "$OUTPUT")"
+run bash "$DOCTOR" --strict
+assert_eq 1 "$STATUS" "strict fails on design shape advisories"
+rm specs/design.md
+rmdir specs/product
+
 it "doctor refuses old paths with one actionable finding and no partial history report"
 for legacy in specs/log.md specs/log specs/archive.md; do
     ln -s missing "$legacy"

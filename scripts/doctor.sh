@@ -147,6 +147,25 @@ if [ -d "$root/specs/product" ]; then
 else
     budget 150 "$root"/specs/product.md; budget 300 "$root"/specs/architecture.md
 fi
+design="specs/design.md"
+if [ -f "$root/$design" ]; then
+    budget_fix 100 "tighten the summary and link longer decisions; keep implementation values in code" "$root/$design"
+    # shellcheck disable=SC2016 # awk uses $0 for the input line
+    rows="$(verify_lines awk "$SPEC_METADATA_SKIP_AWK"'
+        !metadata_skip($0) {
+            h = $0; sub(/^ ? ? ?##[[:blank:]]+/, "", h)
+            if (h == $0) next
+            sub(/[[:blank:]]+#+[[:blank:]]*$/, "", h); sub(/[[:blank:]]+$/, "", h)
+            seen[h] = 1
+        }
+        END {
+            n = split("Direction Composition Copy Decisions", sections, " ")
+            for (i = 1; i <= n; i++) if (!(sections[i] in seen)) print sections[i]
+        }' "$root/$design")"
+    while IFS= read -r section; do
+        [ -z "$section" ] || advisories+=("$design: missing '## $section' heading (design-template.md)")
+    done <<< "$rows"
+fi
 # Each budget has a split (spec.md, Layout), and each piece keeps the budget of its parent.
 budget 150 "$root"/specs/product/users.md "$root"/specs/product/users/*.md \
     "$root"/specs/product/non-goals.md "$root"/specs/product/non-goals/*.md \
@@ -242,6 +261,8 @@ while IFS= read -r where; do [ -z "$where" ] || findings+=("Malformed ID at $whe
 cite_files=()
 test_files="$(verify_lines spec_test_files "$root")"
 while IFS= read -r file; do [ -z "$file" ] || cite_files+=("$file"); done <<< "$listed"$'\n'"$test_files"
+# Design cites canonical items but does not define them.
+[ ! -f "$root/$design" ] || cite_files+=("$design")
 if [ "${#cite_files[@]}" -gt 0 ]; then
     rows="$(
         { printf '%s\n' "$items" | awk -F "$SEP" 'NF { print "D" FS $1 FS $5 }' || exit 1
@@ -292,8 +313,13 @@ missing_links() { # links
         fi
     done <<< "$1"
 }
-links="$(spec_links "$root")"
 spec_list=(); while IFS= read -r file; do [ -z "$file" ] || spec_list+=("$file"); done <<< "$listed"
+summaries="product.md, architecture.md"
+if [ -f "$root/$design" ]; then
+    spec_list+=("$design")
+    summaries="$summaries, design.md"
+fi
+links=""; [ "${#spec_list[@]}" -eq 0 ] || links="$(spec_links "$root" "${spec_list[@]}")"
 observed=(); for file in "$root"/specs/observed.md "$root"/specs/observed/*.md; do [ -f "$file" ] && observed+=("${file#"$root"/}"); done
 observed_links=""; [ "${#observed[@]}" -eq 0 ] || observed_links="$(spec_links "$root" "${observed[@]}")"
 archive_links=""; [ ! -f "$root/.prdkit/history/archive.md" ] || archive_links="$(spec_links "$root" .prdkit/history/archive.md)"
@@ -307,8 +333,8 @@ done <<< "$links"
 rows="$(
     missing_links "$links" && missing_links "$observed_links" && missing_links "$archive_links" || exit 1
     if [ -d "$root/specs/product" ] && [ "${#spec_list[@]}" -gt 0 ]; then
-        reach "specs/product.md specs/architecture.md specs/SPEC.md" \
-            "is reached from no summary (product.md, architecture.md or a file they link); give it a line and a link in its parent (spec.md, Layout)" \
+        reach "specs/product.md specs/architecture.md $design specs/SPEC.md" \
+            "is reached from no summary ($summaries or a file they link); give it a line and a link in its parent (spec.md, Layout)" \
             0 "$links" "${spec_list[@]}" || exit 1
     fi
     if [ -d "$root/specs/observed" ] && [ "${#observed[@]}" -gt 0 ]; then

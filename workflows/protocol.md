@@ -59,7 +59,7 @@ resume, apply [spec.md](spec.md), Resolve owner answers, before asking it again.
 
 | What | File |
 |------|------|
-| The spec: current product (L0), architecture (L1), parts (L2) | `specs/`, per [spec.md](spec.md), Layout |
+| The spec: current product (L0), architecture and optional UI design (L1), parts (L2) | `specs/`, per [spec.md](spec.md), Layout |
 | Facts observed about the outside world | `specs/observed.md` (`observed-template.md`), or `specs/observed/<area>.md` once split |
 | Pending owner direction and open questions only | `specs/inbox.md` (`inbox-template.md`) |
 | Holds, waivers, attestations, deployments | `specs/records.md` (`records-template.md`); long authority quotes in `specs/authority.md` on demand |
@@ -75,7 +75,8 @@ or path. Every claim says whether it is observed, decided, assumed or proposed.
 
 1. The request and the open change it belongs to ([change.md](change.md)), plus its parent's
    outcome checkpoint: original goal, intended architecture, critical path, lane purposes and limits.
-2. The constitution, then `product.md` and `architecture.md` in full.
+2. The constitution, then `product.md` and `architecture.md` in full; read `specs/design.md`
+   when present and relevant.
 3. The part files the change touches, and parts across a touched interface.
 4. Their code and tests, and a `legacy` document only when a part links it. `.prdkit/history/archive.md`
    only on demand: a history question, or before re-trying a direction.
