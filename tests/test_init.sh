@@ -342,6 +342,7 @@ foreign=.prdkit/scripts/bash/foreign.sh
 memory=.prdkit/memory/earlier-policy.md
 missing=.prdkit/scripts/bash/already-absent.sh
 printf 'original bytes\n' > "$PROJ6/$pristine"
+chmod +x "$PROJ6/$pristine"
 printf 'edited bytes\n' > "$PROJ6/$edited"
 cp "$PROJ6/$pristine" "$PROJ6/$memory"
 cp "$PROJ6/$pristine" "$PROJ6/consumer-target"
@@ -400,6 +401,93 @@ run bash "$PROJ7/.product-kit/scripts/init.sh" --target "$PROJ7" --upgrade --cop
 assert_eq 0 "$STATUS"
 assert_contains "$OUTPUT" "Removed retired kit file: $link"
 if [ -L "$PROJ7/$link" ]; then _no 'dangling command remains'; else _ok 'dangling command removed'; fi
+
+it "retirement preserves changes to the executable bit in either direction"
+P="$(make_project)"; track_tmp "$P"
+printf 'retired script\n' > "$P/.product-kit/scripts/earlier-mode.sh"
+printf 'retired template\n' > "$P/.product-kit/templates/earlier-mode.md"
+bash "$P/.product-kit/scripts/init.sh" --target "$P" >/dev/null || exit 1
+rm "$P/.product-kit/scripts/earlier-mode.sh" "$P/.product-kit/templates/earlier-mode.md"
+script=.prdkit/scripts/bash/earlier-mode.sh
+template=.prdkit/templates/earlier-mode.md
+chmod -x "$P/$script"
+chmod +x "$P/$template"
+snapshot_upgrade_fixture "$P" || exit 1
+run bash "$P/.product-kit/scripts/init.sh" --target "$P" --check
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "RETIRED — kept"
+assert_not_contains "$OUTPUT" "RETIRED — unedited"
+run bash "$P/.product-kit/scripts/init.sh" --target "$P" --upgrade
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" 'Kept retired files'
+for rel in "$script" "$template"; do
+    assert_contains "$OUTPUT" "  $rel"
+    assert_file "$P/$rel"
+done
+if [ ! -x "$P/$script" ] && [ -x "$P/$template" ]; then _ok 'consumer modes preserved'; else _no 'consumer modes changed'; fi
+
+it "a local previous release supplies nondefault copy modes"
+P="$(make_project)"; track_tmp "$P"
+KIT="$(mktemp -d)"; track_tmp "$KIT"
+cp -R "$P/.product-kit/." "$KIT/" || exit 1
+for file in executable-edited executable-pristine; do
+    printf 'retired workflow\n' > "$KIT/workflows/$file.md"
+    chmod +x "$KIT/workflows/$file.md"
+done
+git -C "$KIT" init -q
+git -C "$KIT" add -A &&
+    git -C "$KIT" -c user.name=test -c user.email=t@example.com commit -qm 'prior kit release' &&
+    git -C "$KIT" tag "v$(cat "$KIT/VERSION")" || exit 1
+bash "$KIT/scripts/init.sh" --target "$P" >/dev/null || exit 1
+rm "$KIT/workflows/executable-edited.md" "$KIT/workflows/executable-pristine.md"
+chmod -x "$P/.prdkit/workflows/executable-edited.md"
+snapshot_upgrade_fixture "$P" || exit 1
+run bash "$KIT/scripts/init.sh" --target "$P" --upgrade
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" 'Removed retired kit file: .prdkit/workflows/executable-pristine.md'
+assert_contains "$OUTPUT" '  .prdkit/workflows/executable-edited.md'
+assert_file "$P/.prdkit/workflows/executable-edited.md" 'historical nondefault mode edit is kept'
+if [ -e "$P/.prdkit/workflows/executable-pristine.md" ]; then _no 'pristine executable workflow remains'; else _ok 'pristine executable workflow removed'; fi
+
+it "retirement skips an alias of a current install destination"
+P="$(make_inited_project)"; track_tmp "$P"
+alias_path=.prdkit/scripts/bash/earlier-common.sh
+current=.prdkit/scripts/bash/common.sh
+ln "$P/$current" "$P/$alias_path"
+printf '%s  %s\n' "$(hash_of "$P/$current")" "$alias_path" >> "$P/.prdkit/.manifest"
+snapshot_upgrade_fixture "$P" || exit 1
+run bash "$P/.product-kit/scripts/init.sh" --target "$P" --upgrade
+assert_eq 0 "$STATUS"
+assert_not_contains "$OUTPUT" "Removed retired kit file: $alias_path"
+assert_file "$P/$alias_path" 'does not unlink a path that aliased a current destination before installation'
+assert_file "$P/$current"
+assert_not_contains "$(cat "$P/.prdkit/.manifest")" "$alias_path"
+assert_contains "$(cat "$P/.prdkit/.manifest")" "$current"
+
+it "sparse-excluded retired files are reported and remain managed until present"
+P="$(make_project)"; track_tmp "$P"
+printf 'retired script\n' > "$P/.product-kit/scripts/earlier-sparse.sh"
+bash "$P/.product-kit/scripts/init.sh" --target "$P" >/dev/null || exit 1
+rm "$P/.product-kit/scripts/earlier-sparse.sh"
+rel=.prdkit/scripts/bash/earlier-sparse.sh
+snapshot_upgrade_fixture "$P" || exit 1
+git -C "$P" sparse-checkout set --no-cone '/*' "!/$rel" || exit 1
+if [ ! -e "$P/$rel" ]; then _ok 'path excluded by sparse checkout'; else _no 'sparse fixture was not excluded'; fi
+run bash "$P/.product-kit/scripts/init.sh" --target "$P" --check
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'sparse checkout'
+run bash "$P/.product-kit/scripts/init.sh" --target "$P" --upgrade
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" 'sparse checkout'
+assert_contains "$OUTPUT" "  $rel"
+assert_contains "$(cat "$P/.prdkit/.manifest")" "$rel" 'deferred path stays recorded'
+git -C "$P" sparse-checkout disable || exit 1
+assert_file "$P/$rel"
+snapshot_upgrade_fixture "$P" || exit 1
+run bash "$P/.product-kit/scripts/init.sh" --target "$P" --upgrade
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" "Removed retired kit file: $rel"
+assert_not_contains "$(cat "$P/.prdkit/.manifest")" "$rel"
 
 # Containment: each project below sits in its own base directory, so a sentinel next to it is
 # outside the target but inside the test's scratch space.

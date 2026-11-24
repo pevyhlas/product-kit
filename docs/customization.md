@@ -77,10 +77,12 @@ templates and memory files. `--upgrade --force` still has to pass the overwrite 
 can link to `CLAUDE.md`). An upgrade refuses links to root files outside the project.
 When the kit no longer ships a manifest-listed file, `--check` reports it as retired drift. On
 `--upgrade`, an unedited retired file or an installer-owned command symlink is removed, even if
-the link is dangling. Edited retired files, foreign symlinks and retired memory files are kept
-and listed for manual follow-up. All retired paths leave the manifest, including those already
-absent. Tracked project references to removed files are warnings, not blockers. A plain rerun
-with retired entries directs you to `--upgrade`.
+the link is dangling. Content and executable-bit edits, foreign symlinks, and retired memory
+files are kept and listed for manual follow-up. A retired path that aliases a current install
+destination is left to the install pass. Retired paths leave the manifest except those excluded
+by sparse checkout: include the listed paths before upgrading again. Tracked project references
+to removed files are warnings, not blockers. A plain rerun with retired entries directs you to
+`--upgrade`.
 The manifest records version, harnesses, install mode, selected options and pristine file
 hashes. Upgrade from a clean, committed checkout. To deselect agent tiers, use
 `--without agent-tiers`; the installer removes its managed files only when the project no

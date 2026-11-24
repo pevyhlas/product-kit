@@ -32,6 +32,7 @@ case "$tool:$FAULT" in
     mv:manifest) if [ "$last" = "$FAULT_ROOT/.prdkit/.manifest" ]; then exit 76; fi ;;
     mv:published) if [ "$last" = "$FAULT_ROOT/.prdkit/.manifest" ]; then "$REAL_MV" "$@" || exit; exit 76; fi ;;
     rm:retired) if [ "$last" = "$FAULT_ROOT/.claude/commands/prdkit-retired.md" ]; then "$REAL_RM" "$@" || exit; exit 79; fi ;;
+    rm:retired-eol) if [ "$last" = "$FAULT_ROOT/.prdkit/templates/retired-eol.md" ]; then "$REAL_RM" "$@" || exit; exit 79; fi ;;
     mktemp:storage) case "$last" in *prdkit-install*) exit 77 ;; esac ;;
 esac
 case "$tool" in
@@ -232,7 +233,9 @@ for fault in retired published; do
     if [ "$fault" = published ]; then marker=manifest; expected=76; fi
     run env PATH="$SHIMS:$PATH" FAULT="$fault" FAULT_ROOT="$PROJ" bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --copy
     assert_eq "$expected" "$STATUS" "$OUTPUT"
-    assert_contains "$(cat "$PROJ/.prdkit/.install-state")" "phase: $marker"
+    state="$(cat "$PROJ/.prdkit/.install-state")"
+    assert_contains "$state" "phase: $marker"
+    assert_contains "$state" 'retired-file: 120000 ' 'command deletion proof survives the write phase'
     if [ -L "$PROJ/.claude/commands/prdkit-retired.md" ]; then _no 'retired link remains'; else _ok 'retired link already removed'; fi
     rm "$PROJ/.prdkit/scripts/bash/retired.sh"
     run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --copy
@@ -248,6 +251,44 @@ for fault in retired published; do
     assert_not_contains "$(cat "$PROJ/.prdkit/.manifest")" '/retired.sh'
     if [ -e "$PROJ/.prdkit/.install-state" ]; then _no 'marker not cleared'; else _ok 'retry clears marker'; fi
 done
+
+it "a normalized retired file resumes, but an unvalidated mode edit does not"
+PROJ="$(make_project)"; track_tmp "$PROJ"
+PROJ="$(CDPATH='' cd "$PROJ" && pwd -P)"
+rel=.prdkit/templates/retired-eol.md
+mode_edit=.prdkit/scripts/bash/retired-mode.sh
+printf 'original line\r\n' > "$PROJ/.product-kit/templates/retired-eol.md"
+printf 'original script\n' > "$PROJ/.product-kit/scripts/retired-mode.sh"
+bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" >/dev/null || exit 1
+printf '/%s text eol=crlf\n' "$rel" > "$PROJ/.gitattributes"
+printf 'Run retired-eol.md\n' > "$PROJ/guide.md"
+chmod -x "$PROJ/$mode_edit"
+rm "$PROJ/.product-kit/templates/retired-eol.md" "$PROJ/.product-kit/scripts/retired-mode.sh"
+snapshot_upgrade_fixture "$PROJ" || exit 1
+assert_eq "$(printf 'original line\r\n' | install_hash_stream)" "$(install_hash_stream < "$PROJ/$rel")"
+assert_eq "$(printf 'original line\n' | install_hash_stream)" "$(git -C "$PROJ" show "HEAD:$rel" | install_hash_stream)"
+run env PATH="$SHIMS:$PATH" FAULT=retired-eol FAULT_ROOT="$PROJ" bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade
+assert_eq 79 "$STATUS" "$OUTPUT"
+assert_contains "$(cat "$PROJ/.prdkit/.install-state")" 'phase: retired'
+assert_contains "$(cat "$PROJ/.prdkit/.install-state")" \
+    "retired-file: 100644 $(git -C "$PROJ" rev-parse "HEAD:$rel") $(printf 'original line\r\n' | install_hash_stream)  $rel"
+cp "$PROJ/.prdkit/.install-state" "$PROJ/.git/original-state"
+sed "s/^retired-file: 100644 [0-9a-f]*/retired-file: 100644 invalid/" \
+    "$PROJ/.git/original-state" > "$PROJ/.prdkit/.install-state"
+run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade
+assert_eq 1 "$STATUS" 'mismatched committed identity is refused'
+assert_contains "$OUTPUT" 'invalid retired-file evidence'
+cp "$PROJ/.git/original-state" "$PROJ/.prdkit/.install-state"
+rm "$PROJ/$mode_edit"
+run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade
+assert_eq 1 "$STATUS" 'retry refuses a mode-only customization deleted outside the installer'
+assert_contains "$OUTPUT" "not a validated installer-owned intermediate state: $mode_edit"
+git -C "$PROJ" restore -- "$mode_edit" || exit 1
+run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_contains "$OUTPUT" 'guide.md:1:Run retired-eol.md'
+assert_contains "$OUTPUT" "  $mode_edit"
+if [ -e "$PROJ/.prdkit/.install-state" ]; then _no 'marker not cleared'; else _ok 'retry clears marker'; fi
 
 it "overlapping writers refuse before mutation and the original writer finishes coherently"
 PROJ="$(make_inited_project)"; track_tmp "$PROJ"

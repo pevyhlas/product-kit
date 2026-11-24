@@ -27,18 +27,49 @@ upgrade_committed_manifest() (
         [ ! -f "$work/link" ] && install_manifest_format "$work/manifest" && cat "$work/manifest"
 )
 
-upgrade_retired_head_state() (
-    local work link_target
-    work="$(mktemp -d)" || return 1
-    trap 'rm -rf "$work"' EXIT
-    upgrade_head_file "$1" "$work/file" "$work/link" || return 1
-    if [ -f "$work/link" ]; then
-        link_target="$(cat "$work/file" && printf x)" || return 1
-        retired_file_state "$1" "$2" "$work/file" "${link_target%x}"
-    else
-        retired_file_state "$1" "$2" "$work/file"
-    fi
-)
+upgrade_retired_head_entry() { # mode and blob identity, or an untracked/ignored path
+    local entry oid mode
+    entry="$(git -C "$TARGET" ls-tree HEAD -- ":(top,literal)$1")" || return 1
+    if [ -z "$entry" ]; then echo 'absent -'; return 0; fi
+    mode="${entry%% *}"; oid="${entry%%$'\t'*}"; oid="${oid##* }"
+    case "$mode" in 100644|100755|120000) printf '%s %s\n' "$mode" "$oid" ;; *) return 1 ;; esac
+}
+
+retirement_proof_recorded() { # exact manifest row, not a pathname pattern
+    local line
+    while IFS= read -r line; do
+        line="${line#retired-file: }"; line="${line#* }"; line="${line#* }"
+        if [ "$line" = "$1" ]; then return 0; fi
+    done <<< "$RETIRED_PROOFS"
+    return 1
+}
+
+upgrade_retirement_proofs() {
+    local marker="$PRDKIT_DIR/.install-state" proofs line claim mode row rel observed seen=$'\n'
+    verify_lf_file "$marker" || return 1
+    proofs="$(LC_ALL=C awk '/^retired-file: /' "$marker")" || return 1
+    [ -n "$proofs" ] || return 0
+    while IFS= read -r line; do
+        claim="${line#retired-file: }"; mode="${claim%% *}"; row="${claim#* }"; row="${row#* }"
+        rel="${row#*  }"
+        # The old manifest constrains both the path and its validated pristine hash.
+        case $'\n'"$RETIRED_ENTRIES"$'\n' in *$'\n'"$row"$'\n'*) ;; *) return 1 ;; esac
+        case "$seen" in *$'\n'"$rel"$'\n'*) return 1 ;; esac
+        seen="$seen$rel"$'\n'
+        case "$rel" in .prdkit/memory/*) return 1 ;; esac
+        observed="$(upgrade_retired_head_entry "$rel")" || return 1
+        [ "$claim" = "$observed $row" ] || return 1
+        case "$mode" in
+            100644|100755) [ "$mode" = "$(retired_expected_mode "$rel")" ] || return 1 ;;
+            120000)
+                $PREVIOUS_SYMLINK || return 1
+                case "$rel" in .claude/commands/*|.opencode/commands/*) ;; *) return 1 ;; esac ;;
+            absent) ;;
+            *) return 1 ;;
+        esac
+    done <<< "$proofs"
+    printf '%s\n' "$proofs"
+}
 
 upgrade_same_file() { # real file rendered regular file link-metadata
     if [ -f "$3" ]; then
@@ -106,7 +137,7 @@ upgrade_destinations_safe() (
         done < "$work/planned"
         if [ ${#RETIRED_REMOVE[@]} -gt 0 ]; then
             for rel in "${RETIRED_REMOVE[@]}"; do
-                if [ "$dest" = "$TARGET/$rel" ]; then
+                if [ "$dest" = "$TARGET/$rel" ] || [ "$dest" -ef "$TARGET/$rel" ]; then
                     echo "Root-file edit $root overlaps retired file $rel; nothing was written." >&2
                     return 1
                 fi
@@ -164,8 +195,8 @@ upgrade_render_expected() { # caller-owned work directory -> head/, rendered/, p
         fi
         printf '%s\0' "$rel" >> "$work/paths" || return 1
     done
-    # Only committed files that matched their retired ownership entry can be
-    # missing as a result of the previous run. The rendered outcome is absence.
+    # Only paths with validated pre-unlink evidence can be missing as
+    # installer intermediates. The rendered outcome is absence.
     if [ ${#RETIRED_DELETED[@]} -gt 0 ]; then
         for rel in "${RETIRED_DELETED[@]}"; do
             upgrade_head_file "$rel" "$work/head/$rel" "$work/head-links/$rel" || return 1
@@ -217,6 +248,7 @@ upgrade_render_expected() { # caller-owned work directory -> head/, rendered/, p
             if [ "$cur" != "$kit" ]; then rec="$(recorded_hash "$rel")"; hash="${rec:-$kit}"; fi
             printf '%s  %s\n' "$hash" "$rel"
         done < "$work/files"
+        retain_sparse_retirement_rows
     } > "$work/rendered/.prdkit/.manifest"
     printf '.prdkit/.manifest.tmp\0' >> "$work/paths" || return 1
     upgrade_head_file .prdkit/.manifest.tmp "$work/head/.prdkit/.manifest.tmp" "$work/head-links/.prdkit/.manifest.tmp" || return 1
@@ -231,7 +263,8 @@ upgrade_marker_valid() { # rendered work; only metadata the installer actually e
     local marker="$PRDKIT_DIR/.install-state" phase path version entry
     [ -f "$marker" ] && [ ! -L "$marker" ] && [ ! -x "$marker" ] && verify_lf_file "$marker" || return 1
     if git -C "$TARGET" ls-files --error-unmatch -- .prdkit/.install-state >/dev/null 2>&1; then return 1; fi
-    awk '/^(phase|path|source-version): / { n++; next } { bad=1 } END { exit bad || n!=3 }' "$marker" || return 1
+    awk '/^retired-file: / { next } /^(phase|path|source-version): / { n++; next } { bad=1 }
+        END { exit bad || n!=3 }' "$marker" || return 1
     phase="$(install_manifest_value "$marker" phase)" && path="$(install_manifest_value "$marker" path)" &&
         version="$(install_manifest_value "$marker" source-version)" || return 1
     [ "$version" = "$PK_VERSION" ] || return 1
@@ -240,10 +273,9 @@ upgrade_marker_valid() { # rendered work; only metadata the installer actually e
         file:*) awk -F '\t' -v p="$path" '$2==p { found=1 } END { exit !found }' "$1/files"; return ;;
         optional:*) case " $REMOVE_OPTIONS_FILES " in *" $path "*) return 0 ;; esac; return 1 ;;
         retired:*)
-            # An ignored file can already be gone with no HEAD entry. This validates
-            # the marker path, not the dirty paths (those still need a rendered outcome).
+            # A retired phase identifies a specific pre-unlink receipt.
             while IFS= read -r entry; do
-                if [ -n "$entry" ] && [ "${entry#*  }" = "$path" ]; then return 0; fi
+                if [ -n "$entry" ] && [ "${entry#*  }" = "$path" ] && retirement_proof_recorded "$entry"; then return 0; fi
             done <<< "$RETIRED_ENTRIES"
             return 1 ;;
         *) return 1 ;;
