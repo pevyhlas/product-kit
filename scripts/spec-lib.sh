@@ -35,8 +35,12 @@ SPEC_BULLET_ID_AWK='function spec_bullet_id(s) {
     return s
 }'
 
-SPEC_HEADING_AWK='function spec_heading(line,   depth) {
-    sub(/^ ? ? ?/, "", line)
+SPEC_HEADING_AWK='function spec_unindent(line) {
+    if (!match(line, /^ +/)) return line
+    return substr(line, (RLENGTH > 3 ? 3 : RLENGTH) + 1)
+}
+function spec_heading(line,   depth) {
+    line = spec_unindent(line)
     if (!match(line, /^#+/) || RLENGTH > 6 || substr(line, RLENGTH + 1) !~ /^([ \t]|$)/) return 0
     depth = RLENGTH; heading_title = substr(line, depth + 1)
     sub(/[ \t]+#+[ \t]*$/, "", heading_title)
@@ -44,9 +48,61 @@ SPEC_HEADING_AWK='function spec_heading(line,   depth) {
     return depth
 }'
 
-SPEC_RECORD_NAME_AWK='
-    function spec_record_type(type) { return type ~ /^(HOLD|WAIVER|ATTEST|DEPLOY)$/ }
-    function spec_record_name(name) { return name ~ /^[A-Za-z0-9][A-Za-z0-9._-]*$/ }'
+SPEC_PART_AWK='
+    function spec_part_id(s) { return s ~ /^P[0-9]+(\.[0-9]+)?$/ }
+    function spec_part_header(s) { return s ~ /^\|[[:space:]]*[Pp]art[[:space:]]*\|/ }
+    function spec_part_row(s,   id) {
+        if (!sub(/^\|[[:space:]]*/, "", s) || !match(s, /^[^[:space:]|]+[[:space:]]/)) return ""
+        id = substr(s, 1, RLENGTH - 1)
+        return spec_part_id(id) ? id : ""
+    }
+    function spec_retired_part(s,   id) {
+        if (!sub(/^[[:space:]]*[-*][[:space:]]+(\*\*)?/, "", s) ||
+            !match(s, /^[^[:space:]|]+[[:space:]]/) || s !~ /^[^|]*retired:/) return ""
+        id = substr(s, 1, RLENGTH - 1)
+        return spec_part_id(id) ? id : ""
+    }'
+
+# Parse a record row without consulting authority files. Return a diagnostic or fill row.
+SPEC_RECORD_ROW_AWK='
+    function spec_record_date(s) { return s ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ }
+    function spec_record_row(line, row,   n, f, type, name, kv, need, date, until, who, i, k, stray, m, req, missing, reason) {
+        if (line !~ /^(HOLD|WAIVER|ATTEST|DEPLOY)([[:space:]]|$)/) return "not a HOLD, WAIVER, ATTEST or DEPLOY record"
+        if (match(line, /[[:space:]]—([[:space:]]|$)/)) {
+            reason = substr(line, RSTART + RLENGTH); line = substr(line, 1, RSTART - 1)
+            sub(/^[[:space:]]+/, "", reason)
+        }
+        gsub(/\t/, " ", reason)
+        n = split(line, f, /[[:space:]]+/)
+        type = f[1]; name = f[2]
+        if (name !~ /^[A-Za-z0-9][A-Za-z0-9._-]*$/) return type " needs an id or app name first"
+        # A word without "=" continues the preceding value, except when it is a date.
+        for (i = 3; i <= n; i++)
+            if (index(f[i], "=")) { k = substr(f[i], 1, index(f[i], "=") - 1); kv[k] = substr(f[i], index(f[i], "=") + 1) }
+            else if (f[i] != "" && k != "") { if (!spec_record_date(kv[k])) kv[k] = kv[k] " " f[i] }
+            else if (f[i] != "" && stray == "") stray = f[i]
+        if ((type == "HOLD" || type == "WAIVER") && ("ref" in kv))
+            return type " " name ": put ref= after the reason separator ( — )"
+        if (type == "HOLD") { need = "owner scope since until"; date = kv["since"]; until = kv["until"]; who = kv["owner"] }
+        else if (type == "WAIVER") { need = "owner check scope expires"; until = kv["expires"]; who = kv["owner"] }
+        else if (type == "ATTEST") { need = "by what env version date"; date = kv["date"]; who = kv["by"] }
+        else { need = "env rev date by"; date = kv["date"]; who = kv["by"] }
+        if (stray != "") return type " " name ": \"" stray "\" comes before any key=value"
+        m = split(need, req, " ")
+        for (i = 1; i <= m; i++) if (kv[req[i]] == "") missing = missing " " req[i] "="
+        if (missing != "") return type " " name " is missing" missing
+        if (date != "" && !spec_record_date(date)) return type " " name " date must be YYYY-MM-DD"
+        if (type == "WAIVER" && !spec_record_date(until)) return "WAIVER " name " expires= must be YYYY-MM-DD"
+        if ((type == "HOLD" || type == "WAIVER") && reason ~ /^ref=/ &&
+            (reason !~ /^ref=specs\/authority\.md#[A-Za-z0-9][A-Za-z0-9._-]*@[0-9a-f]+$/ ||
+             length(reason) - index(reason, "@") != 12))
+            return "invalid authority reference (expected ref=specs/authority.md#<anchor>@<12 lowercase hex digits>)"
+        row["type"] = type; row["name"] = name; row["owner"] = who
+        row["scope"] = kv["scope"]; row["env"] = kv["env"]; row["date"] = date; row["until"] = until
+        row["rev"] = (type == "ATTEST") ? kv["version"] : kv["rev"]
+        row["check"] = (type == "ATTEST") ? kv["what"] : kv["check"]; row["reason"] = reason
+        return ""
+    }'
 
 source "$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/spec-navigation-lib.sh"
 
@@ -863,7 +919,7 @@ spec_items() { # root [--skip-invalid-journey-ids] [file...]: the spec files whe
     for file in ${files[@]+"${files[@]}"}; do
         verify_lf_file "$root/$file" || { printf 'Invalid spec text: %s (expected non-empty LF-terminated text)\n' "$file" >&2; return 1; }
         expected="$(wc -l < "$root/$file")" || return 1
-        awk -v expected="$expected" -v file="$(spec_field "$file")" -v strict_journeys="$strict_journeys" "$SPEC_SKIP_AWK $SPEC_BULLET_ID_AWK"'
+        awk -v expected="$expected" -v file="$(spec_field "$file")" -v strict_journeys="$strict_journeys" "$SPEC_SKIP_AWK $SPEC_BULLET_ID_AWK $SPEC_PART_AWK"'
             BEGIN { gsub(/[\037\r\n]/, " ", file) }
             function indent(s) { sub(/[^[:space:]].*/, "", s); return length(s) }
             function flags(line, id, block,   m, p, t, b, v, i, u) {
@@ -887,14 +943,14 @@ spec_items() { # root [--skip-invalid-journey-ids] [file...]: the spec files whe
             pend != "" && /^[[:space:]]*([-*+]|[0-9]+\.)[[:space:]]/ && !spec_bullet_id($0) && indent($0) > pend_ind { insub = 1; subs = subs "\n" $0; next }
             { flush() }
             /^#/ { retired_list = ($0 ~ /^#+[[:space:]]+Retired[[:space:]]*$/) }
-            /^\|[[:space:]]*[Pp]art[[:space:]]*\|/ {
+            spec_part_header($0) {
                 matcol = 4; n = split($0, cell, "|")
                 for (i = 2; i <= n; i++) { h = cell[i]; gsub(/^[[:space:]]+|[[:space:]]+$/, "", h); if (tolower(h) == "maturity") matcol = i }
                 next
             }
-            /^\|[[:space:]]*P[0-9]+(\.[0-9]+)?[[:space:]]/ {
-                n = split($0, cell, "|"); id = cell[2]; gsub(/^[[:space:]]+|[[:space:]]+$/, "", id)
-                title = id; sub(/^P[0-9]+(\.[0-9]+)?[[:space:]]+/, "", title); sub(/[[:space:]].*/, "", id)
+            (id = spec_part_row($0)) != "" {
+                n = split($0, cell, "|"); title = cell[2]
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", title); sub(/^[^[:space:]]+[[:space:]]+/, "", title)
                 # Maturity and planned come from the Maturity cell (`hypothesis, planned: 012-x`), so
                 # "planned:" elsewhere in the row does not mark the part.
                 mc = cell[matcol ? matcol : 4]; mat = mc; gsub(/^[[:space:]]+|[[:space:]]+$/, "", mat); sub(/[,;( ].*/, "", mat)
@@ -904,9 +960,9 @@ spec_items() { # root [--skip-invalid-journey-ids] [file...]: the spec files whe
                 next
             }
             # A part on the Retired list: `- P3 Store: retired: <where>`, only under `## Retired`.
-            retired_list && /^[[:space:]]*[-*][[:space:]]+(\*\*)?P[0-9]+(\.[0-9]+)?[[:space:]][^|]*retired:/ {
-                id = $0; sub(/^[[:space:]]*[-*][[:space:]]+(\*\*)?/, "", id); title = id
-                sub(/[[:space:]].*/, "", id); sub(/^P[0-9]+(\.[0-9]+)?[[:space:]]+/, "", title); sub(/[*:].*/, "", title)
+            retired_list && (id = spec_retired_part($0)) != "" {
+                title = $0; sub(/^[[:space:]]*[-*][[:space:]]+(\*\*)?[^[:space:]]+[[:space:]]+/, "", title)
+                sub(/[*:].*/, "", title)
                 print id "\037" title "\037\037\037yes\037no\037" file ":" NR; next
             }
             /^##?#?[[:space:]]+D-[0-9][0-9]+[[:space:]]/ {
@@ -1426,52 +1482,19 @@ spec_authority_ref() { # root anchor
 # Records: line, type, name, owner, scope, env, rev, date, until, check, reason. A line that
 # is not a valid record prints type INVALID and the problem as its reason.
 spec_records() { # root
-    local root="$1" file="$1/specs/records.md" expected rows row line type reason checked error
-    local ref_format='^ref=specs/authority\.md#([A-Za-z0-9][A-Za-z0-9._-]*)@[0-9a-f]{12}$'
+    local root="$1" file="$1/specs/records.md" expected rows row line type reason anchor checked error
     [ -f "$file" ] || return 0
     verify_lf_file "$file" allow-empty || { echo 'Invalid text in specs/records.md' >&2; return 1; }
     expected="$(wc -l < "$file")" || return 1
-    rows="$(awk -v expected="$expected" "$SPEC_SKIP_AWK $SPEC_RECORD_NAME_AWK"'
-        function isdate(s) { return s ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ }
+    rows="$(awk -v expected="$expected" "$SPEC_SKIP_AWK $SPEC_RECORD_ROW_AWK"'
         function bad(why) { print NR "\037INVALID\037\037\037\037\037\037\037\037\037" why; }
         { gsub(/\037/, " "); if (spec_skip($0)) next }
         /^[[:space:]]*$/ || /^#/ { next }
         {
-            line = $0; reason = ""
-            if (match(line, /[[:space:]]—([[:space:]]|$)/)) {
-                reason = substr(line, RSTART + RLENGTH); line = substr(line, 1, RSTART - 1)
-                sub(/^[[:space:]]+/, "", reason)
-            }
-            gsub(/\t/, " ", reason)
-            n = split(line, f, /[[:space:]]+/)
-            type = f[1]; name = f[2]
-            split("", kv)
-            # A word without "=" continues the previous value: until=<condition> and what=<claim>
-            # may hold spaces. A date stays a date (a note after it is dropped, as before). A word
-            # before the first key is malformed.
-            stray = ""; k = ""
-            for (i = 3; i <= n; i++)
-                if (index(f[i], "=")) { k = substr(f[i], 1, index(f[i], "=") - 1); kv[k] = substr(f[i], index(f[i], "=") + 1) }
-                else if (f[i] != "" && k != "") { if (!isdate(kv[k])) kv[k] = kv[k] " " f[i] }
-                else if (f[i] != "" && stray == "") stray = f[i]
-            if (!spec_record_type(type)) { bad("not a HOLD, WAIVER, ATTEST or DEPLOY record"); next }
-            if (!spec_record_name(name)) { bad(type " needs an id or app name first"); next }
-            if ((type == "HOLD" || type == "WAIVER") && ("ref" in kv)) {
-                bad(type " " name ": put ref= after the reason separator ( — )"); next
-            }
-            if (type == "HOLD") { need = "owner scope since until"; date = kv["since"]; until = kv["until"]; who = kv["owner"] }
-            else if (type == "WAIVER") { need = "owner check scope expires"; date = ""; until = kv["expires"]; who = kv["owner"] }
-            else if (type == "ATTEST") { need = "by what env version date"; date = kv["date"]; until = ""; who = kv["by"] }
-            else { need = "env rev date by"; date = kv["date"]; until = ""; who = kv["by"] }
-            if (stray != "") { bad(type " " name ": \"" stray "\" comes before any key=value"); next }
-            m = split(need, req, " "); missing = ""
-            for (i = 1; i <= m; i++) if (kv[req[i]] == "") missing = missing " " req[i] "="
-            if (missing != "") { bad(type " " name " is missing" missing); next }
-            if (date != "" && !isdate(date)) { bad(type " " name " date must be YYYY-MM-DD"); next }
-            if (type == "WAIVER" && !isdate(until)) { bad("WAIVER " name " expires= must be YYYY-MM-DD"); next }
-            rev = (type == "ATTEST") ? kv["version"] : kv["rev"]
-            check = (type == "ATTEST") ? kv["what"] : kv["check"]
-            print NR "\037" type "\037" name "\037" who "\037" kv["scope"] "\037" kv["env"] "\037" rev "\037" date "\037" until "\037" check "\037" reason
+            error = spec_record_row($0, row)
+            if (error != "") { bad(error); next }
+            print NR "\037" row["type"] "\037" row["name"] "\037" row["owner"] "\037" row["scope"] "\037" row["env"] \
+                "\037" row["rev"] "\037" row["date"] "\037" row["until"] "\037" row["check"] "\037" row["reason"]
         }
         END { if (NR != expected) exit 1 }' "$file")" || return 1
     while IFS= read -r row; do
@@ -1480,9 +1503,8 @@ spec_records() { # root
         error=""
         case "$type:$reason" in
             HOLD:ref=*|WAIVER:ref=*)
-                if ! [[ "$reason" =~ $ref_format ]]; then
-                    error='invalid authority reference (expected ref=specs/authority.md#<anchor>@<12 lowercase hex digits>)'
-                elif ! checked="$(spec_authority_ref "$root" "${BASH_REMATCH[1]}" 2>&1)"; then
+                anchor="${reason#*#}"
+                if ! checked="$(spec_authority_ref "$root" "${anchor%@*}" 2>&1)"; then
                     error="${checked:-authority reference could not be verified}"
                 elif [ "$checked" != "$reason" ]; then
                     error="authority digest mismatch for ${reason#ref=}"

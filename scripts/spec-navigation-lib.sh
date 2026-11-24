@@ -9,7 +9,8 @@ spec_navigation() { # file budget|stats|compact|diagnostics|target|index|section
     case "$last" in x|$'\nx') ;; *) terminated=0 ;; esac
     LC_ALL=C PRDKIT_NAV_SELECTOR="${3:-}" awk -v mode="$2" -v terminated="$terminated" \
         -v expected_lines="${4:-}" -v expected_bytes="${5:-}" \
-        "$SPEC_HEADING_AWK $SPEC_BULLET_ID_AWK $SPEC_RECORD_NAME_AWK"'
+        "$SPEC_HEADING_AWK $SPEC_BULLET_ID_AWK $SPEC_PART_AWK $SPEC_RECORD_ROW_AWK"'
+        BEGIN { focused = mode == "index" || mode == "section" }
         function norm(s) {
             gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); gsub(/[[:space:]]+/, " ", s)
             return tolower(s)
@@ -45,10 +46,21 @@ spec_navigation() { # file budget|stats|compact|diagnostics|target|index|section
                 names[n] = names[n] (names[n] == "" ? "" : ", ") id
             }
         }
+        function structure_break() { paragraph = 0; part_table = 0 }
+        # Match only a potential top-level paragraph underline, not a break after a blank.
+        function check_setext(t, depth,   markers) {
+            if (!underline && paragraph && t ~ /^(=+|-+)[ \t]*$/) underline = NR
+            if (t ~ /^[ \t]+[^ \t]/) return
+            markers = t; gsub(/[ \t]/, "", markers)
+            paragraph = !depth && t !~ /^[ \t]*$|^[|>]|^([-+*]|[0-9]+[.)])([ \t]|$)/ &&
+                        markers !~ /^---+$|^\*\*\*+$|^___+$/ && t !~ /^=+[ \t]*$/
+        }
         # The most recent heading owns its IDs; only section spans include descendants.
-        function structure(line,   depth, d, word) {
+        function structure(line, t,   depth, d, word, row) {
             depth = spec_heading(line)
+            check_setext(t, depth)
             if (depth) {
+                part_table = 0; retired = heading_title == "Retired"
                 for (d = 6; d >= depth; d--) if (d in open) {
                     last_line[open[d]] = NR - 1; delete open[d]
                 }
@@ -59,13 +71,16 @@ spec_navigation() { # file budget|stats|compact|diagnostics|target|index|section
                 open[depth] = section
                 if (mode == "section") {
                     split(heading_title, word, " "); sub(/:$/, "", word[1])
-                    if (word[1] ~ /^[A-Za-z][A-Za-z0-9._-]*-[0-9]+$/)
+                    if (word[1] ~ /^[A-Za-z][A-Za-z0-9._-]*-[0-9]+$/ || spec_part_id(word[1]))
                         alias(section, word[1])
                 }
             } else if (mode == "section" && section) {
                 alias(section, spec_bullet_id(line))
-                split(line, word, " ")
-                if (spec_record_type(word[1]) && spec_record_name(word[2])) alias(section, word[2])
+                if (line !~ /^\|/) part_table = 0
+                if (spec_part_header(line)) part_table = 1
+                else if (part_table) alias(section, spec_part_row(line))
+                if (retired) alias(section, spec_retired_part(line))
+                if (spec_record_row(line, row) == "") alias(section, row["name"])
             }
         }
         function visible(i) { return !valid || i < start || i > end }
@@ -104,16 +119,15 @@ spec_navigation() { # file budget|stats|compact|diagnostics|target|index|section
             raw[NR] = $0; bytes[NR] = length($0) + 1; weight[NR] = reading($0)
             raw_bytes += bytes[NR]; raw_reading += weight[NR]
             line = $0; sub(/\r$/, "", line)
-            t = line; sub(/^ */, "", t)
+            t = spec_unindent(line)
             if (fence != "") {
-                if (substr(t, 1, 1) == fence) {
-                    closing = t
-                    if (fence == "`") gsub(/`/, "", closing); else gsub(/~/, "", closing)
-                    if (closing ~ /^[[:space:]]*$/ && length(t) - length(closing) >= fence_len) fence = ""
-                }
+                if (match(t, /^`+|^~+/) && substr(t, 1, 1) == fence && RLENGTH >= fence_len &&
+                    substr(t, RLENGTH + 1) ~ /^[ \t]*$/) fence = ""
                 next
             }
             if (comment) { if (index(line, "-->")) comment = 0; next }
+            starts_comment = line ~ /^[[:space:]]*<!--/
+            if (starts_comment && !index(line, "-->")) comment = 1
             if (index(line, "prdkit:navigation:")) {
                 if (line == "<!-- prdkit:navigation:v1 begin -->") {
                     if (start) bad("multiple or nested navigation blocks")
@@ -123,7 +137,7 @@ spec_navigation() { # file budget|stats|compact|diagnostics|target|index|section
                     if (!in_block || end) bad("unmatched navigation end marker")
                     end = NR; in_block = 0
                 } else bad("unknown or malformed navigation marker")
-                candidate = 1; next
+                candidate = 1; structure_break(); next
             }
             if (in_block && line ~ /^\[[Nn][Aa][Vv]-[A-Za-z0-9_-]+\]: https?:\/\/[^][[:space:]<>()"\047]+$/) {
                 # No blanks, prose, titles or general-purpose references inside the envelope.
@@ -138,15 +152,14 @@ spec_navigation() { # file budget|stats|compact|diagnostics|target|index|section
             }
             if (in_block) {
                 bad("navigation block contains an unsupported definition or other content")
-                if (mode != "index" && mode != "section") next
+                if (!focused) next
             }
             if (end && line !~ /^[[:space:]]*$/) bad("navigation block is not a footer")
-            if (line ~ /^[[:space:]]*<!--/) {
-                if (!index(line, "-->")) comment = 1
-                next
+            if (starts_comment) { structure_break(); next }
+            if (match(t, /^```+|^~~~+/) && (substr(t, 1, 1) == "~" || !index(substr(t, RLENGTH + 1), "`"))) {
+                fence = substr(t, 1, 1); fence_len = RLENGTH; structure_break(); next
             }
-            if (match(t, /^```+|^~~~+/)) { fence = substr(t, 1, 1); fence_len = RLENGTH; next }
-            if (mode == "index" || mode == "section") structure(line)
+            if (focused) structure(line, t)
             # Full HTML-block parsing is outside this narrow convention. Keep the raw file.
             if (line ~ /<[\/!?A-Za-z]/) html = 1
             # Count possible definitions/uses conservatively, including unusual indentation,
@@ -190,7 +203,11 @@ spec_navigation() { # file budget|stats|compact|diagnostics|target|index|section
                 key = norm(ENVIRON["PRDKIT_NAV_SELECTOR"])
                 if (!valid || !(key in urls)) exit 1
                 printf "%d: [%s]: %s\n", locations[key], key, urls[key]
-            } else if (mode == "index" || mode == "section") {
+            } else if (focused) {
+                if (underline) {
+                    printf "%d: Setext (underlined) headings are not supported; use --raw or convert to ATX headings.\n", underline
+                    exit 10
+                }
                 for (d in open) last_line[open[d]] = NR
                 if (mode == "index") index_sections()
                 else select_section()

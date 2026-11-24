@@ -86,20 +86,23 @@ Visible IDs, mappings and all substantive text still count. Auto-loaded instruct
 remain raw. An exemption alone saves no model input.
 
 For routine spec context use `bash .prdkit/scripts/bash/read-spec.sh specs/<file>.md` before
-loading text into the agent context. Its read-only projection keeps original line numbers and
-reports its version, source path, observed HEAD, actual content blob, raw size and omitted size.
-The working-tree snapshot may differ from HEAD; the content blob identifies the bytes read.
+loading text into the agent context. The compact view keeps original line numbers. It and `--stats`
+report the projection version and raw and omitted sizes. All projected views report the source
+path, observed HEAD and content blob. The working-tree snapshot may differ from HEAD; the blob
+identifies the bytes read.
 
 - `--index` lists ATX (`#`–`######`) headings as a tree, with original line numbers and reading-line
   counts. A heading's count includes its own line and its subsections, at one line per 100 characters
   (rounded up, at least one per physical line), excluding only validated navigation.
 - `--section 'Heading text'` returns one section, from its heading through the line before the next
   heading of equal or higher level (or EOF). Quote multiword headings. A leading heading ID (e.g.
-  `D-01`), a defined item ID (e.g. `R-01` in a bold requirement bullet), a record row ID, or an ID on
-  a `Tracking:` link selects its nearest enclosing heading. IDs cited only in prose do not select
-  sections. Matching ignores ASCII case and collapses whitespace. Fenced examples and standalone
-  HTML comments do not supply headings or IDs. Zero or multiple matches exit 2 and list candidates
-  with their source lines.
+  `D-01` or `P1`), a defined item ID (e.g. `R-01` in a bold requirement bullet or `P1` in a Parts
+  table), a well-formed record row ID, or an ID on a `Tracking:` link selects its nearest enclosing
+  heading. Citations do not select sections. Matching ignores ASCII case and collapses whitespace.
+  Fenced examples and standalone HTML comments do not supply headings or IDs. Zero or multiple
+  matches exit 2 and list candidates with their source lines.
+- Both focused modes refuse Setext (underlined) headings with exit 2 and the underline's source
+  line. Use `--raw` to inspect them or convert the headings to ATX.
 - `--stats` shows accounting; `--target nav-key` resolves one validated target; `--raw` returns exact
   source bytes. All modes are mutually exclusive; use `--help` for syntax.
 
