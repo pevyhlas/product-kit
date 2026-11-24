@@ -7,6 +7,8 @@ name: CI
 
 on:
   pull_request:
+    # Re-evaluate the policy when the PR title changes, even at the same head.
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 
@@ -126,3 +128,135 @@ jobs:
               exit 1
             fi
           done
+
+  replay-plan:
+    name: Select changed suites
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      changed: ${{ steps.plan.outputs.changed }}
+      ancestor: ${{ steps.plan.outputs.ancestor }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: plan
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          ancestor=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+          git diff --no-renames --name-only -z --diff-filter=AMT "$ancestor" "$HEAD_SHA" \
+            -- ':(top,glob)tests/test_*.sh' > "$RUNNER_TEMP/suites.z"
+          changed=false
+          if [ -s "$RUNNER_TEMP/suites.z" ]; then changed=true; fi
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "ancestor=$ancestor" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.plan.outputs.changed == 'true'
+        with:
+          name: replay-plan
+          path: ${{ runner.temp }}/suites.z
+          retention-days: 1
+          if-no-files-found: error
+
+  base:
+    name: Run changed suites on base
+    needs: replay-plan
+    if: github.event_name == 'pull_request' && needs.replay-plan.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: replay-plan
+          path: ${{ runner.temp }}
+      - name: Run head tests against the merge base
+        env:
+          ANCESTOR: ${{ needs.replay-plan.outputs.ancestor }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          cp scripts/maintainer/fails-on-base.sh "$RUNNER_TEMP/driver.sh"
+          git checkout -q --detach "$ANCESTOR"
+          git restore --source="$HEAD_SHA" --staged --worktree -- tests/
+          bash "$RUNNER_TEMP/driver.sh" run "$RUNNER_TEMP/suites.z" "$RUNNER_TEMP/result.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: replay-base
+          path: ${{ runner.temp }}/result.json
+          retention-days: 1
+          if-no-files-found: error
+
+  head:
+    name: Run changed suites on head
+    needs: replay-plan
+    if: github.event_name == 'pull_request' && needs.replay-plan.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: replay-plan
+          path: ${{ runner.temp }}
+      - name: Run the exact head
+        run: bash scripts/maintainer/fails-on-base.sh run "$RUNNER_TEMP/suites.z" "$RUNNER_TEMP/result.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: replay-head
+          path: ${{ runner.temp }}/result.json
+          retention-days: 1
+          if-no-files-found: error
+
+  fails-on-base:
+    name: Fails before the fix
+    needs: [replay-plan, base, head]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require the plan and both snapshot jobs
+        env:
+          PLAN: ${{ needs.replay-plan.result }}
+          CHANGED: ${{ needs.replay-plan.outputs.changed }}
+          BASE: ${{ needs.base.result }}
+          HEAD: ${{ needs.head.result }}
+        run: |
+          case "$PLAN:$CHANGED:$BASE:$HEAD" in
+            success:false:skipped:skipped) echo 'No changed suites.' >> "$GITHUB_STEP_SUMMARY" ;;
+            success:true:success:success) ;;
+            *) echo "INCONCLUSIVE: plan=$PLAN changed=$CHANGED base=$BASE head=$HEAD" | tee -a "$GITHUB_STEP_SUMMARY"; exit 2 ;;
+          esac
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.replay-plan.outputs.changed == 'true'
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.replay-plan.outputs.changed == 'true'
+        id: results
+        with:
+          pattern: replay-*
+          path: ${{ runner.temp }}/results
+      - name: Compare complete results
+        if: always() && needs.replay-plan.outputs.changed == 'true'
+        env:
+          DOWNLOAD: ${{ steps.results.outcome }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if [ "$DOWNLOAD" != success ]; then
+            echo 'INCONCLUSIVE: result artifacts unavailable.' | tee -a "$GITHUB_STEP_SUMMARY"; exit 2
+          fi
+          root="$RUNNER_TEMP/results"
+          bash scripts/maintainer/fails-on-base.sh compare "$root/replay-plan/suites.z" \
+            "$root/replay-base/result.json" "$root/replay-head/result.json" "$PR_TITLE" >> "$GITHUB_STEP_SUMMARY" 2>&1

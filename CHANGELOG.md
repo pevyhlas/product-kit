@@ -15,7 +15,12 @@ change by change.
   entries from Git. A separate **Allocated through** line preserves the allocation floor if
   a sparse member is omitted. Explicit numbering must exceed that floor and the highest ID
   visible in the checked archive indexes, logs and change records. Existing cutoff-only
-  archives do not need migration.
+  archives in the supported format need no allocation-floor migration.
+- Pull request CI shows which changed test suites fail before the fix and pass on the PR head.
+  With no changed suites the check passes, including for `fix` titles. Otherwise,
+  conventional `fix` titles require at least one reproducing suite; other titles are advisory.
+  Base and head run on separate hosted runners, so a base worker cannot answer a head test.
+  The check compares one-day result artifacts; missing or incomplete evidence fails the check.
 - Holds and waivers can keep long verbatim owner quotes in `specs/authority.md` using
   checked references. Status and doctor validate the references without shortening the
   scope or end condition in the row. No migration needed.

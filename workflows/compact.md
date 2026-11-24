@@ -38,8 +38,8 @@ On its own line, write `**Allocated through**: N` (one to nine decimal digits). 
 the largest allocated ID known at the pass: take the maximum of the previous floor,
 the existing cutoff and archived IDs, live log and change record IDs, and every ID
 being folded. Never lower this value or derive it from the rewritten sparse list.
-The floor reserves numbers for allocation; it does not mark changes closed. Legacy
-cutoff-only archives may omit it until the next pass.
+The floor reserves numbers for allocation; it does not mark changes closed. Cutoff-only
+archives in the supported format may omit it until the next pass.
 
 Allocation and close check the working archive,
 `HEAD`, and the locally available tips of `main`, `master`, `origin/main`, `origin/master`,
