@@ -311,6 +311,21 @@ assert_eq 1 "$STATUS" "ambiguous focused package refused" || :
 assert_contains "$OUTPUT" "multiple merge bases" "refusal explains the ambiguous start" || :
 assert_eq absent "$([ -e "$bm/.prdkit/cache/evidence/010-cross" ] && echo present || echo absent)" "no round allocated" || :
 
+it "--since can use a unique integration base despite an ambiguous default"
+b checkout -q --detach "$cross_target"
+mkdir -p "$bm/.prdkit/memory"
+printf '## Configuration\n- review-integration-branches: origin/integration\n' > "$bm/.prdkit/memory/config.md"
+b add .prdkit/memory/config.md; b commit -qm 'configure integration on default'
+trust_at "$bm" main "$(b rev-parse HEAD)"
+# R precedes X, so neither of the default ref's two best bases (X and M) is R.
+b update-ref refs/remotes/origin/integration "$R"
+b checkout -q 001-x
+cd_run 010-integration "$R" "$H" --since "$X"
+assert_eq 0 "$STATUS" "unique configured ref builds: $OUTPUT" || :
+if [ "$STATUS" = 0 ]; then
+    assert_eq refs/remotes/origin/integration "$(cut -f4 "$(pkg_of "$OUTPUT")/completed.tsv")" 'round records the matching ref'
+fi
+
 it "--since accepts the merge base with a configured integration branch"
 b checkout -q "$BMAIN"
 mkdir -p "$bm/.prdkit/memory"

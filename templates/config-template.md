@@ -60,6 +60,7 @@ the publisher list and tier minimums work as before.
 
 Keep one level-two heading named Configuration, and never repeat that heading
 name at any level, even in an example. Write policy entries exactly as shown;
-the section ends at the next level-one or level-two heading (including an
-underlined heading), or the end of the file. Put HTML comments and fenced
-examples after the section, never above or inside it.
+the section ends at the next ATX `#` or `##` heading, or the end of the file.
+Underlined headings are refused anywhere outside fenced examples and HTML comments.
+Leave a blank line before a `---` thematic break. Put comments and fenced examples
+after the section, never above or inside it.

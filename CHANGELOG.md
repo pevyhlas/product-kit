@@ -36,9 +36,10 @@ change by change.
 
 ### Fixed
 
-- Focused review packages refuse multiple best merge bases before allocating a round.
-  Underlined headings now open and end the review configuration section regardless of
-  underline length, keeping later examples out of policy.
+- Focused review packages require a trusted integration ref with a unique matching
+  merge base before allocating a round. An ambiguous ref cannot disqualify a valid one.
+- Review configuration uses ATX headings only. A visible heading underline refuses the
+  entire policy instead of letting an example open or end the configuration section.
 - The launcher refuses a pass when the native result does not match the checked head,
   trusted target, or required review roles and areas.
 

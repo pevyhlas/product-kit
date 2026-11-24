@@ -184,15 +184,15 @@ for marker in '```text' '<!--'; do
 done
 
 it 'a second Configuration heading anywhere reports both locations'
-for heading in '## Configuration' '   #### CONFIGURATION ##' $'Configuration\n   ---' $'Configuration\n==='; do
+for heading in '## Configuration' '   #### CONFIGURATION ##'; do
     policy "$publishers" '## Meaning' '```' "$heading" '```'; gate
     assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'config.md lines 1 and 7'
 done
 
 it 'level-two heading spelling and section boundaries use raw lines'
 review APPROVED 1004
-for heading in ' ## Configuration' '  ## configuration ###' $'   ##\tCONFIGURATION' $'Configuration\n---'; do
-    for boundary in '# Notes' '  ## Notes' $'Notes\n===' $'Notes\n---'; do
+for heading in ' ## Configuration' '  ## configuration ###' $'   ##\tCONFIGURATION'; do
+    for boundary in '# Notes' '  ## Notes'; do
         printf '%s\n' "$heading" '- review-host: github' '### Roles' '- review-owner: user:1003' \
             "$separate" "$boundary" '<!-- examples -->' '```' '- review-owner: user:42' '```' |
             trusted_edit "$ref" "$config"
@@ -202,33 +202,50 @@ done
 
 source .prdkit/scripts/bash/spec-lib.sh
 cd "$_SCRATCH_CWD" || exit 1
-it 'setext boundaries accept title-width and short underlines with trailing whitespace'
-result="$(printf '%s\n' Configuration $'------------- \t' "$publishers" | spec_review_config_section)"
-assert_contains "$result" "$publishers" 'title-width underline opens Configuration'
-for boundary in $'Reference examples\n==================\t' $'Reference examples\n- ' $'Reference examples\n='; do
-    result="$(printf '%s\n' '## Configuration' "$publishers" "$boundary" '- review-t0-paths: examples/' | spec_review_config_section)"
-    assert_contains "$result" "$publishers" 'policy before heading retained'
-    assert_not_contains "$result" 'review-t0-paths' 'settings after the setext heading are not policy'
+it 'a visible underline anywhere refuses the whole config, without interpreting its title'
+refuse_underline() {
+    local line="$1" rc=0; shift
+    printf '%s\r\n' "$@" | spec_review_config_section > section.out 2> section.err || rc=$?
+    assert_eq 1 "$rc" "refuse underline at line $line"
+    assert_eq '' "$(cat section.out)" 'no partial policy'
+    assert_contains "$(cat section.err)" "config.md line $line: underlined headings are unsupported; use #/## headings"
+}
+refuse_underline 2 'Configuration' $'------------- \t' "$publishers"
+refuse_underline 2 'Example' '=' '## Configuration' "$publishers"
+refuse_underline 2 '    Configuration' '-------------' "$publishers"
+refuse_underline 4 '## Configuration' "$publishers" '    Notes' '-----' 'later setting'
+for container in '> Quote' '- Item'; do
+    refuse_underline 3 "$container" 'Configuration' '-------------' "$publishers"
+    refuse_underline 5 '## Configuration' "$publishers" "$container" 'Notes' '-----' 'later setting'
 done
-result="$(printf '%s\n' '## Configuration' ' ' '---' "$publishers" | spec_review_config_section)"
-assert_contains "$result" "$publishers" 'a thematic break without a title does not end the section'
+refuse_underline 5 '## Configuration' "$publishers" '## Notes' 'Example' '   ==='
+refuse_underline 3 '## Configuration' 'Reference examples' '---'
+
+it 'thematic breaks, table delimiters and literal examples are not underlined headings'
+result="$(printf '%s\r\n' '---' '## Configuration' ' ' '---' '| field |' '|---|' "$publishers" \
+    '## Notes' '````md' '```' 'Example' '---' '````' '~~~' 'Title' '=' '~~~' \
+    'Text <!-- comment' 'Example' '===' '-->' | spec_review_config_section)"
+assert_contains "$result" "$publishers"
+assert_not_contains "$result" 'Example'
+refuse_underline 9 '## Configuration' "$publishers" '## Notes' '<!--' 'Example' '===' '-->' 'Visible' '-'
+for literal in 'Use `<!--` for a comment.' '\<!--' '    <!--'; do
+    refuse_underline 6 '## Configuration' "$publishers" '## Notes' "$literal" 'Visible' '-'
+done
 run spec_review_config_section <<< $'## Configuration\n```text\n----\n- review-publishers: bot:42\n```'
 assert_eq 1 "$STATUS" 'a setext underline cannot turn a fence into a section boundary'
 assert_contains "$OUTPUT" 'config.md line 2'
 
 it 'Unicode title padding preserves unique fields and cannot hide a duplicate'
 for pad in $'\302\240' $'\342\200\257' $'\343\200\200'; do
-    for heading in "## ${pad}Configuration${pad}##${pad}" "${pad}Configuration${pad}"$'\n---'; do
-        printf '%s\n' "$heading" "$separate" > heading.fixture
-        result="$(spec_review_config_section < heading.fixture)"
-        assert_contains "$result" "$separate"
-        printf '%s\n' '## Meaning' '## Configuration' "$publishers" >> heading.fixture
-        last_heading=$(($(wc -l < heading.fixture)-1))
-        reader_exit=0; spec_review_config_section < heading.fixture > section.out 2> section.err || reader_exit=$?
-        assert_eq 1 "$reader_exit"
-        assert_eq '' "$(cat section.out)" 'no fields emitted from either section'
-        assert_contains "$(cat section.err)" "config.md lines 1 and $last_heading"
-    done
+    printf '%s\n' "## ${pad}Configuration${pad}##${pad}" "$separate" > heading.fixture
+    result="$(spec_review_config_section < heading.fixture)"
+    assert_contains "$result" "$separate"
+    printf '%s\n' '## Meaning' '## Configuration' "$publishers" >> heading.fixture
+    last_heading=$(($(wc -l < heading.fixture)-1))
+    reader_exit=0; spec_review_config_section < heading.fixture > section.out 2> section.err || reader_exit=$?
+    assert_eq 1 "$reader_exit"
+    assert_eq '' "$(cat section.out)" 'no fields emitted from either section'
+    assert_contains "$(cat section.err)" "config.md lines 1 and $last_heading"
     result="$(printf '%s\n' "##${pad}Configuration" "$publishers" "${pad}## Configuration" "$separate" | spec_review_config_section)"
     assert_eq '' "$result" 'Unicode whitespace is neither ATX indentation nor a marker separator'
 done

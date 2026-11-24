@@ -1771,13 +1771,47 @@ SPEC_REVIEW_SPACES_AWK='function spaces(s) {
 # assignment line numbers. An absent level-two Configuration heading emits no policy.
 spec_review_config_section() {
     LC_ALL=C awk -v diagnostic="${1:-/dev/stderr}" "$SPEC_REVIEW_SPACES_AWK"'
-        function scan(raw,following,n,   s,title,level) {
+        # Only the underline check exempts examples. Raw ATX duplicate and marker
+        # checks below still see every line, including examples.
+        function underline_check(s,   tail,mark,at) {
+            if (fence != "") {
+                tail=s; sub(/[ \t]+$/, "", tail)
+                if (index(tail,fence)==1 && (tail ~ /^`+$/ || tail ~ /^~+$/)) fence=""
+                return
+            }
+            if (!comment && match(s,/^```+|^~~~+/)) {
+                mark=substr(s,1,RLENGTH); tail=substr(s,RLENGTH+1)
+                if (substr(mark,1,1)=="~" || !index(tail,"`")) { fence=mark; return }
+            }
+            if (!comment && !underline && nonblank && s ~ /^(=+|-+)[ \t]*$/) underline=NR
+            # Comments may open inline or close and reopen on the same line.
+            # A literal opener in indented code, an escape or a code span must
+            # not hide a later visible underline.
+            if (!comment && s ~ /^[ \t]/) return
+            while (length(s)) {
+                if (comment) {
+                    at=index(s,"-->"); if (!at) return
+                    comment=0; s=substr(s,at+3)
+                } else {
+                    if (!match(s,/<!--|\\.|`+/)) return
+                    mark=substr(s,RSTART,RLENGTH); s=substr(s,RSTART+RLENGTH)
+                    if (mark=="<!--") comment=1
+                    else if (substr(mark,1,1)=="`") {
+                        tail=s
+                        while (match(tail,/`+/)) {
+                            at=RLENGTH; tail=substr(tail,RSTART+RLENGTH)
+                            if (at==length(mark)) { s=tail; break }
+                        }
+                    }
+                }
+            }
+        }
+        function scan(raw,n,   s,title,level) {
             s=raw; sub(/\r$/, "", s); sub(/^ ? ? ?/, "", s)
+            underline_check(s)
+            nonblank=(spaces(raw) ~ /[^[:space:]]/)
             if (match(s,/^#+/) && RLENGTH<=6 && substr(s,RLENGTH+1) ~ /^([ \t]|$)/) {
                 level=RLENGTH; title=substr(s,level+1)
-            } else if (spaces(s) ~ /[^[:space:]]/ && following ~ /^ ? ? ?(=+|-+)[ \t]*\r?$/ &&
-                       spaces(s) !~ /<!--|-->|^[[:space:]]*(```|~~~)/) {
-                level=(index(following,"=") ? 1 : 2); title=raw
             }
             if (level) {
                 title=spaces(title)
@@ -1795,10 +1829,11 @@ spec_review_config_section() {
             }
             if (start && !stop && n>start) body[n]=raw
         }
-        NR>1 { scan(previous,$0,NR-1) }
-        { previous=$0 }
+        { scan($0,NR) }
         END {
-            if (NR) scan(previous,"",NR)
+            if (underline) {
+                print "config.md line " underline ": underlined headings are unsupported; use #/## headings" > diagnostic; exit 1
+            }
             if (duplicate) {
                 print "Duplicate Configuration headings at config.md lines " first " and " duplicate > diagnostic; exit 1
             }

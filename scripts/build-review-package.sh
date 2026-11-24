@@ -141,8 +141,8 @@ while IFS=$'\t' read -r trusted tip; do
     if [ -n "$SINCE" ]; then
         mb="$(git -C "$REPO_ROOT" merge-base --all "$tip" "$HEAD_SHA")" || exit 1
         if [[ "$mb" == *$'\n'* ]]; then
-            echo "ERROR: ${trusted#refs/remotes/} and HEAD have multiple merge bases; merge the target into the branch before building a focused package" >&2
-            exit 1
+            merge_bases="$merge_bases ${trusted#refs/remotes/}=multiple merge bases"
+            continue # Another trusted integration ref may uniquely support BASE.
         fi
     else
         mb="$(git -C "$REPO_ROOT" merge-base "$tip" "$HEAD_SHA" 2>/dev/null || true)"
