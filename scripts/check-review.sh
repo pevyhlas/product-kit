@@ -95,10 +95,14 @@ if github_review_policy "$root" "$policy_at"; then
     fi
 else problems+=("$RC_ERROR")
 fi
+record_history_available=false
 if $base_trusted; then
     if ! record_problem="$(review_record_history "$root" "$id" "$import_base" "$head" "$work")"; then
         problems+=("Cannot validate the change record format: fetch the complete local history, trees and record blobs")
-    elif [ -n "$record_problem" ]; then problems+=("$record_problem"); fi
+    else
+        record_history_available=true
+        [ -z "$record_problem" ] || problems+=("$record_problem")
+    fi
 fi
 # Every **Tier** field in a record on stdin, one per line: T0-T3, or ? when its whole value (up to
 # the next · or the end of the line, in optional backticks) is not exactly one tier: T1/T3, T1-T3,
@@ -129,19 +133,26 @@ raise_floor() { # tier where
     if [ -n "$1" ] && { [ -z "$floor" ] || [[ "$1" > "$floor" ]]; }; then floor="$1"; floor_at="$2"; fi
 }
 trusted_floor() { # rev where file: absence is fine; a record there must name exactly one tier
-    local entry named
-    if entry="$(GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git --literal-pathspecs -C "$root" ls-tree --full-tree "$1" -- "$3")"; then
-        case "$entry" in
-            "") return 0 ;;
-            '100644 blob '*|'100755 blob '*)
-                if GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -C "$root" cat-file blob "$1:$3" > "$work/floor-record" &&
-                    verify_lf_file "$work/floor-record" &&
-                    named="$(record_tiers < "$work/floor-record")"; then
-                    case "$named" in T[0-3]) raise_floor "$named" "$2 ($3)"; return 0 ;; esac
-                fi ;;
-        esac
+    local entry named shown blob
+    if ! entry="$(GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git --literal-pathspecs -C "$root" \
+        -c core.quotePath=true ls-tree --full-tree "$1" -- "$3" 2>/dev/null)"; then
+        problems+=("Cannot read $(LC_ALL=C printf '%q' "$3") at $2: fetch the complete local history, trees and record blobs")
+        return 0
     fi
-    problems+=("The record at $2 names no readable tier ($3), so the trusted minimum is unknown; fix it there first")
+    [ -n "$entry" ] || return 0
+    shown="${entry#*$'\t'}"
+    case "$entry" in
+        '100644 blob '*|'100755 blob '*)
+            blob="${entry%%$'\t'*}"; blob="${blob##* }"
+            if ! GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -C "$root" cat-file blob "$blob" > "$work/floor-record" 2>/dev/null; then
+                problems+=("Cannot read $shown at $2: fetch the complete local history, trees and record blobs")
+                return 0
+            fi
+            if verify_lf_file "$work/floor-record" && named="$(record_tiers < "$work/floor-record")"; then
+                case "$named" in T[0-3]) raise_floor "$named" "$2 ($shown)"; return 0 ;; esac
+            fi ;;
+    esac
+    problems+=("The record at $2 names no readable tier ($shown), so the trusted minimum is unknown; fix it there first")
 }
 trusted_floors() { # file
     [ -z "$policy_at" ] || trusted_floor "$policy_at" "the trusted base (${trusted_default#refs/remotes/})" "$1"
@@ -153,15 +164,18 @@ trusted_floors() { # file
     fi
 }
 touched_record_floors() {
-    local file seen
-    local -a checked=("$path")
-    while IFS= read -r -d '' file; do
-        for seen in "${checked[@]}"; do
-            [ "$file" != "$seen" ] || continue 2
-        done
-        checked+=("$file")
-        trusted_floors "$file"
-    done < "$work/record-paths"
+    local file
+    if ! review_touched_paths "$root" "$start" "$head" "$work" > "$work/tier-paths" ||
+        ! verify_lf_file "$work/tier-paths" allow-empty; then
+        problems+=("Cannot determine which records changed: fetch the complete local history and trees")
+        return 0
+    fi
+    while IFS= read -r file; do
+        file="${file//%0D/$'\r'}"
+        file="${file//%0A/$'\n'}"
+        file="${file//%25/%}"
+        [ "$file" = "$path" ] || trusted_floors "$file"
+    done < "$work/tier-paths"
 }
 # T0 is docs only: every changed path outside the record and closing metadata must be a regular,
 # non-executable file under a path the trusted config lists in review-t0-paths (literal paths;
@@ -286,7 +300,7 @@ else
             [ -n "$commit" ] || continue
             raise_floor "$(tier_floor_of "$commit")" "commit ${commit:0:12} ($path)"
         done < <(git -C "$root" rev-list --full-history "$start..$head" -- "$path" 2>/dev/null || true)
-        if [ -f "$work/record-paths" ]; then touched_record_floors; fi
+        if $record_history_available; then touched_record_floors; fi
         if [ "$start" != "$head" ] && [ -n "$(changed_since "$start" specs/product.md specs/product)" ]; then
             raise_floor T3 "its L0 edit ($(changed_since "$start" specs/product.md specs/product))"
         fi

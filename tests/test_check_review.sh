@@ -253,6 +253,46 @@ run bash "$CHECK" --json 001-greet
 assert_eq 3 "$STATUS"
 assert_contains "$OUTPUT" '"tier":"T1"'
 
+it "a target sync does not attribute a record imported unchanged from the target"
+SYNC=specs/changes/005-target-only.md
+printf '# Change: Target maintenance\n\n**Tier**: T3\n' |
+    trusted_edit "refs/remotes/origin/$DEFAULT" "$SYNC" || exit 1
+git merge -qm "sync the target" origin/HEAD || exit 1
+run bash "$CHECK" --json 001-greet
+assert_eq 3 "$STATUS"
+assert_contains "$OUTPUT" '"tier":"T1"'
+assert_not_contains "$OUTPUT" "$SYNC"
+git reset -q --hard "$CARRIER_HEAD"
+
+it "target-sync imports still go through the broader format scan"
+SYNC_TARGET="$(git rev-parse origin/HEAD)"
+printf '# Change: Target maintenance\n\n**Tier**: T3\n\n## State\n**Review**: old\n' |
+    trusted_edit "refs/remotes/origin/$DEFAULT" "$SYNC" || exit 1
+git merge -qm "sync a record with obsolete format" origin/HEAD || exit 1
+run bash "$CHECK" --json 001-greet
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" '"tier":"T1"'
+assert_contains "$OUTPUT" 'Unsupported **Review** field in change record history'
+git reset -q --hard "$CARRIER_HEAD"
+git update-ref "refs/remotes/origin/$DEFAULT" "$SYNC_TARGET"
+
+it "a target-sync resolution counts even if a later commit restores the target entry"
+git merge -q --no-commit origin/HEAD >/dev/null 2>&1 || exit 1
+printf '\nMerge-only edit.\n' >> "$SYNC"
+git add "$SYNC"; git commit -qm "resolve the target sync with a record edit"
+RESOLUTION="$(git rev-parse HEAD)"
+git reset -q --hard "$CARRIER_HEAD"
+git merge -qm "sync the target without editing its record" origin/HEAD || exit 1
+SYNC_TREE="$(git rev-parse 'HEAD^{tree}')"
+git merge -qs ours "$RESOLUTION" || exit 1
+assert_eq "$SYNC_TREE" "$(git rev-parse 'HEAD^{tree}')" "no resolution survives in the head tree"
+run bash "$CHECK" --json 001-greet
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" '"tier":"T3"'
+assert_contains "$OUTPUT" "its floor is T3, from the trusted base (origin/$DEFAULT) ($SYNC)"
+git reset -q --hard "$CARRIER_HEAD"
+git update-ref "refs/remotes/origin/$DEFAULT" "$MULTI_BASE"
+
 it "downgrading another open record requires its trusted tier"
 printf '# Change: Other\n\n**Tier**: T1\n' > "$OTHER"
 git commit -qam "lower the other record"
@@ -329,8 +369,31 @@ for trusted_text in '**Tier**: T3\n**Tier**: T1\n' '**Tier**: T3'; do
     assert_eq 1 "$STATUS"
     assert_contains "$OUTPUT" "The record at the trusted base (origin/$DEFAULT) names no readable tier"
     assert_contains "$OUTPUT" "$OTHER"
+    assert_contains "$OUTPUT" "fix it there first"
     git update-ref "refs/remotes/origin/$DEFAULT" "$MULTI_BASE"
 done
+
+it "unusual names stay intact and unavailable trusted objects say to fetch, not repair"
+git reset -q --hard "$CARRIER_HEAD"
+ODD=$'specs/changes/006-odd%0A\tname\n.md'
+QUOTED='"specs/changes/006-odd%0A\tname\n.md"'
+printf '# Change: Candidate copy\n\n**Tier**: T1\n' > "$ODD"
+git add -- "$ODD"; git commit -qm "touch a record with an unusual name"
+printf '# Change: Trusted copy\n\n**Tier**: T3\n' |
+    trusted_edit "refs/remotes/origin/$DEFAULT" "$ODD" || exit 1
+run bash "$CHECK" 001-greet
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "its floor is T3, from the trusted base (origin/$DEFAULT) ($QUOTED)"
+blob="$(git rev-parse "origin/HEAD:$ODD")"
+object="$(git rev-parse --git-path "objects/${blob:0:2}/${blob:2}")"
+mv -- "$object" "$_SCRATCH_CWD/missing-tier-blob" || exit 1
+run bash "$CHECK" 001-greet
+mv -- "$_SCRATCH_CWD/missing-tier-blob" "$object" || exit 1
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "Cannot read $QUOTED at the trusted base (origin/$DEFAULT): fetch"
+assert_not_contains "$OUTPUT" "fix it there first"
+git reset -q --hard "$OTHER_EDIT"
+git update-ref "refs/remotes/origin/$DEFAULT" "$MULTI_BASE"
 
 it "the import base and the change's start also supply non-carrier floors"
 git update-ref "refs/remotes/origin/$DEFAULT" "$TRUSTED_TIP"
