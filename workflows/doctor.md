@@ -22,6 +22,9 @@ close, duplicate inbox identities/fields/option keys and mismatched answer revis
 the rest are advisories that `--strict` fails. The kit's `scripts/init.sh --check` reports
 installation drift. Never repair during diagnosis or read a clean report as readiness.
 
+If present, `specs/design.md` is checked for the four headings in `design-template.md`, a
+100-reading-line budget and resolvable links and citations, not for the quality of its direction.
+
 For a checked `ref=` reason, doctor reports the verified row's scope and end condition
 (`authority_records` in JSON, when present), not the quote. A broken reference is a malformed
 record, reported at its line in `specs/records.md`.

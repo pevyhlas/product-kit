@@ -26,7 +26,7 @@
 REVIEW_FP_EMPTY=fp1:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 # The L0/L1 spec the owner approves: their fingerprint is the change's content over these only.
 REVIEW_L01_PATHSPECS=(':(top,literal)specs/product.md' ':(top,literal)specs/product'
-    ':(top,literal)specs/architecture.md' ':(top,literal)specs/architecture'
+    ':(top,literal)specs/architecture.md' ':(top,literal)specs/architecture' ':(top,literal)specs/design.md'
     ':(top,literal)specs/SPEC.md' ':(top,literal)specs/decisions')
 REVIEW_FP_ERROR=""; REVIEW_MB=""; REVIEW_FP=""
 

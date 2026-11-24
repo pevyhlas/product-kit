@@ -37,6 +37,9 @@ When using `new-change.sh` directly, pass `--programme` to include the commented
 checkpoint scaffold for a programme parent or continuing follow-up queue. Ordinary records get
 only a pointer to the format. See [Running a change](../workflows/change.md).
 
+For projects with a UI, the optional L1 [design summary](../workflows/spec.md#layout) uses the
+installed `design-template.md`; no separate command is needed.
+
 ## Installed version and spec layout
 
 The `status.sh` and `doctor.sh` adoption summary distinguishes the recorded installation

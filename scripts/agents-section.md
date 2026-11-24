@@ -7,7 +7,8 @@ A generated plan never grants action authority. Resume from the open change reco
 actual repository state, not chat memory.
 
 - `specs/product.md` and `specs/product/` (L0: journeys, then what must be true) and
-  `specs/architecture.md` (L1) — why the system is shaped as it is; `specs/parts/` (L2) — what
+  `specs/architecture.md` (L1) — why the system is shaped as it is; optional `specs/design.md`
+  (L1) — UI direction and decisions; `specs/parts/` (L2) — what
   each part guarantees. `specs/product/lifecycle.md` names the current stage: build for it, and
   build an item marked `from:` a later stage only on owner direction.
 - `specs/changes/<id>.md` — open changes with acceptance and State; `specs/log.md` and `specs/log/` — closed ones.

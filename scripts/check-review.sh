@@ -278,7 +278,7 @@ t0_violations() { # from to
 }
 eligible() { [ "$(review_eligibility "$registry" "$1")" = reviewer ]; }
 path="specs/changes/$id.md"
-spec_l01=(specs/product.md specs/product specs/architecture.md specs/architecture specs/SPEC.md specs/decisions)
+spec_l01=(specs/product.md specs/product specs/architecture.md specs/architecture specs/design.md specs/SPEC.md specs/decisions)
 changed_since() { # sha [pathspec...] -> paths changed from sha to head; check the shared log separately
     local sha="$1"; shift
     [ "$#" -gt 0 ] || set -- . ":(exclude)$path" ":(exclude)specs/log.md" ":(exclude)specs/log/$id.md"

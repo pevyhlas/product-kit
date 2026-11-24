@@ -399,6 +399,14 @@ echo '# Product' > specs/product.md; git add specs/product.md; git commit -qm "L
 run bash "$CHECK" 003-docs
 assert_eq 1 "$STATUS" "an L0 spec edit is never T0"
 git reset -q --hard HEAD~1
+{ git show "$TRUSTED_TIP:.prdkit/memory/config.md"; printf -- '- review-t0-paths: docs/, README.md, specs/\n'; } |
+    trusted_edit "refs/remotes/origin/$DEFAULT" .prdkit/memory/config.md
+printf '# UI design\n' > specs/design.md
+git add specs/design.md; git commit -qm "L1 UI design"
+run bash "$CHECK" 003-docs
+assert_eq 1 "$STATUS" "the UI spec is L1 even under a trusted T0 prefix"
+assert_contains "$OUTPUT" "specs/design.md" "the rejected path is named"
+git reset -q --hard HEAD~1
 record_t0_fail="$(printf '**Receipt fixture**: round 1 · %s..%s · docs · FAIL · 0 critical, 1 high, 0 medium, 0 low · https://example.invalid/pr/3#c1' "$(git rev-parse --short "$DEFAULT")" "$(git rev-parse --short HEAD)")"
 printf '%s\n' "$record_t0_fail" >> specs/changes/003-docs.md; git commit -qam "record a FAIL" >/dev/null
 run bash "$CHECK" 003-docs

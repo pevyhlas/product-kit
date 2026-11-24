@@ -209,6 +209,14 @@ git add specs/architecture.md; git commit -qm L1
 online; assert_eq 1 "$STATUS" 'architecture specification edits need the owner again'
 assert_contains "$OUTPUT" 'L0/L1 spec changed'
 
+it 'adding design direction after a T3 approval changes the L0/L1 slice'
+fresh; approve
+printf '# UI design\n\n## Direction\n\nChanged direction.\n' > specs/design.md
+git add specs/design.md; git commit -qm 'UI design'
+fx_activity "$A" "$(git rev-parse HEAD)" '{"timestamp":"2026-01-03T00:00:00Z"}'
+online; assert_eq 1 "$STATUS" 'the design summary belongs to L1'
+assert_contains "$OUTPUT" 'L0/L1 spec changed'
+
 it 'native owner snapshots and structure previews never invoke gh or jq'
 fresh; approve; online --save-receipts .git/owner-offline
 assert_eq 0 "$STATUS" "$OUTPUT"

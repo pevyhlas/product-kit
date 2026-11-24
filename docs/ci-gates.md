@@ -416,7 +416,7 @@ parts, change records restating or citing undefined IDs), past-due hold reminder
 open inbox items and their age, retained resolved items, local machine paths in
 specs and agent context, links to missing files in the spec and `specs/archive.md`, spec files
 that no chain of links from
-`product.md` or `architecture.md` reaches (1.1 layout; retired files exempt) and `observed.md`
+`product.md`, `architecture.md` or the optional `design.md` reaches (1.1 layout; retired files exempt) and `observed.md`
 pieces it does not link, a lifecycle stage naming no environment that
 `specs/architecture/environments.md` lists, raw evidence under `specs/`, a stale worktree
 registration, and

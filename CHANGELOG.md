@@ -10,6 +10,9 @@ change by change.
 
 ### Added
 
+- Projects with a UI can opt into `specs/design.md`, a short L1 summary for direction,
+  composition, copy and owner decisions. The installer provides the template without creating
+  a spec file; doctor checks its structure when present.
 - Holds and waivers can keep long verbatim owner quotes in `specs/authority.md` using
   checked references. Status and doctor validate the references without shortening the
   scope or end condition in the row. No migration needed.
