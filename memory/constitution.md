@@ -23,9 +23,9 @@ SYNC IMPACT REPORT
 
 # Product-Kit Constitution
 
-**Version**: 1.2.0
+**Version**: 1.3.0
 **Ratified**: 2026-06-02
-**Last Amended**: 2026-11-12
+**Last Amended**: 2026-11-24
 
 > This is Product-Kit's *own* constitution — the principles governing the toolkit itself.
 > It is meta: Product-Kit ships a generic `templates/constitution-template.md` for projects
@@ -113,9 +113,9 @@ constitution's principles serve as the acceptance criteria.
 ## Governance
 
 - **Amendment procedure**: edit this file directly (Product-Kit develops itself); version per below.
-- **Versioning policy**: MAJOR = incompatible workflow/command changes; MINOR = larger compatible
-  workflow or capability changes; PATCH = fixes, clarifications and small backward-compatible
-  additions. A new optional command alone does not require a minor bump. Owner direction,
-  2026-10-31 ([source](https://github.com/pevyhlas/product-kit/issues/63)):
-  "make it still 1.3.+ - I don't think we should be increasing the second number unless we do bigger changes".
+- **Versioning policy**: from 3.0.0 the kit stays on 3.x.y. MINOR = any breaking (incompatible
+  workflow, command, policy or install) change; PATCH = everything else, including fixes,
+  clarifications and backward-compatible additions. MAJOR moves only when the owner names a
+  major reason, never for a routine breaking change. Owner direction, 2026-11-22. The release
+  mechanics are in CONTRIBUTING.md, "Releases".
 - **Compliance review**: changes are reviewed against these principles before merge.
