@@ -8,6 +8,8 @@ change by change.
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-11-24 — tracked history, coverage check and checked owner quotes
+
 ### Added
 
 - Compaction can index closed changes even after an earlier change stays open. Add exact
@@ -34,16 +36,6 @@ change by change.
   lines without checking them off or logging them; an optional `Drops:` line distinguishes
   dropped tasks. Keep execution details in the ignored plan or PR.
 
-### Removed (breaking)
-
-- Removed kit migration guides and cutover/restructure instructions, installer retirement and
-  review-migration flags, historical State verdict and receipt clearance paths, reviewer
-  registration via the capabilities table, and compatibility readers for old install manifests,
-  feature counters, programme checkpoints, inbox entries and agent tier maps.
-  Review requires a per-change close entry at the closing commit. Agents must migrate an older
-  install manually; Product-Kit provides no migration tooling. Ordinary upgrades and consumer
-  data-migration guidance remain.
-
 ### Changed (breaking)
 
 - Closed changes and the archive now live in tracked `.prdkit/history/`, not in `specs/`.
@@ -69,6 +61,20 @@ change by change.
 - Each close row is at most 200 characters, including its date, change ID and any tags:
   `<intent> — <IDs and parts> — <disposition> — <PR>` after the prefix. Shorten existing
   overlong live rows; leave task lists and acceptance evidence on the PR.
+
+### Removed (breaking)
+
+- Removed kit migration guides and cutover/restructure instructions, installer retirement and
+  review-migration flags, historical State verdict and receipt clearance paths, reviewer
+  registration via the capabilities table, and compatibility readers for old install manifests,
+  feature counters, programme checkpoints, inbox entries and agent tier maps.
+  Review requires a per-change close entry at the closing commit. Agents must migrate an older
+  install manually; Product-Kit provides no migration tooling. Ordinary upgrades and consumer
+  data-migration guidance remain.
+  To upgrade a 2.1 install, first delete `.prdkit/scripts/bash/review-legacy-lib.sh` and
+  `.prdkit/scripts/bash/review-upgrade-lib.sh` and their `.prdkit/.manifest` lines, commit, then
+  run `init.sh --upgrade`. Otherwise the upgrade refuses because the manifest lists files the kit
+  no longer installs.
 
 ### Fixed
 
