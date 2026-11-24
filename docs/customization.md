@@ -76,13 +76,14 @@ templates and memory files. `--upgrade --force` still has to pass the overwrite 
 `AGENTS.md` and `.gitignore` may link to a file inside the project (for example, `AGENTS.md`
 can link to `CLAUDE.md`). An upgrade refuses links to root files outside the project.
 When the kit no longer ships a manifest-listed file, `--check` reports it as retired drift. On
-`--upgrade`, an unedited retired file or an installer-owned command symlink is removed, even if
-the link is dangling. Content and executable-bit edits, foreign symlinks, and retired memory
-files are kept and listed for manual follow-up. A retired path that aliases a current install
-destination is left to the install pass. Retired paths leave the manifest except those excluded
-by sparse checkout: include the listed paths before upgrading again. Tracked project references
-to removed files are warnings, not blockers. A plain rerun with retired entries directs you to
-`--upgrade`.
+`--upgrade`, a retired regular file is unedited if its content matches the manifest hash; file
+mode does not affect that decision. Installer-owned command symlinks are removed even if dangling.
+Content edits, foreign symlinks, directories, and retired memory files are kept and listed for
+manual follow-up. Retirement does not unlink an alias of a current install destination. If sparse
+checkout excludes any retired tracked paths, the upgrade refuses before writing. Include the
+listed paths with `git sparse-checkout add`, then retry. A successful upgrade drops all retired
+entries from the manifest. Tracked references to removed files are warnings, not blockers. A plain
+rerun with retired entries directs you to `--upgrade`.
 The manifest records version, harnesses, install mode, selected options and pristine file
 hashes. Upgrade from a clean, committed checkout. To deselect agent tiers, use
 `--without agent-tiers`; the installer removes its managed files only when the project no
@@ -104,6 +105,10 @@ customization. The manifest publishes last. An unfinished write phase leaves
 report it as incomplete. Keep the original source revision available and retry it with
 `init.sh --upgrade`, then check integrity. A marker can remain even after manifest publication;
 it still requires a coherent retry, not deletion to make the gate green.
+For a missing retired path, a retry verifies the committed file independently of the marker.
+It checks regular files after Git's checkout conversion (including line endings) and checks
+the target of committed command symlinks. If required Git objects are missing locally,
+the retry refuses rather than fetching them.
 
 The write phase uses an exclusive `.prdkit/.install-lock` file with PID/host. Concurrent writers
 are refused rather than waiting on stale ownership data. Normal failure/TERM releases the lock;

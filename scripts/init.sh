@@ -140,13 +140,6 @@ if [ "$INITIAL_MANIFEST" != absent ] && ! install_manifest_format "$MANIFEST"; t
     echo 'Invalid .prdkit/.manifest: expected LF text with unique version, harnesses, mode (copy or symlink), options (none or agent-tiers), and SHA-256 entries for installed kit paths; nothing was written.' >&2
     exit 1
 fi
-install_state_fingerprint() {
-    local state="$PRDKIT_DIR/.install-state"
-    if [ -f "$state" ] && [ ! -L "$state" ]; then install_hash_stream < "$state"
-    else echo absent; fi
-}
-INITIAL_INSTALL_STATE="$(install_state_fingerprint)"
-
 # --- Resolve install harnesses -----------------------------------------------
 # Product-Kit's core is markdown + bash, so commands can be installed for more
 # than one agent CLI. Verified per-harness targets:
@@ -408,8 +401,11 @@ file_locally_edited() {
 # directory, in the absolute or relative form this script writes, dangling or not.
 is_kit_command_link() {
     local file="$1" target dir kitdir
-    target="$(readlink "$file" && printf x)" || return 1
-    target="${target%$'\nx'}"
+    if [ "$#" -eq 2 ]; then target="$2"
+    else
+        target="$(readlink "$file" && printf x)" || return 1
+        target="${target%$'\nx'}"
+    fi
     case "$target" in /*) ;; *) target="$(dirname "$file")/$target" ;; esac
     [ "${target##*/}" = "${file##*/}" ] || return 1
     dir="$(cd "$(dirname "$target")" 2>/dev/null && pwd -P)" || return 1
@@ -417,40 +413,26 @@ is_kit_command_link() {
     [ "$dir" = "$kitdir" ]
 }
 
-# The previous release, when present in the kit's own local checkout, can tell
-# us whether a copied source was executable. Shell helpers always got chmod +x.
-retired_expected_mode() {
-    local rel="$1" src entry
-    case "$rel" in
-        .prdkit/scripts/bash/*.sh) echo 100755; return 0 ;;
-        .prdkit/scripts/bash/*) src="scripts/${rel##*/}" ;;
-        .prdkit/templates/*) src="templates/${rel##*/}" ;;
-        .prdkit/workflows/*) src="workflows/${rel##*/}" ;;
-        .claude/commands/*|.opencode/commands/*) src="commands/${rel##*/}" ;;
-        *) echo 100644; return 0 ;;
+is_retired_kit_link() { # relative path [committed link target]
+    case "$1" in
+        .claude/commands/*|.opencode/commands/*)
+            local file="$TARGET/$1"
+            shift
+            $PREVIOUS_SYMLINK && is_kit_command_link "$file" "$@"
+            return ;;
     esac
-    if [ -n "$PREVIOUS_KIT_TREE" ] && entry="$(GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1 \
-        git -C "$PK_ROOT" ls-tree "$PREVIOUS_KIT_TREE" -- ":(top,literal)$src" 2>/dev/null)"; then
-        if [[ "$entry" = '100755 blob '* ]]; then echo 100755; return 0; fi
-    fi
-    echo 100644
+    return 1
 }
 
 # Only regular files and installer command links can be unedited; never hash through a symlink.
 retired_file_state() { # relative path, recorded hash
-    local rel="$1" rec="$2" file="$TARGET/$1" cur mode=100644
+    local rel="$1" rec="$2" file="$TARGET/$1" cur
     if [ -L "$file" ]; then
-        case "$rel" in
-            .claude/commands/*|.opencode/commands/*)
-                if $PREVIOUS_SYMLINK && is_kit_command_link "$file"; then echo unedited; return 0; fi ;;
-        esac
+        if is_retired_kit_link "$rel"; then echo unedited; return 0; fi
     elif [ ! -e "$file" ]; then echo absent; return 0
     elif [ -f "$file" ] && [[ "$rel" != .prdkit/memory/* ]]; then
-        if [ -x "$file" ]; then mode=100755; fi
-        if [ "$mode" = "$(retired_expected_mode "$rel")" ]; then
-            cur="$(hash_file "$file")" || return 1
-            if [ "$cur" = "$rec" ]; then echo unedited; return 0; fi
-        fi
+        cur="$(hash_file "$file")" || return 1
+        if [ "$cur" = "$rec" ]; then echo unedited; return 0; fi
     fi
     echo kept
 }
@@ -513,61 +495,49 @@ retired_parent_problem() {
 }
 
 # Plan from validated manifest rows. A missing tracked file counts as previous
-# installer work only when pre-unlink evidence survived in the progress marker.
+# installer work only if its committed checkout representation is pristine.
 plan_retirement() {
-    local entry rel rec state git_root version index_entry
-    if [ -n "$RETIRED_ENTRIES" ]; then
-        version="$(LC_ALL=C awk '/^version: / { print substr($0, 10) }' <<< "$PREVIOUS_MANIFEST")" || return 1
-        if [ "$(git -C "$PK_ROOT" rev-parse --show-toplevel 2>/dev/null)" = "$PK_ROOT" ] &&
-            git check-ref-format "refs/tags/v$version" && spec_objects_local "$PK_ROOT"; then
-            PREVIOUS_KIT_TREE="$(GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1 \
-                git -C "$PK_ROOT" rev-parse --verify --quiet "refs/tags/v$version^{tree}")" || PREVIOUS_KIT_TREE=""
-        fi
-    fi
-    if $RESUMING_UPGRADE; then
-        RETIRED_PROOFS="$(upgrade_retirement_proofs)" || {
-            echo 'P1: invalid retired-file evidence in .prdkit/.install-state; nothing was written.' >&2
+    local entry rel rec state git_root index_entry
+    [ -n "$RETIRED_ENTRIES" ] || return 0
+    git_root="$(git -C "$TARGET" rev-parse --show-toplevel 2>/dev/null)" || git_root=""
+    if $CHECK && [ "$git_root" = "$TARGET" ]; then
+        # ls-files can expand a sparse index. Do not fetch objects to do that.
+        spec_objects_local "$TARGET" || {
+            echo 'Cannot inspect retired files in the index without fetching missing objects; nothing was written.' >&2
             return 1
         }
     fi
-    [ -n "$RETIRED_ENTRIES" ] || return 0
-    git_root="$(git -C "$TARGET" rev-parse --show-toplevel 2>/dev/null)" || git_root=""
     while IFS= read -r entry; do
         rel="${entry#*  }"; rec="${entry%%  *}"
+        if [ "$git_root" = "$TARGET" ]; then
+            index_entry="$(GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1 \
+                git -C "$TARGET" ls-files -t -- ":(top,literal)$rel")" || return 1
+            if [[ "$index_entry" = 'S '* ]]; then RETIRED_SPARSE+=("$rel"); continue; fi
+        fi
         if $CHECK && retired_parent_problem "$rel" >/dev/null; then state=kept
-        elif retired_overlaps_current "$rel"; then continue
         else state="$(retired_file_state "$rel" "$rec")" || return 1; fi
         case "$state" in
-            unedited) RETIRED_REMOVE+=("$rel") ;;
+            unedited)
+                if ! retired_overlaps_current "$rel"; then RETIRED_REMOVE+=("$rel"); fi ;;
             kept) RETIRED_KEEP+=("$rel") ;;
             absent)
-                index_entry=""
-                if [ "$git_root" = "$TARGET" ]; then
-                    # Avoid expanding a sparse index on old Git in a partial clone.
-                    spec_objects_local "$TARGET" || return 1
-                    index_entry="$(GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1 \
-                        git -C "$TARGET" ls-files -t -- ":(top,literal)$rel")" || return 1
+                if $RESUMING_UPGRADE; then
+                    state="$(upgrade_retired_head_state "$rel" "$rec")" || {
+                        printf 'Cannot read committed retired file %s from local Git objects; nothing was written.\n' "$rel" >&2
+                        return 1
+                    }
+                    if [ "$state" = unedited ]; then RETIRED_DELETED+=("$rel"); continue; fi
                 fi
-                if [[ "$index_entry" = 'S '* ]]; then RETIRED_SPARSE+=("$entry")
-                elif retirement_proof_recorded "$entry"; then RETIRED_DELETED+=("$rel")
-                else RETIRED_ABSENT+=("$rel")
-                fi ;;
+                RETIRED_ABSENT+=("$rel") ;;
         esac
     done <<< "$RETIRED_ENTRIES"
 }
-PREVIOUS_KIT_TREE=""; RETIRED_PROOFS=""
 RETIRED_REMOVE=(); RETIRED_KEEP=(); RETIRED_ABSENT=(); RETIRED_DELETED=(); RETIRED_SPARSE=()
 
 list_sparse_retirements() {
-    local entry
-    if [ ${#RETIRED_SPARSE[@]} -gt 0 ]; then
-        echo 'Retired files kept in the manifest (excluded by sparse checkout; include these paths before upgrading again):'
-        for entry in "${RETIRED_SPARSE[@]}"; do printf '  %s\n' "${entry#*  }"; done
-    fi
-}
-
-retain_sparse_retirement_rows() {
-    if [ ${#RETIRED_SPARSE[@]} -gt 0 ]; then printf '%s\n' "${RETIRED_SPARSE[@]}"; fi
+    echo 'Retired files excluded by sparse checkout:'
+    printf '  %s\n' "${RETIRED_SPARSE[@]}"
+    echo 'Include these paths (or their parent directories) with git sparse-checkout add, then retry --upgrade.'
 }
 
 # Where an in-place edit of a root file (AGENTS.md, .gitignore) lands: the file itself, or, for
@@ -697,7 +667,7 @@ if $CHECK; then
             echo "RETIRED — already absent (--upgrade drops these manifest entries):"
             printf '  %s\n' "${RETIRED_ABSENT[@]}"
         fi
-        list_sparse_retirements
+        if [ ${#RETIRED_SPARSE[@]} -gt 0 ]; then list_sparse_retirements; fi
         echo
     fi
 
@@ -773,6 +743,11 @@ warn_retired_references() {
 if $UPGRADE; then
     [ "$INITIAL_MANIFEST" != absent ] || { echo 'No install manifest; run init.sh without --upgrade to install.' >&2; exit 1; }
     plan_retirement || exit 1
+    if [ ${#RETIRED_SPARSE[@]} -gt 0 ]; then
+        list_sparse_retirements >&2
+        echo 'Upgrade refused; nothing was written.' >&2
+        exit 1
+    fi
     upgrade_destinations_safe || exit 1
     upgrade_checkout_clean || exit 1
     upgrade_no_overwrite || exit 1
@@ -818,25 +793,9 @@ if [ "$INITIAL_MANIFEST" != "$current_manifest" ]; then
     echo 'Error: manifest changed while preparing the install; retry to resolve current ownership/harness settings.' >&2
     exit 1
 fi
-if [ "$INITIAL_INSTALL_STATE" != "$(install_state_fingerprint)" ]; then
-    echo 'Error: install state changed while preparing the install; retry with the current recovery marker.' >&2
-    exit 1
-fi
 record_progress() {
     INSTALL_PHASE="$1"; INSTALL_PATH="$2"
-    if [ -n "$RETIRED_PROOFS" ]; then
-        # Later phases must keep every previous unlink receipt, even across a
-        # failed publication. Publish the combined marker before unlinking.
-        (
-            stage="$(mktemp -d "$PRDKIT_DIR/.install-state.prdkit-install.XXXXXX")" || exit 1
-            trap 'rm -rf "$stage"' EXIT
-            printf 'phase: %s\npath: %s\nsource-version: %s\n%s\n' "$1" "$2" "$PK_VERSION" "$RETIRED_PROOFS" \
-                > "$stage/payload" || exit 1
-            mv -f "$stage/payload" "$PRDKIT_DIR/.install-state"
-        )
-    else
-        printf 'phase: %s\npath: %s\nsource-version: %s\n' "$1" "$2" "$PK_VERSION" > "$PRDKIT_DIR/.install-state"
-    fi
+    printf 'phase: %s\npath: %s\nsource-version: %s\n' "$1" "$2" "$PK_VERSION" > "$PRDKIT_DIR/.install-state"
 }
 record_progress prepare .prdkit
 
@@ -997,18 +956,6 @@ if [ ${#RETIRED_REMOVE[@]} -gt 0 ]; then
             kept) RETIRED_KEEP+=("$rel"); continue ;;
             absent) continue ;;
         esac
-        evidence="$(upgrade_retired_head_entry "$rel")"
-        # A tracked executable-bit edit must be preserved even when Git was
-        # configured to ignore worktree mode differences.
-        case "$evidence" in
-            'absent '* ) ;;
-            '120000 '*) if [ ! -L "$TARGET/$rel" ]; then RETIRED_KEEP+=("$rel"); continue; fi ;;
-            "$(retired_expected_mode "$rel") "*) if [ -L "$TARGET/$rel" ]; then RETIRED_KEEP+=("$rel"); continue; fi ;;
-            *) RETIRED_KEEP+=("$rel"); continue ;;
-        esac
-        if ! retirement_proof_recorded "$rec  $rel"; then
-            RETIRED_PROOFS="${RETIRED_PROOFS:+$RETIRED_PROOFS$'\n'}retired-file: $evidence $rec  $rel"
-        fi
         record_progress retired "$rel"
         rm -f "$TARGET/$rel"
         removed+=("$rel")
@@ -1188,7 +1135,6 @@ rm -f "$manifest_tmp"
             echo "${rec:-$kit}  $rel"
         fi
     done <<< "$KIT_FILES"
-    retain_sparse_retirement_rows
 } > "$manifest_tmp"
 # A symlinked manifest is replaced, never written through or moved into.
 [ ! -L "$MANIFEST" ] || rm -f "$MANIFEST"
@@ -1204,7 +1150,6 @@ if $UPGRADE; then
         echo 'Kept retired files (no longer managed; delete them or fold their content into project-owned files):'
         printf '  %s\n' "${RETIRED_KEEP[@]}"
     fi
-    list_sparse_retirements
     warn_retired_references
     echo "Run 'bash .product-kit/scripts/init.sh --check' anytime to see install drift."
     echo "Run /prdkit-status for the current state."

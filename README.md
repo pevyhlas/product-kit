@@ -242,9 +242,9 @@ bash .product-kit/scripts/init.sh --check     # read-only; expected drift can ex
 
 Replace `vX.Y.Z` with the selected tag. Inspect the drift, then run
 `bash .product-kit/scripts/init.sh --upgrade` from a clean, committed checkout.
-Unedited files no longer shipped by the kit are removed. Retired files with content or executable-bit
-edits, foreign symlinks, and retired memory files are kept and listed for you to delete or fold into
-project-owned files. Retired files excluded by sparse checkout stay in the manifest until included.
+Retired files whose contents still match the install manifest are removed. Retired files with
+content edits, foreign symlinks, directories, and retired memory files are kept and listed for
+manual follow-up. If sparse checkout excludes retired tracked paths, include them before upgrading.
 Review any warnings about tracked references to removed files. Unsupported manifest formats still
 need manual reconciliation. Kit-owned commands and scripts that the kit still ships are refreshed
 if unmodified; customized managed files that would be overwritten block the upgrade. Project-owned

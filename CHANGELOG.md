@@ -10,8 +10,9 @@ change by change.
 
 ### Changed
 
-- Upgrades remove unedited retired kit files, list retired files kept for manual follow-up,
-  and warn about tracked references to removed files.
+- Upgrades remove retired kit files with unchanged content, list retired files kept for manual
+  follow-up, and warn about tracked references to removed files. Upgrades refuse if sparse
+  checkout excludes a retired tracked path.
 
 ## [2.2.0] — 2026-11-24 — tracked history, coverage check and checked owner quotes
 
