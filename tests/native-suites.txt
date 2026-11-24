@@ -45,3 +45,4 @@ test_review_package_completion.sh
 test_delivery_checkpoint.sh
 test_fail_closed_verifiers.sh
 test_release.sh
+test_fails_on_base.sh

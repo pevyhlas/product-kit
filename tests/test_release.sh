@@ -478,6 +478,8 @@ assert_eq "" "$(grep -rniE 'self-hosted|runs-on:[ \t]*\[' "$PK_ROOT/.github" || 
 on_block() { awk '/^on:/ { f = 1 } f && /^[^ #]/ && !/^on:/ { f = 0 } f' "$1"; }
 assert_eq "on:
   pull_request:
+    # Re-evaluate the policy when the PR title changes, even at the same head.
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]" "$(on_block "$CIWF")" "CI runs for every pull request and for pushes to main"
 assert_eq "on:
@@ -504,6 +506,28 @@ for f in "$CIWF" "$MACWF"; do
         END { if (checkout && !disabled) print checkout }' "$f")" "no checkout persists credentials in $n"
 done
 assert_eq 1 "$(grep -cxF 'test_release.sh' "$TESTS_DIR/native-suites.txt" || true)" "the macOS check runs this suite"
+assert_eq 1 "$(grep -cxF 'test_fails_on_base.sh' "$TESTS_DIR/native-suites.txt" || true)" "the replay suite runs on native macOS"
+# Only the regression replay is PR-only; both shard result aggregates always run.
+assert_eq "test:    if: \${{ always() }}
+replay-plan:    if: github.event_name == 'pull_request'
+base:    if: github.event_name == 'pull_request' && needs.replay-plan.outputs.changed == 'true'
+head:    if: github.event_name == 'pull_request' && needs.replay-plan.outputs.changed == 'true'
+fails-on-base:    if: always() && github.event_name == 'pull_request'
+portable-helpers-macos:    if: \${{ always() }}" \
+    "$(awk '/^  [a-z-]+:$/ { job = $1 } /^    if:/ { print job $0 }' "$CIWF" "$MACWF")" \
+    "CI runs the aggregates unconditionally and the replay only on PRs"
+assert_contains "$(cat "$CIWF")" 'needs: [replay-plan, base, head]' "the comparator waits for independent runners"
+assert_eq 3 "$(grep -c 'retention-days: 1$' "$CIWF")" "the plan and both results expire after one day"
+# Exercise the actual final job gate, including the single intentional skip.
+awk '/case "\$PLAN:\$CHANGED:\$BASE:\$HEAD" in/,/esac/' "$CIWF" > "$WFRUN/replay-gate.sh"
+for row in success:false:skipped:skipped:0 success:true:success:success:0 \
+    failure:false:skipped:skipped:2 success:true:skipped:success:2 success:true:success:cancelled:2; do
+    IFS=: read -r plan changed base head expected <<< "$row"
+    run env PLAN="$plan" CHANGED="$changed" BASE="$base" HEAD="$head" GITHUB_STEP_SUMMARY="$WFRUN/summary" \
+        bash "$WFRUN/replay-gate.sh"
+    assert_eq "$expected" "$STATUS" "final replay gate: $row"
+    if [ "$expected" = 2 ]; then assert_contains "$OUTPUT" 'INCONCLUSIVE'; fi
+done
 # CI lints with the pinned ShellCheck, checked against its published digest, never with the
 # version the runner image ships.
 assert_eq 1 "$(grep -cxF '          v=v0.11.0' "$CIWF" || true)" "CI installs ShellCheck 0.11.0"

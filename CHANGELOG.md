@@ -13,6 +13,11 @@ change by change.
 - Projects with a UI can opt into `specs/design.md`, a short L1 summary for direction,
   composition, copy and owner decisions. The installer provides the template without creating
   a spec file; doctor checks its structure when present.
+- Pull request CI shows which changed test suites fail before the fix and pass on the PR head.
+  With no changed suites the check passes, including for `fix` titles. Otherwise,
+  conventional `fix` titles require at least one reproducing suite; other titles are advisory.
+  Base and head run on separate hosted runners, so a base worker cannot answer a head test.
+  The check compares one-day result artifacts; missing or incomplete evidence fails the check.
 - Holds and waivers can keep long verbatim owner quotes in `specs/authority.md` using
   checked references. Status and doctor validate the references without shortening the
   scope or end condition in the row. No migration needed.
@@ -35,6 +40,13 @@ change by change.
   Review requires a per-change close entry at the closing commit. Agents must migrate an older
   install manually; Product-Kit provides no migration tooling. Ordinary upgrades and consumer
   data-migration guidance remain.
+
+### Fixed
+
+- PR review launcher groups now have live guard leaders that signal only their own groups.
+  The launcher checks for surviving members without waiting for a leader and confirms the
+  groups are absent at the kernel level before deleting scratch. If it cannot verify shutdown
+  or output drain, it refuses and retains scratch.
 
 ## [2.1.0] — 2026-11-23 — task parts, change tags and fail-closed verifiers
 

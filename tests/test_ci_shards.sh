@@ -184,7 +184,8 @@ for platform in linux native; do
     gate_body="$(job_body "$workflow" "$gate")"
     assert_eq "    name: $check_name" "$(printf '%s\n' "$gate_body" | grep '^    name:')" "$platform required check name"
     assert_eq "    needs: $deps" "$(printf '%s\n' "$gate_body" | grep '^    needs:')" "$platform aggregate needs every lane"
-    assert_eq '    if: ${{ always() }}' "$(grep -E '^[[:space:]]*(- )?if:' "$workflow" || true)" "$platform only the aggregate is conditional and always runs"
+    assert_eq '    if: ${{ always() }}' "$(printf '%s\n' "$gate_body" | grep -E '^[[:space:]]*(- )?if:' || true)" "$platform aggregate always runs"
+    assert_not_contains "$matrix_body" 'if:' "$platform matrix is unconditional"
     assert_contains "$matrix_body" "    runs-on: $image" "$platform uses its native hosted image"
     assert_contains "$matrix_body" "    timeout-minutes: $ceiling" "$platform retains its timeout ceiling"
     assert_contains "$matrix_body" "      fail-fast: false" "$platform does not cancel siblings after a failure"
@@ -201,6 +202,7 @@ for platform in linux native; do
         checks_body="$(job_body "$workflow" checks)"
         assert_contains "$checks_body" '    runs-on: ubuntu-24.04' "Linux checks run on the hosted Linux image"
         assert_not_contains "$checks_body" '    needs:' "Linux checks run in parallel"
+        assert_not_contains "$checks_body" 'if:' "Linux checks are unconditional"
         for legacy in adoption_gate doctor lifecycle spec_navigation; do
             assert_contains "$checks_body" "bash tests/test_$legacy.sh" "legacy mawk: $legacy still runs"
         done
