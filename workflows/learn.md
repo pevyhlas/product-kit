@@ -1,7 +1,7 @@
 # Learning from outcomes
 
 **Inputs**: thesis, journeys, qualities and hypotheses in `specs/product.md` and `specs/product/`,
-observed outcomes.
+observed outcomes, and `specs/design.md` when present and relevant.
 **Writes**: inbox proposals; spec edits only after the owner decides.
 **Result**: a supported or inconclusive conclusion, and the next decision.
 

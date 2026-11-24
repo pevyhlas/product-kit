@@ -11,3 +11,7 @@ template without broadening the owner's instructions. Start a small product in `
 (`.prdkit/templates/product-template.md`, `.prdkit/templates/architecture-template.md`),
 describing what is true now, inferred intent as `hypothesis`. Report what was created, inferred
 and still needs a decision.
+
+For a project that opts into a separate UI design summary, use
+`.prdkit/templates/design-template.md` for `specs/design.md` ([spec.md](spec.md#layout)).
+The installer ships the template, not the spec file.

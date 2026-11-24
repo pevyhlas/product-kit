@@ -21,6 +21,8 @@ answer. You do not write the spec yourself unless you want to.
   serves, the core loop's path, the key decisions, key areas such as security and observability,
   and the risks. Then `specs/architecture/`: decisions, with the alternatives they rejected and
   when to revisit them, and one file per topic, including why the design works.
+- `specs/design.md` (L1, optional for projects with a UI): your direction, composition, copy and
+  lasting decisions in one page; implementation values stay in code.
 - `specs/inbox.md`: questions waiting for your answer, clarification or observation. Each has a
   stable ID, topic tags and an answer field; choices have stable keys as well as numbers. Use
   `/prdkit-inbox` to review them one at a time, optionally naming tags or IDs. Select an option,

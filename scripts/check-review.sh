@@ -173,7 +173,7 @@ t0_violations() { # from to
     done <<< "$raw"
 }
 path="specs/changes/$id.md"
-spec_l01=(specs/product.md specs/product specs/architecture.md specs/architecture specs/SPEC.md specs/decisions)
+spec_l01=(specs/product.md specs/product specs/architecture.md specs/architecture specs/design.md specs/SPEC.md specs/decisions)
 changed_since() { # sha [pathspec...] -> paths changed from sha to head, including edits to the folded log
     local sha="$1"; shift
     [ "$#" -gt 0 ] || set -- . ":(exclude)$path" ":(exclude).prdkit/history/log/$id.md"

@@ -18,6 +18,8 @@ for file in ledger-emit.sh ledger-spool-adapter.sh json-lib.sh retrospective.sh;
     if [ -e "$PROJ/.prdkit/scripts/bash/$file" ]; then _no "removed $file installed"; else _ok "removed $file not installed"; fi
 done
 assert_file "$PROJ/.prdkit/templates/spec-template.md"
+assert_file "$PROJ/.prdkit/templates/design-template.md"
+assert_contains "$(cat "$PROJ/.prdkit/.manifest")" '.prdkit/templates/design-template.md' 'optional design template is mapped and hashed'
 assert_file "$PROJ/.prdkit/templates/authority-template.md"
 assert_file "$PROJ/.prdkit/templates/history-log-template.md"
 assert_file "$PROJ/.prdkit/scripts/bash/authority-ref.sh"

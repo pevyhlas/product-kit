@@ -18,8 +18,9 @@ The four-column `manifest.tsv` inventories artifacts. `context-manifest.tsv` add
 - uniquely resolved child spec IDs and heading-linked blocks, including nested item bodies;
 - the **actual** installed `bounds.sh` output on materialized HEAD canon and the actual child's
   scope, with all input blobs inventoried (a recovered scope record keeps its historical binding);
-- trusted policy/registry/config at `policy_at`, required product/architecture canon and
-  conservative part/cross-interface context. Proposed changes remain in the full diff.
+- trusted policy/registry/config at `policy_at`, required product/architecture canon, optional
+  `specs/design.md` when present, and conservative part/cross-interface context. Proposed changes
+  remain in the full diff.
 
 Ambiguous IDs/headings, missing/unsafe objects, unsupported links and unverified verification
 are recorded in `context-gaps.txt`, not silently discarded. Whole-file explicit selections

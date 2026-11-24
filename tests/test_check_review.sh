@@ -194,6 +194,17 @@ echo '# Product' > specs/product.md; git add specs/product.md; git commit -qm "L
 run bash "$CHECK" 003-docs
 assert_eq 1 "$STATUS" "an L0 spec edit is never T0"
 git reset -q --hard HEAD~1
+it "the optional L1 design summary is excluded from T0 even under a trusted prefix"
+{ git show "$TRUSTED_TIP:.prdkit/memory/config.md"; printf -- '- review-t0-paths: docs/, README.md, specs/\n'; } |
+    trusted_edit "refs/remotes/origin/$DEFAULT" .prdkit/memory/config.md
+run bash "$CHECK" 003-docs
+assert_eq 3 "$STATUS" "the docs-only branch passes native-gate structure checks"
+printf '# UI design\n' > specs/design.md
+git add specs/design.md; git commit -qm "L1 UI design"
+run bash "$CHECK" 003-docs
+assert_eq 1 "$STATUS" "the UI spec is L1 even under a trusted T0 prefix"
+assert_contains "$OUTPUT" "or the L0/L1 spec): specs/design.md. Claim T1 or higher" "only the L1 path is rejected"
+git reset -q --hard HEAD~1
 git update-ref "refs/remotes/origin/$DEFAULT" "$TRUSTED_TIP"
 git checkout -q 001-greet; git branch -q -D 003-docs
 

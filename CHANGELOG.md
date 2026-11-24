@@ -10,6 +10,9 @@ change by change.
 
 ### Added
 
+- Projects with a UI can opt into `specs/design.md`, a short L1 summary for direction,
+  composition, copy and owner decisions. The installer provides the template without creating
+  a spec file; doctor checks its structure when present.
 - Optional `review-lenses` maps registered reviewers to GitHub accounts. One App can cover
   several areas; the gate reports the approving account and review per area. With lenses
   configured, T3 needs a mapped `design` approval plus a separate owner approval (#161).
