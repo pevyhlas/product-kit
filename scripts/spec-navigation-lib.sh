@@ -24,18 +24,18 @@ spec_navigation() { # file budget|stats|compact|diagnostics|target|index|section
                 s = substr(s, RSTART + RLENGTH)
             }
         }
-        function tracking(s,   key, label, pending, records, n, i) {
+        function tracking(s, account,   key, label, pending, records, n, i) {
             sub(/^ *Tracking: */, "", s)
             while (s != "") {
                 if (!match(s, /^\[[A-Za-z0-9][A-Za-z0-9._\/-]*\]\[[Nn][Aa][Vv]-[A-Za-z0-9_-]+\]/)) return
                 label = substr(s, 1, RLENGTH); s = substr(s, RLENGTH + 1)
-                if (mode == "section") records[++n] = substr(label, 2, index(label, "]") - 2)
+                if (!account) records[++n] = substr(label, 2, index(label, "]") - 2)
                 sub(/^\[[^]]+\]\[/, "", label); sub(/\]$/, "", label)
                 key = norm(label); pending[key]++
                 if (s != "" && s !~ /^ +/) return
                 sub(/^ +/, "", s)
             }
-            for (key in pending) uses[key] += pending[key]
+            if (account) for (key in pending) uses[key] += pending[key]
             for (i = 1; i <= n; i++) alias(section, records[i])
         }
         function alias(n, id,   key) {
@@ -46,21 +46,60 @@ spec_navigation() { # file budget|stats|compact|diagnostics|target|index|section
                 names[n] = names[n] (names[n] == "" ? "" : ", ") id
             }
         }
-        function structure_break() { paragraph = 0; part_table = 0 }
-        # Match only a potential top-level paragraph underline, not a break after a blank.
-        function check_setext(t, depth,   markers) {
-            if (!underline && paragraph && t ~ /^(=+|-+)[ \t]*$/) underline = NR
-            if (t ~ /^[ \t]+[^ \t]/) return
-            markers = t; gsub(/[ \t]/, "", markers)
-            paragraph = !depth && t !~ /^[ \t]*$|^[|>]|^([-+*]|[0-9]+[.)])([ \t]|$)/ &&
-                        markers !~ /^---+$|^\*\*\*+$|^___+$/ && t !~ /^=+[ \t]*$/
+        function structure_break() { paragraph = 0; table = 0; header_cols = 0; list_context = 0 }
+        function cells(s, fields) {
+            if (!sub(/^\|/, "", s)) return 0
+            sub(/\|[ \t]*$/, "", s)
+            return split(s, fields, /[|]/)
+        }
+        function delimiter(fields, n,   i) {
+            if (!n || n != header_cols) return 0
+            for (i = 1; i <= n; i++) if (fields[i] !~ /^[ \t]*:?-+:?[ \t]*$/) return 0
+            return 1
+        }
+        function table_ids(line, first,   row, r) {
+            if (part_header) alias(section, spec_part_row(line))
+            gsub(/^[ \t]+|[ \t]+$/, "", first)
+            if (spec_record_row(first, row) != "") return
+            # Only syntax matters here; authority references are verified by the record reader.
+            r = row["reason"]
+            if (row["type"] ~ /^(HOLD|WAIVER)$/ && r ~ /^ref=/ &&
+                (r !~ /^ref=specs\/authority\.md#[A-Za-z0-9][A-Za-z0-9._-]*@[0-9a-f]+$/ ||
+                 length(r) - index(r, "@") != 12)) return
+            alias(section, row["name"])
         }
         # The most recent heading owns its IDs; only section spans include descendants.
-        function structure(line, t,   depth, d, word, row) {
+        function structure(line, t,   depth, d, word, list_item, thematic, markers, fields, n) {
+            if (t ~ /^[ \t]*$/) { paragraph = 0; table = 0; header_cols = 0; return }
+            if (t ~ /^[ \t]/) {
+                paragraph = 0; table = 0; header_cols = 0
+                if (list_context && mode == "section") {
+                    alias(section, spec_bullet_id(line))
+                    if (retired) alias(section, spec_retired_part(line))
+                    if (line ~ /^[ \t]+Tracking: /) {
+                        sub(/^[ \t]+/, "", line); tracking(line, 0)
+                    }
+                }
+                return
+            }
+            n = cells(t, fields)
+            if (table && n) {
+                if (mode == "section" && section) table_ids(t, fields[1])
+                return
+            }
+            table = delimiter(fields, n)
+            if (table) { paragraph = 0; list_context = 0; return }
+            header_cols = n; part_header = n && spec_part_header(t)
             depth = spec_heading(line)
-            check_setext(t, depth)
+            if (!underline && paragraph && t ~ /^(=+|-+)[ \t]*$/) underline = NR
+            markers = t; gsub(/[ \t]/, "", markers)
+            thematic = markers ~ /^---+$|^\*\*\*+$|^___+$/
+            list_item = !thematic && t ~ /^([-+*]|[0-9]+[.)])([ \t]|$)/
+            paragraph = !depth && !list_item && !thematic &&
+                        t !~ /^>|^\[[^][]+\]:[ \t]*[^ \t]|^=+[ \t]*$/
+            list_context = !depth && (list_item || (paragraph && list_context && line ~ /^ /))
             if (depth) {
-                part_table = 0; retired = heading_title == "Retired"
+                retired = heading_title == "Retired"
                 for (d = 6; d >= depth; d--) if (d in open) {
                     last_line[open[d]] = NR - 1; delete open[d]
                 }
@@ -76,11 +115,8 @@ spec_navigation() { # file budget|stats|compact|diagnostics|target|index|section
                 }
             } else if (mode == "section" && section) {
                 alias(section, spec_bullet_id(line))
-                if (line !~ /^\|/) part_table = 0
-                if (spec_part_header(line)) part_table = 1
-                else if (part_table) alias(section, spec_part_row(line))
                 if (retired) alias(section, spec_retired_part(line))
-                if (spec_record_row(line, row) == "") alias(section, row["name"])
+                if (t ~ /^Tracking: /) tracking(t, 0)
             }
         }
         function visible(i) { return !valid || i < start || i > end }
@@ -125,9 +161,17 @@ spec_navigation() { # file budget|stats|compact|diagnostics|target|index|section
                     substr(t, RLENGTH + 1) ~ /^[ \t]*$/) fence = ""
                 next
             }
-            if (comment) { if (index(line, "-->")) comment = 0; next }
-            starts_comment = line ~ /^[[:space:]]*<!--/
+            if (comment) { if (t !~ /^[ \t]/ && index(t, "-->")) comment = 0; next }
+            starts_comment = t ~ /^<!--/
             if (starts_comment && !index(line, "-->")) comment = 1
+            if (match(t, /^```+|^~~~+/) && (substr(t, 1, 1) == "~" || !index(substr(t, RLENGTH + 1), "`"))) {
+                fence = substr(t, 1, 1); fence_len = RLENGTH
+            }
+            # A malformed navigation envelope never changes authored section boundaries.
+            if (focused) {
+                if (starts_comment || fence != "") structure_break()
+                else structure(line, t)
+            }
             if (index(line, "prdkit:navigation:")) {
                 if (line == "<!-- prdkit:navigation:v1 begin -->") {
                     if (start) bad("multiple or nested navigation blocks")
@@ -137,7 +181,7 @@ spec_navigation() { # file budget|stats|compact|diagnostics|target|index|section
                     if (!in_block || end) bad("unmatched navigation end marker")
                     end = NR; in_block = 0
                 } else bad("unknown or malformed navigation marker")
-                candidate = 1; structure_break(); next
+                candidate = 1; next
             }
             if (in_block && line ~ /^\[[Nn][Aa][Vv]-[A-Za-z0-9_-]+\]: https?:\/\/[^][[:space:]<>()"\047]+$/) {
                 # No blanks, prose, titles or general-purpose references inside the envelope.
@@ -152,14 +196,10 @@ spec_navigation() { # file budget|stats|compact|diagnostics|target|index|section
             }
             if (in_block) {
                 bad("navigation block contains an unsupported definition or other content")
-                if (!focused) next
+                next
             }
             if (end && line !~ /^[[:space:]]*$/) bad("navigation block is not a footer")
-            if (starts_comment) { structure_break(); next }
-            if (match(t, /^```+|^~~~+/) && (substr(t, 1, 1) == "~" || !index(substr(t, RLENGTH + 1), "`"))) {
-                fence = substr(t, 1, 1); fence_len = RLENGTH; structure_break(); next
-            }
-            if (focused) structure(line, t)
+            if (starts_comment || fence != "") next
             # Full HTML-block parsing is outside this narrow convention. Keep the raw file.
             if (line ~ /<[\/!?A-Za-z]/) html = 1
             # Count possible definitions/uses conservatively, including unusual indentation,
@@ -170,7 +210,7 @@ spec_navigation() { # file budget|stats|compact|diagnostics|target|index|section
                 key = norm(substr(scan, RSTART + 1, RLENGTH - 3)); outside[key]++
                 scan = substr(scan, RSTART + RLENGTH)
             }
-            if (line ~ /^ ? ? ?Tracking: /) tracking(line)
+            if (line ~ /^ ? ? ?Tracking: /) tracking(line, 1)
         }
         END {
             if (NR && !terminated) { bytes[NR]--; raw_bytes-- }

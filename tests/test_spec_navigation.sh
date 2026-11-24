@@ -163,16 +163,20 @@ assert_eq 0 "$STATUS"
 assert_contains "$OUTPUT" '--index'
 assert_contains "$OUTPUT" '--section'
 
-it "record IDs register only from well-formed rows, not record-like prose"
-printf '%s\n' '# Records' '## Paused' 'HOLD stop-01 owner=owner scope=all since=2026-01-01 until=lifted — Pause.' \
-    '## Notes' 'HOLD stop-01 applies only until the review is done.' 'HOLD prose-01 is a note.' \
-    'HOLD wrong-date owner=owner scope=all since=yesterday until=lifted' \
-    'WAIVER missing-field owner=owner check=A1 expires=2026-01-01' \
-    'HOLD broken-ref owner=owner scope=all since=2026-01-01 until=lifted — ref=specs/authority.md#H-01@short' > "$SECTIONS"
+it "record IDs register only from well-formed rows inside a delimited table"
+printf '%s\n' '# Records' '## Paused' '| Record |' '|---|' \
+    '| HOLD stop-01 owner=owner scope=all since=2026-01-01 until=lifted — Pause. |' \
+    '| HOLD prose-01 is a note. |' \
+    '| HOLD wrong-date owner=owner scope=all since=yesterday until=lifted |' \
+    '| WAIVER missing-field owner=owner check=A1 expires=2026-01-01 |' \
+    '| HOLD broken-ref owner=owner scope=all since=2026-01-01 until=lifted — ref=specs/authority.md#H-01@short |' \
+    '## Notes' 'HOLD stop-01 owner=owner scope=all since=2026-01-01 until=lifted' \
+    'HOLD plain-01 owner=owner scope=all since=2026-01-01 until=lifted' \
+    '| Record |' '| HOLD no-table owner=owner scope=all since=2026-01-01 until=lifted |' > "$SECTIONS"
 run bash "$READER" --section stop-01 "$SECTIONS"
 assert_eq 0 "$STATUS"
-assert_eq $'2: ## Paused\n3: HOLD stop-01 owner=owner scope=all since=2026-01-01 until=lifted — Pause.' "${OUTPUT#*$'\n'}"
-for id in prose-01 wrong-date missing-field broken-ref; do
+assert_eq "$(awk 'NR >= 2 && NR <= 9 { print NR ": " $0 }' "$SECTIONS")" "${OUTPUT#*$'\n'}"
+for id in prose-01 wrong-date missing-field broken-ref plain-01 no-table; do
     run bash "$READER" --section "$id" "$SECTIONS"
     assert_eq 2 "$STATUS" "$id is not defined"
     assert_contains "$OUTPUT" 'No match for section selector'
@@ -181,9 +185,13 @@ done
 it "part definitions in a Parts table or a part heading resolve, but citations do not"
 cp "$PK_ROOT/examples/request-service/specs/architecture.md" "$SECTIONS"
 printf '\n## Citations\n\n| Reference | Note |\n|---|---|\n| P1 citation | P2 is also cited. |\n' >> "$SECTIONS"
+printf '\n## Discussion\n\n| Part | Note |\n| P1 is referenced here | This is just an example. |\n| P9 not a part | Also an example. |\n' >> "$SECTIONS"
 run bash "$READER" --section p1 "$SECTIONS"
 assert_eq 0 "$STATUS"
 assert_eq "$(awk 'NR >= 19 && NR <= 25 { print NR ": " $0 }' "$SECTIONS")" "${OUTPUT#*$'\n'}"
+run bash "$READER" --section P9 "$SECTIONS"
+assert_eq 2 "$STATUS"
+assert_contains "$OUTPUT" 'No match for section selector'
 printf '%s\n' '# P1.2 Storage' '## Why it exists' 'P1.2 keeps records.' \
     '## Retired' '- P3 Older component: retired: moved elsewhere' > "$SECTIONS"
 run bash "$READER" --section P1.2 "$SECTIONS"
@@ -220,6 +228,20 @@ assert_eq $'1: # Spec (13 reading lines)\n13:   ## Next (1 reading line)' "${OUT
 run bash "$READER" --section Next "$SECTIONS"
 assert_eq 0 "$STATUS"
 
+it "Setext refusal distinguishes paragraphs from delimited tables and references"
+printf '%s\n' '# Scope' '' '| Exceptions' '----------' '- **R-08 Separate subsection**' '' '## Following' > "$SECTIONS"
+run bash "$READER" --index "$SECTIONS"
+assert_eq 2 "$STATUS"
+assert_contains "$OUTPUT" "$SECTIONS: 4: Setext"
+run bash "$READER" --section R-08 "$SECTIONS"
+assert_eq 2 "$STATUS"
+assert_contains "$OUTPUT" "$SECTIONS: 4: Setext"
+printf '%s\n' '# Scope' '' '[ref]: https://example.test' '---' '' \
+    '| Item | Note |' '|:---|---:|' '| Example | Note |' '---' '' '- A list item' '---' '## Following' > "$SECTIONS"
+run bash "$READER" --index "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq $'1: # Scope (13 reading lines)\n13:   ## Following (1 reading line)' "${OUTPUT#*$'\n'}"
+
 it "only contiguous, correctly indented, matching fence runs can close an example"
 for fence in '```' '~~~'; do
     printf '%s\n' '# Spec' " $fence${fence:0:1}md" "$fence $fence" "    $fence$fence" \
@@ -253,7 +275,38 @@ printf '%s\n' '# Spec' '' '    ```md' '' '## Real' 'Tracking: [A-1][nav-a]' \
 run spec_reading_lines "$SECTIONS"
 assert_eq '6 9' "$OUTPUT" "an indented fence example does not mask a real footer"
 
+it "indented literals do not delimit structure or define IDs outside a list"
+printf '%s\n' '# Scope' '' '    <!-- example' '' '## First' '' \
+    '    ## Not a heading' '    - **R-77 Literal, not a bullet**' '' '## Second' \
+    '- **R-77 Actual requirement**' '    An indented continuation.' '' '    - **R-78 Nested requirement**' \
+    '' 'Outside the list.' '    - **R-79 Literal after the list**' > "$SECTIONS"
+run bash "$READER" --index "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq $'1: # Scope (17 reading lines)\n5:   ## First (5 reading lines)\n10:   ## Second (8 reading lines)' "${OUTPUT#*$'\n'}"
+for id in R-77 R-78; do
+    run bash "$READER" --section "$id" "$SECTIONS"
+    assert_eq 0 "$STATUS"
+    assert_contains "$OUTPUT" '10: ## Second'
+    assert_not_contains "$OUTPUT" 'Literal, not a bullet'
+done
+run bash "$READER" --section R-79 "$SECTIONS"
+assert_eq 2 "$STATUS"
+assert_contains "$OUTPUT" 'No match for section selector'
+printf '%s\n' '# Scope' '   <!-- example' '    -->' '## Hidden' '   -->' '   ## Real' > "$SECTIONS"
+run bash "$READER" --index "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq $'1: # Scope (6 reading lines)\n6:   ## Real (1 reading line)' "${OUTPUT#*$'\n'}"
+
 it "invalid navigation is still visible and does not hide a heading in authored content"
+printf '%s\n' '# Scope' '## First' 'Text.' '## About prdkit:navigation: v2' 'Separate text.' '## Next' > "$SECTIONS"
+run bash "$READER" --index "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '4:   ## About prdkit:navigation: v2 (2 reading lines)'
+run bash "$READER" --section First "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq $'2: ## First\n3: Text.' "${OUTPUT#*$'\n'}"
+run spec_navigation "$SECTIONS" diagnostics
+assert_contains "$OUTPUT" 'Generated navigation retained: unknown or malformed navigation marker'
 printf '%s\n' '# Spec' 'Tracking: [REC-1][nav-a]' '<!-- prdkit:navigation:v1 begin -->' \
     '[nav-a]: https://example.test/items/REC-1' '## Authored' 'Prose in a malformed footer.' \
     '<!-- prdkit:navigation:v1 end -->' > "$SECTIONS"

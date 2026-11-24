@@ -93,10 +93,6 @@ SPEC_RECORD_ROW_AWK='
         if (missing != "") return type " " name " is missing" missing
         if (date != "" && !spec_record_date(date)) return type " " name " date must be YYYY-MM-DD"
         if (type == "WAIVER" && !spec_record_date(until)) return "WAIVER " name " expires= must be YYYY-MM-DD"
-        if ((type == "HOLD" || type == "WAIVER") && reason ~ /^ref=/ &&
-            (reason !~ /^ref=specs\/authority\.md#[A-Za-z0-9][A-Za-z0-9._-]*@[0-9a-f]+$/ ||
-             length(reason) - index(reason, "@") != 12))
-            return "invalid authority reference (expected ref=specs/authority.md#<anchor>@<12 lowercase hex digits>)"
         row["type"] = type; row["name"] = name; row["owner"] = who
         row["scope"] = kv["scope"]; row["env"] = kv["env"]; row["date"] = date; row["until"] = until
         row["rev"] = (type == "ATTEST") ? kv["version"] : kv["rev"]
@@ -1443,12 +1439,17 @@ spec_authority_ref() { # root anchor
     [ -f "$file" ] || { echo 'missing authority file specs/authority.md' >&2; return 1; }
     review_file_without_nul "$file" 2>/dev/null ||
         { echo 'cannot read specs/authority.md as LF text' >&2; return 1; }
-    if entry="$(LC_ALL=C awk -v anchor="$anchor" "$SPEC_METADATA_SKIP_AWK $SPEC_HEADING_AWK"'
+    if entry="$(LC_ALL=C awk -v anchor="$anchor" "$SPEC_METADATA_SKIP_AWK"'
         index($0, "\r") { problem = 12; exit }
         !metadata_skip($0) {
-            if ((depth = spec_heading($0))) {
+            h = $0; sub(/^ ? ? ?/, "", h)
+            if (match(h, /^#+/) && RLENGTH <= 6 && substr(h, RLENGTH + 1) ~ /^([ \t]|$)/) {
+                depth = RLENGTH
                 if (level && depth <= level) level = 0
-                if ("x" heading_title == "x" anchor) {
+                h = substr(h, depth + 1)
+                sub(/[ \t]+#+[ \t]*$/, "", h)
+                gsub(/^[ \t]+|[ \t]+$/, "", h)
+                if ("x" h == "x" anchor) {
                     if (++found > 1) { problem = 11; exit }
                     level = depth
                 }
@@ -1482,7 +1483,8 @@ spec_authority_ref() { # root anchor
 # Records: line, type, name, owner, scope, env, rev, date, until, check, reason. A line that
 # is not a valid record prints type INVALID and the problem as its reason.
 spec_records() { # root
-    local root="$1" file="$1/specs/records.md" expected rows row line type reason anchor checked error
+    local root="$1" file="$1/specs/records.md" expected rows row line type reason checked error
+    local ref_format='^ref=specs/authority\.md#([A-Za-z0-9][A-Za-z0-9._-]*)@[0-9a-f]{12}$'
     [ -f "$file" ] || return 0
     verify_lf_file "$file" allow-empty || { echo 'Invalid text in specs/records.md' >&2; return 1; }
     expected="$(wc -l < "$file")" || return 1
@@ -1503,8 +1505,9 @@ spec_records() { # root
         error=""
         case "$type:$reason" in
             HOLD:ref=*|WAIVER:ref=*)
-                anchor="${reason#*#}"
-                if ! checked="$(spec_authority_ref "$root" "${anchor%@*}" 2>&1)"; then
+                if ! [[ "$reason" =~ $ref_format ]]; then
+                    error='invalid authority reference (expected ref=specs/authority.md#<anchor>@<12 lowercase hex digits>)'
+                elif ! checked="$(spec_authority_ref "$root" "${BASH_REMATCH[1]}" 2>&1)"; then
                     error="${checked:-authority reference could not be verified}"
                 elif [ "$checked" != "$reason" ]; then
                     error="authority digest mismatch for ${reason#ref=}"

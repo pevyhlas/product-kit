@@ -97,14 +97,25 @@ identifies the bytes read.
 - `--section 'Heading text'` returns one section, from its heading through the line before the next
   heading of equal or higher level (or EOF). Quote multiword headings. A leading heading ID (e.g.
   `D-01` or `P1`), a defined item ID (e.g. `R-01` in a bold requirement bullet or `P1` in a Parts
-  table), a well-formed record row ID, or an ID on a `Tracking:` link selects its nearest enclosing
+  table), a record ID in a table, or an ID on a `Tracking:` link selects its nearest enclosing
   heading. Citations do not select sections. Matching ignores ASCII case and collapses whitespace.
-  Fenced examples and standalone HTML comments do not supply headings or IDs. Zero or multiple
-  matches exit 2 and list candidates with their source lines.
-- Both focused modes refuse Setext (underlined) headings with exit 2 and the underline's source
-  line. Use `--raw` to inspect them or convert the headings to ATX.
+  Zero or multiple matches exit 2 and list candidates with their source lines.
 - `--stats` shows accounting; `--target nav-key` resolves one validated target; `--raw` returns exact
   source bytes. All modes are mutually exclusive; use `--help` for syntax.
+
+**Supported spec grammar for `--section` and `--index`** (not a full Markdown parser):
+
+- ATX headings, backtick or tilde fences, and standalone `<!--` comments use zero to three leading
+  spaces. A fence closer uses the same character, at least the opener's run length, and no trailing
+  text. Fenced or commented content never supplies headings or IDs. An ID indented four or more
+  spaces counts only in a list: the previous nonblank line must be a list item or its continuation.
+- Parts and record tables start with a pipe-led header and an immediately following delimiter row
+  (e.g. `|---|---|`). A Parts table has `Part` as its first column; for record IDs the first cell
+  must contain a well-formed row. Plain rows in `specs/records.md` still work for status and doctor,
+  but do not supply focused lookup IDs.
+- Both modes refuse a Setext underline (`=` or `-` runs immediately after a paragraph) with exit 2
+  and the underline's source line. Blank lines, delimited table rows, list items and link reference
+  definitions do not start such headings. Use `--raw` to inspect or convert the headings to ATX.
 
 Section output keeps the original line numbers and, like the compact view, omits only validated
 navigation within the selected range. Raw Git diffs/blobs remain the integrity and review artifacts;

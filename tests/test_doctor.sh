@@ -379,6 +379,31 @@ run bash "$AUTH_REF" H-07
 assert_eq 0 "$STATUS"
 assert_eq 'ref=specs/authority.md#H-07@6ac0061d5838' "$OUTPUT" 'next peer heading ends entry; fenced and commented anchors are not duplicates'
 
+it "existing authority digests keep main's indented-heading behavior on the active awk"
+printf '%s\n' '# Authority' '## H-01' 'Owner approval.' '  ## Other' 'Unrelated.' > specs/authority.md
+# Legacy mawk matches only one space with this historical expression.
+if LC_ALL=C awk 'BEGIN { h = "  ## Other"; sub(/^ ? ? ?/, "", h); exit (h !~ /^##/) }'; then
+    digest=fcff486c40d9; other=c0204f9c6d62
+else
+    digest=c0204f9c6d62; other=fcff486c40d9
+fi
+run bash "$AUTH_REF" H-01
+assert_eq 0 "$STATUS"
+assert_eq "ref=specs/authority.md#H-01@$digest" "$OUTPUT"
+for ref in "$digest" "$other"; do
+    printf '# Records\nHOLD H-01 owner=owner scope=production since=2026-10-01 until=lifted — ref=specs/authority.md#H-01@%s\n' "$ref" > specs/records.md
+    run bash "$DOCTOR" --json
+    if [ "$ref" = "$digest" ]; then
+        assert_eq 0 "$STATUS"
+        assert_contains "$OUTPUT" 'HOLD H-01 on production by owner'
+        assert_not_contains "$OUTPUT" 'authority digest mismatch'
+    else
+        assert_eq 1 "$STATUS"
+        assert_contains "$OUTPUT" 'Malformed record at specs/records.md:2: authority digest mismatch'
+    fi
+done
+rm specs/records.md
+
 it "long quotes exceed the row budget inline, but checked references retain exact scope"
 scope='production promotions for the public service only, except rollbacks approved by the incident lead; internal preview is not held'
 hold_row="HOLD H-07 owner=owner scope=$scope since=2026-10-01 until=2026-10-05"
