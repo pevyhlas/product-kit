@@ -4,14 +4,15 @@
 # This script cannot authenticate its own workflow registration or repair startup injection.
 #
 # Invariants:
-# Bind the event and fetched objects to the live repository, PR head, target and default
-# policy tip. Run the native gate and its helpers from that policy tip, not candidate files.
+# Bind the event and fetched objects to the live repository, PR head, target and the
+# workflow-pinned policy ref's tip. Run the native gate and helpers from that tip alone.
 # Accept only a consistent host pass for the exact checked head and unchanged final
 # bindings. Invalid output, timeout, cancellation or cleanup failure cannot pass.
 #
 # Threat model:
-# Include untrusted candidate PR contents (forks included), concurrent host ref changes
-# and interrupted work; bound execution and clean up owned processes and scratch.
+# Include untrusted candidate PR contents (forks included), changes to the live default
+# branch or other host refs, and interrupted work. The default setting can veto but never
+# select policy. Bound execution and clean up owned processes and scratch.
 # Trust the registered launcher, pre-shell setup and runner. A hostile writer on the
 # runner or a caller controlling shell startup is outside this script's boundary.
 # shellcheck disable=SC2329,SC2016 # trap/callbacks; positional arguments expanded in the bounded Bash.
@@ -89,6 +90,9 @@ finish() {
         printf '{"launcher":"complete","error":null,"native_exit":%s,"native":%s}\n' "$native_exit" "$native"
     else
         printf 'check-pr-review: %s/%s\n' "$phase" "$error_code" >&2
+        if [ "$error_code" = policy-ref-required ]; then
+            printf '%s\n' 'Product-Kit 3.1 requires --policy-ref <protected branch> in the registered required workflow.' >&2
+        fi
         if [ "$error_code" = invalid-policy ] && [ -n "$policy_error" ]; then printf '%s\n' "$policy_error" >&2; fi
         printf '{"launcher":"refused","error":{"stage":"%s","code":"%s"},"native_exit":%s,"native":%s}\n' \
             "$phase" "$error_code" "$native_exit" "$native"
@@ -101,15 +105,20 @@ trap 'request_signal interrupted' INT TERM HUP
 trap 'request_signal overall-timeout' USR1
 trap 'refuse "$phase" command-failed' ERR
 
-repository=""; event=""
+repository=""; event=""; policy_ref=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --repository) [ "$#" -ge 2 ] && [ -z "$repository" ] || refuse bootstrap usage 2; repository="$2"; shift ;;
         --event) [ "$#" -ge 2 ] && [ -z "$event" ] || refuse bootstrap usage 2; event="$2"; shift ;;
+        --policy-ref)
+            [ "$#" -ge 2 ] && [ -n "$2" ] || refuse bootstrap policy-ref-required 2
+            [ -z "$policy_ref" ] || refuse bootstrap invalid-policy-ref 2
+            policy_ref="$2"; shift ;;
         *) refuse bootstrap usage 2 ;;
     esac
     shift
 done
+[ -n "$policy_ref" ] || refuse bootstrap policy-ref-required 2
 [[ "$repository" =~ ^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+$ ]] || refuse bootstrap usage 2
 case "${repository#*/}" in .|..|*.git) refuse bootstrap usage 2 ;; esac
 [ -n "$event" ] && [ -f "$event" ] && [ ! -L "$event" ] || refuse bootstrap usage 2
@@ -395,16 +404,21 @@ branch() {
     [[ "$1" != *[[:cntrl:]]* ]] && [ "$1" != HEAD ] &&
         git check-ref-format "refs/heads/$1" >/dev/null 2>&1
 }
+branch "$policy_ref" || refuse bootstrap invalid-policy-ref 2
+policy_source="refs/heads/$policy_ref"
+policy_tracking="refs/remotes/origin/$policy_ref"
+policy_encoded="$(printf '%s' "$policy_ref" | jq -sRr @uri)"
 
 # REST resources are singular, not lists: there is no pagination to silently truncate here.
 # The native adapter owns complete review pagination.
 read_bindings() {
-    local prefix="$1" default_encoded target_encoded
+    local prefix="$1" target_encoded
     api "repos/$repository" "$root/$prefix.repo"
     jq -e --arg repo "$repository" --arg rid "$GITHUB_REPOSITORY_ID" \
-        '.full_name == $repo and (.id|tostring) == $rid and (.default_branch|type) == "string" and
-         (.default_branch|test("[\u0000-\u001f\u007f]")|not)' \
+        '.full_name == $repo and (.id|tostring) == $rid' \
         "$root/$prefix.repo" >/dev/null || refuse binding repository
+    jq -e --arg branch "$policy_ref" '.default_branch == $branch' \
+        "$root/$prefix.repo" >/dev/null || refuse binding policy-ref-mismatch
     api "repos/$repository/pulls/$pr" "$root/$prefix.pr"
     jq -e --arg repo "$repository" --arg rid "$GITHUB_REPOSITORY_ID" --argjson pr "$pr" \
         '.number == $pr and .state == "open" and .merged_at == null and
@@ -416,18 +430,16 @@ read_bindings() {
          (.head.repo.id|type) == "number" and .head.repo.id > 0 and
          (.head.repo.id|floor) == .head.repo.id' \
         "$root/$prefix.pr" >/dev/null || refuse binding pr
-    default_branch="$(jq -r .default_branch "$root/$prefix.repo")"
     target_branch="$(jq -r .base.ref "$root/$prefix.pr")"
     head_branch="$(jq -r .head.ref "$root/$prefix.pr")"
     head="$(jq -r .head.sha "$root/$prefix.pr")"
-    if ! branch "$default_branch" || ! branch "$target_branch" || ! branch "$head_branch" || ! sha "$head"; then
+    if ! branch "$target_branch" || ! branch "$head_branch" || ! sha "$head"; then
         refuse binding ref
     fi
-    default_encoded="$(printf '%s' "$default_branch" | jq -sRr @uri)"
     target_encoded="$(printf '%s' "$target_branch" | jq -sRr @uri)"
-    api "repos/$repository/git/ref/heads/$default_encoded" "$root/$prefix.policy"
+    api "repos/$repository/git/ref/heads/$policy_encoded" "$root/$prefix.policy"
     api "repos/$repository/git/ref/heads/$target_encoded" "$root/$prefix.target"
-    jq -e --arg ref "refs/heads/$default_branch" \
+    jq -e --arg ref "$policy_source" \
         '.ref == $ref and .object.type == "commit" and (.object.sha|test("^[0-9a-f]{40}$"))' \
         "$root/$prefix.policy" >/dev/null || refuse binding policy
     jq -e --arg ref "refs/heads/$target_branch" \
@@ -437,9 +449,9 @@ read_bindings() {
     target="$(jq -r .object.sha "$root/$prefix.target")"
     if ! sha "$policy" || ! sha "$target"; then refuse binding commit; fi
     # Compare identity/ref/object fields, not irrelevant mutable title/body or review metadata.
-    jq -cn --arg default "$default_branch" --arg target "$target_branch" --arg head "$head" \
+    jq -cn --arg policy_ref "$policy_source" --arg target "$target_branch" --arg head "$head" \
         --arg policy "$policy" --arg tip "$target" --slurpfile p "$root/$prefix.pr" \
-        '[$default,$target,$head,$policy,$tip,$p[0].head.ref,$p[0].head.repo.id]' > "$root/$prefix.binding"
+        '[$policy_ref,$target,$head,$policy,$tip,$p[0].head.ref,$p[0].head.repo.id]' > "$root/$prefix.binding"
 }
 phase=binding
 bounded 120 "$root/event" "$root/event.err" cat -- "$event" || refuse binding event-read
@@ -498,14 +510,15 @@ bounded 120 "$root/fetch.out" "$root/fetch.err" git -C "$objects" fetch --no-tag
     --no-auto-maintenance "$url" \
     "+refs/pull/$pr/head:refs/prdkit/head" \
     "+refs/heads/$target_branch:$canonical" \
-    "+refs/heads/$default_branch:refs/remotes/origin/$default_branch" || refuse fetch acquisition
+    "+$policy_source:$policy_tracking" || refuse fetch acquisition
+[ "$(git -C "$objects" rev-parse --verify --quiet "$policy_tracking")" = "$policy" ] ||
+    refuse binding policy-commit-mismatch
 [ "$(git -C "$objects" rev-parse refs/prdkit/head)" = "$head" ] &&
-    [ "$(git -C "$objects" rev-parse "$canonical")" = "$target" ] &&
-    [ "$(git -C "$objects" rev-parse "refs/remotes/origin/$default_branch")" = "$policy" ] || refuse binding fetched-commit
+    [ "$(git -C "$objects" rev-parse "$canonical")" = "$target" ] || refuse binding fetched-commit
 [ "$(git -C "$objects" rev-parse --is-shallow-repository)" = false ] &&
     [ ! -e "$objects/.git/objects/info/alternates" ] &&
     [ ! -e "$objects/.git/shallow" ] || refuse fetch incomplete
-git -C "$objects" symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$default_branch"
+git -C "$objects" symbolic-ref refs/remotes/origin/HEAD "$policy_tracking"
 # No URL/remote remains from which a native object read could implicitly acquire objects.
 unset GIT_ASKPASS
 rm "$root/askpass"
@@ -601,13 +614,17 @@ jq -e '
     (.result == "pass" or .result == "fail" or .result == "preview")
 ' "$root/native.json" >/dev/null || refuse native result-shape
 if [ "$native_exit" -eq 0 ]; then
+    # Previously installed checkers bind policy_at but do not emit policy_ref.
     jq -e --arg id "$selected" --arg pr "https://github.com/$repository/pull/$pr" \
-        --arg h "$head" --arg ref "$canonical" --arg p "$policy" --arg t "$target" '
+        --arg h "$head" --arg ref "$canonical" --arg p "$policy" --arg t "$target" \
+        --arg policy_ref "$policy_tracking" '
         .result == "pass" and .authority == "host" and .problems == [] and .change == $id and
         .pr == $pr and .head == $h and .pr_head == $h and .head_is_pr_head == true and
         .base == $ref and .base_trusted == true and .policy_at == $p and
         .diagnostics.head == $h and .diagnostics.base_ref == $ref and .diagnostics.base_at == $t and
-        .diagnostics.policy_at == $p and .blocking == [] and (.reviews | type == "array") and
+        .diagnostics.policy_at == $p and
+        (.diagnostics | (has("policy_ref") | not) or .policy_ref == $policy_ref) and
+        .blocking == [] and (.reviews | type == "array") and
         all(.reviews[]; (.reviewer|type=="number" and .>0 and floor==.) and (.role|IN("publisher","owner"))) and
         ([.reviews[].reviewer] | length == (unique|length)) and
         (if has("areas") then
