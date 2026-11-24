@@ -491,6 +491,39 @@ run git merge --no-edit 018-b
 assert_eq 1 "$STATUS" "two lines on top of .prdkit/history/log.md conflict"
 git merge --abort; git checkout -q "$DEFAULT"; git branch -q -D merge-both squash-both merge-lines 017-a 018-b
 
+it "close rejects caller-supplied tags and writes only escaped header tags"
+branch_with_code 019-tagged
+sed -i.bak 's/ · \*\*Tier\*\*/ · **Tags**: cleanup, small batch, _literal_, www.example.test · **Tier**/' specs/changes/019-tagged.md
+rm specs/changes/019-tagged.md.bak
+printf '\n## Notes\n**Tags**: not header metadata\n' >> specs/changes/019-tagged.md
+git commit -qam '019-tagged: header and body tags'
+approve_head
+tag_head="$(git rev-parse HEAD)"
+run bash "$B/close-change.sh" --pr "$pr" 019-tagged "tagged — R-01 — #19 · **Tags**: caller text"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "omit **Tags** from the description"
+assert_eq "$tag_head" "$(git rev-parse HEAD)" "caller text cannot close the change"
+run bash "$B/close-change.sh" --pr "$pr" 019-tagged "tagged — R-01 — #19"
+assert_eq 0 "$STATUS" "the reviewed change closes: $OUTPUT"
+assert_eq '- 2026-11-09 019-tagged: tagged — R-01 — #19 · **Tags**: cleanup, small batch, \_literal\_, www\.example.test' \
+    "$(git show HEAD:.prdkit/history/log/019-tagged.md)" "only escaped header tags are committed"
+
+it "malformed header tags leave the approved head, record and log untouched"
+branch_with_code 020-markup
+awk 'NR == 2 { print "**Tags**: [runbook](https://example.test/docs), <br>, <!-- note -->" } { print }' \
+    specs/changes/020-markup.md > specs/changes/020.tmp
+mv specs/changes/020.tmp specs/changes/020-markup.md
+git commit -qam '020-markup: invalid tags'
+approve_head
+tag_head="$(git rev-parse HEAD)"
+run bash "$B/close-change.sh" --pr "$pr" 020-markup "markup — R-01 — #20"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "Malformed Tags"
+assert_eq "$tag_head" "$(git rev-parse HEAD)" "refusal leaves HEAD unchanged"
+assert_file specs/changes/020-markup.md
+run test ! -e .prdkit/history/log/020-markup.md
+assert_eq 0 "$STATUS" "no log entry written"
+
 it "status and doctor flag merged-open records including T0 and unreviewed ones; parents stay quiet"
 branch_with_code 004-left; pass_line code "$(git merge-base HEAD "$DEFAULT")" "$(git rev-parse HEAD)" >> specs/changes/004-left.md
 git commit -qam "004-left: review PASS" >/dev/null

@@ -138,7 +138,15 @@ POLICY_AT="$(printf '%s\n' "$trusted_tips" | sed -n 1p | cut -f2)"
 while IFS=$'\t' read -r trusted tip; do
     [ -n "$trusted" ] || continue
     git -C "$REPO_ROOT" merge-base --is-ancestor "$BASE_SHA" "$tip" || continue
-    mb="$(git -C "$REPO_ROOT" merge-base "$tip" "$HEAD_SHA" 2>/dev/null || true)"
+    if [ -n "$SINCE" ]; then
+        mb="$(git -C "$REPO_ROOT" merge-base --all "$tip" "$HEAD_SHA")" || exit 1
+        if [[ "$mb" == *$'\n'* ]]; then
+            echo "ERROR: ${trusted#refs/remotes/} and HEAD have multiple merge bases; merge the target into the branch before building a focused package" >&2
+            exit 1
+        fi
+    else
+        mb="$(git -C "$REPO_ROOT" merge-base "$tip" "$HEAD_SHA" 2>/dev/null || true)"
+    fi
     [ -z "$mb" ] || merge_bases="$merge_bases ${trusted#refs/remotes/}=${mb}"
     if [ "$mb" = "$BASE_SHA" ]; then base_is_merge_base=true; BASE_REF="$trusted"; BASE_AT="$tip"; break; fi
 done <<<"$trusted_tips"

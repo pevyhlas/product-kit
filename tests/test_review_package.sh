@@ -300,6 +300,17 @@ out="$(cd "$bm" && bash "$SCRIPT" 001-x "$M" "$H")"
 assert_contains "$out" "\"BASE_SHA\":\"$M\"" "without --since the package still builds"
 assert_contains "$(cat "$(pkg_of "$out")/diff.patch")" 'evil' "and carries the whole range"
 
+it "--since refuses two best merge bases before allocating a review round"
+# Mb merged X and M. The target independently merges the same parents in reverse.
+cross_target="$(b commit-tree "$Mb^{tree}" -p "$M" -p "$X" -m 'parallel merge')"
+trust_at "$bm" "$BMAIN" "$cross_target"
+assert_eq 2 "$(b merge-base --all "$cross_target" "$H" | wc -l | tr -d ' ')" 'criss-cross fixture'
+# Pass the very base a single-result lookup would choose.
+cd_run 010-cross "$(b merge-base "$cross_target" "$H")" "$H" --since "$R"
+assert_eq 1 "$STATUS" "ambiguous focused package refused" || :
+assert_contains "$OUTPUT" "multiple merge bases" "refusal explains the ambiguous start" || :
+assert_eq absent "$([ -e "$bm/.prdkit/cache/evidence/010-cross" ] && echo present || echo absent)" "no round allocated" || :
+
 it "--since accepts the merge base with a configured integration branch"
 b checkout -q "$BMAIN"
 mkdir -p "$bm/.prdkit/memory"

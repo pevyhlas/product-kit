@@ -15,6 +15,17 @@ cat >> "$registry" <<'EOF'
 | code | reviewer |
 | design | reviewer |
 | implementation | maker |
+| duplicate | reviewer |
+| duplicate | reviewer |
+| dual | reviewer |
+| dual | maker |
+| unclear | undecided |
+<!--
+| hidden | reviewer |
+-->
+```
+| fenced | reviewer |
+```
 EOF
 git add .; git commit -qm baseline
 base="$(git rev-parse HEAD)"
@@ -189,9 +200,23 @@ for heading in ' ## Configuration' '  ## configuration ###' $'   ##\tCONFIGURATI
     done
 done
 
-it 'Unicode title padding preserves unique fields and cannot hide a duplicate'
 source .prdkit/scripts/bash/spec-lib.sh
 cd "$_SCRATCH_CWD" || exit 1
+it 'setext boundaries accept title-width and short underlines with trailing whitespace'
+result="$(printf '%s\n' Configuration $'------------- \t' "$publishers" | spec_review_config_section)"
+assert_contains "$result" "$publishers" 'title-width underline opens Configuration'
+for boundary in $'Reference examples\n==================\t' $'Reference examples\n- ' $'Reference examples\n='; do
+    result="$(printf '%s\n' '## Configuration' "$publishers" "$boundary" '- review-t0-paths: examples/' | spec_review_config_section)"
+    assert_contains "$result" "$publishers" 'policy before heading retained'
+    assert_not_contains "$result" 'review-t0-paths' 'settings after the setext heading are not policy'
+done
+result="$(printf '%s\n' '## Configuration' ' ' '---' "$publishers" | spec_review_config_section)"
+assert_contains "$result" "$publishers" 'a thematic break without a title does not end the section'
+run spec_review_config_section <<< $'## Configuration\n```text\n----\n- review-publishers: bot:42\n```'
+assert_eq 1 "$STATUS" 'a setext underline cannot turn a fence into a section boundary'
+assert_contains "$OUTPUT" 'config.md line 2'
+
+it 'Unicode title padding preserves unique fields and cannot hide a duplicate'
 for pad in $'\302\240' $'\342\200\257' $'\343\200\200'; do
     for heading in "## ${pad}Configuration${pad}##${pad}" "${pad}Configuration${pad}"$'\n---'; do
         printf '%s\n' "$heading" "$separate" > heading.fixture
@@ -228,6 +253,15 @@ for extra in "$separate" '- review-publishers: user:1004' '- review-publishers: 
     '- review-publishers: user:1001,user:1004,user:1006'; do
     policy "$separate" "$extra"; gate
     assert_eq 1 "$STATUS" "refuse '$extra'"; assert_contains "$OUTPUT" 'review-lenses'
+done
+it 'ambiguous, invalid and hidden registrations cannot qualify an approving account'
+tier T1; review APPROVED 1001
+policy '- review-lenses: code=bot:1001'; gate
+assert_eq 0 "$STATUS" 'same account qualifies with one visible reviewer registration'
+for identity in duplicate dual unclear hidden fenced; do
+    policy "- review-lenses: $identity=bot:1001"; gate
+    assert_eq 1 "$STATUS" "$identity cannot qualify the approval"
+    assert_contains "$OUTPUT" "area '$identity' must name one eligible reviewer"
 done
 it 'candidate registry or mapping cannot authorize design'
 policy "$separate"

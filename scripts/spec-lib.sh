@@ -1775,7 +1775,8 @@ spec_review_config_section() {
             s=raw; sub(/\r$/, "", s); sub(/^ ? ? ?/, "", s)
             if (match(s,/^#+/) && RLENGTH<=6 && substr(s,RLENGTH+1) ~ /^([ \t]|$)/) {
                 level=RLENGTH; title=substr(s,level+1)
-            } else if (following ~ /^ ? ? ?(===|---)\r?$/) {
+            } else if (spaces(s) ~ /[^[:space:]]/ && following ~ /^ ? ? ?(=+|-+)[ \t]*\r?$/ &&
+                       spaces(s) !~ /<!--|-->|^[[:space:]]*(```|~~~)/) {
                 level=(index(following,"=") ? 1 : 2); title=raw
             }
             if (level) {

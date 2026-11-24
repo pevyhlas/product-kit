@@ -36,6 +36,9 @@ change by change.
 
 ### Fixed
 
+- Focused review packages refuse multiple best merge bases before allocating a round.
+  Underlined headings now open and end the review configuration section regardless of
+  underline length, keeping later examples out of policy.
 - The launcher refuses a pass when the native result does not match the checked head,
   trusted target, or required review roles and areas.
 
