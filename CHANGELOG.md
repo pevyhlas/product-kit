@@ -8,6 +8,8 @@ change by change.
 
 ## [Unreleased]
 
+## [3.0.0] — 2026-11-24 — native GitHub review gate and optional UI design summary
+
 ### Added
 
 - Projects with a UI can opt into `specs/design.md`, a short L1 summary for direction,
@@ -34,6 +36,10 @@ change by change.
   dismissed (#138).
 - Review policy requires a unique Configuration heading. Comments and fenced examples
   before or within that section are rejected.
+- To upgrade a 2.x install, merge the `review-host`, `review-publishers` and `review-owner`
+  entries described in `.prdkit/templates/config-template.md` to the integration branch and
+  drop `review-publisher-isolation`, then run `init.sh --upgrade`. It removes the retired
+  review scripts unless they were edited, and lists any it keeps.
 
 ### Removed (breaking)
 
