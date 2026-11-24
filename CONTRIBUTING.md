@@ -26,8 +26,9 @@ points small, operational contracts explicit, and examples generic.
   `# Threat model:` headers, quote the invariants in the PR and say which ones the
   change affects. The independent review checks the change against both blocks.
   A finding outside the stated threat model is at most Low unless the reviewer
-  shows a non-hostile sequence that triggers it. Follow [SECURITY.md](SECURITY.md)
-  for private vulnerability reporting.
+  shows a non-hostile sequence that triggers it.
+  A defect that can only cause a spurious failure (never a false pass) of a maintainer CI check is at most Low.
+  Follow [SECURITY.md](SECURITY.md) for private vulnerability reporting.
 - Note user-visible changes under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md). Leave
   `VERSION` alone: the maintainer decides when a change is released, and as which version
   (see Releases).
@@ -41,7 +42,7 @@ points small, operational contracts explicit, and examples generic.
 - `workflows/`: agent protocol, spec and change contracts, and operational behavior.
 - `templates/`: project-owned spec, change and policy scaffolds installed into consumers.
 - `scripts/`: deterministic helpers and the installer mapping. `scripts/maintainer/` holds
-  kit-only tooling (releases) that the installer never ships to consumers.
+  kit-only tooling that the installer never ships to consumers.
 
 The kit's own development records are kept privately and are not part of this repository.
 
@@ -108,6 +109,36 @@ shards (and the Linux checks job) all succeed. Both must pass before a merge. On
 decides releases: `CI (macOS)` neither triggers nor gates one. Pull-request runs get a
 read-only token and no secrets, and a run from an outside contributor waits for the
 maintainer's approval.
+
+The Linux-only **Fails before the fix** job runs on pull requests, including title edits.
+It runs each added or changed `tests/test_*.sh` suite at the exact PR head and at the
+merge base with the PR head's entire `tests/` directory. Everything outside `tests/`,
+including scripts, templates, workflows and commands, stays at the merge base for the
+base run. The job summary shows both results and includes failure output; a missing
+base dependency can make the suite fail. **Isolation invariant:** base and head run on
+separate GitHub-hosted runners, so no process or local service from one snapshot can
+serve the other. Each snapshot job has a 20-minute limit. A third job compares both
+one-day result artifacts against the planned suites. A missing job, timeout, or
+incomplete result fails the check as `INCONCLUSIVE`, even for advisory titles.
+With no changed suites, neither snapshot runs and the final check succeeds.
+Titles such as `fix:`, `fix(scope):`, `fix!:` and `fix(scope)!:` need at least one suite that
+fails on base and passes on head.
+For other titles the comparison is advisory. The new job does not change branch protection
+or gate releases. To replay locally, use two separate checkouts. For suites that start
+services, put the checkouts on separate machines or VMs to reproduce CI isolation.
+Given `base` (the merge base) and `head` (the PR SHA), prepare a common plan:
+
+```bash
+git diff --no-renames --name-only -z --diff-filter=AMT "$base" "$head" \
+  -- ':(top,glob)tests/test_*.sh' > suites.z
+```
+
+In the base checkout restore the head's tests with
+`git restore --source="$head" --staged --worktree -- tests/`. Leave the exact head
+checkout intact. In each checkout, run the **head version** of the driver with
+`bash /path/to/fails-on-base.sh run /path/to/suites.z /path/to/result.json`.
+Bring both results and the plan together and run
+`bash /path/to/fails-on-base.sh compare suites.z base.json head.json 'fix: title'`.
 
 ## License
 
