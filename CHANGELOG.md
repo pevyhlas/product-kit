@@ -16,6 +16,14 @@ change by change.
 - Versioning is documented as 3.x.y in the changelog, CONTRIBUTING and the kit's constitution:
   breaking changes bump the minor number, not the major.
 
+### Changed (breaking)
+
+- The 3.1 review launcher requires `--policy-ref <branch>` (#198). Edit the registered
+  required workflow once to pass the literal name of the protected default branch. The
+  launcher refuses if the live default differs from that pin, the repository ID does not
+  match the authenticated event/environment, or the fetched policy tip differs from the
+  API-bound commit. The pinned branch's policy must still approve the PR target.
+
 ## [3.0.0] — 2026-11-24 — native GitHub review gate and optional UI design summary
 
 ### Added

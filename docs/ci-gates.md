@@ -174,8 +174,15 @@ host-registered immutable required workflow W
   permissions: {} by default; this job: contents: read, pull-requests: read
   trusted pre-shell constructor -> absolute trusted /bin/bash --noprofile --norc
     W's validated regular-blob launcher:
-    check-pr-review.sh --repository <fixed-owner/name> --event <private-host-event-path>
+    check-pr-review.sh --repository <fixed-owner/name> --event <private-host-event-path> --policy-ref <protected branch>
 ```
+
+**3.1 workflow migration:** Make a one-time edit to the registered required workflow to pass
+`--policy-ref` with the literal name of the protected default branch (for example, `main`,
+not `refs/heads/main`). Pin that value in W itself; do not derive it from the event, PR target,
+or live default setting. Roll the updated W source and launcher out together and verify that
+the registry requires the updated workflow before resuming merges. A branch rename or a
+deliberate change of policy branch requires a reviewed workflow update, not a fallback.
 
 [GitHub ruleset workflows][events] support only `pull_request`, `pull_request_target` and
 `merge_group`, using their default activity types. This integration uses only `pull_request`.
@@ -217,6 +224,11 @@ enforcement until they have a separately verified merge-time control. Prove the
 rerun behavior on a protected pilot PR: dismiss its approval and verify that the rerun blocks
 the same head, then approve it again and verify that a fresh run passes.
 
+**Threat model: the default-branch setting cannot select policy.** Changing it cannot redirect
+the launcher to a different branch's policy or checker. W must name a protected branch with
+no bypass: anyone able to change its tip can change the policy and checker used for future
+runs. The pin fixes the branch identity, not its commit across runs.
+
 [events]: https://docs.github.com/en/enterprise-cloud@latest/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/troubleshooting-rules#supported-ruleset-workflow-events
 [rules]: https://docs.github.com/en/enterprise-cloud@latest/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets
 [rerun]: https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs
@@ -246,12 +258,15 @@ policy, deployment evidence and no-bypass controls; this entrypoint does not aut
 test or ruleset removal.
 
 The launcher checks the event/live repository IDs, PR number, open state, fork/head repository,
-branch and exact commit H. It separately resolves current target T and default-policy P, fetches
-their complete histories into new fetch-only objects, checks exact tips, and rechecks live
-bindings before accepting a result. Event base SHA remains evidence, not current T. Candidate
-clone URLs, local Git state, hooks, config, replacements, alternates and credentials are never
-copied. Fetch is restricted to the bound github.com HTTPS repository; no tags, filters, submodules,
-shallow history or implicit object acquisition.
+branch and exact commit H. It separately resolves current target T and policy commit P from
+`refs/heads/<policy-ref>`, fetches their complete histories into new fetch-only objects, checks
+exact tips, and rechecks live bindings before accepting a result. The live default must equal
+`--policy-ref` on both reads (`policy-ref-mismatch` if not); it never supplies the ref to resolve.
+A live repository identity mismatch (`repository`) or a fetched policy tip different from P
+(`policy-commit-mismatch`) also refuses in the binding stage. Event base SHA remains evidence,
+not current T. Candidate clone URLs, local Git state, hooks, config, replacements, alternates and
+credentials are never copied. Fetch is restricted to the bound github.com HTTPS repository;
+no tags, filters, submodules, shallow history or implicit object acquisition.
 
 The exact native gate/helper closure is extracted as regular blobs from P's installed
 `.prdkit/scripts/bash/`, not from H or the old merge base: `check-review.sh`, `common.sh`,
@@ -293,8 +308,10 @@ newline-terminated:
 ```
 
 `native` is the **entire** native object, including unknown fields/diagnostics, not the empty
-illustration above. `complete` means transport completed, not approval: native failures and
-preview exit 3 remain nonzero. A transport refusal uses `launcher:"refused"`,
+illustration above. Current native diagnostics include `policy_ref` (the local
+`refs/remotes/origin/<policy-ref>` mapped from W's pin) alongside `policy_at`. `complete` means
+transport completed, not approval: native failures and preview exit 3 remain nonzero.
+A transport refusal uses `launcher:"refused"`,
 `error:{"stage":"binding","code":"context-moved"}` (for example), actual `native_exit` or null, and
 any valid captured native object or null. Error classes/phases on stderr are sanitized; raw
 host/tool stderr stays private to the invocation, never printed as workflow commands.

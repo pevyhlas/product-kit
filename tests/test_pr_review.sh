@@ -78,9 +78,11 @@ printf '%s\\\\n' \"\\\$BASH_VERSION\" > \"$FIX/interpreter\"
         "$PK_ROOT/scripts/check-pr-review.sh" > "$FIX/launcher"
 }
 instrument
-bindings() { # head [branch] [target]
-    local h="$1" b="${2:-feat/carrier}" t="${3:-main}" p tip
-    p="$(git rev-parse main)"; tip="$(git rev-parse "$t")"
+bindings() { # head [branch] [target] [policy branch]
+    local h="$1" b="${2:-feat/carrier}" t="${3:-main}" policy_branch="${4:-main}" p tip p_route t_route
+    p="$(git rev-parse "$policy_branch")"; tip="$(git rev-parse "$t")"
+    p_route="$(printf '%s' "$policy_branch" | jq -sRr @uri)"
+    t_route="$(printf '%s' "$t" | jq -sRr @uri)"
     fx_pr 7 "$h" "$(jq -cn --arg branch "$b" --arg target "$t" --arg tip "$tip" '
         {head:{ref:$branch,repo:{id:42}},base:{ref:$target,sha:$tip,repo:{id:42,full_name:"owner/repo"}}}')"
     printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
@@ -88,17 +90,21 @@ bindings() { # head [branch] [target]
     git update-ref refs/pull/7/head "$h"
     jq -n --slurpfile pr "$GH_STUB_DIR/pulls/7.json" \
         '{action:"synchronize",number:7,repository:{id:42,full_name:"owner/repo"},pull_request:$pr[0]}' > "$FIX/event"
-    printf '{"id":42,"full_name":"owner/repo","default_branch":"main"}\n' > "$GH_STUB_DIR/routes/repos_owner_repo.json"
-    jq -n --arg sha "$p" '{ref:"refs/heads/main",object:{type:"commit",sha:$sha}}' \
-        > "$GH_STUB_DIR/routes/git_ref_heads_main.json"
+    jq -n --arg policy "$policy_branch" '{id:42,full_name:"owner/repo",default_branch:$policy}' \
+        > "$GH_STUB_DIR/routes/repos_owner_repo.json"
+    jq -n --arg sha "$p" --arg ref "refs/heads/$policy_branch" '{ref:$ref,object:{type:"commit",sha:$sha}}' \
+        > "$GH_STUB_DIR/routes/git_ref_heads_${p_route}.json"
     jq -n --arg sha "$tip" --arg ref "refs/heads/$t" '{ref:$ref,object:{type:"commit",sha:$sha}}' \
-        > "$GH_STUB_DIR/routes/git_ref_heads_${t}.json"
+        > "$GH_STUB_DIR/routes/git_ref_heads_${t_route}.json"
 }
 invoke_launcher() {
+    local policy_args=()
+    if [ -n "${POLICY_REF-main}" ]; then policy_args=(--policy-ref "${POLICY_REF-main}"); fi
     if env -i PATH="$ORIGINAL_PATH" GH_TOKEN=synthetic-read-token GITHUB_EVENT_NAME=pull_request \
         GITHUB_REPOSITORY=owner/repo GITHUB_REPOSITORY_ID=42 \
         "$@" \
         "$REAL_BASH" --noprofile --norc "$FIX/launcher" --repository owner/repo --event "$FIX/event" \
+        ${policy_args[@]+"${policy_args[@]}"} \
         > "$FIX/stdout" 2>"$FIX/stderr"; then STATUS=0; else STATUS=$?; fi
     OUTPUT="$(cat "$FIX/stdout")"
 }
@@ -138,6 +144,20 @@ arm_fixture_deadline() { # capture basename, readiness file, bounded's deadline 
     mv "$FIX/short" "$FIX/launcher"
 }
 bindings "$HEAD_SHA"
+
+it 'the registered workflow must supply a valid policy branch'
+POLICY_REF='' launch
+assert_eq 2 "$STATUS"
+assert_eq bootstrap "$(jq -r .error.stage "$FIX/stdout")"
+assert_eq policy-ref-required "$(jq -r .error.code "$FIX/stdout")"
+assert_contains "$(cat "$FIX/stderr")" '3.1 requires --policy-ref <protected branch> in the registered required workflow'
+assert_eq null "$(jq .native_exit "$FIX/stdout")"
+for invalid_ref in HEAD 'bad..ref' $'main\n'; do
+    POLICY_REF="$invalid_ref" launch
+    assert_eq 2 "$STATUS"
+    assert_eq invalid-policy-ref "$(jq -r .error.code "$FIX/stdout")"
+    assert_eq null "$(jq .native_exit "$FIX/stdout")"
+done
 
 it 'installed entrypoint and valid real integrated native T0 host control'
 assert_file .prdkit/scripts/bash/check-pr-review.sh
@@ -214,7 +234,7 @@ assert_eq 0 "$STATUS" "$OUTPUT"
 assert_eq absent "$([ -e "$FIX/sentinel" ] && echo present || echo absent)"
 assert_eq absent "$([ -e "$FIX/hook-sentinel" ] && echo present || echo absent)"
 
-it 'target and policy are separate authenticated tips, with policy-configured literal trust'
+it 'a pinned slash-named policy approves a separate authenticated target'
 git checkout -q --detach "$BASE"
 printf 'integration work\n' > target.txt; git add target.txt; git commit -qm 'target only'
 TARGET="$(git rev-parse HEAD)"
@@ -224,15 +244,16 @@ git checkout -q --detach "$BASE"
 # unmodified real helper, so neither can manufacture this marker or the native decision.
 printf '\nprintf "loaded\\n" >> %q\n' "$FIX/p-navigation" >> .prdkit/scripts/bash/spec-navigation-lib.sh
 git add -A; git commit -qm 'trusted policy navigation witness'
-git branch -f main HEAD
+git branch policy/review HEAD
 POLICY="$(git rev-parse HEAD)"
 git checkout -q feat/carrier
-bindings "$HEAD_SHA" feat/carrier integration
-launch
+bindings "$HEAD_SHA" feat/carrier integration policy/review
+POLICY_REF=policy/review launch
 assert_eq 0 "$STATUS" "$OUTPUT"
 assert_eq "$TARGET" "$(printf '%s' "$OUTPUT" | jq -r .native.diagnostics.base_at)"
 assert_eq "$POLICY" "$(printf '%s' "$OUTPUT" | jq -r .native.policy_at)"
 assert_eq "$POLICY" "$(printf '%s' "$OUTPUT" | jq -r .native.diagnostics.policy_at)"
+assert_eq refs/remotes/origin/policy/review "$(jq -r .native.diagnostics.policy_ref "$FIX/stdout")"
 assert_eq $'loaded\nloaded' "$(cat "$FIX/p-navigation")" 'both parser and native gate source navigation only from P'
 it 'malformed policy reports its source lines when checking an additional target'
 git checkout -q --detach "$BASE"
@@ -291,7 +312,7 @@ bindings "$HEAD_SHA" feat/001-carrier; launch
 assert_eq 0 "$STATUS" "$OUTPUT"
 assert_eq 001-carrier "$(printf '%s' "$OUTPUT" | jq -r .native.change)"
 
-it 'event/head/repository/base/default binding mismatches refuse, never fall back offline'
+it 'event/head/repository/base binding mismatches refuse, never fall back offline'
 bindings "$HEAD_SHA"
 for mutation in '.repository.id=43' '.pull_request.head.sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' \
     '.pull_request.base.ref="other"' '.pull_request.head.ref="feature\u0000"' '.action="closed"' '.number=0'; do
@@ -303,16 +324,33 @@ for mutation in '.repository.id=43' '.pull_request.head.sha="aaaaaaaaaaaaaaaaaaa
 done
 printf '{"id":43,"full_name":"owner/repo","default_branch":"main"}\n' > "$GH_STUB_DIR/routes/repos_owner_repo.json"
 launch; assert_eq 1 "$STATUS"
-bindings "$HEAD_SHA"
-jq '.object.sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' "$GH_STUB_DIR/routes/git_ref_heads_main.json" > "$FIX/route"
+assert_eq binding "$(jq -r .error.stage "$FIX/stdout")"
+assert_eq repository "$(jq -r .error.code "$FIX/stdout")"
+assert_eq null "$(jq .native_exit "$FIX/stdout")"
+
+it 'a different live default branch cannot select policy'
+bindings "$HEAD_SHA" feat/carrier main policy/review
+launch; assert_eq 1 "$STATUS"
+assert_eq binding "$(jq -r .error.stage "$FIX/stdout")"
+assert_eq policy-ref-mismatch "$(jq -r .error.code "$FIX/stdout")"
+assert_eq null "$(jq .native_exit "$FIX/stdout")"
+
+it 'a distinct fetched policy tip must match its API binding'
+bindings "$HEAD_SHA" feat/carrier integration
+jq --arg tip "$TARGET" '.object.sha=$tip' "$GH_STUB_DIR/routes/git_ref_heads_main.json" > "$FIX/route"
 mv "$FIX/route" "$GH_STUB_DIR/routes/git_ref_heads_main.json"
-launch; assert_eq fetched-commit "$(printf '%s' "$OUTPUT" | jq -r .error.code)"
+launch; assert_eq 1 "$STATUS"
+assert_eq binding "$(jq -r .error.stage "$FIX/stdout")"
+assert_eq policy-commit-mismatch "$(jq -r .error.code "$FIX/stdout")"
+assert_eq null "$(jq .native_exit "$FIX/stdout")"
 bindings "$HEAD_SHA"
 
 it 'unapproved target and failed acquisition refuse before native evaluation'
 git branch other "$BASE"
 bindings "$HEAD_SHA" feat/carrier other
-launch; assert_eq unapproved-target "$(printf '%s' "$OUTPUT" | jq -r .error.code)"
+launch; assert_eq 1 "$STATUS"
+assert_eq unapproved-target "$(jq -r .error.code "$FIX/stdout")"
+assert_eq null "$(jq .native_exit "$FIX/stdout")"
 bindings "$HEAD_SHA"
 touch "$FIX/fetch-fail"; launch; rm "$FIX/fetch-fail"
 assert_eq acquisition "$(printf '%s' "$OUTPUT" | jq -r .error.code)"
@@ -364,7 +402,7 @@ assert_eq 0 "$STATUS" "$OUTPUT"
 assert_eq '[null,17,true]' "$(printf '%s' "$OUTPUT" | jq -c .native.extension.keep)"
 NATIVE="$(printf '%s' "$OUTPUT" | jq -c .native)"
 # Synthetic NEGATIVE output-contract tests, not replacements for the real-native positive control.
-for fault in multiple malformed nul binding preview wrong-type missing-publisher missing-owner same-account outstanding-objection wrong-area-review missing-design exit-result overflow timeout; do
+for fault in multiple malformed nul binding wrong-policy-ref preview wrong-type missing-publisher missing-owner same-account outstanding-objection wrong-area-review missing-design exit-result overflow timeout; do
     git checkout -q --detach "$BASE"
     case "$fault" in
         multiple) printf '#!/bin/bash\nprintf '\''{}\\n{}\\n'\''\n' > "$FIX/gate" ;;
@@ -376,6 +414,7 @@ for fault in multiple malformed nul binding preview wrong-type missing-publisher
             filter=.; rc=0
             case "$fault" in
                 binding) filter='.head="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' ;;
+                wrong-policy-ref) filter='.diagnostics.policy_ref="refs/remotes/origin/other"' ;;
                 preview) filter='.result="preview"|.authority="snapshot"'; rc=3 ;;
                 wrong-type) filter='.head_is_pr_head="true"' ;;
                 missing-publisher) filter='.tier="T1"|.reviews[0].role="owner"' ;;
@@ -434,7 +473,7 @@ git branch -f main HEAD
 bindings "$HEAD_SHA"
 env -i PATH="$ORIGINAL_PATH" GH_TOKEN=synthetic GITHUB_EVENT_NAME=pull_request \
     GITHUB_REPOSITORY=owner/repo GITHUB_REPOSITORY_ID=42 \
-    "$REAL_BASH" "$FIX/launcher" --repository owner/repo --event "$FIX/event" \
+    "$REAL_BASH" "$FIX/launcher" --repository owner/repo --event "$FIX/event" --policy-ref main \
     > "$FIX/stdout" 2>"$FIX/stderr" &
 LAUNCHER_PID=$!
 await_fixture "$LAUNCHER_PID" "$FIX/native-ready" "$FIX/native-descendant" || :
@@ -468,6 +507,8 @@ cp "$FIX/bin/gh" "$FIX/gh.original"
 launch
 assert_eq 1 "$STATUS"
 assert_eq refused "$(printf '%s' "$OUTPUT" | jq -r .launcher)"
+assert_eq policy-ref-mismatch "$(jq -r .error.code "$FIX/stdout")"
+assert_eq 0 "$(jq .native_exit "$FIX/stdout")"
 assert_eq pass "$(printf '%s' "$OUTPUT" | jq -r .native.result)"
 cp "$FIX/gh.original" "$FIX/bin/gh"
 
@@ -589,7 +630,7 @@ rm -f "$FIX/descendant"
 touch "$FIX/hang"
 env -i PATH="$ORIGINAL_PATH" GH_TOKEN=synthetic GITHUB_EVENT_NAME=pull_request \
     GITHUB_REPOSITORY=owner/repo GITHUB_REPOSITORY_ID=42 \
-    "$REAL_BASH" "$FIX/launcher" --repository owner/repo --event "$FIX/event" \
+    "$REAL_BASH" "$FIX/launcher" --repository owner/repo --event "$FIX/event" --policy-ref main \
     > "$FIX/stdout" 2>"$FIX/stderr" &
 LAUNCHER_PID=$!
 await_fixture "$LAUNCHER_PID" "$FIX/descendant" || :

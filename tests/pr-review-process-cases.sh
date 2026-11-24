@@ -280,7 +280,7 @@ for shutdown in clean survivor threaded ambiguous; do
     record_cleanup
     env -i PATH="$ORIGINAL_PATH" GH_TOKEN=synthetic GITHUB_EVENT_NAME=pull_request \
         GITHUB_REPOSITORY=owner/repo GITHUB_REPOSITORY_ID=42 \
-        "$REAL_BASH" --noprofile --norc "$FIX/launcher" --repository owner/repo --event "$FIX/event" \
+        "$REAL_BASH" --noprofile --norc "$FIX/launcher" --repository owner/repo --event "$FIX/event" --policy-ref main \
         > "$FIX/stdout" 2>"$FIX/stderr" &
     LAUNCHER_PID=$!
     if ! await_fixture "$LAUNCHER_PID" "$FIX/group" "$FIX/stubborn"; then
