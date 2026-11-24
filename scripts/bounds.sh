@@ -178,7 +178,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     if is_change_id "${1:-}"; then
         archive_index="$(spec_archive_log_index "$root")" || exit "$?"
         if spec_archive_log_covers "$archive_index" "$1"; then
-            printf '%s is closed: its number is condensed in specs/archive.md\n' "$1" >&2
+            printf '%s is closed: its number is condensed in .prdkit/history/archive.md\n' "$1" >&2
             exit 2
         fi
     fi

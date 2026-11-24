@@ -163,8 +163,9 @@ parity
 it "An unsupported fingerprint cannot supply a prospective bridge"
 # Same source delta as F1, plus a log edit the former token did not bind.
 git checkout -q --detach "$F1"
-printf -- '- 2026-01-02 002-other: complete\n' >> specs/log.md
-git add specs/log.md; git commit -qm 'historical reviewed log'
+mkdir -p .prdkit/history
+printf -- '- 2026-01-02 002-other: complete\n' >> .prdkit/history/log.md
+git add .prdkit/history/log.md; git commit -qm 'historical reviewed log'
 old_head="$(git rev-parse HEAD)"
 git checkout -q "$ID"
 jq --arg old "$old_head" '.[1].body |= (split("\n") | .[1] |= (fromjson | .head=$old | tojson) | join("\n"))' \
@@ -346,8 +347,8 @@ advance dirty-control
 package
 assert_not_contains "$(cat "$PKG"/context-sections/*.txt)" 'dirty worktree' 'committed canon only'
 git rm -q "specs/changes/$ID.md"
-mkdir -p specs/log; printf -- '- 2026-01-03 %s: closed\n' "$ID" > "specs/log/$ID.md"
-git add specs/log; git commit -qm 'synthetic close'
+mkdir -p .prdkit/history/log; printf -- '- 2026-01-03 %s: closed\n' "$ID" > ".prdkit/history/log/$ID.md"
+git add .prdkit/history/log; git commit -qm 'synthetic close'
 # Closing metadata is equal, but a structural package must bind the historical record.
 receipt_raw_run bash "$BUILD" "$ID" "$BASE"
 assert_eq 0 "$STATUS" 'a closing head needs fresh context'

@@ -3,7 +3,7 @@
 **Inputs**: a change with its acceptance results, its record, PR and diff, the spec it
 touches, the reviewers registered in `.prdkit/memory/agents.md`, and project policy.
 **Writes**: the review package, reports and publisher-authored receipts on the PR, the final PR
-context, the log entry (`specs/log/<id>.md`) and the record's deletion.
+context, the log entry (`.prdkit/history/log/<id>.md`) and the record's deletion.
 **Result**: a closed change whose exact head may merge, or review pending or a recorded blocker.
 
 Read this before dispatching review, merging or closing. [change.md](change.md) opens and builds
@@ -223,12 +223,13 @@ discarded after useful context is durable. A child PR updates only its row and t
 its parent, and never copies its plan, findings or evidence there.
 
 After PASS, only record deletion and the log change: publish the final receipts,
-then run `.prdkit/scripts/bash/close-change.sh --pr <url> <id> "<intent> — <IDs> — <disposition;
-runtime unknown if relevant> — <PR>"`, which writes the log entry `specs/log/<id>.md` and deletes
-the record once `check-review.sh` passes. The text is at most 300 characters: carried findings and
-follow-ups go to the parent's row or the spec, evidence stays on the PR. One file per closed
+then run `.prdkit/scripts/bash/close-change.sh --pr <url> <id> "<intent> — <IDs and parts> — <disposition> — <PR>"`.
+Once `check-review.sh` passes, the helper writes `.prdkit/history/log/<id>.md` and deletes
+the record. Keep the full row within 200 characters, including date, change ID and any tags.
+Note runtime unknowns in the disposition if relevant; keep task lists and acceptance evidence
+on the PR, and follow-ups in the parent's row or the spec. One file per closed
 change means two branches that each close a change never conflict in the log; compaction folds
-the entries into `specs/log.md` ([compact.md](compact.md)).
+the entries into `.prdkit/history/log.md` ([compact.md](compact.md)).
 
 The closing commit uses the checkout's ambient Git identity. To use an agent identity, set
 `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` for the

@@ -76,7 +76,7 @@ edited in the same PR. Sections of one file; skip a section that has nothing rea
 - A behavior change without a spec edit says `Spec impact: none — <reason>`. Unaffected changes
   and parts get no note at all.
 - The PR that delivers a task deletes its line from the change record. No `[x]`, delivered note
-  or log entry for the task. A deleted line means delivered unless the PR description lists it
+  or history entry for the task. A deleted line means delivered unless the PR description lists it
   on a `Drops: <change-id> T004, T005` line. In a single-PR change, the closing PR delivers the
   tasks with the change by deleting the record.
 - Acceptance links its evidence. The cache is local to one machine: link a CI run or PR comment

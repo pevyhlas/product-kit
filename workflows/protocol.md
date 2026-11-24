@@ -59,13 +59,13 @@ resume, apply [spec.md](spec.md), Resolve owner answers, before asking it again.
 
 | What | File |
 |------|------|
-| The spec: product (L0), architecture (L1), parts (L2), archive | `specs/`, per [spec.md](spec.md), Layout |
+| The spec: current product (L0), architecture (L1), parts (L2) | `specs/`, per [spec.md](spec.md), Layout |
 | Facts observed about the outside world | `specs/observed.md` (`observed-template.md`), or `specs/observed/<area>.md` once split |
 | Pending owner direction and open questions only | `specs/inbox.md` (`inbox-template.md`) |
 | Holds, waivers, attestations, deployments | `specs/records.md` (`records-template.md`); long authority quotes in `specs/authority.md` on demand |
 | Open change (deleted when it closes) | `specs/changes/<id>.md` |
 | Optional execution scratch (never the sole handover) | gitignored `.prdkit/cache/implementation/<id>.md`; useful context on the same PR |
-| Closed changes, one line each | `specs/log/<id>.md` per close, folded into `specs/log.md` at compaction |
+| History (tracked, never cited by the spec) | `.prdkit/history/log/<id>.md` per close, folded into `log.md`; `archive.md` indexes older closes and lessons |
 
 Templates are in `.prdkit/templates/`. Raw evidence never lives in `specs/`: diffs, results,
 logs and captures stay in CI, the PR or the gitignored `.prdkit/cache/evidence/`, linked by URL
@@ -77,7 +77,7 @@ or path. Every claim says whether it is observed, decided, assumed or proposed.
    outcome checkpoint: original goal, intended architecture, critical path, lane purposes and limits.
 2. The constitution, then `product.md` and `architecture.md` in full.
 3. The part files the change touches, and parts across a touched interface.
-4. Their code and tests, and a `legacy` document only when a part links it. `specs/archive.md`
+4. Their code and tests, and a `legacy` document only when a part links it. `.prdkit/history/archive.md`
    only on demand: a history question, or before re-trying a direction.
 
 Read a document over 32 KB by section. Agent context files (`CLAUDE.md`, `AGENTS.md`) load on

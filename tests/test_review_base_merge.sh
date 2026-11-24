@@ -66,9 +66,9 @@ git update-ref "refs/remotes/origin/$DEFAULT" origin/integration
 run bash "$CHECK" --json 001-reviewed
 assert_eq 0 "$STATUS" 'default integration merge retains coverage without an override'
 printf '\nFinalization context.\n' >> "$RECORD"
-mkdir -p specs/log
-printf -- '- 2026-10-30 001-reviewed: metadata only\n' > specs/log/001-reviewed.md
-git add specs; git commit -qm 'metadata after base import'
+mkdir -p .prdkit/history/log
+printf -- '- 2026-10-30 001-reviewed: metadata only\n' > .prdkit/history/log/001-reviewed.md
+git add specs .prdkit/history; git commit -qm 'metadata after base import'
 check
 assert_eq 0 "$STATUS" 'metadata after import stays covered'
 git checkout -q "$DEFAULT"

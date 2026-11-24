@@ -248,61 +248,62 @@ git commit -qm "record and a submodule" >/dev/null
 git update-ref "refs/remotes/origin/$DEFAULT" HEAD
 git checkout -q -b 005-close-branch
 git update-index --cacheinfo "160000,$(git rev-parse "$REVIEWED"),vendor"; git commit -qm "bump the ignored submodule" >/dev/null
-git rm -q specs/changes/005-close.md; mkdir -p specs/log; printf -- '- 2026-10-20 005-close: closed — #5\n' > specs/log/005-close.md
-git add specs/log; git commit -qm close >/dev/null
+git rm -q specs/changes/005-close.md; mkdir -p .prdkit/history/log; printf -- '- 2026-10-20 005-close: closed — #5\n' > .prdkit/history/log/005-close.md
+git add .prdkit/history/log; git commit -qm close >/dev/null
 run bash "$CHECK" --json 005-close
 assert_eq 1 "$STATUS" "an ignored gitlink bump is not a record-only close"
 assert_contains "$OUTPUT" '"record_only":false' "no exemption"
 assert_contains "$OUTPUT" "T1 needs a recorded independent review" "review required"
 git checkout -q 005-close; git branch -q -D 005-close-branch
 git checkout -q -b 005-close-branch
-git rm -q specs/changes/005-close.md; mkdir -p specs; printf -- '- 2026-10-20 005-close: closed — #5\n' >> specs/log.md
-chmod +x specs/log.md; git add specs/log.md; git commit -qm "close with an executable log" >/dev/null
+git rm -q specs/changes/005-close.md; mkdir -p .prdkit/history; printf -- '- 2026-10-20 005-close: closed — #5\n' >> .prdkit/history/log.md
+chmod +x .prdkit/history/log.md; git add .prdkit/history/log.md; git commit -qm "close with an executable log" >/dev/null
 run bash "$CHECK" 005-close
 assert_eq 1 "$STATUS" "an executable log fails"
-assert_contains "$OUTPUT" "specs/log.md must stay a regular, non-executable file" "says why"
+assert_contains "$OUTPUT" ".prdkit/history/log.md must stay a regular, non-executable file" "says why"
 git checkout -q 005-close; git branch -q -D 005-close-branch
 git checkout -q -b 005-close-branch
-git rm -q specs/changes/005-close.md; mkdir -p specs/log.md; printf 'echo run\n' > specs/log.md/payload.sh
-git add specs/log.md; git commit -qm "close with a log directory" >/dev/null
+git rm -q specs/changes/005-close.md; mkdir -p .prdkit/history/log.md; printf 'echo run\n' > .prdkit/history/log.md/payload.sh
+git add .prdkit/history/log.md; git commit -qm "close with a log directory" >/dev/null
 run bash "$CHECK" --json 005-close
 assert_eq 1 "$STATUS" "a directory at the log path cannot exempt what it holds"
-assert_contains "$OUTPUT" "specs/log.md must stay a regular, non-executable file" "says why"
+assert_contains "$OUTPUT" ".prdkit/history/log.md must stay a regular, non-executable file" "says why"
 git checkout -q 005-close; git branch -q -D 005-close-branch
-mkdir -p specs; printf -- '- 2026-10-19 004-older: older — #4\n' > specs/log.md; git add specs/log.md; git commit -qm "a log on the base" >/dev/null
+mkdir -p .prdkit/history; printf -- '- 2026-10-19 004-older: older — #4\n' > .prdkit/history/log.md; git add .prdkit/history/log.md; git commit -qm "a log on the base" >/dev/null
 git update-ref "refs/remotes/origin/$DEFAULT" HEAD
 git checkout -q -b 005-close-branch
-git rm -q specs/log.md specs/changes/005-close.md; mkdir -p specs/log.md; printf -- '- 2026-10-20 005-close: closed — #5\n' > specs/log.md/entry
-git add specs/log.md; git commit -qm "replace the log with a directory" >/dev/null
+git rm -q .prdkit/history/log.md specs/changes/005-close.md; mkdir -p .prdkit/history/log.md; printf -- '- 2026-10-20 005-close: closed — #5\n' > .prdkit/history/log.md/entry
+git add .prdkit/history/log.md; git commit -qm "replace the log with a directory" >/dev/null
 run bash "$CHECK" 005-close
 assert_eq 1 "$STATUS" "replacing the log with a directory fails"
-assert_contains "$OUTPUT" "specs/log.md must stay a regular, non-executable file" "says why"
+assert_contains "$OUTPUT" ".prdkit/history/log.md must stay a regular, non-executable file" "says why"
 git checkout -q 001-greet; git branch -q -D 005-close 005-close-branch
 git update-ref "refs/remotes/origin/$DEFAULT" "$TRUSTED_TIP"
 
 it "an unsafe log where the change starts cannot be converted or deleted without review"
 for unsafe in executable directory; do
     git checkout -q -b 006-start "$DEFAULT"
-    mkdir -p specs/changes; printf '# Change: Start\n\n**Tier**: T1\n\n## State\n' > specs/changes/006-start.md
+    mkdir -p specs/changes .prdkit/history; printf '# Change: Start\n\n**Tier**: T1\n\n## State\n' > specs/changes/006-start.md
     if [ "$unsafe" = executable ]; then
-        printf -- '- 2026-10-19 004-older: older — #4\n' > specs/log.md; chmod +x specs/log.md
+        printf -- '- 2026-10-19 004-older: older — #4\n' > .prdkit/history/log.md; chmod +x .prdkit/history/log.md
     else
-        mkdir -p specs/log.md; printf -- '- 2026-10-19 004-older: older — #4\n' > specs/log.md/entry
-        printf 'echo run\n' > specs/log.md/payload.sh
+        mkdir -p .prdkit/history/log.md; printf -- '- 2026-10-19 004-older: older — #4\n' > .prdkit/history/log.md/entry
+        printf 'echo run\n' > .prdkit/history/log.md/payload.sh
     fi
-    git add specs; git commit -qm "an unsafe log on the base ($unsafe)" >/dev/null
+    git add specs .prdkit/history; git commit -qm "an unsafe log on the base ($unsafe)" >/dev/null
     git update-ref "refs/remotes/origin/$DEFAULT" HEAD
     for how in convert delete; do
         git checkout -q -b 006-start-branch
-        git rm -r -q specs/log.md
+        git rm -r -q .prdkit/history/log.md
         if [ "$how" = convert ]; then
-            printf -- '- 2026-10-19 004-older: older — #4\n' > specs/log.md; git add specs/log.md
+            mkdir -p .prdkit/history
+            printf -- '- 2026-10-19 004-older: older — #4\n' > .prdkit/history/log.md; git add .prdkit/history/log.md
         fi
         git commit -qm "$how the $unsafe log" >/dev/null
         run bash "$CHECK" 006-start
         assert_eq 1 "$STATUS" "$how an unsafe log at the start ($unsafe): it still fails"
-        assert_contains "$OUTPUT" "specs/log.md is not a regular, non-executable file at the change's start" "says why"
-        assert_not_contains "$OUTPUT" "specs/log.md must stay a regular" "the head is clean"
+        assert_contains "$OUTPUT" ".prdkit/history/log.md is not a regular, non-executable file at the change's start" "says why"
+        assert_not_contains "$OUTPUT" ".prdkit/history/log.md must stay a regular" "the head is clean"
         git checkout -q 006-start; git branch -q -D 006-start-branch
     done
     git checkout -q 001-greet; git branch -q -D 006-start
@@ -370,14 +371,14 @@ git reset -q --hard HEAD~1
 run bash "$CHECK" 003-docs
 assert_eq 0 "$STATUS" "docs under the trusted T0 paths pass"
 assert_contains "$OUTPUT" "tier T0 needs no independent review. All changes outside the change record and validated closing metadata passed the trusted T0 path check (review-t0-paths)." "says what the path check covered"
-mkdir -p specs/log; printf -- '- 2026-10-20 003-docs: docs — #3\n' > specs/log/003-docs.md
-git add specs/log/003-docs.md; git commit -qm "the change's log entry" >/dev/null
+mkdir -p .prdkit/history/log; printf -- '- 2026-10-20 003-docs: docs — #3\n' > .prdkit/history/log/003-docs.md
+git add .prdkit/history/log/003-docs.md; git commit -qm "the change's log entry" >/dev/null
 run bash "$CHECK" 003-docs
 assert_eq 0 "$STATUS" "the change's own log entry file is outside T0's paths, like the log"
-chmod +x specs/log/003-docs.md; git add specs/log/003-docs.md; git commit -qm "executable entry" >/dev/null
+chmod +x .prdkit/history/log/003-docs.md; git add .prdkit/history/log/003-docs.md; git commit -qm "executable entry" >/dev/null
 run bash "$CHECK" 003-docs
 assert_eq 1 "$STATUS" "an executable log entry fails"
-assert_contains "$OUTPUT" "specs/log/003-docs.md must stay a regular, non-executable file" "says why"
+assert_contains "$OUTPUT" ".prdkit/history/log/003-docs.md must stay a regular, non-executable file" "says why"
 git reset -q --hard HEAD~2
 chmod +x docs/guide.md; git commit -qam "executable doc" >/dev/null
 run bash "$CHECK" 003-docs
@@ -527,8 +528,8 @@ git reset -q --hard "$REVIEWED"
 
 it "the closing commit deletes the record and adds its log entry; the last record still decides"
 record T1 "$(verdict code PASS "$CLEAN")"
-git rm -q specs/changes/001-greet.md; mkdir -p specs/log; printf -- '- 2026-10-18 001-greet: warmer greeting — R-01 — #1\n' > specs/log/001-greet.md
-git add specs/log; git commit -qm close >/dev/null
+git rm -q specs/changes/001-greet.md; mkdir -p .prdkit/history/log; printf -- '- 2026-10-18 001-greet: warmer greeting — R-01 — #1\n' > .prdkit/history/log/001-greet.md
+git add .prdkit/history/log; git commit -qm close >/dev/null
 run bash "$CHECK" --json
 assert_eq 0 "$STATUS" "passes after the record is deleted"
 assert_contains "$OUTPUT" '"result":"pass","change":"001-greet"' "JSON result"
@@ -569,7 +570,8 @@ assert_eq 1 "$STATUS" "a raw commit hash is never a trusted base, even origin/HE
 
 it "a --base inside the change's own history cannot hide its code"
 echo 'unreviewed' > src/evil.txt; git add src/evil.txt; git commit -qm "after review" >/dev/null
-printf -- '- note\n' >> specs/log.md; git add specs/log.md; git commit -qm "log only" >/dev/null
+mkdir -p .prdkit/history
+printf -- '- note\n' >> .prdkit/history/log.md; git add .prdkit/history/log.md; git commit -qm "log only" >/dev/null
 run bash "$CHECK" --base HEAD~1
 assert_eq 1 "$STATUS" "an untrusted base is refused"
 assert_contains "$OUTPUT" "--base HEAD~1 is not a trusted integration branch" "says why"
@@ -595,8 +597,8 @@ it "a change closed after its code merged carries only the record and the log"
 git checkout -q 001-greet~1 -- src specs/changes; git commit -qm "001-greet (#1)" >/dev/null
 git update-ref "refs/remotes/origin/$DEFAULT" HEAD
 git checkout -q -b 001-close
-git rm -q specs/changes/001-greet.md; mkdir -p specs/log; printf -- '- 2026-10-19 001-greet: warmer greeting — R-01 — #2\n' > specs/log/001-greet.md
-git add specs/log; git commit -qm close >/dev/null
+git rm -q specs/changes/001-greet.md; mkdir -p .prdkit/history/log; printf -- '- 2026-10-19 001-greet: warmer greeting — R-01 — #2\n' > .prdkit/history/log/001-greet.md
+git add .prdkit/history/log; git commit -qm close >/dev/null
 run bash "$CHECK" 001-greet
 assert_eq 0 "$STATUS" "passes"
 assert_contains "$OUTPUT" "carries only the record and the log" "says why"
@@ -617,8 +619,8 @@ assert_contains "$OUTPUT" "no covering receipt needed on this PR" "earlier PR co
 git checkout -q -b develop "$DEFAULT"; echo d > dev.txt; git add dev.txt; git commit -qm develop >/dev/null
 git update-ref refs/remotes/origin/develop develop
 git checkout -q -b 001-close-dev develop
-git rm -q specs/changes/001-greet.md; mkdir -p specs/log; printf -- '- 2026-10-19 001-greet: warmer greeting — R-01 — #3\n' > specs/log/001-greet.md
-git add specs/log; git commit -qm close >/dev/null
+git rm -q specs/changes/001-greet.md; mkdir -p .prdkit/history/log; printf -- '- 2026-10-19 001-greet: warmer greeting — R-01 — #3\n' > .prdkit/history/log/001-greet.md
+git add .prdkit/history/log; git commit -qm close >/dev/null
 run bash "$CHECK" --base origin/develop 001-greet
 assert_eq 0 "$STATUS" "a record-only close into develop passes"
 assert_contains "$OUTPUT" "since origin/develop it carries only the record and the log" "names the base"
@@ -626,11 +628,11 @@ git checkout -q "$DEFAULT"; git branch -q -D 001-close-dev develop; git update-r
 
 it "a close finds its log line in a large log"
 git checkout -q -b 001-close-biglog "$DEFAULT"
-git rm -q specs/changes/001-greet.md; mkdir -p specs/log
-printf -- '- 2026-10-19 001-greet: warmer greeting — R-01 — #4\n' > specs/log/001-greet.md
-git add specs/log; git commit -qm close >/dev/null
-{ cat specs/log/001-greet.md; i=0; while [ "$i" -lt 4000 ]; do printf -- '- 2026-10-01 %03d-old-change: an older change with a long enough summary line — #%d\n' "$((i % 900 + 100))" "$i"; i=$((i + 1)); done; } >> specs/log.md
-git rm -q specs/log/001-greet.md; git add specs/log.md; git commit -qm compact >/dev/null
+git rm -q specs/changes/001-greet.md; mkdir -p .prdkit/history/log
+printf -- '- 2026-10-19 001-greet: warmer greeting — R-01 — #4\n' > .prdkit/history/log/001-greet.md
+git add .prdkit/history/log; git commit -qm close >/dev/null
+{ cat .prdkit/history/log/001-greet.md; i=0; while [ "$i" -lt 4000 ]; do printf -- '- 2026-10-01 %03d-old-change: an older change with a long enough summary line — #%d\n' "$((i % 900 + 100))" "$i"; i=$((i + 1)); done; } >> .prdkit/history/log.md
+git rm -q .prdkit/history/log/001-greet.md; git add .prdkit/history/log.md; git commit -qm compact >/dev/null
 run bash "$CHECK" 001-greet
 assert_not_contains "$OUTPUT" "has no '- <date> 001-greet" "no SIGPIPE false alarm past 64 KiB"
 git checkout -q "$DEFAULT"; git branch -q -D 001-close-biglog
@@ -641,9 +643,9 @@ git rm -q specs/changes/001-greet.md; git commit -qm close >/dev/null
 run bash "$CHECK" 001-greet
 assert_eq 1 "$STATUS" "fails"
 assert_contains "$OUTPUT" "001-greet is closed (its record is deleted) but the log at" "names the missing log entry"
-assert_contains "$OUTPUT" "(specs/log/001-greet.md, as close-change.sh writes it, or its compacted line in specs/log.md)" "and where it goes"
-mkdir -p specs/log; printf -- '- 2026-10-19 001-greet: warmer greeting — R-01 — #5\n' > specs/log/001-greet.md
-git add specs/log; git commit -qm 'log entry' >/dev/null
+assert_contains "$OUTPUT" "(.prdkit/history/log/001-greet.md, as close-change.sh writes it, or its compacted line in .prdkit/history/log.md)" "and where it goes"
+mkdir -p .prdkit/history/log; printf -- '- 2026-10-19 001-greet: warmer greeting — R-01 — #5\n' > .prdkit/history/log/001-greet.md
+git add .prdkit/history/log; git commit -qm 'log entry' >/dev/null
 run bash "$CHECK" 001-greet
 assert_not_contains "$OUTPUT" "has no '- <date> 001-greet" "its entry file is the log entry"
 assert_eq 1 "$STATUS" "a later log entry does not validate the closing commit"

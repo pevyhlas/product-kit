@@ -19,8 +19,8 @@ cat >> .prdkit/memory/config.md <<'EOF'
 - review-t0-paths: docs/
 EOF
 printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n| second | reviewer |\n' >> .prdkit/memory/agents.md
-mkdir -p specs
-printf -- '- 2026-01-02 002-earlier: completed\n' > specs/log.md
+mkdir -p .prdkit/history
+printf -- '- 2026-01-02 002-earlier: completed\n' > .prdkit/history/log.md
 git add -A; git commit -qm baseline
 BASE="$(git rev-parse HEAD)"
 git update-ref refs/remotes/origin/main HEAD
@@ -201,7 +201,7 @@ assert_contains "$OUTPUT" "\"pr_head\":\"$PR_HEAD\""
 it 'a shared-log-only close requires a per-change entry at deletion'
 git checkout -qb shared-log-close "$PR_HEAD"
 git rm -q specs/changes/001-reviewed.md
-printf -- '- 2026-01-03 001-reviewed: closed\n' >> specs/log.md
+printf -- '- 2026-01-03 001-reviewed: closed\n' >> .prdkit/history/log.md
 git commit -qam 'close without a per-change entry'
 online
 assert_eq 1 "$STATUS"
@@ -210,21 +210,21 @@ assert_contains "$OUTPUT" 'current per-change entry format'
 it 'a current close can be compacted without changing its own fingerprint'
 git checkout -q "$PR_HEAD"
 git rm -q specs/changes/001-reviewed.md
-mkdir -p specs/log
-printf -- '- 2026-01-03 001-reviewed: closed\n' > specs/log/001-reviewed.md
-git add specs/log; git commit -qm close
+mkdir -p .prdkit/history/log
+printf -- '- 2026-01-03 001-reviewed: closed\n' > .prdkit/history/log/001-reviewed.md
+git add .prdkit/history/log; git commit -qm close
 CLOSE_ENTRY="$(git rev-parse HEAD)"
-cat specs/log/001-reviewed.md >> specs/log.md
-git rm -q specs/log/001-reviewed.md; git commit -qam compact
+cat .prdkit/history/log/001-reviewed.md >> .prdkit/history/log.md
+git rm -q .prdkit/history/log/001-reviewed.md; git commit -qam compact
 online
 assert_eq 0 "$STATUS" "$OUTPUT"
 assert_eq "$FP" "$(jq -r .fingerprint <<< "$OUTPUT")" 'the compacted close retains the reviewed fingerprint'
 
 it 'compaction is not closing metadata'
 git checkout -q "$CLOSE_ENTRY"
-cat specs/log/001-reviewed.md >> specs/log.md
-git rm -q specs/log/001-reviewed.md
-printf -- '- 2026-01-04 compaction: retain current entries\n' >> specs/log.md
+cat .prdkit/history/log/001-reviewed.md >> .prdkit/history/log.md
+git rm -q .prdkit/history/log/001-reviewed.md
+printf -- '- 2026-01-04 compaction: retain current entries\n' >> .prdkit/history/log.md
 git commit -qam 'compact the shared log'
 fx_pr 7 "$PR_HEAD"
 online
@@ -288,7 +288,7 @@ assert_eq 0 "$STATUS" "$OUTPUT"
 git rm -q specs/changes/003-original.md
 mkdir -p specs/changes
 printf '# Carrier\n**Tier**: T1\n## State\n' > specs/changes/004-carrier.md
-mkdir -p specs/log; printf -- '- 2026-01-01 003-original: moved to carrier\n' > specs/log/003-original.md
+mkdir -p .prdkit/history/log; printf -- '- 2026-01-01 003-original: moved to carrier\n' > .prdkit/history/log/003-original.md
 git add -A; git commit -qm carrier
 fx_pr 7 "$(git rev-parse HEAD)"
 printf '| security | reviewer |\n' >> .git/registry-fragment

@@ -42,8 +42,8 @@ FAILED="$(git rev-parse HEAD)"
 printf '**Receipt fixture**: round 1 · %s..%s · integration · FAIL · 0 critical, 1 high, 0 medium, 0 low · fixture:inherited-report\n' "$BASE" "$FAILED" >> specs/changes/002-final-child.md
 # Parent disposition/deletion is substantive reviewed content, before final review.
 git rm -q specs/changes/001-programme.md
-mkdir -p specs/log
-printf -- '- 2026-10-25 001-programme: integrated outcome — R-01 — delivered; runtime unverified — PR 1\n' > specs/log/001-programme.md
+mkdir -p .prdkit/history/log
+printf -- '- 2026-10-25 001-programme: integrated outcome — R-01 — delivered; runtime unverified — PR 1\n' > .prdkit/history/log/001-programme.md
 git add -A; git commit -qm 'prepare parent disposition for combined review'
 PREPARED="$(git rev-parse HEAD)"
 
@@ -62,8 +62,8 @@ assert_contains "$OUTPUT" "T3 needs the owner's native approval" "owner missing"
 printf '**Receipt fixture**: round 2 · %s..%s · owner · PASS · fixture:owner-words\n' "$BASE" "$PREPARED" >> specs/changes/002-final-child.md
 git add specs/changes/002-final-child.md; git commit -qm 'fixture for native owner approval of combined scope'
 git rm -q specs/changes/002-final-child.md
-printf -- '- 2026-10-25 002-final-child: final implementation — R-01 — delivered; runtime unverified — PR 1\n' > specs/log/002-final-child.md
-git add specs/log/002-final-child.md; git commit -qm 'finalize carrier in same PR'
+printf -- '- 2026-10-25 002-final-child: final implementation — R-01 — delivered; runtime unverified — PR 1\n' > .prdkit/history/log/002-final-child.md
+git add .prdkit/history/log/002-final-child.md; git commit -qm 'finalize carrier in same PR'
 
 it "one exact-head gate covers the child and already-reviewed parent deletion"
 run bash "$CHECK" --json --base origin/main --head HEAD 002-final-child
@@ -71,7 +71,7 @@ assert_eq 0 "$STATUS" "same-PR multi-record finalization passes"
 assert_contains "$OUTPUT" '"record_only":false' "real source scope, not a cleanup exemption"
 assert_contains "$OUTPUT" '"tier":"T3"' "combined tier retained"
 assert_eq '' "$(git ls-tree -r --name-only HEAD specs/changes)" "no cleanup records remain"
-assert_eq 2 "$(awk '/^-/ { count++ } END { print count+0 }' specs/log/*.md)" "both dispositions retained"
+assert_eq 2 "$(awk '/^-/ { count++ } END { print count+0 }' .prdkit/history/log/*.md)" "both dispositions retained"
 
 it "changes outside carrier metadata still need review"
 printf 'unreviewed change\n' >> src/app.txt

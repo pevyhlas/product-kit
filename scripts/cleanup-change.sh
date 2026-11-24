@@ -647,7 +647,7 @@ remove_worktree() { # path label locked
 # --- Remove every closed change's worktree ---------------------------------
 
 # Whether <id> is closed on a trusted ref: its record specs/changes/<id>.md is gone there and
-# the log has its entry, specs/log/<id>.md as close-change.sh writes it or a line in specs/log.md
+# the log has its entry, .prdkit/history/log/<id>.md as close-change.sh writes it or a line in .prdkit/history/log.md
 # ("- <date> <id>: ..."). Both facts are read from the trusted ref, never from the worktree's own
 # branch.
 CLOSED_REFS=""

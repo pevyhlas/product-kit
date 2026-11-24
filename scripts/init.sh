@@ -887,6 +887,7 @@ if [ ${#KIT_OVERWRITTEN[@]} -gt 0 ]; then
 fi
 
 # --- Seed .gitignore entries for kit-managed local state ---------------------
+# .prdkit/history/ is consumer-owned and tracked; never ignore .prdkit/ as a whole.
 # .prdkit/cache/ holds raw evidence (review packages, test output), which records link instead
 # of committing; .worktrees/ is where new-change.sh puts isolated change checkouts.
 # Seeding them here means no later command has to mutate a tracked

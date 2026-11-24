@@ -265,7 +265,10 @@ L2  specs/parts/<part>.md       one box: why it exists, components, behaviors, i
     code and tests              the exact implementation; tests cite the IDs they prove
 ```
 
-Around it: open changes in `specs/changes/` (implementation records finalize in their own PR), one line per closed change in `specs/log.md` (written as `specs/log/<id>.md`, folded in at compaction), owner direction and open questions in `specs/inbox.md`, and holds, waivers and deployments in `specs/records.md`. A small project can keep everything in one `specs/SPEC.md`.
+Open changes live in `specs/changes/`, owner direction and open questions in `specs/inbox.md`,
+and holds, waivers and deployments in `specs/records.md`. A small project can keep its canon
+in one `specs/SPEC.md`. Closed changes go in tracked `.prdkit/history/log/<id>.md`, one line
+each, folded into `.prdkit/history/log.md` at compaction. The spec never cites history.
 
 <details>
 <summary><b>Example: a product page and a journey</b> (from <a href="examples/request-service"><code>examples/request-service</code></a>)</summary>

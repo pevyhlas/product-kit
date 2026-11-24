@@ -107,7 +107,7 @@ generate_slug() {
     printf '%s\n' "$result"
 }
 
-# Every checkout whose specs/ can hold a claimed number: this one, worktrees under
+# Every checkout that can hold a claimed number: this one, worktrees under
 # .worktrees/, and every worktree git knows about. Paths may repeat or not exist.
 list_checkouts() {
     local wt line worktrees
@@ -154,7 +154,7 @@ list_archive_details() {
     local checkouts checkout
     checkouts="$(sort -u <<< "$CHECKOUTS")" || return 1
     while IFS= read -r checkout; do
-        spec_archive_log_details "$checkout" "$checkout/specs/archive.md" || return 1
+        spec_archive_log_details "$checkout" "$checkout/.prdkit/history/archive.md" || return 1
     done <<< "$checkouts"
     [ "$HAS_GIT" = true ] || return 0
     spec_archive_log_integration "$REPO_ROOT" "$INTEGRATION_TIPS" details
@@ -281,8 +281,14 @@ AUTO_NUMBER=false
 # every checkout. Keep the lock through record creation; a malformed index cannot be overridden.
 acquire_number_lock
 CHECKOUTS="$(list_checkouts)" || exit 1
+while IFS= read -r checkout; do
+    spec_require_history_layout "$checkout" || exit 1
+done <<< "$CHECKOUTS"
 INTEGRATION_TIPS=""
-if [ "$HAS_GIT" = true ]; then INTEGRATION_TIPS="$(spec_integration_tips "$REPO_ROOT")"; fi
+if [ "$HAS_GIT" = true ]; then
+    INTEGRATION_TIPS="$(spec_integration_tips "$REPO_ROOT")"
+    spec_require_history_tips "$REPO_ROOT" "$INTEGRATION_TIPS" || exit 1
+fi
 ARCHIVE_DETAILS="$(list_archive_details)"
 COMMITTED_CLAIMS="$(list_committed_claims)"
 CLAIMS="$(list_claimed)" || exit 1
@@ -317,9 +323,9 @@ if [ "$AUTO_NUMBER" = false ]; then
         spec_archive_log_covers "$index" "$NUM" || continue
         cutoff="${index%% *}"
         if [ "$((10#$NUM))" -le "$cutoff" ]; then
-            printf '[prdkit] Error: change number %s is reserved: specs/archive.md condenses the log through %03d; omit --number or use a number above %03d.\n' "$NUM" "$cutoff" "$HIGH_WATER" >&2
+            printf '[prdkit] Error: change number %s is reserved: .prdkit/history/archive.md condenses the log through %03d; omit --number or use a number above %03d.\n' "$NUM" "$cutoff" "$HIGH_WATER" >&2
         else
-            printf '[prdkit] Error: change number %s is reserved by the condensed log index in specs/archive.md; omit --number or use a number above %03d.\n' "$NUM" "$HIGH_WATER" >&2
+            printf '[prdkit] Error: change number %s is reserved by the condensed log index in .prdkit/history/archive.md; omit --number or use a number above %03d.\n' "$NUM" "$HIGH_WATER" >&2
         fi
         exit 1
     done <<< "$ARCHIVE_DETAILS"

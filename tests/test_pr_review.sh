@@ -322,8 +322,8 @@ git checkout -q --detach "$HEAD_SHA"
 
 it 'closed unnumbered carrier is recovered by the native gate, including its log'
 git rm -q specs/changes/001-carrier.md
-mkdir -p specs/log
-printf -- '- 2026-01-01 001-carrier: closed\n' > specs/log/001-carrier.md
+mkdir -p .prdkit/history/log
+printf -- '- 2026-01-01 001-carrier: closed\n' > .prdkit/history/log/001-carrier.md
 git add -A; git commit -qm close
 CLOSED="$(git rev-parse HEAD)"
 bindings "$CLOSED"; launch

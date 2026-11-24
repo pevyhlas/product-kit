@@ -48,7 +48,7 @@ case "$VERIFY_FAULT:$*" in
     squash-eof:*'diff --no-renames --name-only -z '*) printf 'one.txt'; exit 0 ;;
     close-default-fail:*'ls-tree --name-only main -- :(literal)specs/changes/'*|close-default-fail:*'cat-file -e main:specs/changes/'*)
         exit 5 ;;
-    close-log-fail:*'ls-tree HEAD -- :(literal)specs/log.md') exit 5 ;;
+    close-log-fail:*'ls-tree HEAD -- :(literal).prdkit/history/log.md') exit 5 ;;
 esac
 exec "$REAL_GIT" "$@"
 SH
@@ -291,17 +291,17 @@ cp "$config" "$_SCRATCH_CWD/clean-config"
 awk '{printf "%s\r\n",$0}' "$_SCRATCH_CWD/clean-config" > "$config"
 run bash "$B/doctor.sh" --json; failed 'doctor CRLF config'
 cp "$_SCRATCH_CWD/clean-config" "$config"
-mkdir -p specs/log
-printf -- '- 2026-11-22 001-example:\n' > specs/log/001-example.md
+mkdir -p .prdkit/history/log
+printf -- '- 2026-11-22 001-example:\n' > .prdkit/history/log/001-example.md
 run bash "$B/status.sh" --json; failed 'status malformed log entry'
 it 'status refuses a plausible count from a failed log-entry line counter'
-COUNT_TARGET="$VERIFY_PROJECT/specs/log/001-example.md"
+COUNT_TARGET="$VERIFY_PROJECT/.prdkit/history/log/001-example.md"
 printf '%s\n' '- 2026-11-22 001-example: done' 'stale second line' > "$COUNT_TARGET"
 fault line-count bash "$B/status.sh" --json
 failed 'failed log-entry line count'
 assert_file "$COUNT_HIT"
 assert_contains "$OUTPUT" 'Malformed log entry'
-rm specs/log/001-example.md
+rm .prdkit/history/log/001-example.md
 
 it 'read-spec detects a failed or short snapshot producer'
 for mode in spec-fail spec-short; do
@@ -356,27 +356,27 @@ assert_contains "$OUTPUT" 'cannot read tags'
 assert_eq "$before_head" "$(git rev-parse HEAD)" 'HEAD unchanged'
 assert_eq "$before_index" "$(git hash-object .git/index)" 'index bytes unchanged'
 assert_file "$record"
-[ ! -e specs/log/001-example.md ] || _no 'no entry written'
+[ ! -e .prdkit/history/log/001-example.md ] || _no 'no entry written'
 if [ "$(git rev-parse HEAD)" != "$before_head" ]; then git checkout -qb retry-metadata "$before_head" || exit 1; fi
 
 it 'close preflight rejects invalid folded logs before writing an entry'
 for format in empty crlf eof; do
     case "$format" in
-        empty) : > specs/log.md ;;
-        crlf) printf '# Closed changes\r\n' > specs/log.md ;;
-        eof) printf '# Closed changes' > specs/log.md ;;
+        empty) : > .prdkit/history/log.md ;;
+        crlf) printf '# Closed changes\r\n' > .prdkit/history/log.md ;;
+        eof) printf '# Closed changes' > .prdkit/history/log.md ;;
     esac
     fault none bash "$B/close-change.sh" "${close_args[@]}"
     failed "close $format"
-    assert_contains "$OUTPUT" 'invalid specs/log.md'
+    assert_contains "$OUTPUT" 'invalid .prdkit/history/log.md'
     assert_eq "$before_head" "$(git rev-parse HEAD)" 'HEAD unchanged'
     assert_eq "$before_index" "$(git hash-object .git/index)" 'index bytes unchanged'
     assert_file "$record"
-    [ ! -e specs/log/001-example.md ] || _no 'no entry written'
+    [ ! -e .prdkit/history/log/001-example.md ] || _no 'no entry written'
     # Restore only this disposable fixture if the base accepted the malformed input.
     if [ "$(git rev-parse HEAD)" != "$before_head" ]; then git checkout -q -b "retry-$format" "$before_head" || exit 1; fi
 done
-printf '# Closed changes\n' > specs/log.md
+printf '# Closed changes\n' > .prdkit/history/log.md
 fault close-default-fail bash "$B/close-change.sh" "${close_args[@]}"
 failed 'close default tree producer failed'
 assert_contains "$OUTPUT" 'could not check for specs/changes/001-example.md on main'
@@ -388,18 +388,18 @@ it 'a failed folded-log lookup is not a successful absence'
 before_index="$(git hash-object .git/index)"
 fault close-log-fail bash "$B/close-change.sh" "${close_args[@]}"
 failed 'close folded log lookup failed'
-assert_contains "$OUTPUT" 'could not check for specs/log.md at HEAD'
+assert_contains "$OUTPUT" 'could not check for .prdkit/history/log.md at HEAD'
 assert_eq "$before_head" "$(git rev-parse HEAD)" 'HEAD unchanged after failed lookup'
 assert_eq "$before_index" "$(git hash-object .git/index)" 'index unchanged after failed lookup'
 assert_file "$record"
-[ ! -e specs/log/001-example.md ] || _no 'no duplicate entry written'
+[ ! -e .prdkit/history/log/001-example.md ] || _no 'no duplicate entry written'
 if [ "$(git rev-parse HEAD)" != "$before_head" ]; then git checkout -qb retry-log-fail "$before_head" || exit 1; fi
 
 it 'close checks the committed folded log when sparse checkout omits it'
-printf '# Closed changes\n\n- 2026-11-22 001-example: Already closed\n' > specs/log.md
-git add specs/log.md && git commit -qm 'fold the existing entry' || exit 1
-git sparse-checkout set --no-cone '/*' '!/specs/log.md' || exit 1
-[ ! -e specs/log.md ] && git cat-file -e HEAD:specs/log.md || exit 1
+printf '# Closed changes\n\n- 2026-11-22 001-example: Already closed\n' > .prdkit/history/log.md
+git add .prdkit/history/log.md && git commit -qm 'fold the existing entry' || exit 1
+git sparse-checkout set --no-cone '/*' '!/.prdkit/history/log.md' || exit 1
+[ ! -e .prdkit/history/log.md ] && git cat-file -e HEAD:.prdkit/history/log.md || exit 1
 before_head="$(git rev-parse HEAD)"; before_index="$(git hash-object .git/index)"
 run bash "$B/close-change.sh" "${close_args[@]}"
 failed 'close sparse folded log'
@@ -407,5 +407,5 @@ assert_contains "$OUTPUT" 'the log already has an entry for 001-example'
 assert_eq "$before_head" "$(git rev-parse HEAD)" 'HEAD unchanged with sparse folded log'
 assert_eq "$before_index" "$(git hash-object .git/index)" 'index unchanged with sparse folded log'
 assert_file "$record"
-[ ! -e specs/log/001-example.md ] || _no 'no entry written with sparse folded log'
+[ ! -e .prdkit/history/log/001-example.md ] || _no 'no entry written with sparse folded log'
 finish

@@ -117,7 +117,7 @@ for workflow in "$change" "$implementation"; do
     assert_contains "$workflow" 'unique within the change; never reuse or renumber them' "task keys are local and permanent"
 done
 assert_contains "$change" 'The PR that delivers a task deletes its line' "delivery deletes the line"
-assert_contains "$change" 'No `[x]`, delivered note or log entry for the task' "no task archive"
+assert_contains "$change" 'No `[x]`, delivered note or history entry for the task' "no task archive"
 assert_contains "$implementation" 'Local verification is not delivery' "verified work is not yet delivered"
 assert_contains "$review" 'For a single-PR change, deleting the record delivers its tasks' "single-PR tasks are delivered at close"
 assert_eq 1 "$(grep -cxF "$drops" "$T/pr-summary-template.md" || true)" "standalone Drops line in the PR template"
@@ -138,7 +138,7 @@ it "compaction preserves current canon and keeps history off the default load pa
 compact="$(flat "$W/compact.md")"
 assert_contains "$compact" 'never by dropping items' "preserve current canon"
 assert_contains "$compact" 'Log condensed through' "preserve numbering after log compaction"
-assert_contains "$protocol" '`specs/archive.md` only on demand' "the archive is read on demand"
+assert_contains "$protocol" '`.prdkit/history/archive.md` only on demand' "the archive is read on demand"
 assert_not_contains "$protocol" '`specs/archive/`' "no archive folder on the load table"
 
 finish

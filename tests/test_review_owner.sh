@@ -255,8 +255,8 @@ barrier_fixture() {
     git add -A; git commit -qm delivery
     if [ "$MODE" = closing ]; then
         git rm -q "specs/changes/$CHANGE.md"
-        mkdir -p specs/log
-        printf -- '- 2026-01-01 %s: closed\n' "$CHANGE" > "specs/log/$CHANGE.md"
+        mkdir -p .prdkit/history/log
+        printf -- '- 2026-01-01 %s: closed\n' "$CHANGE" > ".prdkit/history/log/$CHANGE.md"
         git add -A; git commit -qm closure
     elif [ "$MODE" = renamed ]; then
         git mv "specs/changes/$CHANGE.md" specs/changes/002-carrier.md

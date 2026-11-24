@@ -242,7 +242,7 @@ t0_paths() { # rev -> configured entries, one per line
 }
 metadata_mode_problems() { # rev -> the record or log path when it is there but not a regular file
     local file entry
-    for file in "$path" specs/log.md "specs/log/$id.md"; do
+    for file in "$path" .prdkit/history/log.md ".prdkit/history/log/$id.md"; do
         entry="$(GIT_NO_REPLACE_OBJECTS=1 git -C "$root" ls-tree "$1" -- "$file")" || return 1
         case "$entry" in ""|"100644 blob "*) ;; *) printf '%s\n' "$file" ;; esac
     done
@@ -252,10 +252,10 @@ t0_violations() { # from to
     allowed="$(t0_paths "$policy_at")"
     raw="$(LC_ALL=C GIT_NO_REPLACE_OBJECTS=1 git -C "$root" -c core.quotepath=true diff --raw --no-abbrev \
         --no-renames --no-ext-diff --no-textconv --no-color --no-relative --ignore-submodules=none "$1" "$2" -- . \
-        ":(top,literal,exclude)$path" ":(top,literal,exclude)specs/log/$id.md")" || return 1
+        ":(top,literal,exclude)$path" ":(top,literal,exclude).prdkit/history/log/$id.md")" || return 1
     while IFS="$(printf '\t')" read -r meta file; do
         [ -n "$meta" ] || continue
-        if [ "$file" = specs/log.md ] && [ -z "$shared_log_delta" ]; then continue; fi
+        if [ "$file" = .prdkit/history/log.md ] && [ -z "$shared_log_delta" ]; then continue; fi
         old="${meta%% *}"; old="${old#:}"; new="${meta#* }"; new="${new%% *}"
         ok=false
         case "$old:$new" in 000000:100644|100644:100644|100644:000000) ok=true ;; esac
@@ -281,7 +281,7 @@ path="specs/changes/$id.md"
 spec_l01=(specs/product.md specs/product specs/architecture.md specs/architecture specs/SPEC.md specs/decisions)
 changed_since() { # sha [pathspec...] -> paths changed from sha to head; check the shared log separately
     local sha="$1"; shift
-    [ "$#" -gt 0 ] || set -- . ":(exclude)$path" ":(exclude)specs/log.md" ":(exclude)specs/log/$id.md"
+    [ "$#" -gt 0 ] || set -- . ":(exclude)$path" ":(exclude).prdkit/history/log.md" ":(exclude).prdkit/history/log/$id.md"
     git -C "$root" diff --name-only --no-renames --ignore-submodules=none "$sha" "$head" -- "$@" | tr '\n' ' ' | sed 's/ $//'
 }
 
@@ -303,18 +303,18 @@ else
     elif ! log="$(spec_log_entries_at "$root" "$head")"; then
         problems+=("$id is closed (its record is deleted), but the log at $head cannot be read without fetching from the promisor remote (a partial clone with Git older than 2.45): fetch the branch's blobs or use Git 2.45+")
     elif ! grep -q "^- [0-9-]* $id:" <<< "$log"; then
-        problems+=("$id is closed (its record is deleted) but the log at $head has no '- <date> $id: <what changed>' entry (specs/log/$id.md, as close-change.sh writes it, or its compacted line in specs/log.md)")
-    elif ! log_mode="$(GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -C "$root" ls-tree "$last" -- "specs/log/$id.md")" ||
+        problems+=("$id is closed (its record is deleted) but the log at $head has no '- <date> $id: <what changed>' entry (.prdkit/history/log/$id.md, as close-change.sh writes it, or its compacted line in .prdkit/history/log.md)")
+    elif ! log_mode="$(GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -C "$root" ls-tree "$last" -- ".prdkit/history/log/$id.md")" ||
         [[ "$log_mode" != '100644 blob '* ]] ||
-        ! GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -C "$root" cat-file blob "$last:specs/log/$id.md" > "$fp_cache/close-entry" ||
+        ! GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -C "$root" cat-file blob "$last:.prdkit/history/log/$id.md" > "$fp_cache/close-entry" ||
         ! spec_log_entry_valid "$fp_cache/close-entry" "$id"; then
-        problems+=("$id was closed without specs/log/$id.md at the closing commit; use the current per-change entry format from close-change.sh, not a direct edit to specs/log.md")
+        problems+=("$id was closed without .prdkit/history/log/$id.md at the closing commit; use the current per-change entry format from close-change.sh, not a direct edit to .prdkit/history/log.md")
     fi
     # Closing metadata must be plain files. The per-change entry is its own one line.
     while read -r log_mode log_type log_sha log_path; do
         case "$log_mode $log_type" in
             "100644 blob"|"100755 blob")
-                [ "$log_path" != specs/log.md ] || continue
+                [ "$log_path" != .prdkit/history/log.md ] || continue
                 if ! spec_objects_local "$root"; then
                     problems+=("$log_path at $head cannot be checked without fetching from the promisor remote (a partial clone with Git older than 2.45): fetch the branch's blobs or use Git 2.45+")
                     continue
@@ -325,7 +325,7 @@ else
                 fi ;;
             *) problems+=("$log_path at $head is not a regular file; the log and the change's entry are plain files") ;;
         esac
-    done < <(GIT_NO_LAZY_FETCH=1 git -C "$root" ls-tree "$head" -- specs/log.md "specs/log/$id.md" 2>/dev/null)
+    done < <(GIT_NO_LAZY_FETCH=1 git -C "$root" ls-tree "$head" -- .prdkit/history/log.md ".prdkit/history/log/$id.md" 2>/dev/null)
     record="$(cat "$fp_cache/selected-record")"
     # The tier is the record's single **Tier** field; a second one, even in a comment, is refused.
     claims="$(printf '%s\n' "$record" | record_tiers)"
@@ -390,7 +390,7 @@ else
     done
     shared_log_delta=""
     if [ -n "$start" ] &&
-        ! shared_log_delta="$(review_delta_stream "$root" "$id" "$start" "$head" ':(top,literal)specs/log.md')"; then
+        ! shared_log_delta="$(review_delta_stream "$root" "$id" "$start" "$head" ':(top,literal).prdkit/history/log.md')"; then
         shared_log_delta=unreadable
         problems+=("The shared log's diff from ${start:0:12} to $head cannot be checked")
     fi

@@ -18,6 +18,7 @@ for file in ledger-emit.sh ledger-spool-adapter.sh json-lib.sh retrospective.sh;
 done
 assert_file "$PROJ/.prdkit/templates/spec-template.md"
 assert_file "$PROJ/.prdkit/templates/authority-template.md"
+assert_file "$PROJ/.prdkit/templates/history-log-template.md"
 assert_file "$PROJ/.prdkit/scripts/bash/authority-ref.sh"
 assert_file "$PROJ/.prdkit/workflows/change.md"
 assert_file "$PROJ/.prdkit/workflows/protocol.md"
@@ -58,6 +59,18 @@ printf '{}\n' > "$PROJ/.prdkit/cache/001-x.enrich.json"
 run git -C "$PROJ" check-ignore -q .prdkit/cache/001-x.enrich.json
 assert_eq 0 "$STATUS" "usage-enrichment input ignored by Git"
 rm "$PROJ/.prdkit/cache/001-x.enrich.json"
+it "fresh project history is tracked, not installed or ignored"
+mkdir -p .prdkit/history
+cp .prdkit/templates/history-log-template.md .prdkit/history/log.md
+cp .prdkit/templates/archive-template.md .prdkit/history/archive.md
+assert_contains "$(cat .prdkit/history/log.md)" 'History only; never cited by the spec.'
+assert_contains "$(cat .prdkit/history/log.md)" 'git log --diff-filter=A -- .prdkit/history/log/<id>.md'
+run git add -- .prdkit/history/
+assert_eq 0 "$STATUS" "history needs no forced add"
+assert_eq "$(printf '.prdkit/history/archive.md\n.prdkit/history/log.md')" "$(git ls-files .prdkit/history/)"
+assert_not_contains "$(cat .prdkit/.manifest)" '.prdkit/history/' "history belongs to the project"
+git rm -rqf -- .prdkit/history/ || exit 1
+
 it "execution scratch stays ignored while templates and neutral playbooks install"
 mkdir -p "$PROJ/.prdkit/cache/implementation"
 printf 'unfinished task details\n' > "$PROJ/.prdkit/cache/implementation/001-demo.md"
