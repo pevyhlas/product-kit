@@ -8,6 +8,7 @@ run bash .product-kit/scripts/init.sh
 it "fresh install provides the public interface and neutral agent operations"
 assert_eq 0 "$STATUS" "install succeeds"
 assert_contains "$OUTPUT" 'Product-Kit initialized' "success banner"
+assert_not_contains "$OUTPUT" 'Git ignores history' "fresh install leaves history addable"
 assert_contains "$OUTPUT" 'commit the .product-kit pin' "fresh install explains the upgrade pin"
 assert_not_contains "$OUTPUT" 'submodule update --remote' "upgrades select a release instead of following a branch"
 for file in constitution.md agents.md config.md; do assert_file "$PROJ/.prdkit/memory/$file" "$file seeded"; done
@@ -20,6 +21,7 @@ assert_file "$PROJ/.prdkit/templates/spec-template.md"
 assert_file "$PROJ/.prdkit/templates/design-template.md"
 assert_contains "$(cat "$PROJ/.prdkit/.manifest")" '.prdkit/templates/design-template.md' 'optional design template is mapped and hashed'
 assert_file "$PROJ/.prdkit/templates/authority-template.md"
+assert_file "$PROJ/.prdkit/templates/history-log-template.md"
 assert_file "$PROJ/.prdkit/scripts/bash/authority-ref.sh"
 assert_file "$PROJ/.prdkit/workflows/change.md"
 assert_file "$PROJ/.prdkit/workflows/protocol.md"
@@ -60,6 +62,18 @@ printf '{}\n' > "$PROJ/.prdkit/cache/001-x.enrich.json"
 run git -C "$PROJ" check-ignore -q .prdkit/cache/001-x.enrich.json
 assert_eq 0 "$STATUS" "usage-enrichment input ignored by Git"
 rm "$PROJ/.prdkit/cache/001-x.enrich.json"
+it "fresh project history is tracked, not installed or ignored"
+mkdir -p .prdkit/history
+cp .prdkit/templates/history-log-template.md .prdkit/history/log.md
+cp .prdkit/templates/archive-template.md .prdkit/history/archive.md
+assert_contains "$(cat .prdkit/history/log.md)" 'History only; never cited by the spec.'
+assert_contains "$(cat .prdkit/history/log.md)" 'git log --diff-filter=A -- .prdkit/history/log/<id>.md'
+run git add -- .prdkit/history/
+assert_eq 0 "$STATUS" "history needs no forced add"
+assert_eq "$(printf '.prdkit/history/archive.md\n.prdkit/history/log.md')" "$(git ls-files .prdkit/history/)"
+assert_not_contains "$(cat .prdkit/.manifest)" '.prdkit/history/' "history belongs to the project"
+git rm -rqf -- .prdkit/history/ || exit 1
+
 it "execution scratch stays ignored while templates and neutral playbooks install"
 mkdir -p "$PROJ/.prdkit/cache/implementation"
 printf 'unfinished task details\n' > "$PROJ/.prdkit/cache/implementation/001-demo.md"
@@ -76,11 +90,43 @@ snapshot_upgrade_fixture "$PROJ" || exit 1
 run bash .product-kit/scripts/init.sh --upgrade
 assert_eq 0 "$STATUS" "upgrade succeeds"
 assert_contains "$OUTPUT" "Added '.prdkit/cache/' to .gitignore" "entry added on upgrade"
+assert_not_contains "$OUTPUT" 'Git ignores history' "normal upgrade leaves history addable"
+run git check-ignore --no-index -- .prdkit/history/log.md .prdkit/history/log/001-example.md .prdkit/history/archive.md
+assert_eq 1 "$STATUS" "all three history locations are addable after upgrade"
+run git check-ignore -q -- .prdkit/cache/implementation/future.md
+assert_eq 0 "$STATUS" "cache remains ignored after upgrade"
 snapshot_upgrade_fixture "$PROJ" || exit 1
 run bash .product-kit/scripts/init.sh --upgrade
 assert_eq 0 "$STATUS" "repeat upgrade succeeds"
 assert_not_contains "$OUTPUT" "Added '.prdkit/cache/'" "not added twice"
 assert_eq 1 "$(grep -cxF '.prdkit/cache/' "$PROJ/.gitignore")" "entry present exactly once"
+
+it "fresh install and committed upgrade name blocking ignore rules without changing them"
+IGNORE_PROJ="$(make_project)"; track_tmp "$IGNORE_PROJ"
+# A targeted rule blocks only entries, not the archive or folded log.
+printf '%s\n' '/.prdkit/history/log/' > "$IGNORE_PROJ/.gitignore"
+run bash "$IGNORE_PROJ/.product-kit/scripts/init.sh" --target "$IGNORE_PROJ"
+assert_eq 0 "$STATUS" "fresh install warns about a targeted rule"
+assert_contains "$OUTPUT" $'.gitignore:1:/.prdkit/history/log/\t.prdkit/history/log/001-example.md'
+assert_eq 1 "$(grep -c 'Warning: Git ignores history:' <<< "$OUTPUT")"
+(
+    cd "$IGNORE_PROJ" || exit 1
+    mkdir -p .prdkit/history
+    cp .prdkit/templates/history-log-template.md .prdkit/history/log.md
+    snapshot_upgrade_fixture "$IGNORE_PROJ" || exit 1
+    printf '%s\n' '/.prdkit/' >> .gitignore
+    snapshot_upgrade_fixture "$IGNORE_PROJ"
+) || exit 1
+run bash "$IGNORE_PROJ/.product-kit/scripts/init.sh" --target "$IGNORE_PROJ" --upgrade
+assert_eq 0 "$STATUS" "upgrade warns instead of rewriting consumer ignore policy"
+for history_path in .prdkit/history/log.md .prdkit/history/log/001-example.md .prdkit/history/archive.md; do
+    assert_contains "$OUTPUT" $':/.prdkit/\t'"$history_path" "warning names the rule and $history_path"
+done
+assert_contains "$OUTPUT" 'Narrow this ignore rule to track .prdkit/history/; keep .prdkit/cache/ ignored.'
+assert_eq '' "$(git -C "$IGNORE_PROJ" status --porcelain -- .gitignore)" "consumer ignore policy is unchanged"
+run git -C "$IGNORE_PROJ" check-ignore -q -- .prdkit/cache/future.json
+assert_eq 0 "$STATUS" "cache stays ignored"
+
 it "manifest covers every installed file and includes workflow hashes"
 assert_contains "$(cat "$PROJ/.prdkit/.manifest")" "version: $(cat "$PK_ROOT/VERSION")" "version recorded"
 expected=0

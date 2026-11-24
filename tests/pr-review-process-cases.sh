@@ -81,14 +81,7 @@ printf '# Carrier\n**Tier**: T1\n## State\n' > specs/changes/001-carrier.md
 dd if=/dev/urandom of=source.bin bs=1048576 count=8 2>>"$FIX/dd.err"
 git add -A; git commit -qm 'large reviewed implementation'
 LARGE_HEAD="$(git rev-parse HEAD)"
-LARGE_FP="$(review_fingerprint "$PROJ" 001-carrier "$LARGE_BASE" "$LARGE_HEAD")"
 bindings "$LARGE_HEAD"
-PAYLOAD="$(jq -cn --arg head "$LARGE_HEAD" --arg base "$LARGE_BASE" --arg fp "$LARGE_FP" '
-    {schema:"prdkit.review.v3",id:"00000000000000000000000000000011",repo:"owner/repo",pr:7,
-     change:"001-carrier",reviewer:"code",from:"start",to:$fp,head:$head,since:"",
-     base:"refs/remotes/origin/main",base_at:$base,verdict:"PASS",
-     critical:0,high:0,medium:0,low:0,report:"https://example.invalid/report"}')"
-fx_review 7 "$(printf '<!-- prdkit-review\n%s\n-->\n' "$PAYLOAD")"
 instrument
 awk -v dir="$FIX" '
     /^bounded 120 "\$root\/fsck.out"/ {

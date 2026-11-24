@@ -158,7 +158,7 @@ def build_cleanup(root, scripts, features, token):
     name, original = sample(features, "original")
     tracked = f"{name}-tracked"
     (repo / tracked).write_bytes(original)
-    (repo / ".gitignore").write_text(".prdkit/\n.worktrees/\n")
+    (repo / ".gitignore").write_text(f"/{KIT}/\n.prdkit/ledger/\n.worktrees/\n")
     has_module = features & {"absorbed", "embedded", "linked"}
     if has_module:
         src.mkdir()
@@ -204,10 +204,10 @@ def build_cleanup(root, scripts, features, token):
         git(repo, "worktree", "add", "-qb", target.name, target)
         args = [target.name]
         if "closed" in features:
-            log = repo / "specs/log.md"
-            log.parent.mkdir()
+            log = repo / ".prdkit/history/log.md"
+            log.parent.mkdir(parents=True)
             log.write_text(f"- 2026-01-01 {ID}: closed\n- 2026-01-01 {target.name}: closed\n")
-            git(repo, "add", "specs")
+            git(repo, "add", str(log.relative_to(repo)))
             git(repo, "commit", "-qm", "close changes")
             git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
             git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
@@ -304,7 +304,7 @@ def cleanup(root, scripts, features, token):
 
 
 def build_close(root, template, features, token):
-    # A reviewed change and its real fixture receipts come from the Bash suite.
+    # A reviewed change and its exact-head host fixture come from the Bash suite.
     repo = root / "repo"
     shutil.copytree(template, repo, symlinks=True)
     change = git(repo, "branch", "--show-current").decode().strip()
@@ -318,17 +318,18 @@ def build_close(root, template, features, token):
         (repo / "specs/changes").rename(outside / "changes")
         (repo / "specs/changes").symlink_to(outside / "changes")
     elif "inside" in features:
-        (repo / "specs/other-log").mkdir()
-        (repo / "specs/log").symlink_to("other-log")
+        (repo / ".prdkit/history/other-log").mkdir(parents=True)
+        (repo / ".prdkit/history/log").symlink_to("other-log")
     elif "escaping" in features:
-        (repo / "specs/log").symlink_to(outside)
+        (repo / ".prdkit/history").mkdir(exist_ok=True)
+        (repo / ".prdkit/history/log").symlink_to(outside)
     contents(repo, f"src/{change}.txt", features | {"untracked"}, token)
     return repo, change, outside
 
 
 def close(root, template, features, token):
     repo, change, outside = build_close(root, template, features, token)
-    record, entry = f"specs/changes/{change}.md", f"specs/log/{change}.md"
+    record, entry = f"specs/changes/{change}.md", f".prdkit/history/log/{change}.md"
     before, guard = tree(repo, (".git",)), tree(outside)
     head = git(repo, "rev-parse", "HEAD")
     # Full branch ref when attached, literal HEAD when detached.
@@ -354,7 +355,9 @@ def close(root, template, features, token):
         require(set(delta) == {record.encode(), entry.encode()}, "unexpected close commit")
         after = tree(repo, (".git",))
         del before[record], after[entry]
-        after.pop("specs/log", None)  # created to hold the new entry
+        after.pop(".prdkit/history/log", None)  # created to hold the new entry
+        if ".prdkit/history" not in before:
+            after.pop(".prdkit/history", None)
         same(before, after, "unrelated work")
     refuse = bool(features & {"staged", "inside", "escaping", "nested"})
     require(rc == int(refuse), f"expected exit {int(refuse)}, got {rc}: {output}")

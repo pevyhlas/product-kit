@@ -10,8 +10,9 @@ vague request (and ask its consequential questions) first. Create it with
 `.prdkit/scripts/bash/new-change.sh --json --short-name <name> "<intent>"`: it numbers the change,
 renders `.prdkit/templates/change-template.md` and creates a worktree unless `--no-worktree` (a new
 branch in the current checkout; existing work carries over). It never hands out a number a
-`planned:` marker names; to open that planned change, pass its number and slug (`--number 12
---short-name export` for `planned: 012-export`). The worktree starts from committed HEAD: it lists
+`planned:` marker names. To open that planned change, pass its number and slug (`--number 12
+--short-name export` for `planned: 012-export`) if it exceeds the largest allocated number.
+Otherwise, open the change with a fresh number and update the marker. The worktree starts from committed HEAD: it lists
 uncommitted `specs/` paths left behind (`UNCARRIED_SPECS`); record the owner direction and spec
 context the change needs in the worktree. Use `--no-branch` for project-authorized
 existing-branch delivery: it creates only the numbered record in the current checkout. Pass the
@@ -75,7 +76,7 @@ edited in the same PR. Sections of one file; skip a section that has nothing rea
 - A behavior change without a spec edit says `Spec impact: none — <reason>`. Unaffected changes
   and parts get no note at all.
 - The PR that delivers a task deletes its line from the change record. No `[x]`, delivered note
-  or log entry for the task. A deleted line means delivered unless the PR description lists it
+  or history entry for the task. A deleted line means delivered unless the PR description lists it
   on a `Drops: <change-id> T004, T005` line. In a single-PR change, the closing PR delivers the
   tasks with the change by deleting the record.
 - Acceptance links its evidence. The cache is local to one machine: link a CI run or PR comment

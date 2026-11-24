@@ -21,12 +21,14 @@ while [ "$#" -gt 0 ]; do
 done
 root="$(get_repo_root)"
 require_consumer_root "$root" status.sh
+spec_require_history_layout "$root" || exit 1
 spec_require_layout "$root" || exit 1
 today="$(spec_today)"
 layout="$(spec_layout "$root")"
 mixed="$(spec_mixed_forms "$root")"
 SEP="$SPEC_SEP"
-compaction="$(spec_compaction "$root")" || exit "$?"
+archive_index="$(spec_archive_log_index "$root")" || exit "$?"
+compaction="$(spec_compaction "$root" "$archive_index")" || exit "$?"
 read -r closed_since last_pass <<< "$compaction"
 
 age() { # date -> days since, or blank
@@ -50,7 +52,7 @@ later="$(if [ -n "$stage_now" ]; then
         !($2 in gone) && stage_rank($3) > stage_rank(now) { out = out (out ? ", " : "") $2 " (" $3 ")" }
         END { print out }'
 fi)"
-changes="$(verify_lines spec_open_changes "$root")"
+changes="$(verify_lines spec_open_changes "$root" "$archive_index")"
 inbox="$(verify_lines spec_inbox "$root")"
 records="$(verify_lines spec_records "$root")"
 
@@ -382,7 +384,7 @@ esac
 [ -z "$mixed" ] || printf '\nTwo spec forms: specs/SPEC.md beside %s — keep one; the views below combine both.\n' "$mixed"
 if [ "$closed_since" -ge 10 ]; then
     printf '\nCompaction due: %s changes closed %s (.prdkit/workflows/compact.md, Compaction).\n' "$closed_since" \
-        "$(if [ -n "$last_pass" ]; then echo "since the last pass ($last_pass)"; else echo 'and no pass recorded in specs/log.md'; fi)"
+        "$(if [ -n "$last_pass" ]; then echo "since the last pass ($last_pass)"; else echo 'and no pass recorded in .prdkit/history/log.md'; fi)"
 fi
 
 printf '\nOutcome progress (recorded claims; evidence and allocation need review)\n'

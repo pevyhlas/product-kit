@@ -120,12 +120,11 @@ use_gh_stub() { # [fixture directory]
     GH_STUB_DIR="${1:-$(mktemp -d)}"; export GH_STUB_DIR
     [ -n "$GH_STUB_DIR" ] || return 1
     mkdir -p "$GH_STUB_DIR/bin" "$GH_STUB_DIR/pulls" "$GH_STUB_DIR/reviews" \
-        "$GH_STUB_DIR/routes" "$GH_STUB_DIR/users" "$GH_STUB_DIR/issues/comments"
+        "$GH_STUB_DIR/routes"
     cp "$TESTS_DIR/gh-stub.sh" "$GH_STUB_DIR/bin/gh"
     chmod +x "$GH_STUB_DIR/bin/gh"
     : > "$GH_STUB_DIR/requests"
     printf '%s\n' '{"__typename":"Bot","login":"publisher[bot]","databaseId":1001}' > "$GH_STUB_DIR/publisher.json"
-    printf '%s\n' '[]' > "$GH_STUB_DIR/activity.json"
     export PATH="$GH_STUB_DIR/bin:$PATH"
     track_tmp "$GH_STUB_DIR"
 }
@@ -162,22 +161,6 @@ fx_owner_review() { # PR APPROVED|CHANGES_REQUESTED|DISMISSED commit [overrides]
     overrides="$(jq -n --arg state "$2" --arg commit "$3" --argjson overrides "$overrides" '
         {state:$state,commit:{oid:$commit},author:{__typename:"User",login:"owner",databaseId:1003}} * $overrides')" || return 1
     fx_review "$1" 'Owner review.' "$overrides"
-}
-
-fx_activity() { # before after [activity JSON overrides]
-    local overrides="${3:-}"
-    [ -n "$overrides" ] || overrides='{}'
-    jq --arg before "$1" --arg after "$2" --argjson overrides "$overrides" '
-        . + [({id:(length+1001),activity_type:"push",ref:"refs/heads/feature",before:$before,after:$after,
-               timestamp:"2026-01-01T12:00:00Z"} * $overrides)]' "$GH_STUB_DIR/activity.json" > "$GH_STUB_DIR/activity.next" &&
-        mv "$GH_STUB_DIR/activity.next" "$GH_STUB_DIR/activity.json"
-}
-
-fx_closed_pr() { # number head [JSON overrides; merged_at non-null models a merge]
-    local overrides="${3:-}"
-    [ -n "$overrides" ] || overrides='{}'
-    overrides="$(jq -n --argjson overrides "$overrides" '{state:"closed"} * $overrides')" || return 1
-    fx_pr "$1" "$2" "$overrides"
 }
 
 # Register cleanup of temp dirs created during the run.

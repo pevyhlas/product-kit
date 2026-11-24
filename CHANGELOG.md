@@ -13,6 +13,49 @@ change by change.
 - Projects with a UI can opt into `specs/design.md`, a short L1 summary for direction,
   composition, copy and owner decisions. The installer provides the template without creating
   a spec file; doctor checks its structure when present.
+- Optional `review-lenses` maps registered reviewers to GitHub accounts. One App can cover
+  several areas; the gate reports the approving account and review per area. With lenses
+  configured, T3 needs a mapped `design` approval plus a separate owner approval (#161).
+
+### Changed
+
+- Reviewers submit approvals or changes requested directly on GitHub under their own
+  identities. After a local close, push the closing commit for its required reviews.
+
+### Changed (breaking)
+
+- The 3.0 gate checks native GitHub reviews on the exact PR head. T0 needs no approval;
+  T1–T3 need an independent publisher, and T3 also needs an owner. An ID in both roles
+  counts only as owner. The PR author counts for neither. Open objections block every tier
+  across pushes until the objector approves the current head or the objection itself is
+  dismissed (#138).
+- Review policy requires a unique Configuration heading. Comments and fenced examples
+  before or within that section are rejected.
+
+### Removed (breaking)
+
+- Removed receipt publication, replay, snapshots and cross-head approval inheritance.
+  The native gate rejects the retired `review-publisher-isolation` setting.
+
+### Fixed
+
+- Focused review packages require a trusted integration ref with a unique matching
+  merge base before allocating a round. An ambiguous ref cannot disqualify a valid one.
+- Review configuration uses ATX headings only. A visible heading underline refuses the
+  entire policy instead of letting an example open or end the configuration section.
+- The launcher refuses a pass when the native result does not match the checked head,
+  trusted target, or required review roles and areas.
+
+## [2.2.0] — 2026-11-24 — tracked history, coverage check and checked owner quotes
+
+### Added
+
+- Compaction can index closed changes even after an earlier change stays open. Add exact
+  closed-number ranges to the archive's **Log condensed through** line and retrieve the full
+  entries from Git. A separate **Allocated through** line preserves the allocation floor if
+  a sparse member is omitted. Explicit numbering must exceed that floor and the highest ID
+  visible in the checked archive indexes, logs and change records. Existing cutoff-only
+  archives in the supported format need no allocation-floor migration.
 - Pull request CI shows which changed test suites fail before the fix and pass on the PR head.
   With no changed suites the check passes, including for `fix` titles. Otherwise,
   conventional `fix` titles require at least one reproducing suite; other titles are advisory.
@@ -31,6 +74,32 @@ change by change.
   lines without checking them off or logging them; an optional `Drops:` line distinguishes
   dropped tasks. Keep execution details in the ignored plan or PR.
 
+### Changed (breaking)
+
+- Closed changes and the archive now live in tracked `.prdkit/history/`, not in `specs/`.
+  From the project root, run the lines for the paths you have, then commit the move:
+
+  ```bash
+  mkdir -p .prdkit/history
+  git mv specs/log.md .prdkit/history/log.md
+  git mv specs/log .prdkit/history/log
+  git mv specs/archive.md .prdkit/history/archive.md
+  ```
+
+  If the destination `log/` already exists, move the remaining entry files individually;
+  do not nest the directory or overwrite entries. Update stale worktrees and integration
+  refs before allocating or closing changes. Keep `.prdkit/history/` tracked and ignore
+  `.prdkit/cache/`, not all of `.prdkit/`. The installer warns about blocking ignore
+  rules without rewriting them. Update the folded log header to match
+  `history-log-template.md`, and remove any links to history from the spec.
+  Preserve the archive's condensed numbers and allocation floor. If a sparse index points
+  to the old path, commit its referenced folded log at `.prdkit/history/log.md` on a durable
+  Git ref, and point the index to that snapshot. For a cutoff-only index, keep the bare
+  cutoff and move the old Git locator to a separate archive note. No old-path reader is provided.
+- Each close row is at most 200 characters, including its date, change ID and any tags:
+  `<intent> — <IDs and parts> — <disposition> — <PR>` after the prefix. Shorten existing
+  overlong live rows; leave task lists and acceptance evidence on the PR.
+
 ### Removed (breaking)
 
 - Removed kit migration guides and cutover/restructure instructions, installer retirement and
@@ -40,9 +109,16 @@ change by change.
   Review requires a per-change close entry at the closing commit. Agents must migrate an older
   install manually; Product-Kit provides no migration tooling. Ordinary upgrades and consumer
   data-migration guidance remain.
+  To upgrade a 2.1 install, first delete `.prdkit/scripts/bash/review-legacy-lib.sh` and
+  `.prdkit/scripts/bash/review-upgrade-lib.sh` and their `.prdkit/.manifest` lines, commit, then
+  run `init.sh --upgrade`. Otherwise the upgrade refuses because the manifest lists files the kit
+  no longer installs.
 
 ### Fixed
 
+- Opening a change in a partial clone reads the pinned template without fetching and
+  stops before creating a worktree if the template object is missing. Review still
+  recognizes integration branches configured in a locally available policy on older Git.
 - PR review launcher groups now have live guard leaders that signal only their own groups.
   The launcher checks for surviving members without waiting for a leader and confirms the
   groups are absent at the kernel level before deleting scratch. If it cannot verify shutdown

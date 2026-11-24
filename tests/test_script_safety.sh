@@ -46,7 +46,7 @@ assert_contains "$OUTPUT" "missing or empty # Invariants: block" "invariants req
 assert_contains "$OUTPUT" "missing or empty # Threat model: block" "threat model requires prose"
 
 it "risky scripts declare non-empty invariants and threat models"
-for script in cleanup-change close-change publish-review check-adoption install-source-lib \
+for script in cleanup-change close-change github-reviews-lib check-adoption install-source-lib \
     check-review check-pr-review build-review-package new-change init; do
     run check_safety_headers "$PK_ROOT/scripts/$script.sh"
     assert_eq 0 "$STATUS" "scripts/$script.sh has both safety blocks: $OUTPUT"

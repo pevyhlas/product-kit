@@ -26,15 +26,10 @@ test_pinned_source.sh
 test_install_source_inputs.sh
 test_local_objects.sh
 test_check_review.sh
-test_review_registry.sh
-test_review_base_merge.sh
-test_review_fingerprint.sh
-test_review_receipts.sh
 test_review_gate.sh
+test_review_lenses.sh
 test_review_record_format.sh
 test_pr_review.sh
-test_review_owner.sh
-test_publish_review.sh
 test_review_package.sh
 test_review_package_rounds.sh
 test_review_package_targeted.sh

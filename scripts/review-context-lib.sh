@@ -151,7 +151,7 @@ review_context_build() {
     fi
     while IFS= read -r -d '' path; do
         case "$path" in specs/*.md) ;; *) continue ;; esac
-        case "$path" in specs/changes/*|specs/log/*) continue ;; esac
+        case "$path" in specs/changes/*) continue ;; esac
         if blob="$(context_object "$HEAD_SHA" "$path")"; then
             mkdir -p "$(dirname "$CTX_TMP/material/$path")"
             if ! GIT_NO_LAZY_FETCH=1 git -C "$REPO_ROOT" cat-file blob "$blob" > "$CTX_TMP/material/$path" ||
@@ -264,7 +264,7 @@ review_context_build() {
         context_gap changed-spec "cannot completely enumerate changed canon"
     fi
     while IFS= read -r -d '' path; do
-        case "$path" in specs/changes/*|specs/log*|specs/archive*) continue ;; specs/*) ;; *) continue ;; esac
+        case "$path" in specs/changes/*) continue ;; specs/*) ;; *) continue ;; esac
         if blob="$(context_object "$HEAD_SHA" "$path")"; then
             context_span "$HEAD_SHA" "$path" 1 all changed-spec "changed canon, unabridged"
         else context_gap changed-spec "deleted/unsafe changed canon $(printf '%q' "$path"); inspect full diff"; fi

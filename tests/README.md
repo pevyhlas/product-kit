@@ -31,31 +31,17 @@ python3 -I tests/lib/states.py build ./state-example cleanup ./scripts 701 9 dir
 
 Neither the generator nor its Bash helper is installed in consumer projects.
 
-`test_review_record_format.sh` constructs real commit graphs and checks rejection of
-unsupported State verdicts, including inherited, moved and discarded records.
-The coverage recipe bridge reads `**Receipt fixture**:` lines as test data, not verdicts.
-Valid new recipe verdicts now run the real publisher against the stub, caching its immutable
-body for replay across base changes. Only deliberate malformed/ineligible data bypasses the
-publisher to exercise gate-side rejection. `test_review_owner.sh` and `test_publish_review.sh`
-exercise native activity/identity and real POST/read-back/cache/repair paths independently.
+`test_review_gate.sh` exercises the native approval rule, exact SHA, trusted account IDs,
+review supersession and fail-closed pagination. `test_pr_review.sh` exercises the trusted
+all-PR launcher with the real gate.
 
 Host-adapter tests use `use_gh_stub` from `tests/lib.sh`; it installs `tests/gh-stub.sh`
 as `gh` on `PATH` and selects an isolated `GH_STUB_DIR`. The stub never invokes the real host.
-`fx_pr`, `fx_review`, `fx_owner_review`, `fx_activity` and `fx_closed_pr` build generic
-`owner/repo` fixtures; their final optional argument is a JSON object of overrides.
-Review fixtures use GraphQL fields, including both edit markers. REST deliberately has neither.
-The publishing identity is configurable in `publisher.json`; the installation viewer has the
-same numeric id but typename `User`, while a posted review keeps the publisher's typename.
-
-Every invocation and GraphQL page is appended to `requests`. Tests can empty it before an
-offline check and assert it stays empty. `GH_STUB_OFFLINE=true`, `GH_STUB_FAIL=<route>` and
-`GH_STUB_PARTIAL=<route>` inject failures (for example `pulls/7` or
-`graphql:PrdkitReviews`). `GH_STUB_PAGE_SIZE=1` exercises review cursor paging;
-`GH_STUB_ACTIVITY_PAGE_SIZE=1` pages the ascending activity stream and
-`GH_STUB_FAIL=activity-page-2` fails after a successful first page. A partial
-GraphQL stream stops with `hasNextPage:true`. Named operations are `PrdkitReviews` and
-`PrdkitViewer`. A JSON file under `routes/` overrides a route, replacing `/`, `?`, `&`, `=`
-and `:` with `_`; use it for malformed or non-advancing-cursor responses.
+`fx_pr`, `fx_review` and `fx_owner_review` build generic PR/review fixtures. Their optional
+last argument accepts JSON overrides. Every call and page is recorded in `requests`.
+`GH_STUB_OFFLINE`, `GH_STUB_FAIL` and `GH_STUB_PARTIAL` inject transport failures;
+`GH_STUB_PAGE_SIZE=1` exercises cursor paging. Override `routes/graphql_PrdkitReviews-7.json`
+for malformed or non-advancing pages on PR 7.
 
 `test_new_change_linked.sh` forces overlapping automatic allocations from two linked worktrees.
 Its private-copy negative control replaces the common lock with a per-worktree lock and must
@@ -81,7 +67,7 @@ reproduce the duplicate number; synchronization markers avoid a scheduler-depend
 | Current-source consumer installation, repeated upgrades, customization and source-less helpers | consumer_smoke |
 | Change bounds: constraints, non-goals and qualities in scope for a change's parts and journeys, ranges, later-stage items | bounds |
 | Explicit lifecycle orders, whole multiword names, transitions, invalid classifications, single-file canon and upgrade preservation | lifecycle |
-| Merge gate: recorded review verdicts cover the merged head, per tier and rigor | check_review |
+| Merge gate: record format, trusted reviewer areas and native exact-head approvals | check_review, review_record_format, review_lenses, review_gate, pr_review |
 | Immutable review packages and bounded round allocation | review_package |
 | Remote checkpoint observation | delivery_checkpoint |
 | Context-budget advisories and strict doctor | context_budget |

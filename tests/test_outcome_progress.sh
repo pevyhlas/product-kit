@@ -4,7 +4,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 PROJ="$(make_inited_project)"; track_tmp "$PROJ"
 cd "$PROJ" || exit 1
-mkdir -p specs/changes
+mkdir -p specs/changes .prdkit/history
 record=specs/changes/001-programme.md
 cat > "$record" <<'MD'
 # Change: First useful answer
@@ -33,7 +33,7 @@ cat > "$record" <<'MD'
 **Progress limit**: 99
 ```
 MD
-cat > specs/log.md <<'MD'
+cat > .prdkit/history/log.md <<'MD'
 - 2026-10-02 002-repair: repair one — R-01 — source PASS — PR 1
 - 2026-10-03 003-repair: repair two — R-01 — source PASS — PR 2
 - 2026-10-04 004-repair: repair three — R-01 — source PASS — PR 3
@@ -43,7 +43,7 @@ status_json() { bash .prdkit/scripts/bash/status.sh --json; }
 checkpoint() { printf '%s' "$OUTPUT" | jq -c '.outcome_progress[] | select(.id == "001-programme")'; }
 
 it "passing repairs still trigger outcome reassessment at the default bound"
-before="$(git status --porcelain; cat "$record" specs/log.md)"
+before="$(git status --porcelain; cat "$record" .prdkit/history/log.md)"
 run status_json
 assert_eq 0 "$STATUS" "JSON status succeeds"
 row="$(checkpoint)"
@@ -53,7 +53,7 @@ assert_eq 3 "$(printf '%s' "$row" | jq -r .no_progress_changes)" "only State dat
 assert_contains "$row" 'Owner' "goal retained with JSON escaping"
 assert_eq 'one repair lane; one foundation lane; elapsed cost unknown' "$(printf '%s' "$row" | jq -r .allocation)" "lane purposes preserved"
 assert_eq 1 "$(printf '%s' "$OUTPUT" | jq -r '.changes[0].acceptance.passed')" "technical PASS is separate"
-assert_eq "$before" "$(git status --porcelain; cat "$record" specs/log.md)" "status is read-only"
+assert_eq "$before" "$(git status --porcelain; cat "$record" .prdkit/history/log.md)" "status is read-only"
 run bash .prdkit/scripts/bash/status.sh
 assert_contains "$OUTPUT" 'REASSESS: 3 integrated changes' "human warning"
 assert_contains "$OUTPUT" 'critical path: source contract -> integration -> provider pass' "critical path visible"
@@ -121,7 +121,7 @@ run status_json
 row="$(checkpoint)"
 assert_eq 2 "$(printf '%s' "$row" | jq -r .no_progress_changes)" "own branch wins over stale root"
 assert_eq "$(printf '%s' "$OUTPUT" | jq -r '.changes[0].location')" "$(printf '%s' "$row" | jq -r .location)" "same provenance"
-printf -- '- 2026-10-05 001-programme: complete — R-01 — PR 4\n' >> specs/log.md
+printf -- '- 2026-10-05 001-programme: complete — R-01 — PR 4\n' >> .prdkit/history/log.md
 run status_json
 assert_eq 1 "$(printf '%s' "$OUTPUT" | jq '.outcome_progress | length')" "root open record still projected"
 rm "$record"

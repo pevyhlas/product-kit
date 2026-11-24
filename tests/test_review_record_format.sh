@@ -3,7 +3,6 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 source "$PK_ROOT/scripts/common.sh"
 source "$PK_ROOT/scripts/spec-lib.sh"
-source "$PK_ROOT/scripts/review-fingerprint-lib.sh"
 source "$PK_ROOT/scripts/review-policy-lib.sh"
 STATUS=0; OUTPUT=""
 
@@ -20,7 +19,7 @@ BASE="$(git rev-parse HEAD)"
 scan() { run review_record_history "$PROJECT" "$ID" "$1" HEAD "$WORK"; }
 refused() {
     assert_eq 0 "$STATUS" 'scanner returns a format finding'
-    assert_contains "$OUTPUT" 'prdkit.review.v3 host receipts' 'current format named'
+    assert_contains "$OUTPUT" 'native GitHub reviews' 'current format named'
 }
 old_field() { printf '**Review**: round 1 · older · agent · FAIL\n' >> "$1"; }
 

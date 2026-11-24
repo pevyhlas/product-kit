@@ -5,17 +5,15 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 source "$PK_ROOT/scripts/common.sh"
 source "$PK_ROOT/scripts/spec-lib.sh"
-source "$PK_ROOT/scripts/review-fingerprint-lib.sh"
 STATUS=0
 PROJ="$(make_inited_project)"; track_tmp "$PROJ"
 cd "$PROJ" || exit 1
-cat >> .prdkit/memory/config.md <<'EOF'
+cat > .prdkit/memory/config.md <<'EOF'
 
 ## Configuration
 - review-host: github
 - review-publishers: bot:1001
 - review-owner: user:1003
-- review-publisher-isolation: required
 - review-t0-paths: docs/
 - review-integration-branches: origin/integration
 EOF
@@ -48,7 +46,7 @@ ORIGINAL_PATH="$PATH"
     printf 'exec %q "$@"\n' "$GH_STUB_DIR/bin/gh"
 } > "$FIX/bin/gh"
 # Only the HTTPS fetch is routed to an owned synthetic repository. All object reads, full-history
-# selection, trusted extraction, fingerprints, receipt parsing and native evaluation are real.
+# selection, trusted extraction, review pagination and native evaluation are real.
 {
     printf '#!/bin/bash\n'
     printf 'for a in "$@"; do\n'
@@ -85,6 +83,8 @@ bindings() { # head [branch] [target]
     p="$(git rev-parse main)"; tip="$(git rev-parse "$t")"
     fx_pr 7 "$h" "$(jq -cn --arg branch "$b" --arg target "$t" --arg tip "$tip" '
         {head:{ref:$branch,repo:{id:42}},base:{ref:$target,sha:$tip,repo:{id:42,full_name:"owner/repo"}}}')"
+    printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
+    fx_review 7 'Independent review.' '{"state":"APPROVED"}'
     git update-ref refs/pull/7/head "$h"
     jq -n --slurpfile pr "$GH_STUB_DIR/pulls/7.json" \
         '{action:"synchronize",number:7,repository:{id:42,full_name:"owner/repo"},pull_request:$pr[0]}' > "$FIX/event"
@@ -141,12 +141,41 @@ bindings "$HEAD_SHA"
 
 it 'installed entrypoint and valid real integrated native T0 host control'
 assert_file .prdkit/scripts/bash/check-pr-review.sh
+printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
 launch
 assert_eq 0 "$STATUS" "$OUTPUT $(cat "$FIX/stderr")"
 assert_eq complete "$(printf '%s' "$OUTPUT" | jq -r .launcher)"
 assert_eq host "$(printf '%s' "$OUTPUT" | jq -r .native.authority)"
 assert_eq "$HEAD_SHA" "$(printf '%s' "$OUTPUT" | jq -r .native.diagnostics.head)"
 assert_eq "$BASE" "$(printf '%s' "$OUTPUT" | jq -r .native.diagnostics.policy_at)"
+assert_eq '[]' "$(jq -c .native.reviews "$FIX/stdout")" 'complete T0 check accepts an empty review list'
+fx_review 7 'Needs a correction.' "$(jq -cn --arg old "$BASE" '{state:"CHANGES_REQUESTED",commit:{oid:$old}}')"
+launch
+assert_eq 1 "$STATUS" 'an eligible objection fails the native T0 check'
+assert_eq complete "$(jq -r .launcher "$FIX/stdout")"
+assert_eq "[[1001,\"1001\",\"$BASE\"]]" "$(jq -c '[.native.blocking[] | [.reviewer,.review,.commit]]' "$FIX/stdout")"
+
+it 'review events re-evaluate live approvals without a push or a top-level PR number'
+git checkout -q --detach "$HEAD_SHA"
+sed 's/T0/T1/' specs/changes/001-carrier.md > record.new; mv record.new specs/changes/001-carrier.md
+git commit -qam 'opt in to independent review'; reviewed_head="$(git rev-parse HEAD)"
+bindings "$reviewed_head"
+for action in submitted dismissed; do
+    jq --arg a "$action" 'del(.number) | .action=$a | .review={state:"approved"}' "$FIX/event" > "$FIX/review-event"
+    mv "$FIX/review-event" "$FIX/event"
+    if [ "$action" = dismissed ]; then
+        jq '.[0].state="DISMISSED"' "$GH_STUB_DIR/reviews/7.json" > "$FIX/reviews"
+        mv "$FIX/reviews" "$GH_STUB_DIR/reviews/7.json"
+    fi
+    launch GITHUB_EVENT_NAME=pull_request_review
+    if [ "$action" = submitted ]; then assert_eq 0 "$STATUS" 'live eligible approval passes'
+    else assert_eq 1 "$STATUS" 'dismissal on the same head fails'; fi
+    assert_eq complete "$(jq -r .launcher "$FIX/stdout")" 'real gate ran for the review event'
+    assert_eq "$reviewed_head" "$(jq -r .native.pr_head "$FIX/stdout")"
+done
+launch
+assert_eq refused "$(jq -r .launcher "$FIX/stdout")" 'review action cannot masquerade as a PR action'
+git checkout -q --detach "$HEAD_SHA"
 
 it 'forks and drafts use the base repository numeric PR ref, never candidate clone URLs'
 bindings "$HEAD_SHA"
@@ -156,100 +185,6 @@ mv "$FIX/pr" "$GH_STUB_DIR/pulls/7.json"
 jq --slurpfile p "$GH_STUB_DIR/pulls/7.json" '.pull_request=$p[0]|.action="converted_to_draft"' "$FIX/event" > "$FIX/new-event"
 mv "$FIX/new-event" "$FIX/event"
 launch; assert_eq 0 "$STATUS" "$OUTPUT"
-bindings "$HEAD_SHA"
-
-it 'real native T1 authenticated coverage passes, while an invalid receipt still blocks beside it'
-git checkout -q --detach "$HEAD_SHA"
-printf '# Carrier\n**Tier**: T1\n## State\n' > specs/changes/001-carrier.md
-printf 'implementation\n' > source.txt
-git add -A; git commit -qm 'T1 implementation'
-T1_HEAD="$(git rev-parse HEAD)"
-FP="$(review_fingerprint "$PROJ" 001-carrier "$BASE" "$T1_HEAD")"
-bindings "$T1_HEAD"
-PAYLOAD="$(jq -cn --arg head "$T1_HEAD" --arg base "$BASE" --arg fp "$FP" '
-    {schema:"prdkit.review.v3",id:"00000000000000000000000000000001",repo:"owner/repo",pr:7,
-     change:"001-carrier",reviewer:"code",from:"start",to:$fp,head:$head,since:"",
-     base:"refs/remotes/origin/main",base_at:$base,verdict:"PASS",
-     critical:0,high:0,medium:0,low:0,report:"https://example.invalid/report"}')"
-fx_review 7 "$(printf '<!-- prdkit-review\n%s\n-->\n' "$PAYLOAD")"
-launch; assert_eq 0 "$STATUS" "$OUTPUT"
-assert_eq 1 "$(printf '%s' "$OUTPUT" | jq -r .native.receipts)"
-fx_review 7 '<!-- prdkit-review
-{"schema":"invalid"}
--->'
-launch; assert_eq 1 "$STATUS"
-assert_eq complete "$(printf '%s' "$OUTPUT" | jq -r .launcher)"
-assert_eq 1 "$(printf '%s' "$OUTPUT" | jq -r .native.invalid_receipts)"
-printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
-git checkout -q --detach "$HEAD_SHA"
-bindings "$HEAD_SHA"
-
-assert_owner_barrier() { # state reason; all other native requirements must be clean
-    assert_eq 1 "$STATUS" "$MODE owner barrier refuses"
-    assert_eq complete "$(jq -r .launcher "$FIX/stdout")"
-    assert_eq 1 "$(jq -r .native_exit "$FIX/stdout")" 'actual native refusal, not a transport failure'
-    assert_eq host "$(jq -r .native.authority "$FIX/stdout")"
-    assert_eq "$1" "$(jq -r '.native.owner.barriers[0].state' "$FIX/stdout")"
-    assert_contains "$OUTPUT" "$2"
-    assert_eq 1 "$(jq '.native.problems|length' "$FIX/stdout")" 'only the specific owner barrier blocks'
-    assert_eq '["owner"]' "$(jq -c .native.diagnostics.problem_classes "$FIX/stdout")"
-    assert_eq 0 "$(jq .native.invalid_receipts "$FIX/stdout")"
-    assert_eq "$OWNER_AT" "$(jq -r .native.diagnostics.head "$FIX/stdout")"
-    assert_eq "$OWNER_POLICY" "$(jq -r .native.diagnostics.policy_at "$FIX/stdout")"
-    assert_eq "$OWNER_POLICY" "$(jq -r .native.diagnostics.base_at "$FIX/stdout")"
-    assert_eq "$([ "$MODE" = record-only ] && echo true || echo false)" \
-        "$(jq -r .native.record_only "$FIX/stdout")"
-}
-it 'integrated native owner barriers and same-actor clearing survive T0 and record-only exemptions'
-for MODE in docs record-only; do
-    git checkout -q --detach "$BASE"
-    sed 's/review-owner: user:1003/review-owner: user:1003, user:1004/' \
-        .prdkit/memory/config.md > "$FIX/config"
-    cp "$FIX/config" .prdkit/memory/config.md
-    git add -A; git commit -qm 'trusted two-owner policy'
-    OWNER_POLICY="$(git rev-parse HEAD)"; git branch -f main "$OWNER_POLICY"
-    if [ "$MODE" = docs ]; then OWNER_AT="$HEAD_SHA"
-    else
-        git checkout -q --detach "$BASE"
-        mkdir -p specs/changes
-        printf '# Carrier\n**Tier**: T1\n## State\n' > specs/changes/001-carrier.md
-        git add -A; git commit -qm 'record-only carrier'
-        OWNER_AT="$(git rev-parse HEAD)"
-    fi
-    bindings "$OWNER_AT"
-    printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
-    printf '[]\n' > "$GH_STUB_DIR/activity.json"
-    fx_activity 0000000000000000000000000000000000000000 "$OWNER_AT" \
-        '{"ref":"refs/heads/feat/carrier","activity_type":"branch_creation","timestamp":"2026-01-01T12:00:00Z"}'
-    launch; assert_eq 0 "$STATUS" "$MODE event-free real-native control: $OUTPUT"
-    assert_eq '[]' "$(jq -c .native.problems "$FIX/stdout")"
-    fx_owner_review 7 CHANGES_REQUESTED "$OWNER_AT"
-    launch; assert_owner_barrier CHANGES_REQUESTED 'changes requested, not PASS'
-    assert_eq user:1003 "$(jq -r '.native.owner.barriers[0].actor' "$FIX/stdout")"
-    fx_owner_review 7 APPROVED "$OWNER_AT" '{"author":{"databaseId":1004},"submittedAt":"2026-01-03T00:00:00Z"}'
-    launch; assert_owner_barrier CHANGES_REQUESTED 'changes requested, not PASS'
-    assert_eq user:1004 "$(jq -r .native.owner.actor "$FIX/stdout")" 'another owner cannot clear the issuer'
-    fx_owner_review 7 APPROVED aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa '{"submittedAt":"2026-01-04T00:00:00Z"}'
-    launch; assert_owner_barrier CHANGES_REQUESTED 'later review'
-    assert_contains "$OUTPUT" 'cannot be confirmed as the PR head' 'invalid same-actor approval cannot clear'
-    fx_owner_review 7 APPROVED "$OWNER_AT" '{"submittedAt":"2026-01-05T00:00:00Z"}'
-    launch; assert_eq 0 "$STATUS" "$MODE valid same-issuer clearing: $OUTPUT"
-    assert_eq '[]' "$(jq -c .native.owner.barriers "$FIX/stdout")"
-    assert_eq '[]' "$(jq -c .native.reviews "$FIX/stdout")" 'owner clearing is not independent coverage'
-    fx_owner_review 7 DISMISSED "$OWNER_AT" '{"author":{"databaseId":1004},"submittedAt":"2026-01-06T00:00:00Z"}'
-    launch; assert_owner_barrier DISMISSED 'latest owner review was dismissed'
-    assert_eq user:1004 "$(jq -r '.native.owner.barriers[0].actor' "$FIX/stdout")"
-    assert_not_contains "$OUTPUT" 'changes requested, not PASS' 'dismissal has its own revocation reason'
-    fx_owner_review 7 APPROVED "$OWNER_AT" '{"submittedAt":"2026-01-07T00:00:00Z"}'
-    launch; assert_owner_barrier DISMISSED 'latest owner review was dismissed'
-    fx_owner_review 7 APPROVED "$OWNER_AT" '{"author":{"databaseId":1004},"submittedAt":"2026-01-08T00:00:00Z"}'
-    launch; assert_eq 0 "$STATUS" "$MODE dismissal cleared only by its issuer: $OUTPUT"
-    assert_eq '[]' "$(jq -c .native.problems "$FIX/stdout")"
-done
-printf '[]\n' > "$GH_STUB_DIR/reviews/7.json"
-printf '[]\n' > "$GH_STUB_DIR/activity.json"
-git branch -f main "$BASE"
-git checkout -q --detach "$HEAD_SHA"
 bindings "$HEAD_SHA"
 
 it 'pre-shell constructor removes shell injection; launcher drops inherited Git/config/proxy state'
@@ -299,6 +234,16 @@ assert_eq "$TARGET" "$(printf '%s' "$OUTPUT" | jq -r .native.diagnostics.base_at
 assert_eq "$POLICY" "$(printf '%s' "$OUTPUT" | jq -r .native.policy_at)"
 assert_eq "$POLICY" "$(printf '%s' "$OUTPUT" | jq -r .native.diagnostics.policy_at)"
 assert_eq $'loaded\nloaded' "$(cat "$FIX/p-navigation")" 'both parser and native gate source navigation only from P'
+it 'malformed policy reports its source lines when checking an additional target'
+git checkout -q --detach "$BASE"
+printf '## Configuration\n' >> .prdkit/memory/config.md
+git commit -qam 'duplicate policy heading'; git branch -f main HEAD
+git checkout -q feat/carrier
+bindings "$HEAD_SHA" feat/carrier integration
+launch; assert_eq 1 "$STATUS"
+assert_eq 'invalid-policy' "$(jq -r .error.code "$FIX/stdout")"
+assert_contains "$(cat "$FIX/stderr")" 'Duplicate Configuration headings at config.md lines 2 and 8'
+assert_eq null "$(jq -c .native "$FIX/stdout")"
 git branch -f main "$BASE"
 bindings "$HEAD_SHA"
 
@@ -322,8 +267,8 @@ git checkout -q --detach "$HEAD_SHA"
 
 it 'closed unnumbered carrier is recovered by the native gate, including its log'
 git rm -q specs/changes/001-carrier.md
-mkdir -p specs/log
-printf -- '- 2026-01-01 001-carrier: closed\n' > specs/log/001-carrier.md
+mkdir -p .prdkit/history/log
+printf -- '- 2026-01-01 001-carrier: closed\n' > .prdkit/history/log/001-carrier.md
 git add -A; git commit -qm close
 CLOSED="$(git rev-parse HEAD)"
 bindings "$CLOSED"; launch
@@ -380,8 +325,8 @@ assert_eq unavailable "$(printf '%s' "$OUTPUT" | jq -r .native.authority)"
 assert_eq complete "$(printf '%s' "$OUTPUT" | jq -r .launcher)"
 rm "$GH_STUB_DIR/routes/graphql_PrdkitReviews-7.json"
 
-it 'unsafe and missing owner/navigation closure entries refuse; both regular modes are accepted'
-for helper in review-owner-lib.sh spec-navigation-lib.sh; do
+it 'unsafe and missing review/navigation closure entries refuse; both regular modes are accepted'
+for helper in github-reviews-lib.sh spec-navigation-lib.sh; do
 for mode in missing symlink gitlink regular; do
     git checkout -q --detach "$BASE"
     case "$mode" in
@@ -419,7 +364,7 @@ assert_eq 0 "$STATUS" "$OUTPUT"
 assert_eq '[null,17,true]' "$(printf '%s' "$OUTPUT" | jq -c .native.extension.keep)"
 NATIVE="$(printf '%s' "$OUTPUT" | jq -c .native)"
 # Synthetic NEGATIVE output-contract tests, not replacements for the real-native positive control.
-for fault in multiple malformed nul binding preview wrong-type exit-result overflow timeout; do
+for fault in multiple malformed nul binding preview wrong-type missing-publisher missing-owner same-account outstanding-objection wrong-area-review missing-design exit-result overflow timeout; do
     git checkout -q --detach "$BASE"
     case "$fault" in
         multiple) printf '#!/bin/bash\nprintf '\''{}\\n{}\\n'\''\n' > "$FIX/gate" ;;
@@ -433,6 +378,12 @@ for fault in multiple malformed nul binding preview wrong-type exit-result overf
                 binding) filter='.head="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' ;;
                 preview) filter='.result="preview"|.authority="snapshot"'; rc=3 ;;
                 wrong-type) filter='.head_is_pr_head="true"' ;;
+                missing-publisher) filter='.tier="T1"|.reviews[0].role="owner"' ;;
+                missing-owner) filter='.tier="T3"|.reviews[0].role="publisher"' ;;
+                same-account) filter='.tier="T3"|.reviews=[(.reviews[0]+{role:"publisher"}),(.reviews[0]+{role:"owner"})]' ;;
+                outstanding-objection) filter='.blocking=[{reviewer:1003,review:"42",role:"owner"}]' ;;
+                wrong-area-review) filter='.areas=[(.reviews[0]|{area:"code",reviewer,review:"999999"})]' ;;
+                missing-design) filter='.tier="T3"|.areas=[(.reviews[0]|{area:"code",reviewer,review})]|.reviews += [{role:"owner",reviewer:1003,review:"42"}]' ;;
                 exit-result) rc=1 ;;
             esac
             {
@@ -669,7 +620,7 @@ run jq -e --arg h "$HEAD_SHA" --arg p "$BASE" '
     .native.policy_at == $p and .native.diagnostics.base_at == $p and
     .native.diagnostics.base_ref == "refs/remotes/origin/main" and
     .native.diagnostics.policy_at == $p and .native.diagnostics.head == $h and
-    .native.diagnostics.receipt_ready == true and .native.diagnostics.host_content_bound == true
+    (.native.reviews | length > 0)
 ' "$FIX/stdout"
 assert_eq 0 "$STATUS" 'only final deletion fails after a fully bound real native success'
 "$REAL_RM" -rf "$FIX/scratch/"*

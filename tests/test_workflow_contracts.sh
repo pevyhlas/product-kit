@@ -45,7 +45,7 @@ it "review is independent, tiered and never empty"
 assert_contains "$protocol" '| T0 | docs only, no behavior change | none |' "T0"
 assert_contains "$protocol" '| T3 | L0 edit or L1 one-way door | design review plus the owner |' "T3"
 assert_contains "$review" 'Never dispatch a round with no source change' "no empty re-review"
-for suite in review_fingerprint review_receipts review_gate review_record_format review_owner publish_review; do
+for suite in review_gate review_record_format review_lenses pr_review; do
     assert_eq 1 "$(grep -cxF "test_$suite.sh" "$TESTS_DIR/native-suites.txt" || true)" "$suite is in the native macOS allowlist"
 done
 assert_contains "$review" 'did not implement' "independent reviewer"
@@ -117,7 +117,7 @@ for workflow in "$change" "$implementation"; do
     assert_contains "$workflow" 'unique within the change; never reuse or renumber them' "task keys are local and permanent"
 done
 assert_contains "$change" 'The PR that delivers a task deletes its line' "delivery deletes the line"
-assert_contains "$change" 'No `[x]`, delivered note or log entry for the task' "no task archive"
+assert_contains "$change" 'No `[x]`, delivered note or history entry for the task' "no task archive"
 assert_contains "$implementation" 'Local verification is not delivery' "verified work is not yet delivered"
 assert_contains "$review" 'For a single-PR change, deleting the record delivers its tasks' "single-PR tasks are delivered at close"
 assert_eq 1 "$(grep -cxF "$drops" "$T/pr-summary-template.md" || true)" "standalone Drops line in the PR template"
@@ -138,7 +138,7 @@ it "compaction preserves current canon and keeps history off the default load pa
 compact="$(flat "$W/compact.md")"
 assert_contains "$compact" 'never by dropping items' "preserve current canon"
 assert_contains "$compact" 'Log condensed through' "preserve numbering after log compaction"
-assert_contains "$protocol" '`specs/archive.md` only on demand' "the archive is read on demand"
+assert_contains "$protocol" '`.prdkit/history/archive.md` only on demand' "the archive is read on demand"
 assert_not_contains "$protocol" '`specs/archive/`' "no archive folder on the load table"
 
 finish

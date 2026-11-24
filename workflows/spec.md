@@ -26,7 +26,6 @@ beside either form.
 | `specs/parts/p<n>-<slug>.md` | L2 summary | one part: why it exists, components with their behaviors and invariants, interfaces, failure, budgets | 200 each | a component moves to `parts/p<n>-<slug>/<component>.md` |
 | `specs/parts/p<n>-<slug>/<component>.md` | L2 | one component, once its part outgrows its budget | 200 each | it is two components |
 | `specs/SPEC.md` | L0–L2 | the combined spec in one file, for a small project | 300 | the layout above, in one change |
-| `specs/archive.md` | history | the archive, in past tense: directions tried and why they stopped, lessons, notable outcomes, a few lines each with a git path at the recorded base commit; read on demand, never by default (`archive-template.md`) | 150 | condense older entries harder: their details stay in git at the base |
 
 Each level opens with a one-page summary that links its detail: `product.md`, `architecture.md`,
 optional `design.md` for projects with a UI, and each part file. A topic with little to say stays
@@ -47,8 +46,9 @@ and a link per piece, and IDs never change. Doctor checks that every link resolv
 spec file in the split layout is reached from a summary (`product.md`, `architecture.md` or
 optional `design.md`) through links (a folder link reaches the files directly in it; a retired
 file is exempt), and that `observed.md` links its pieces.
-Links in `specs/archive.md` must resolve too; a git path is code (`git show <sha>:<path>`), not
-a link.
+The spec is current canon only; never cite `.prdkit/history/`. Read its archive only on
+demand for past directions, lessons or outcomes ([compact.md](compact.md)). Links in the archive
+must resolve too; a Git locator (`git show <sha>:<path>`) is code, not a link.
 
 ## Generated tracking navigation
 
@@ -351,9 +351,10 @@ Budgets are reading budgets, never targets: never pad toward one, and never drop
 passes the line test to fit. A line counts once per 100 characters, so a long row counts as the
 lines it takes to read. Past a budget, tighten the wording, move detail to code or tests, or
 split (Layout). `observed.md` 150 lines, split into `observed/<area>.md`; an open change 150,
-split into changes that each ship on their own; `log.md` 150, older entries condensed into
-`archive.md` (compact.md); `inbox.md` 150, answers incorporated and the rest reviewed with the
-owner; `records.md` 150, lifted, expired and superseded lines removed (git keeps them).
+split into changes that each ship on their own; `.prdkit/history/log.md` and
+`.prdkit/history/archive.md` 150 each, older closes indexed in the archive
+even past a long-open change (compact.md); `inbox.md` 150, answers incorporated and the rest
+reviewed with the owner; `records.md` 150, lifted, expired and superseded lines removed (git keeps them).
 
 ## Organizing
 

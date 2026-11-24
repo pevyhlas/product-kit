@@ -28,7 +28,7 @@ For the greeting fixture, verify exact text using the standard test utility.
 Produce only the requested plain-text output. No external services or dependencies.
 EOF
     # The split layout (spec.md, Layout): L0 summary and detail, L1 summary, one L2 part.
-    mkdir -p specs/product specs/parts
+    mkdir -p specs/product specs/parts .prdkit/history
     cat > specs/product.md <<'EOF'
 # Fixture
 
@@ -229,7 +229,7 @@ mkdir -p .eval-state
 printf 'M1 source verified; deployment unknown\n' > .eval-state/foundation-pass
 EOF
     printf 'Provider is unprovisioned; deployment is not authorized. Source T001 is independent.\n' > .eval-state/provider.txt
-    cat > specs/log.md <<'EOF'
+    cat > .prdkit/history/log.md <<'EOF'
 - 2026-10-02 002-legacy: display label — R-01 — source PASS — PR 2
 - 2026-10-03 003-legacy: display width — R-01 — source PASS — PR 3
 - 2026-10-04 004-legacy: display ordering — R-01 — source PASS — PR 4

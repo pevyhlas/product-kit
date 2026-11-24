@@ -1,7 +1,7 @@
 # CI gates for consumer repositories
 
 Three installed helpers provide read-only CI checks: adoption validates the installed kit,
-review validates authenticated PR receipts and blockers, and strict doctor checks the spec and
+review validates eligible GitHub approvals on the exact head, and strict doctor checks the spec and
 agent context. Online review gating needs `gh`, `jq` and host access in every tier. Adoption,
 doctor and offline review previews need no host credential; no helper needs a model credential.
 
@@ -92,216 +92,67 @@ equality to the committed pin, **not** source provenance, publisher trust, revie
 release approval or permission to merge. Execute the checker and its libraries from a trusted
 installation when relying on its result; candidate-controlled verification code can lie.
 
-Once policy, publisher, release/source and committed-record prerequisites are prepared, a
+Once policy, reviewer accounts, release/source and committed-record prerequisites are prepared, a
 consumer without additional frozen pin/hash restrictions can apply an upgrade with one
 `bash .product-kit/scripts/init.sh --upgrade` command and verify it without copying hashes.
 This proof alone does not make the upgrade review-free or complete the release prerequisites.
 
 ## Review check — `check-review.sh`
 
-```
-bash .prdkit/scripts/bash/check-review.sh --pr <url> [--save-receipts <file>] [--json] [--head <rev>] [--base <rev>] [<change-id>]
-```
-
-```
-bash /trusted-install/.prdkit/scripts/bash/publish-review.sh <change-id> --repo <fetch-only-clone> --pr <url> --reviewer <id> --verdict PASS|FAIL --counts <c>,<h>,<m>,<l> --report <url> --head <rev> [--since <rev>] [--from-report <file>] [--base <ref>] [--dry-run]
-```
-
-The publisher runs the helper and its libraries from the trusted default branch or a pinned
-kit install, never from a PR checkout. `--repo` points at a fetch-only clone; do not execute its
-code. A publisher CI job must never run PR-controlled code with the publisher key, including a
-`pull_request` job with secrets. The gate's candidate-script residual is not permission to
-expose publishing credentials to candidate code.
-
-Reviews are run by the worker, never by CI: the worker dispatches the tier's independent
-reviewers (`protocol.md`) and preserves each report verbatim. A trusted publisher posts its
-content-bound v3 verdict in a submitted COMMENT review; repository text authenticates nothing.
-Before merging, the merging agent runs the online check on the exact head it
-merges (`--head <sha>`, then `gh pr merge --match-head-commit <sha>`). It passes when:
-
-- every latest receipt verdict, in any tier, is PASS with no critical or high finding (no medium
-  either under `Rigor: full`, or when the trusted constitution names no single Rigor); a
-  reviewer's later receipt supersedes its earlier one in host order;
-- no blocking line stands: a blocking line (a FAIL, or counts that block for the Rigor or
-  cannot be read) by a reviewer at some content stands until a later clean PASS from the same
-  reviewer, over a non-empty range, starts at `start` (a full re-review) or at content reachable
-  from the failed content through that reviewer's own later lines; only the latter makes its
-  range link. A blocking end that names no content here stands unless a later clean full
-  re-review follows. Returning to earlier content or rewriting history never clears it;
-- the reviews cover the change: each range end is `start` (no change) or `fp1:<sha256>` (the
-  change's delta from where it leaves `--base`, outside its own record and closing metadata).
-  Shared-log edits are included except for one validated new line closing the selected change. A blocking
-  receipt may end at `none`, which gives no content coverage. Every non-blocking PASS range,
-  superseded rounds included, links its two
-  contents, and so does a blocking range resolved through the reviewer's own later lines. Each
-  reviewer's reviewed content must link to this head's content (`fingerprint` in `--json`), and
-  for T1–T3 so must `start`, so narrow re-reviews of fixes chain while a gap fails. A rebase, a
-  squash, a reverted edit and a base merge that does not overlap keep the content; a fix or an
-  overlapping base merge (`review.md`, Merge) changes it. Empty coverage ranges and a head
-  already inside `--base` are refused;
-- the tier's minimum is present: one independent verdict for T1–T3, plus native owner approval
-  for T3. The latest decisive owner review must be APPROVED, its GraphQL commit must equal the
-  head strictly before submission in the activity log, and its L0/L1 fingerprint must equal this
-  head's. CHANGES_REQUESTED and DISMISSED are barriers. A code fix or
-  rebase can keep approval, while an L0/L1 edit voids it. Which concerns a T2 change
-  needed is the worker's call; the check sees only what is recorded;
-- the tier holds (see Policy from the trusted base below).
-
-### Policy from the trusted base
-
-The check never takes its policy from the change or the caller. Its policy snapshot is the
-current tip of `origin/HEAD`'s target, the default branch (`policy_at` in `--json`), whatever
-`--base` says; without `origin/HEAD` the check fails. `--base` only locates the change's start: it
-must be `origin/HEAD`'s target or one of the `review-integration-branches` in its committed
-`.prdkit/memory/config.md`, and any other `--base` (a local branch, a raw commit hash, an unlisted
-remote branch) fails. At the policy snapshot it reads:
-
-- **Rigor** from `.prdkit/memory/constitution.md`: exactly one Rigor line whose value is `light`
-  or `full`, alone or followed by a space and a note. Anything else (none, two, `light/full`)
-  fails the check and blocks medium findings. A branch that edits its own Rigor is still checked
-  under the trusted one, with a note; the edit applies once it merges.
-- **The reviewer registry** from `.prdkit/memory/agents.md` (below). A reviewer revoked there no
-  longer counts, whatever the branch's merge base said.
-- **Receipt policy** from `.prdkit/memory/config.md`: `review-host: github`, non-empty numeric
-  `review-publishers` (`bot:<id>` and/or `user:<id>`), personal `review-owner` ids (`user:<id>`),
-  and `review-publisher-isolation: required|shared`. Missing or malformed keys fail. Required
-  isolation rejects the PR author as publisher; shared mode reports its independence limitation.
-- **`review-t0-paths`** from `.prdkit/memory/config.md`: literal paths, a trailing `/` naming a
-  directory (for example `- review-t0-paths: docs/, README.md`). A T0 change passes only when
-  every path it changes since its start, outside its record and closing metadata, is a regular
-  non-executable file under one of them, and none is under `.prdkit/`, `.product-kit`, another
-  change record or the L0/L1 spec. Unset, T0 covers only the record and its validated closing
-  metadata. Other shared-log edits follow the normal tier and allowlist rules.
-
-The tier is the record's one `**Tier**:` field, whose whole value (up to the next `·`) is exactly
-one of T0–T3 (`T1/T3`, `T1-T3`, `T1, T3` or a second field, even in a comment, fails). It may
-rise, never fall. Its floor is the highest tier the record names on the default branch, on
-`--base`, where the change left the base and at every commit of the branch since, and T3 when the
-change edits L0 (`specs/product.md` or `specs/product/`, as `protocol.md` tiers it). A record on
-the default branch, on `--base` or at the change's start whose tier field is not exactly one tier
-fails the check. A record-only commit that lowers T3 to T1 after review fails and the owner's
-verdict is still required. Exempt record or log content must be in regular, non-executable
-files (or absent) where the change starts and at the head, never a directory, link or submodule.
-A submodule's `ignore` setting never hides a gitlink change.
-To land a policy change, merge it first in its own pull request, checked under the policy it
-replaces.
-
-### Reviewer eligibility and authenticated receipts
-
-Every covering receipt must name an eligible identity in `.prdkit/memory/agents.md` at the
-trusted base's current tip (`registry_at`, the same as `policy_at`). Without `origin/HEAD` no
-identity is registered; an arbitrary `--base` or local main/master cannot supply its own policy.
-A change cannot add its own maker to the registry and approve itself.
-Use a `## Review registry` section with `| Identity | Role |` columns and exact roles `reviewer`
-or `maker`. Lowercase identifiers may contain letters, digits, dots, underscores and hyphens.
-A maker is denied even if also listed as a reviewer; duplicate or invalid roles are ambiguous.
-Placeholders and free-form descriptions are not registrations. `owner` remains a reserved verdict.
-
-**Adoption:** establish the advertised remote default (`git remote set-head origin --auto` after
-fetching its history), and integrate the identities used by receipts before enabling
-the updated gate. Existing concern labels such as `code` must become registered review identities, or be
-reconciled with actual reviewer evidence. Preserve unresolved FAILs; deleting an ineligible
-identity is not a clean verdict. Registry checking tests declared eligibility, not session independence.
-
-GraphQL authenticates the publisher by author typename plus numeric database id, never login,
-text or `viewer` typename. Each submitted publisher review must contain exactly one valid v3
-block. Any edit marker, malformed block, wrong repo/PR, conflicting id or fingerprint mismatch
-blocks. Identical retries are no-ops in their first host position. Non-publisher copies are ignored
-and counted. Tokens are recomputed against the receipt's `base_at`, not today's advanced base,
-using local provenance objects. An absent endpoint or a match only under the former shared-log
-exclusion retains blocking history but grants no coverage or clearance. If this is a reviewer's
-latest receipt, a different reviewer's PASS cannot replace it: obtain a corrected full PASS.
-
-`--pr` reads every page, this PR's blockers for every change, and standing blockers from closed,
-unmerged PRs of the same head branch. Earlier deliveries never grant coverage. Merged PRs supply
-only restatements; repairs retain the origin PR's position and scope. See the
-[review workflow](../workflows/review.md#repairing-an-edited-or-invalid-receipt) for publisher
-logs and recovery. Logs live outside working trees under the absolute Git common directory,
-`$(git -C <fetch-clone> rev-parse --git-common-dir)/prdkit/receipts/`, and must never be
-maker-writable. Symlinked log components are refused; old `.prdkit/cache/receipts/` logs are
-neither read nor migrated. A repair must have the original review author's typename and numeric id.
-API errors, missing `gh`/`jq` and partial/non-advancing pages are
-`authority:"unavailable"`, exit 1, never an empty list.
-
-The owner's native approval is not a receipt. The activity guard requests ascending order,
-includes merges/deletions, rejects same-second submission ties, and checks continuity only in
-the deciding window. Retention is unknown. An undetermined approval needs a new push (even a
-record-only commit) and re-approval. An absent approved commit names the required fetch. No
-owner text or relay can replace this; the owner cannot self-approve a T3 PR.
-CHANGES_REQUESTED blocks the entire current PR before every coverage exemption, even when
-the carrier is missing. DISMISSED is a distinct revocation barrier. Barriers are per configured
-numeric owner actor: only that issuer's later APPROVED review, after the same native provenance,
-non-self-approval, activity, object and L0/L1 freshness checks, can clear it. COMMENTED/PENDING,
-another owner's approval and record/tier edits cannot. An invalid later approval preserves the
-negative and its diagnosis. No decisive event adds no positive requirement to otherwise exempt
-PRs. Substantive T3 retain their separate requirements.
-Unknown/missing identity or state, duplicate review ids and incomplete streams are unavailable,
-not empty. This current-PR check grants no cross-PR coverage.
-
-Only `authority:"host"` can pass with exit **0**. For offline preview:
-
 ```bash
-bash .prdkit/scripts/bash/check-review.sh --pr <url> --save-receipts receipts.txt <change-id>
-bash .prdkit/scripts/bash/check-review.sh --receipts receipts.txt <change-id>  # preview pass: 3
+bash .prdkit/scripts/bash/check-review.sh --pr <url> [--head <rev>] [--base <trusted-ref>] [--json] <change-id>
 ```
 
-Snapshots are writable, unauthenticated, US-separated normalized rows, readable with awk and
-without gh/jq. They re-run local policy, fingerprints, coverage, owner slice and record history.
-The header is `prdkit-receipts 2`; owner rows append the authenticated `user:<database-id>`
-actor after the existing review/time/state/commit/submission-head fields. Version 1 snapshots
-are refused, not used to infer multi-owner clearance; capture a fresh snapshot with the current
-checker. This does not change verdict receipt v3 or `fp1`.
-JSON reports `authority:"snapshot"`; no source reports `authority:"none"`. Whenever authority is
-not `host` (including `unavailable`), JSON `result` is `preview`, even when problems exist.
-Consumers must inspect authority, problems and exit status: exit 1 is failure and 3 is a
-would-pass preview; only a host-authority pass exits 0. Human output prints
-PREVIEW and fetch time. A would-be pass in either mode exits **3**, not merge authority. JSON
-also reports `pr`, `pr_head`, `head_is_pr_head`, `publisher_isolation`, receipt/ignored/invalid/
-carried counts, native `owner` metadata and `reviews[].receipt` URLs.
-The existing `owner` fields still describe the latest decisive event; `owner.actor` identifies
-its actor, while `owner.barriers[]` reports each standing actor/review/state and distinct reason
-(including an invalid later clearing attempt). `problems` includes these barriers at every tier.
+The **2.x tier minimums are unchanged**. The gate uses the effective record tier after
+checking trusted policy, the tier floor and T0 paths. It enforces these minimums on the exact PR head:
 
-The gate rejects `**Review**:` fields in checked change-record history from raw Git blobs.
-The current format uses `prdkit.review.v3` host receipts. Rewriting pre-merge branch history
-can erase a newly introduced field. The ordinary gate does not authenticate its own execution
-source; use the trusted all-PR boundary below for enforcement. With shared credentials, review
-independence remains a deployment property, not something the host can prove.
+| Tier | Qualifying `APPROVED` reviews |
+| --- | --- |
+| T0 | None required. The structural checks and complete live host read must still pass. |
+| T1, T2 | At least one independent `review-publishers` account. |
+| T3 | At least one independent `review-publishers` account **and** one `review-owner` account. |
 
-A closing commit that deletes the record is checked against the record's last committed
-version; `close-change.sh` makes that commit only after the check passes. A passing check whose
-record is still at the head, with no child or outcome checkpoint, prints a note and reports
-`"record_open":true` in `--json`; a project whose changes each close in one PR can fail its CI on
-that. A programme parent's planning PR reports it too until its first child or outcome checkpoint
-exists. Finalize new implementation
-changes in their own PR, retaining context and evidence on that PR before deleting the record; no
-cleanup-only PR is required. Auxiliary tracked plans are ordinary reviewed paths: removing them
-after PASS invalidates coverage. Remove them before final review, or use ignored execution scratch
-with useful context on the PR.
+The PR author counts for neither role. An account listed in both keys counts **only as owner**;
+commit authorship is irrelevant. For approval, only the account’s latest submitted review
+on the exact current head counts. A new SHA needs fresh approvals.
 
-For a PR finalizing several changes, use the containing implementation record as review carrier
-([review workflow](../workflows/review.md#review-carrier)). It inherits all required acceptance,
-unresolved findings and the combined tier/reviewer concerns. Log/delete the other records before
-the combined final review, then finalize only the carrier after PASS. Check the carrier ID; the
-helper does not automatically transfer obligations or exempt sibling record deletions.
+With optional `review-lenses`, the publishers are the union of the accounts mapped to
+reviewer identities in trusted `agents.md`. For example, `code=bot:1001, design=bot:1004`
+lets either App meet the T1 or T2 minimum, but only `1004` can supply the T3 design
+approval. Without a `design` mapping T3 fails even if the owner approves. Mapping both
+names to `bot:1001` lets one approval cover both areas. An objection from either App
+still blocks at every tier, whether its area supplied a required approval or not.
 
-A pull request that carries only the record and the log since a trusted base,
-including an old change's explicit disposition, skips coverage. Fingerprints, like that
-exemption, are computed only against a trusted base; both trust only the remote default
-identified by `origin/HEAD`, plus `review-integration-branches` in `.prdkit/memory/config.md` read
-from that default's committed snapshot (for example `- review-integration-branches: origin/develop`).
-A change cannot whitelist itself through its own config. Missing/duplicate settings grant no
-additional trust. Establish `origin/HEAD` before relying on an exemption; blocker enumeration
-still requires the online host in every tier.
+As in 2.x, the worker must cover **every applicable T2 concern**; the gate can verify
+at least one, because there is no authoritative list of required areas in the change
+record. With lenses, the live `--json` result adds `areas`: one row per configured area
+with `area`, `reviewer` (numeric account ID) and `review` (GitHub review ID). The last
+two are null if no mapped independent publisher approved. `reviews` retains all qualifying
+approvals even if more than one covers an area; `blocking` lists open objections separately.
 
-Without `--base` the check uses `origin/HEAD`; it no longer falls back to `origin/main`,
-`origin/master`, `main` or `master`, and an explicit base must be trusted as above. JSON exposes
-`base_trusted` and `policy_at`. Name the actual PR target; a stacked branch whose target is not a
-configured integration branch cannot pass until that target is configured. Only receipts on
-this PR cover its checked change; earlier PASSes never carry. The change id defaults to the
-current branch. Online, the PR head must be a local ancestor of `--head`, otherwise authority is
-unavailable. A differing descendant must also be fingerprint-identical, so an unpushed closing
-commit can be checked. Merge using the actual PR head.
+**As in 2.x, a push does not clear an objection.** An eligible account’s `CHANGES_REQUESTED`
+on **any commit of this PR** blocks every tier, including T0. The gate reads all review pages
+in submission order. The objector must submit a later `APPROVED` on the exact current head,
+or an owner/maintainer must dismiss the **objecting review itself** on GitHub. A comment,
+approval from another account, or dismissal of a different review cannot clear it.
+Pending reviews have no effect.
+
+The checked head must match the open PR and its base must match the trusted target. Incomplete
+or inconsistent pages, missing `gh`/`jq`, or an API error fail the check. With `--json`, only
+`result: pass`, `authority: host` and exit 0 mean success. A structural preview without `--pr`
+needs no host tools; it exits 3 if it would otherwise pass, 1 on problems. `reviews` lists
+qualifying approvals; `blocking` lists outstanding objections. Both identify the account,
+review ID and policy role; each blocker also records the SHA on which it was submitted
+in `commit`. Project review obligations and required checks still apply.
+
+Policy comes from the current `origin/HEAD`, never the candidate or its merge base. Configure
+`review-host: github`, numeric `review-publishers` or `review-lenses`, and `review-owner` on the default branch.
+`--base` must resolve to the default target or a listed `review-integration-branches` ref.
+The gate checks the change record, closure log, trusted Rigor, tier floor and T0 path rules.
+It rejects a `**Review**:` field in the State of an affected record, including at the fork
+or in a commit that later deleted the field. A close must have its own per-change entry at
+the closing commit; the shared log alone cannot establish a close.
+See [the configuration template](../templates/config-template.md) for key syntax.
 
 ### Trusted all-PR execution — `check-pr-review.sh`
 
@@ -317,7 +168,7 @@ bootstrap action or registration API):
 
 ```text
 host-registered immutable required workflow W
-  pull_request: opened, reopened, synchronize, edited, ready_for_review, converted_to_draft
+  pull_request: opened, synchronize, reopened
   every applicable PR, forks and drafts included; no path/numbered-branch skips
   fresh GitHub-hosted ubuntu-24.04 job; finite job timeout (at least 11 minutes)
   permissions: {} by default; this job: contents: read, pull-requests: read
@@ -325,6 +176,53 @@ host-registered immutable required workflow W
     W's validated regular-blob launcher:
     check-pr-review.sh --repository <fixed-owner/name> --event <private-host-event-path>
 ```
+
+[GitHub ruleset workflows][events] support only `pull_request`, `pull_request_target` and
+`merge_group`, using their default activity types. This integration uses only `pull_request`.
+A **required workflow** identifies W; a **required status check** is a different
+[ruleset rule][rules]. An ordinary Actions run on `pull_request_review` is not a new
+attempt of W. The launcher can consume review events in other trusted integrations;
+that capability does not make GitHub dispatch them to W.
+
+#### Refresh the required verdict
+
+1. After **any submitted review or dismissal**, the reviewer/dismisser alerts the
+   merge owner and requests a **full rerun** of W. If they lack repository write
+   access, the owner does it. Use the PR's required workflow details to select
+   the **latest run of W for this PR, target and current head H**. Check W's trusted
+   source and its recorded event `pull_request.number` and `pull_request.head.sha`
+   against the live PR. Do not select a run by job name or branch alone.
+2. With the operator's existing access, use **Re-run all jobs** on that run or
+   `gh run rerun RUN_ID --repo OWNER/REPO` ([GitHub instructions][rerun]).
+   A rerun uses the original event SHA/ref and original actor's privileges. W
+   rechecks the event bindings and fetches the **live** reviews. This works for a
+   previously green run too; do not use `--failed`, start a separate workflow or
+   give a write credential to the launcher. Serialize attempts. If a review changes
+   during a run, discard its result and rerun once the change is visible.
+3. Immediately before each merge the owner repeats the full rerun, waits for its
+   new attempt, and verifies the protected PR consumes **that attempt** with a
+   host pass on the still-current H and target. If the head/target changed, the
+   event no longer binds, the run cannot be rerun, or the ruleset still accepts an
+   earlier green result, **hold the merge**. Never waive a failed or missing run.
+
+**Threat model: a pass is a snapshot.** Dismissal after the last live review read
+(even before the job finishes) can leave a stale green check until a rerun.
+Owner-coordinated merges narrow that window; they do not make review and merge
+atomic. Do not use unattended auto-merge with this procedure. A [merge queue][queue]
+can request checks on a new group SHA, but this PR launcher checks an individual
+PR head, not a group or its constituent PRs. Adding `merge_group` to W does not
+implement that mapping or check their live approvals. Consumers requiring queue
+support or protection against a concurrent dismissal must keep their existing
+enforcement until they have a separately verified merge-time control. Prove the
+rerun behavior on a protected pilot PR: dismiss its approval and verify that the rerun blocks
+the same head, then approve it again and verify that a fresh run passes.
+
+[events]: https://docs.github.com/en/enterprise-cloud@latest/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/troubleshooting-rules#supported-ruleset-workflow-events
+[rules]: https://docs.github.com/en/enterprise-cloud@latest/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets
+[rerun]: https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs
+[queue]: https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue
+
+#### Launcher contract
 
 **Before any shell starts**, W's trusted parent must construct an allowlisted environment with a
 fixed fresh-host tool PATH, C locale, private HOME/GH_CONFIG_DIR/XDG_CONFIG_HOME/TMPDIR and umask
@@ -357,9 +255,8 @@ shallow history or implicit object acquisition.
 
 The exact native gate/helper closure is extracted as regular blobs from P's installed
 `.prdkit/scripts/bash/`, not from H or the old merge base: `check-review.sh`, `common.sh`,
-`spec-lib.sh`, its required `spec-navigation-lib.sh`, and the `review-policy-lib.sh`,
-`review-fingerprint-lib.sh`, `review-coverage-lib.sh`, `review-receipts-lib.sh`,
-`review-owner-lib.sh` helper. Every entry must be a contained regular
+`spec-lib.sh`, its required `spec-navigation-lib.sh`, and the `review-policy-lib.sh` and
+`github-reviews-lib.sh` helpers. Every entry must be a contained regular
 Git blob (mode 100644 or 100755); missing helpers, symlinks and gitlinks refuse before sourcing.
 The navigation parser is required even for the launcher's early policy-ref parsing; it is not
 loaded from adjacent candidate or workspace files. Native `spec_trusted_refs` at P must
@@ -368,8 +265,7 @@ into trust. Unique merge base S stays distinct from T and P. An exact numbered b
 ID, even when closed. Otherwise exactly one ID must be introduced by the union of net additions
 and **complete** S..H history (side branches and merge-created additions included), minus IDs
 present at S. Git 2.31+ combined-diff capability is required; incomplete history, no/multiple bases
-or zero/multiple assignments refuse. The native gate owns record recovery, closure, tier,
-fingerprints, owner events, receipts, coverage and sibling-deletion checks.
+or zero/multiple assignments refuse. The native gate owns record recovery, closure, tier and native review evaluation.
 
 The launcher checks a 600-second overall budget, with up to 120 seconds per acquisition,
 selection or extraction and 180 seconds for the native gate before cleanup. FIFO readers cap
@@ -404,9 +300,8 @@ any valid captured native object or null. Error classes/phases on stderr are san
 host/tool stderr stays private to the invocation, never printed as workflow commands.
 
 Only native exit 0, host pass, empty problems and matching change/PR/H/T/P/canonical target plus
-ready/content-bound diagnostics can exit 0. Usage exits 2; all other refusals/failures exit 1.
-Missing/partial host data never falls back to offline success. Final CI certifies actual remote H,
-not the ordinary gate's permitted local metadata-only closing descendant.
+the exact-head approvals required for that tier can exit 0. Usage exits 2; all other refusals/failures exit 1.
+Missing/partial host data never falls back to offline success. Final CI certifies the actual remote H.
 
 ## Spec and context advisories — `doctor.sh --strict`
 
@@ -415,7 +310,8 @@ bash .prdkit/scripts/bash/doctor.sh --strict
 ```
 
 Doctor always fails on malformed or duplicate IDs, malformed records, installation drift,
-agent definition or tier-map findings, a malformed `specs/log/<id>.md`, and a change record
+agent definition or tier-map findings, old history paths, malformed or overlong close rows,
+spec links to history, and a change record
 deleted in history without its log entry (`check-review.sh` fails the same at close).
 It reports unsupported kit layouts and formats as findings. Advisories include spec files over their reading budgets,
 cited IDs that are undefined or retired (in spec files and tests), a reviewed change record
@@ -424,7 +320,7 @@ open (merged without closing, including T0 and records with no verdict), trace
 drift (`Code:` paths not in the repository, stale `planned:` markers, unallocated R/Q items and
 parts, change records restating or citing undefined IDs), past-due hold reminders and expired waivers,
 open inbox items and their age, retained resolved items, local machine paths in
-specs and agent context, links to missing files in the spec and `specs/archive.md`, spec files
+specs and agent context, links to missing files in the spec and `.prdkit/history/archive.md`, spec files
 that no chain of links from
 `product.md`, `architecture.md` or the optional `design.md` reaches (1.1 layout; retired files exempt) and `observed.md`
 pieces it does not link, a lifecycle stage naming no environment that
@@ -441,7 +337,7 @@ the sum of each reading-budget file's excess, not its whole size or the advisory
 The total uses the same reading-line count as the advisories: validated generated
 navigation is excluded, and a reader failure makes the total incomplete and fails doctor.
 Byte-based agent context budgets are separate. Compaction due is an advisory at ten closes
-since the latest compaction line in either log order, including pending `specs/log/<id>.md`
+since the latest compaction line in either log order, including pending `.prdkit/history/log/<id>.md`
 files.
 
 The "Merged without closing" advisory needs the default-branch ref and its tree and blob
