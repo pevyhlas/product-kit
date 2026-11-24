@@ -13,6 +13,10 @@ assert_eq "" "$offenders" "no project-specific stack assumptions"
 it "scripts defer to actual project commands"
 offenders="$(grep -rIlnE '(^|[^[:alnum:]_])(pytest|ruff|cargo (test|clippy|build)|npm (test|run)|dotnet build)([^[:alnum:]_]|$)' "$PK_ROOT/scripts" 2>/dev/null || true)"
 assert_eq "" "$offenders" "no hardcoded toolchain execution"
+it "review reports are an internal helper with generic usage"
+run bash "$PK_ROOT/scripts/review-report.sh" --help
+assert_eq 0 "$STATUS" "the helper exposes portable usage from kit source"
+for mode in scaffold lint normalize; do assert_contains "$OUTPUT" "review-report.sh $mode"; done
 it "private-era aliases and automatic migrations are absent"
 assert_eq "" "$(grep -rlE 'SPECIFY_FEATURE|migrate_legacy' "$PK_ROOT/scripts" || true)" "no compatibility runtime"
 it "all shell helpers parse"

@@ -13,6 +13,7 @@ persists a returned report verbatim.
 
 Return:
 
+- Use the supplied report scaffold and format instructions when available.
 - **Verdict**: PASS or FAIL against the change's spec edits and acceptance, for {HEAD_SHA}.
 - **Counts**: `<n> critical, <n> high, <n> medium, <n> low`.
 - Findings ranked critical, high, medium, low; each gives where, what, why it matters and the

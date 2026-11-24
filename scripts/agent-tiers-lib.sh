@@ -28,11 +28,18 @@ AT_HARNESSES="claude opencode"
 #   banned <id> <line> | handowned <agent> <line> | map <local> <library> <line>
 #   override <scope> <harness> <model> <variant> <reason> <line> <has-reason-column>
 #   literal <tier> <claude-model> <opencode-model> <opencode-variant> <line>
-at_tier_map_records() {
+at_tier_map_records() { # file [awk skip_fence(line) function]
     [ -f "$1" ] || return 0
-    local expected
+    local expected skipper="${2:-}"
     expected="$(wc -l < "$1")" || return 1
-    awk -v expected="$expected" '
+    if [ -z "$skipper" ]; then
+        skipper='function skip_fence(line) {
+            if (infence) { if (line ~ /^[ \t]*(```|~~~)/) infence = 0; return 1 }
+            if (line ~ /^[ \t]*(```|~~~)/) { infence = 1; return 1 }
+            return 0
+        }'
+    fi
+    awk -v expected="$expected" "$skipper"'
         function trim(s) { sub(/^[ \t\r]+/, "", s); sub(/[ \t\r]+$/, "", s); return s }
         function clean(s) {
             gsub(/`/, "", s); gsub(/\*\*/, "", s); s = trim(s)
@@ -43,8 +50,7 @@ at_tier_map_records() {
         BEGIN { OFS = "\037"; incomment = 0; infence = 0; intable = 0; kind = "" }
         {
             line = $0; sub(/\r$/, "", line)
-            if (infence) { if (line ~ /^[ \t]*(```|~~~)/) infence = 0; intable = 0; next }
-            if (!incomment && line ~ /^[ \t]*(```|~~~)/) { infence = 1; intable = 0; next }
+            if (!incomment && skip_fence(line)) { intable = 0; next }
             if (incomment) {
                 p = index(line, "-->"); if (!p) next
                 line = substr(line, p + 3); incomment = 0
@@ -267,10 +273,10 @@ at_snapshot_path_problem() { # root rel
 }
 
 # Load the tier map + snapshot for a project root into AT_* globals.
-at_load() { # root
+at_load() { # root [awk skip_fence(line) function]
     local root="$1" rec
     AT_ROOT="$root"; AT_TIERMAP="$root/.prdkit/memory/agents.md"
-    AT_MAP="$(at_tier_map_records "$AT_TIERMAP")" || return 1
+    AT_MAP="$(at_tier_map_records "$AT_TIERMAP" "${2:-}")" || return 1
     AT_BASELINE="$(printf '%s\n' "$AT_MAP" | awk -F '\037' '!d && $1 == "baseline" { print $2; d = 1 }')" || return 1
     AT_BASELINE_BAD="$(printf '%s\n' "$AT_MAP" | awk -F '\037' '!d && $1 == "baselinebad" { print "line " $3 ": " $2; d = 1 }')" || return 1
     rec="$(printf '%s\n' "$AT_MAP" | awk -F '\037' '!d && $1 == "snapshot" { print $2 "\037" $3; d = 1 }')" || return 1

@@ -14,6 +14,7 @@ change by change.
 ### Added
 
 - `read-spec.sh --index` lists headings and reading-line counts; `--section` reads one section by heading or ID with its source blob and original line numbers.
+- Scaffold, lint, and normalize local review reports with `review-report.sh` without changing the GitHub review gate.
 
 ### Changed
 
