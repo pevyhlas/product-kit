@@ -376,7 +376,8 @@ stage_record_input() { # project-relative path, temp path, pinned start commit
         _spec_history_git "$REPO_ROOT" cat-file blob "$oid" > "$staged"
     elif [ "$type" = missing ]; then
         # Batch mode reports both absent paths and missing objects as "missing".
-        # Keep the fallback only if the tree shows no entry or unresolved symlink.
+        # Keep the fallback only if the tree shows no entry for the path and no
+        # symlink on the path itself or one of its exact ancestors.
         parent="$path"
         while [[ "$parent" = */* ]]; do
             parent="${parent%/*}"
@@ -384,7 +385,9 @@ stage_record_input() { # project-relative path, temp path, pinned start commit
         done
         rows="$(verify_lines _spec_history_git "$REPO_ROOT" ls-tree -t "$rev" -- "${paths[@]}")" || return 1
         while IFS=$'\t' read -r meta name; do
-            if [ "$name" = "$path" ] || [[ "$meta" = '120000 '* ]]; then return 1; fi
+            [ "$name" != "$path" ] || return 1
+            [[ "$meta" = '120000 '* ]] || continue
+            for parent in "${paths[@]}"; do [ "$name" != "$parent" ] || return 1; done
         done <<< "$rows"
     fi
 }

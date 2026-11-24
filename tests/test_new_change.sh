@@ -139,6 +139,20 @@ else
     _ok 'blob-filtered clones unavailable; skipped'
 fi
 
+it "an uncommitted change template falls back despite unrelated template symlinks"
+cd "$TAG_PROJ" || exit 1
+git rm -qf "$tag_template" &&
+    ln -sf ../memory/config.md .prdkit/templates/architecture-template.md &&
+    git add -A && git commit -qm "drop change template; link a sibling" || exit 1
+run bash "$tag_script" --json --number 54 --short-name "sibling-link" "desc"
+assert_eq 0 "$STATUS" "a sibling symlink is not on the template path"
+assert_contains "$OUTPUT" '"CHANGE_ID":"054-sibling-link"'
+assert_not_contains "$OUTPUT" 'make the committed file available locally'
+ln -s missing-dir .prdkit/linked && git add .prdkit/linked && git commit -qm "dangling sibling dir link" || exit 1
+run bash "$tag_script" --json --number 55 --short-name "sibling-dir-link" "desc"
+assert_eq 0 "$STATUS" "a symlink beside an ancestor is not an ancestor"
+cd "$PROJ" || exit 1
+
 it "an empty intent or a non-numeric --number is rejected"
 run bash "$SCRIPT" --json --short-name "x"
 assert_eq 1 "$STATUS" "missing intent exits non-zero"
