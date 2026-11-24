@@ -36,10 +36,20 @@ change by change.
   dismissed (#138).
 - Review policy requires a unique Configuration heading. Comments and fenced examples
   before or within that section are rejected.
-- To upgrade a 2.x install, merge the `review-host`, `review-publishers` and `review-owner`
-  entries described in `.prdkit/templates/config-template.md` to the integration branch and
-  drop `review-publisher-isolation`, then run `init.sh --upgrade`. It removes the retired
-  review scripts unless they were edited, and lists any it keeps.
+- Upgrading a 2.x install is one coordinated cutover; the 2.x and 3.0 gates accept no common
+  policy, so never merge the policy change on its own:
+  1. Pause merges. Settle every open 2.x receipt failure under the old gate, or have its
+     reviewer resubmit the objection as a native "changes requested" review. The 3.0 gate
+     ignores 2.x receipts, so an unsettled one stops blocking.
+  2. In one change on the trusted default branch, bump the kit pin, run `init.sh --upgrade`,
+     set `review-host`, `review-publishers` and `review-owner` as described in
+     `.prdkit/templates/config-template.md`, and drop `review-publisher-isolation`. Switch the
+     registered required workflow to the 3.0 launcher in the same cutover. The upgrade removes
+     the retired review scripts unless they were edited, and lists any it keeps.
+  3. Resume merges. GitHub does not rerun the required workflow when a review is submitted or
+     dismissed: request a full rerun after every review change and again just before each
+     merge, and do not use unattended auto-merge (`docs/ci-gates.md`, "Refresh the required
+     verdict").
 
 ### Removed (breaking)
 

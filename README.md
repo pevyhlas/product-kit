@@ -389,7 +389,7 @@ Pick one owner per change: the kit creates the worktree, or open changes with `-
 
 ## Status
 
-⚠️ **Experimental.** One maintainer builds Product-Kit and uses it on a handful of projects. Interfaces can change between releases; see the [CHANGELOG](CHANGELOG.md) for upgrade notes and the work deferred to 2.1.
+⚠️ **Experimental.** One maintainer builds Product-Kit and uses it on a handful of projects. Interfaces can change between releases; see the [CHANGELOG](CHANGELOG.md) for upgrade notes.
 
 ## Contributing
 
