@@ -31,10 +31,10 @@ Use PASS or FAIL and the actual counts. Critical and high block PASS; medium als
 blocks under full rigor. Supply trusted policy's --rigor, or lint uses the installed
 project's constitution. A PASS with medium findings needs known rigor.
 
-The coordinator keeps the original scaffold and passes it with --scaffold to
-check that the returned header is unchanged, including its title and spacing.
-Keep additional context after that header. Without a tier map, omit --scaffold;
-header fields are then optional. Do not redeclare fields in Markdown formatting.
+Stamps are authoritative only in the opening scaffold header block; later
+reviewer content is not a source of stamps. The coordinator saves the original
+and passes --scaffold to require an exact match; without it, a report may omit
+the block, but an opening "# Review report" must start a complete header.
 
 normalize writes a copy to stdout, changing only the explicit Verdict: line
 immediately before the final Counts: line. It does not infer a verdict from counts.
@@ -72,7 +72,7 @@ export LC_ALL=C
 REPORT_FENCE_AWK='function skip_fence(line,    marker, ending, opener) {
     marker = line; sub(/^ ? ? ?/, "", marker)
     if (report_fence != "") {
-        ending = marker; sub(/ +$/, "", ending)
+        ending = marker; sub(/[ \t]+$/, "", ending)
         if (length(ending) >= length(report_fence) && (ending ~ /^`+$/ || ending ~ /^~+$/) &&
             substr(ending, 1, 1) == substr(report_fence, 1, 1)) report_fence = ""
         return 1
@@ -218,52 +218,33 @@ REPORT_SCAFFOLD="$original" REPORT_COPY="$local_copy" awk -v mode="$mode" -v rig
         split("Critical High Medium Low", severities)
         for (i = 1; i <= 4; i++) rank[severities[i]] = i
         split("Reviewer Base Head Since Scope Model", labels)
-        for (i = 1; i <= 6; i++) stamp_key[tolower(labels[i])] = 1
         original = ENVIRON["REPORT_SCAFFOLD"]
         if (original != "" && !read_scaffold(original)) { invalid_scaffold = 1; exit 4 }
     }
-    function read_scaffold(file,   line, i, prefix, extra) {
-        if ((getline line < file) != 1 || line != "# Review report") return 0
-        stamp[1] = line
-        if ((getline line < file) != 1 || line != "") return 0
-        stamp[2] = line
-        for (i = 1; i <= 6; i++) {
-            prefix = labels[i] ": "
-            if ((getline line < file) != 1 || index(line, prefix) != 1 ||
-                substr(line, length(prefix) + 1) !~ /[^[:space:]]/) return 0
-            stamp[i + 2] = line
+    function valid_header_line(n, line,   prefix) {
+        if (n == 1) return line == "# Review report"
+        if (n == 2 || n == 9) return line == ""
+        prefix = labels[n - 2] ": "
+        return index(line, prefix) == 1 && substr(line, length(prefix) + 1) ~ /[^[:space:]]/
+    }
+    function read_scaffold(file,   line, i, extra) {
+        for (i = 1; i <= 9; i++) {
+            if ((getline line < file) != 1 || !valid_header_line(i, line)) return 0
+            stamp[i] = line
         }
-        if ((getline line < file) != 1 || line != "") return 0
-        stamp[9] = line
         if ((getline line < file) != 1 || line != "## Findings") return 0
         extra = getline line < file
         close(file)
         return extra == 0
     }
     function problem(n, text) { printf "line %d: %s\n", n, text; bad = 1 }
-    function stamp_declaration(key) {
-        if (original != "" || seen[key]++)
-            problem(NR, "duplicate report header field: " key)
-    }
-    # Match labels, not incidental mentions in prose. Peel nested Markdown
-    # containers before checking column cells and ATX headings.
-    function header(line, skip,   key, sep, heading, n, i, cells, previous) {
-        previous = bare_stamp; bare_stamp = ""
-        if (skip) return
-        if (NR in stamp && line == stamp[NR]) { matched[NR] = 1; return }
-        sub(/^[ \t]*/, "", line)
-        while (sub(/^(>[ \t]*|([-*+]|[0-9]+[.)])[ \t]+)[ \t]*/, "", line)) {}
-        if (previous != "" && line ~ /^(=+|-+)[ \t]*$/) stamp_declaration(previous)
-        heading = sub(/^#+[ \t]+/, "", line)
-        if (heading) sub(/[ \t]+#+[ \t]*$/, "", line)
-        n = split(line, cells, /\|/)
-        for (i = 1; i <= n; i++) {
-            sep = index(cells[i], ":")
-            key = tolower(sep ? substr(cells[i], 1, sep - 1) : cells[i])
-            gsub(/^[ \t*_`]+|[ \t*_`]+$/, "", key)
-            if (!(key in stamp_key)) continue
-            if (sep || heading || n > 1) stamp_declaration(key)
-            else bare_stamp = key
+    function header_problem(n) {
+        if (n >= 3 && n <= 8) {
+            if (original != "") problem(n, "preserve the original scaffold line for " labels[n - 2] ":")
+            else problem(n, "expected the " labels[n - 2] ": field at this position in the scaffold header")
+        } else {
+            if (original != "") problem(n, "preserve the original scaffold title and blank lines")
+            else problem(n, "expected a blank line in the scaffold header")
         }
     }
     function finish_finding() {
@@ -317,7 +298,9 @@ REPORT_SCAFFOLD="$original" REPORT_COPY="$local_copy" awk -v mode="$mode" -v rig
     {
         hidden = spec_skip($0)
         if (mode == "lint") {
-            header($0, hidden)
+            if (NR == 1) has_header = (original != "" || $0 == "# Review report")
+            if (has_header && NR <= 9 && (original != "" ? $0 != stamp[NR] : !valid_header_line(NR, $0)))
+                header_problem(NR)
             if (NR > 2) body(before, NR - 2, before_hidden)
         }
         before = last; before_hidden = last_hidden
@@ -340,12 +323,8 @@ REPORT_SCAFFOLD="$original" REPORT_COPY="$local_copy" awk -v mode="$mode" -v rig
             print last
             exit
         }
-        if (original != "")
-            for (i = 1; i <= 9; i++)
-                if (!matched[i]) {
-                    if (i >= 3 && i <= 8) problem(i, "preserve the original scaffold line for " labels[i - 2] ":")
-                    else problem(i, "preserve the original scaffold title and blank lines")
-                }
+        if (original != "" || has_header)
+            for (i = NR + 1; i <= 9; i++) header_problem(i)
         if (NR >= 2 && !verdict_line) body(before, NR - 1, before_hidden)
         if (NR >= 1 && !counts_line) body(last, NR, last_hidden)
         finish_finding()

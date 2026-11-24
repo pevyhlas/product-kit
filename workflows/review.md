@@ -53,6 +53,8 @@ durable public home. When the reviewer is configured in the tier map, prepare th
 and the format from `review-report.sh --help` with the prompt. Before publication, use
 `review-report.sh lint --strict` with the trusted policy's `--rigor` and `--scaffold` pointing to
 the saved original. If there is no tier map, send the format and lint without `--scaffold`.
+Only the opening scaffold header supplies authoritative stamps; treat everything after it as
+reviewer content, not as stamp metadata.
 Report lint is formatting evidence, not approval.
 
 Submit a normal GitHub pull request review under the reviewer’s own identity. Approve the

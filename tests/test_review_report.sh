@@ -155,15 +155,20 @@ EOF
 run scaffold example-review opencode
 assert_eq 0 "$STATUS"
 assert_contains "$OUTPUT" 'Model: test/override'
-{ printf '%s\n\n' '~~~~~  '; cat <<'EOF'
+cp "$MAP" "$MAP.open" || exit 1
+for trailing in '  ' $'\t'; do
+    # Change the registry example closer as well as the tier-map example closer.
+    awk -v trailing="$trailing" '$0 == "~~~" { $0 = $0 trailing } { print }' "$MAP.open" > "$MAP" || exit 1
+    { printf '~~~~~%s\n\n' "$trailing"; cat <<'EOF'
 | Scope | Harness | Model | Variant | Reason |
 |-------|---------|-------|---------|--------|
 | agent:example-review | opencode | test/after-fence | | A real override after the fence |
 EOF
-} >> "$MAP"
-run scaffold example-review opencode
-assert_eq 0 "$STATUS"
-assert_contains "$OUTPUT" 'Model: test/after-fence'
+    } >> "$MAP"
+    run scaffold example-review opencode
+    assert_eq 0 "$STATUS"
+    assert_contains "$OUTPUT" 'Model: test/after-fence'
+done
 mv "$MAP.saved" "$MAP" || exit 1
 
 it "strict lint checks every stamp against the original scaffold"
@@ -188,17 +193,20 @@ assert_contains "$OUTPUT" 'preserve the original scaffold line for Model:'
 run lint --strict --scaffold "$ORIGINAL"
 assert_eq 1 "$STATUS"
 assert_contains "$OUTPUT" 'preserve the original scaffold line for Since:'
-{ report | sed '/^Model:/p'; trailer PASS 0 0 0 0; } > "$INPUT"
+{ report | sed 's/^Model:.*/Head: repeated/'; trailer PASS 0 0 0 0; } > "$INPUT"
 run lint --strict --scaffold "$ORIGINAL"
 assert_eq 1 "$STATUS"
-assert_contains "$OUTPUT" 'duplicate report header field: model'
-{ report | awk '{ print } /^Model:/ { print "- **mOdEl**: alternate" }'; trailer PASS 0 0 0 0; } > "$INPUT"
+assert_contains "$OUTPUT" 'preserve the original scaffold line for Model:'
 run lint --strict
 assert_eq 1 "$STATUS"
-assert_contains "$OUTPUT" 'duplicate report header field: model'
+assert_contains "$OUTPUT" 'expected the Model: field at this position'
 run lint --scaffold "$ORIGINAL"
 assert_eq 0 "$STATUS" "default lint still reports issues without strict status"
-assert_contains "$OUTPUT" 'duplicate report header field: model'
+assert_contains "$OUTPUT" 'preserve the original scaffold line for Model:'
+{ report | sed '/^Model:/p'; trailer PASS 0 0 0 0; } > "$INPUT"
+run lint --strict
+assert_eq 1 "$STATUS" "the fixed header has no room for a repeated stamp"
+assert_contains "$OUTPUT" 'line 9: expected a blank line in the scaffold header'
 run lint --strict --scaffold "$ORIGINAL.missing"
 assert_eq 2 "$STATUS"
 printf 'not a scaffold\n' > "$ORIGINAL.invalid"
@@ -214,36 +222,46 @@ for line in 1 2 9; do
     assert_contains "$OUTPUT" "line $line: preserve the original scaffold title and blank lines"
 done
 
-it "lint refuses duplicate stamp declarations in ordinary Markdown"
-for decoration in '- Model: another' '1. **Model:** another' '2) Model: another' \
-    '### Model: another' '### Model ###' $'Model\n---\nanother' '__Model__: another' '*Model:* another' \
-    '> Model: another' '> 1. **Model:** another' '| Model: another |' \
-    '| Field | Value |'; do
+it "reports take stamps only from the opening block"
+{
+    head -n 9 "$ORIGINAL"
+    cat <<'EOF'
+**Model**: text quoted from a test
+Head: another revision discussed as context
+`git log | head`
+
+## Findings
+
+- Low: docs/example.md:3
+  Scenario: A sample row is printed.
+  Evidence: Rows are printed as `id | model | status`.
+EOF
+    trailer APPROVED 0 0 0 1
+} > "$INPUT"
+normalize > "$INPUT.normalized" || exit 1
+sed 's/^Verdict: APPROVED$/Verdict: PASS/' "$INPUT" > "$INPUT.expected"
+if cmp -s "$INPUT.expected" "$INPUT.normalized"; then _ok "normalize changes only the verdict"; else _no "normalize changes only the verdict"; fi
+mv "$INPUT.normalized" "$INPUT" || exit 1
+run lint --strict --scaffold "$ORIGINAL"
+assert_eq 0 "$STATUS" "context and evidence do not change a stamp"
+assert_eq '' "$OUTPUT"
+run lint --strict
+assert_eq 0 "$STATUS" "standalone lint likewise ignores later stamp-like content"
+assert_eq '' "$OUTPUT"
+
+it "lint sees the trailer after a fence closer with trailing spaces or a tab"
+for trailing in '  ' $'\t'; do
     {
         head -n 9 "$ORIGINAL"
-        printf '%s\n' "$decoration"
-        if [ "$decoration" = '| Field | Value |' ]; then
-            printf '%s\n' '| --- | --- |' '| **Model** | another |'
-        fi
-        printf '\n## Findings\n'
+        printf '%s\n' '~~~~markdown' '~~~' '## Findings'
+        printf '~~~~%s\n\n' "$trailing"
+        printf '## Findings\n'
         trailer PASS 0 0 0 0
     } > "$INPUT"
     run lint --strict --scaffold "$ORIGINAL"
-    assert_eq 1 "$STATUS" "scaffolded: $decoration"
-    assert_contains "$OUTPUT" 'duplicate report header field: model'
-    run lint --strict
-    assert_eq 1 "$STATUS" "standalone: $decoration"
-    assert_contains "$OUTPUT" 'duplicate report header field: model'
+    assert_eq 0 "$STATUS"
+    assert_eq '' "$OUTPUT"
 done
-{
-    head -n 9 "$ORIGINAL"
-    printf '%s\n' '~~~~markdown' '~~~' '1. **Model:** example' '~~~~' \
-        'The reviewer confirmed the model: no unexpected change.' '' '## Findings'
-    trailer PASS 0 0 0 0
-} > "$INPUT"
-run lint --strict --scaffold "$ORIGINAL"
-assert_eq 0 "$STATUS" "context and fenced examples are not stamp declarations"
-assert_eq '' "$OUTPUT"
 
 it "zero findings and valid nonblocking findings lint cleanly"
 { report; trailer PASS 0 0 0 0; } > "$INPUT"
