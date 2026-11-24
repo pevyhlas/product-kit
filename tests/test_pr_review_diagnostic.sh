@@ -394,25 +394,98 @@ for stream_fault in stdout-closed stderr-closed both-closed; do
 done
 restore_missing_summary
 
-it 'instrumentation leaves workload tail, traps, job control and owned registration unchanged'
+it 'group scan fails closed on ambiguous leaders, threaded zombies and malformed rows'
 prepare_structure() {
     unit_cmd cp "$PK_ROOT/scripts/check-pr-review.sh" "$FIX/launcher"
-    unit_cmd nd_instrument
-    unit_cmd test -s "$FIX/launcher"
-    unit_write "$FIX/old-tail" sed -n '/^    capture_err=\$!/,/^    child=\$!/p' "$PK_ROOT/scripts/check-pr-review.sh"
-    unit_write "$FIX/new-tail" sed -n '/^    capture_err=\$!/,/^    child=\$!/p' "$FIX/launcher"
+    unit_write "$FIX/group-view" sed -n \
+        -e '/^group_view() {/,/^}/p' -e '/^probe_group() {/,/^}/p' -e '/^stop_guard() {/,/^}/p' \
+        -e '/^groups_empty() {/,/^}/p' "$FIX/launcher"
+    unit_cmd test -s "$FIX/group-view"
 }
 prepare_structure
-run bash -n "$FIX/launcher"
+scan_group() (
+    source "$FIX/group-view"
+    ps() { printf '%s\n' "$snapshot"; }
+    snapshot="$1"
+    group_view 20
+)
+run scan_group $'1 1 S\n21 20 Z+'
 assert_eq 0 "$STATUS"
-run cmp "$FIX/old-tail" "$FIX/new-tail"
-assert_eq 0 "$STATUS" 'workload subshell through immediate PID registration byte-identical'
-run grep -qF 'exec "$@"' "$FIX/launcher"
-assert_eq 1 "$STATUS" 'observer does not add exec'
-run grep -qF 'then nd_rc=0; else nd_rc=$?; fi' "$FIX/launcher"
-assert_eq 0 "$STATUS" 'signal return code is captured before diagnostics'
-run grep -qF 'nd_wait "$pid" "$waited_exit" "$before" "$signal_count"' "$FIX/launcher"
-assert_eq 0 "$STATUS" 'wait observation receives original status and signal generation'
+assert_eq gone "$OUTPUT" 'plain dead non-child zombie does not keep the group live'
+run scan_group $'20 20 S\n21 20 Zl'
+assert_eq 0 "$STATUS"
+assert_eq busy "$OUTPUT" 'a Linux Zl member may still have a live thread'
+run scan_group $'20 20 Zl\n21 20 Z'
+assert_eq 0 "$STATUS"
+assert_eq unconfirmed "$OUTPUT" 'an ambiguous leader is not permission to wait or retire'
+run scan_group $'1 1 S\n21 20 Z?'
+assert_eq 0 "$STATUS"
+assert_eq unconfirmed "$OUTPUT" 'unknown state is live even after leader disappears'
+run scan_group $'1 1 S\n20 999 S'
+assert_eq 1 "$STATUS" 'a PID in another group is not an owned leader'
+run scan_group $'1 1 S\nbad'
+assert_eq 1 "$STATUS" 'malformed inventory cannot verify group shutdown'
+retired_probe() (
+    source "$FIX/group-view"
+    : > "$FIX/work.ready"
+    probe_group() { state=gone; }
+    guard_request() { printf 'stale request %s\n' "$*"; return 1; }
+    operation="$FIX"
+    stop_guard work 20 3
+)
+run retired_probe
+assert_eq 0 "$STATUS"
+assert_eq '' "$OUTPUT" 'retired ID receives no control request, even if readiness was published'
+stalled_probe() (
+    source "$FIX/group-view"
+    unit_cmd mkfifo "$FIX/stalled-inventory"
+    exec 8<>"$FIX/stalled-inventory"
+    local state="" probe_ok=true
+    group_view() {
+        # Do not produce any result until the controller has returned.
+        while [ ! -f "$FIX/release-inventory" ]; do sleep 0.1; done
+        printf 'gone\n'
+    }
+    if probe_group 20 1; then return 1; fi
+    : > "$FIX/release-inventory"
+    IFS= read -r -t 5 state <&8 || return 1
+    [ "$state" = gone ] && ! probe_group 20 1
+)
+run stalled_probe
+assert_eq 0 "$STATUS" 'a stalled inventory times out without accepting any later response'
+kernel_probe() (
+    source "$FIX/group-view"
+    guarded_pgids=(20 30)
+    builtin() {
+        [ "$*" = 'kill -0 -- -20' ] || [ "$*" = 'kill -0 -- -30' ] || return 2
+        if [ "$4" = -20 ]; then printf 'kill: (-20) - No such process\n' >&2; return 1; fi
+        [ -z "$probe_result" ] || printf 'kill: (-30) - %s\n' "$probe_result" >&2
+        return "$probe_status"
+    }
+    local probe_status="$1" probe_result="$2"
+    groups_empty
+)
+run kernel_probe 1 'No such process'
+assert_eq 0 "$STATUS" 'only ESRCH on every recorded group permits deletion'
+run kernel_probe 0 ''
+assert_eq 1 "$STATUS" 'a live group (including a reused ID) blocks deletion'
+run kernel_probe 1 'Operation not permitted'
+assert_eq 1 "$STATUS" 'EPERM is not proof of absence'
+run kernel_probe 1 ''
+assert_eq 1 "$STATUS" 'an unrecognized failure is not proof of absence'
+run kernel_probe 2 'No such process'
+assert_eq 1 "$STATUS" 'the diagnostic alone is insufficient'
+run awk '
+    /cat .*group-guard.*GUARD/ {in_guard=1}
+    /^GUARD$/ {in_guard=0}
+    /^[[:blank:]]*(kill|wait)[[:blank:]]/ {
+        if (!in_guard || $1 != "kill" || $4 != "\"-$$\"") bad=1
+        signals++
+    }
+    /builtin kill/ && $0 !~ /builtin kill -0 -- "-\$pgid"/ {bad=1}
+    END {exit (bad || signals != 2)}
+' "$FIX/launcher"
+assert_eq 0 "$STATUS" 'only the executing group leader may signal; launcher never waits on a PID'
 
 # Existing run() captures BOTH inherited public streams in memory, independently of the
 # inner fixture captures under test. It introduces no further pathname-based capture.

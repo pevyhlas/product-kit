@@ -4,18 +4,15 @@
 # Sourced by render-agents.sh, doctor.sh and check-adoption.sh (install-lib.sh must be
 # sourced first). Bash 3.2 + POSIX awk; no jq, no network, no kit source checkout.
 #
-# The tier map lives in .prdkit/memory/agents.md and has two shapes:
+# The optional tier map lives in .prdkit/memory/agents.md and uses a pinned, vendored
+# shared baseline with explicit local tier mappings:
 #
-#   Shared (opt-in) — resolve from a vendored shared tier baseline:
 #     Tier baseline: agent-library tiers.json@<commit>
 #     Baseline snapshot: .prdkit/agent-library/tiers.json        (optional; this is the default)
 #     | Local tier | Library tier |        local tier name -> baseline tier name
 #     | Scope | Harness | Model | Variant | Reason |            deviations, each with a reason
 #     Banned models: <id>, <id>        (optional; exact ids, so each harness's form is listed)
 #     Hand-owned agents: <name>, <name>   (optional; projections kept without a neutral source)
-#
-#   Legacy literal — a "| Tier | <Harness> model | ... |" table restating concrete ids.
-#     Still resolves; the overrides table and banned list work on top of it.
 #
 # The kit names no models: every id comes from the project's tier map or its vendored
 # baseline snapshot. Fenced code blocks and HTML comments in agents.md are never parsed, so
@@ -33,7 +30,9 @@ AT_HARNESSES="claude opencode"
 #   literal <tier> <claude-model> <opencode-model> <opencode-variant> <line>
 at_tier_map_records() {
     [ -f "$1" ] || return 0
-    awk '
+    local expected
+    expected="$(wc -l < "$1")" || return 1
+    awk -v expected="$expected" '
         function trim(s) { sub(/^[ \t\r]+/, "", s); sub(/[ \t\r]+$/, "", s); return s }
         function clean(s) {
             gsub(/`/, "", s); gsub(/\*\*/, "", s); s = trim(s)
@@ -115,6 +114,7 @@ at_tier_map_records() {
                 for (i = 1; i <= n; i++) { id = trim(ids[i]); if (id != "") print "handowned", id, NR }
             }
         }
+        END { if (NR != expected) exit 1 }
     ' "$1"
 }
 
@@ -270,10 +270,10 @@ at_snapshot_path_problem() { # root rel
 at_load() { # root
     local root="$1" rec
     AT_ROOT="$root"; AT_TIERMAP="$root/.prdkit/memory/agents.md"
-    AT_MAP="$(at_tier_map_records "$AT_TIERMAP")"
-    AT_BASELINE="$(printf '%s\n' "$AT_MAP" | awk -F '\037' '!d && $1 == "baseline" { print $2; d = 1 }')"
-    AT_BASELINE_BAD="$(printf '%s\n' "$AT_MAP" | awk -F '\037' '!d && $1 == "baselinebad" { print "line " $3 ": " $2; d = 1 }')"
-    rec="$(printf '%s\n' "$AT_MAP" | awk -F '\037' '!d && $1 == "snapshot" { print $2 "\037" $3; d = 1 }')"
+    AT_MAP="$(at_tier_map_records "$AT_TIERMAP")" || return 1
+    AT_BASELINE="$(printf '%s\n' "$AT_MAP" | awk -F '\037' '!d && $1 == "baseline" { print $2; d = 1 }')" || return 1
+    AT_BASELINE_BAD="$(printf '%s\n' "$AT_MAP" | awk -F '\037' '!d && $1 == "baselinebad" { print "line " $3 ": " $2; d = 1 }')" || return 1
+    rec="$(printf '%s\n' "$AT_MAP" | awk -F '\037' '!d && $1 == "snapshot" { print $2 "\037" $3; d = 1 }')" || return 1
     AT_SNAPSHOT_REL=""; AT_SNAPSHOT_LINE=""
     if [ -n "$rec" ]; then
         IFS=$'\037' read -r AT_SNAPSHOT_REL AT_SNAPSHOT_LINE <<EOF
@@ -284,14 +284,14 @@ EOF
     AT_SNAPSHOT="$root/$AT_SNAPSHOT_REL"
     AT_SNAP=""; AT_SNAP_ERR=""
     # A snapshot path outside the checkout is never read or written (refresh writes there).
-    AT_SNAPSHOT_BAD="$(at_snapshot_path_problem "$root" "$AT_SNAPSHOT_REL")"
+    AT_SNAPSHOT_BAD="$(at_snapshot_path_problem "$root" "$AT_SNAPSHOT_REL")" || return 1
     if [ -n "$AT_SNAPSHOT_BAD" ]; then
         AT_SNAPSHOT=""
         if [ -n "$AT_BASELINE" ] || [ -n "$AT_BASELINE_BAD" ]; then AT_SNAP_ERR="unsafe"; fi
     elif [ -n "$AT_BASELINE" ] || [ -n "$AT_BASELINE_BAD" ]; then
         if [ -f "$AT_SNAPSHOT" ]; then
-            AT_SNAP="$(at_tiers_json_records "$AT_SNAPSHOT")"
-            AT_SNAP_ERR="$(printf '%s\n' "$AT_SNAP" | awk -F '\037' '!d && $1 == "error" { print $2; d = 1 }')"
+            AT_SNAP="$(at_tiers_json_records "$AT_SNAPSHOT")" || return 1
+            AT_SNAP_ERR="$(printf '%s\n' "$AT_SNAP" | awk -F '\037' '!d && $1 == "error" { print $2; d = 1 }')" || return 1
             [ -z "$AT_SNAP_ERR" ] || AT_SNAP=""
         else
             AT_SNAP_ERR="missing"
@@ -303,17 +303,6 @@ at_snap_value() { # library-tier harness key
     printf '%s\n' "$AT_SNAP" | awk -F '\037' -v t="$1" -v h="$2" -v k="$3" '!d && $1 == "tier" && $2 == t && $3 == h && $4 == k { print $5; d = 1 }'
 }
 at_snap_has_tier() { printf '%s\n' "$AT_SNAP" | awk -F '\037' -v t="$1" '$1 == "tier" && $2 == t { found = 1 } END { exit !found }'; }
-
-# Compatibility aliases from the kit's former tier names to the shared library names. An
-# explicit `| Local tier | Library tier |` row always wins over these.
-at_tier_alias() {
-    case "$1" in
-        frontier) printf 'verydeep' ;;
-        high) printf 'deep' ;;
-        fast) printf 'light' ;;
-        *) printf '%s' "$1" ;;
-    esac
-}
 
 # Neutral-definition / provenance keys that never belong in a projection's frontmatter:
 # OpenCode turns unknown frontmatter keys into model options, so provenance lives in YAML
@@ -352,29 +341,19 @@ EOF
 
 # Resolve (agent, tier, harness) -> AT_R_MODEL, AT_R_VARIANT, AT_R_SOURCE; AT_R_ERR on failure.
 at_resolve() { # agent tier harness
-    local agent="$1" tier="$2" harness="$3" lib="" model="" variant="" src="" scope m v variant_oc
+    local agent="$1" tier="$2" harness="$3" lib="" model="" variant="" src="" scope m v
     AT_R_MODEL=""; AT_R_VARIANT=""; AT_R_SOURCE=""; AT_R_ERR=""
-    if [ -n "$AT_BASELINE" ]; then
+    if [ -z "$AT_BASELINE" ]; then
+        AT_R_ERR="expected a Tier baseline: agent-library tiers.json@<commit> and reasoned overrides"
+        return 1
+    else
         lib="$(printf '%s\n' "$AT_MAP" | awk -F '\037' -v t="$tier" '!d && $1 == "map" && $2 == t { print $3; d = 1 }')"
         if [ -z "$lib" ] && at_snap_has_tier "$tier"; then lib="$tier"; fi
-        if [ -z "$lib" ]; then
-            lib="$(at_tier_alias "$tier")"
-            at_snap_has_tier "$lib" || lib=""
-        fi
         if [ -n "$lib" ]; then
             model="$(at_snap_value "$lib" "$harness" model)"
             variant="$(at_snap_value "$lib" "$harness" variant)"
             [ -z "$model" ] || src="baseline $lib"
         fi
-    else
-        IFS=$'\037' read -r _ _ m v variant_oc _ <<EOF
-$(printf '%s\n' "$AT_MAP" | awk -F '\037' -v t="$tier" '!d && $1 == "literal" && $2 == t { print; d = 1 }')
-EOF
-        case "$harness" in
-            claude) model="$m"; variant="" ;;
-            opencode) model="$v"; variant="${variant_oc:-}" ;;
-        esac
-        [ -z "$model" ] || src="literal $tier"
     fi
     for scope in "tier:$tier" "agent:$agent"; do
         while IFS=$'\037' read -r m v; do
@@ -473,9 +452,8 @@ at_owned_description() { # def
 
 # --- findings ---------------------------------------------------------------------------
 
-# Static tier-map findings. Every check keys off syntax the project opted into, so a legacy
-# literal-only map without a banned list produces none.
-at_lint() { at_lint_map; at_lint_definitions; at_lint_projection_bans; }
+# Static tier-map findings. Projects without an agent-tier map need no baseline.
+at_lint() { at_lint_map && at_lint_definitions && at_lint_projection_bans; }
 
 # Neutral-definition findings that make the render target set ambiguous: a `harnesses:` line
 # that is not a bracketed list of known projection harnesses.
@@ -484,6 +462,7 @@ at_lint_definitions() {
     for def in "$AT_ROOT"/.prdkit/agents/*.md; do
         [ -f "$def" ] || continue
         name="$(basename "$def" .md)"
+        [ -n "$AT_BASELINE" ] || printf "Agent '%s': expected a Tier baseline: agent-library tiers.json@<commit> and reasoned overrides\n" "$name"
         at_def_harnesses "$def"
         [ -z "$AT_DH_ERR" ] || printf "Agent '%s': .prdkit/agents/%s.md %s\n" "$name" "$name" "$AT_DH_ERR"
     done
@@ -565,12 +544,7 @@ $rec
 EOF
         case "$kind" in
             literal)
-                if [ -n "$AT_BASELINE" ]; then
-                    printf "Tier map line %s: declares a Tier baseline but restates literal model ids for tier '%s'; remove the literal table and record each deviation as an override with a Reason\n" "$e" "$a"
-                fi
-                for model in "$b" "$c"; do
-                    ! at_is_banned "$model" || printf "Tier map line %s: banned model '%s'\n" "$e" "$model"
-                done ;;
+                printf "Tier map line %s: unsupported literal table for '%s'; expected a Tier baseline and overrides with a Reason\n" "$e" "$a" ;;
             map)
                 [ -n "$AT_BASELINE" ] || printf 'Tier map line %s: a Local tier -> Library tier mapping needs a Tier baseline line\n' "$c"
                 if [ -n "$AT_BASELINE" ] && [ -n "$AT_SNAP" ] && ! at_snap_has_tier "$b"; then
@@ -606,12 +580,13 @@ EOF
 # Projection findings for every neutral definition and target harness.
 #   include_missing  report absent projections (doctor reports those itself)
 at_projection_findings() { # include_missing
-    local include_missing="$1" def name tier harness proj current variant key desc
+    local include_missing="$1" def name tier harness proj current variant key desc targets actual body
     for def in "$AT_ROOT"/.prdkit/agents/*.md; do
         [ -f "$def" ] || continue
         name="$(basename "$def" .md)"
-        tier="$(at_fm_value "$def" tier)"
-        for harness in $(at_targets "$AT_ROOT" "$def"); do
+        tier="$(at_fm_value "$def" tier)" || return 1
+        targets="$(at_targets "$AT_ROOT" "$def")" || return 1
+        for harness in $targets; do
             proj="$AT_ROOT/.$harness/agents/$name.md"
             if ! at_resolve "$name" "$tier" "$harness"; then
                 printf "Agent '%s': no %s model resolves (%s)\n" "$name" "$harness" "$AT_R_ERR"
@@ -621,22 +596,28 @@ at_projection_findings() { # include_missing
                 [ "$include_missing" != true ] || printf "Agent '%s': no projection in .%s/agents/ (run render-agents.sh)\n" "$name" "$harness"
                 continue
             fi
-            current="$(at_fm_value "$proj" model)"
+            current="$(at_fm_value "$proj" model)" || return 1
             [ "$current" = "$AT_R_MODEL" ] ||
                 printf "Agent '%s': .%s/agents/%s.md model '%s' differs from resolved '%s' (%s); run render-agents.sh\n" "$name" "$harness" "$name" "${current:-<none>}" "$AT_R_MODEL" "$AT_R_SOURCE"
             if [ "$harness" = opencode ]; then
                 for key in $AT_NEUTRAL_ONLY_KEYS; do
-                    [ -z "$(at_fm_line "$proj" "$key")" ] ||
+                    actual="$(at_fm_line "$proj" "$key")" || return 1
+                    [ -z "$actual" ] ||
                         printf "Agent '%s': .opencode/agents/%s.md carries neutral/provenance key '%s:' as a field (OpenCode passes unknown keys to the model as options); keep provenance in YAML comments\n" "$name" "$name" "$key"
                 done
-                variant="$(at_fm_value "$proj" variant)"
+                variant="$(at_fm_value "$proj" variant)" || return 1
                 [ "$variant" = "$AT_R_VARIANT" ] ||
                     printf "Agent '%s': .%s/agents/%s.md variant '%s' differs from resolved '%s' (%s); run render-agents.sh\n" "$name" "$harness" "$name" "${variant:-<none>}" "${AT_R_VARIANT:-<none>}" "$AT_R_SOURCE"
             fi
-            desc="$(at_owned_description "$def")"
-            [ -z "$desc" ] || [ "$(at_fm_value "$proj" description)" = "$desc" ] ||
-                printf "Agent '%s': .%s/agents/%s.md description differs from the neutral definition; run render-agents.sh\n" "$name" "$harness" "$name"
-            [ "$(at_body_norm "$proj")" = "$(at_body_norm "$def")" ] ||
+            desc="$(at_owned_description "$def")" || return 1
+            if [ -n "$desc" ]; then
+                actual="$(at_fm_value "$proj" description)" || return 1
+                [ "$actual" = "$desc" ] ||
+                    printf "Agent '%s': .%s/agents/%s.md description differs from the neutral definition; run render-agents.sh\n" "$name" "$harness" "$name"
+            fi
+            actual="$(at_body_norm "$proj")" || return 1
+            body="$(at_body_norm "$def")" || return 1
+            [ "$actual" = "$body" ] ||
                 printf "Agent '%s': .%s/agents/%s.md prompt body differs from the neutral definition; run render-agents.sh\n" "$name" "$harness" "$name"
         done
     done
@@ -645,8 +626,7 @@ at_projection_findings() { # include_missing
 # Entry point for doctor/adoption/render --check.
 #   agent_tier_findings <root> [--include-missing] [--always-projections]
 # Projection checks run when the tier map declares a shared baseline (the opt-in), or always
-# with --always-projections (render-agents.sh --check). Legacy literal maps keep their
-# pre-renderer doctor behavior unless the project runs the renderer's check explicitly.
+# with --always-projections (render-agents.sh --check).
 agent_tier_findings() {
     local root="$1" include_missing=false always=false
     shift
@@ -657,11 +637,16 @@ agent_tier_findings() {
         esac
         shift
     done
-    at_load "$root"
-    at_lint
+    if [ -f "$root/.prdkit/memory/agents.md" ]; then
+        verify_lf_file "$root/.prdkit/memory/agents.md" || {
+            printf 'Invalid tier map: expected non-empty LF-terminated text\n'; return
+        }
+    fi
+    at_load "$root" || return 1
+    at_lint || return 1
     if $always || [ -n "$AT_BASELINE" ]; then
         if [ -z "$AT_BASELINE" ] || [ -n "$AT_SNAP" ]; then
-            at_projection_findings "$include_missing"
+            at_projection_findings "$include_missing" || return 1
         fi
     fi
     [ -z "$AT_BASELINE" ] || at_ownership_findings

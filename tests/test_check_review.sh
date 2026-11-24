@@ -32,6 +32,29 @@ record() { # tier, then State review lines
     git add specs/changes/001-greet.md; git commit -qm "record" >/dev/null
 }
 TRUSTED_TIP="$(git rev-parse origin/HEAD)"
+it "the trusted-ref reader includes locally configured refs on older partial-clone Git"
+mkdir "$_SCRATCH_CWD/old-git" || exit 1
+REVIEW_REAL_GIT="$(command -v git)"; export REVIEW_REAL_GIT
+cat > "$_SCRATCH_CWD/old-git/git" <<'SH'
+#!/bin/sh
+if [ "$1" = version ]; then echo 'git version 2.39.5'; exit 0; fi
+exec "$REVIEW_REAL_GIT" "$@"
+SH
+chmod +x "$_SCRATCH_CWD/old-git/git" &&
+    git config remote.origin.promisor true &&
+    git update-ref refs/remotes/origin/develop "$TRUSTED_TIP" || exit 1
+read_trusted_refs() (
+    source .prdkit/scripts/bash/spec-lib.sh
+    PATH="$_SCRATCH_CWD/old-git:$PATH" GIT_ALLOW_PROTOCOL='' GIT_TRACE="$_SCRATCH_CWD/trusted.trace" \
+        spec_trusted_refs "$PWD"
+)
+run read_trusted_refs
+assert_eq 0 "$STATUS"
+assert_eq "refs/remotes/origin/$DEFAULT"$'\n'refs/remotes/origin/develop "$OUTPUT"
+assert_not_contains "$(cat "$_SCRATCH_CWD/trusted.trace")" 'built-in: git fetch '
+git config --unset remote.origin.promisor &&
+    git update-ref -d refs/remotes/origin/develop || exit 1
+
 it "the trusted constitution must name exactly one well-formed Rigor, even with no findings"
 record T1
 for rigor_lines in '' '- **Rigor**: light\n- **Rigor**: light\n' '- **Rigor**: light/full\n' '- **Rigor**: light1\n' \
@@ -59,6 +82,16 @@ done
 record "\`T1\`"
 run bash "$CHECK"
 assert_eq 3 "$STATUS" "a tier in backticks reads the same"
+
+it "a label inside a Tags value cannot supply a tier claim or floor"
+record T1
+awk 'NR == 2 { print "**Tags**: sample **Tier**: T3" } { print }' \
+    specs/changes/001-greet.md > specs/changes/001.tmp
+mv specs/changes/001.tmp specs/changes/001-greet.md
+git commit -qa --amend --no-edit >/dev/null
+run bash "$CHECK" --json
+assert_eq 3 "$STATUS"
+assert_not_contains "$OUTPUT" 'more than one review tier'
 
 it "an L0 edit is T3 whatever the first claim"
 record T1
@@ -132,14 +165,14 @@ git reset -q --hard HEAD~1
 run bash "$CHECK" 003-docs
 assert_eq 3 "$STATUS" "docs under the trusted T0 paths pass"
 assert_contains "$OUTPUT" "PREVIEW" "says why"
-mkdir -p specs/log; printf -- '- 2026-10-20 003-docs: docs — #3\n' > specs/log/003-docs.md
-git add specs/log/003-docs.md; git commit -qm "the change's log entry" >/dev/null
+mkdir -p .prdkit/history/log; printf -- '- 2026-10-20 003-docs: docs — #3\n' > .prdkit/history/log/003-docs.md
+git add .prdkit/history/log/003-docs.md; git commit -qm "the change's log entry" >/dev/null
 run bash "$CHECK" 003-docs
 assert_eq 3 "$STATUS" "the change's own log entry file is outside T0's paths, like the log"
-chmod +x specs/log/003-docs.md; git add specs/log/003-docs.md; git commit -qm "executable entry" >/dev/null
+chmod +x .prdkit/history/log/003-docs.md; git add .prdkit/history/log/003-docs.md; git commit -qm "executable entry" >/dev/null
 run bash "$CHECK" 003-docs
 assert_eq 1 "$STATUS" "an executable log entry fails"
-assert_contains "$OUTPUT" "specs/log/003-docs.md must stay a regular, non-executable file" "says why"
+assert_contains "$OUTPUT" ".prdkit/history/log/003-docs.md must stay a regular, non-executable file" "says why"
 git reset -q --hard HEAD~2
 chmod +x docs/guide.md; git commit -qam "executable doc" >/dev/null
 run bash "$CHECK" 003-docs
@@ -195,12 +228,21 @@ git update-ref "refs/remotes/origin/$DEFAULT" "$TRUSTED_TIP"
 
 it "the closing commit deletes the record and appends the log; the last record still decides"
 record T1
-git rm -q specs/changes/001-greet.md; mkdir -p specs; printf -- '- 2026-10-18 001-greet: warmer greeting — R-01 — #1\n' >> specs/log.md
-git add specs/log.md; git commit -qm close >/dev/null
+git rm -q specs/changes/001-greet.md; mkdir -p .prdkit/history/log; printf -- '- 2026-10-18 001-greet: warmer greeting — R-01 — #1\n' > .prdkit/history/log/001-greet.md
+git add .prdkit/history/log; git commit -qm close >/dev/null
 run bash "$CHECK" --json
 assert_eq 3 "$STATUS" "passes after the record is deleted"
 assert_contains "$OUTPUT" '"result":"preview","change":"001-greet"' "JSON result"
 assert_contains "$OUTPUT" '"record_only":false' "the merge carries code"
+git reset -q --hard HEAD^
+git rm -q specs/changes/001-greet.md
+mkdir -p .prdkit/history
+printf -- '- 2026-10-18 001-greet: direct folded close\n' > .prdkit/history/log.md
+git add .prdkit/history/log.md; git commit -qm 'unsupported direct close'
+run bash "$CHECK"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'use the current per-change entry format'
+git reset -q --hard HEAD^
 it "the head and change id can be given, as CI does for a pull request"
 git checkout -q "$DEFAULT"
 run bash "$CHECK" --head 001-greet --base "origin/$DEFAULT" 001-greet

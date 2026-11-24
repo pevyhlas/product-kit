@@ -3,7 +3,7 @@ set -euo pipefail
 source "$PK_ROOT/tests/evals/fixture.sh"
 fixture_project
 mkdir -p evidence
-printf -- '- 2026-10-12 001-greeting: greeting file — R-01 — N/A\n' > specs/log.md
+printf -- '- 2026-10-12 001-greeting: greeting file — R-01 — N/A\n' > .prdkit/history/log.md
 cat > evidence/acceptance.md <<'EOF'
 # Fixture acceptance
 The greeting passes its technical acceptance check in the fixture environment.

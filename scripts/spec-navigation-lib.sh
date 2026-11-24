@@ -2,11 +2,13 @@
 # One conservative recognizer for prose budgets and routine context. Raw source stays canonical.
 # Bash 3.2 / POSIX awk; no network, tracker, jq or generated source writes.
 
-spec_navigation() { # file budget|stats|compact|diagnostics|target [reference key]
-    local terminated=1
+spec_navigation() { # file budget|stats|compact|diagnostics|target [reference key] [expected lines and bytes]
+    local terminated=1 last
     [ -f "$1" ] || { printf 'No source file: %s\n' "$1" >&2; return 2; }
-    [ -z "$(tail -c 1 "$1")" ] || terminated=0
-    LC_ALL=C awk -v mode="$2" -v target="${3:-}" -v terminated="$terminated" '
+    last="$(tail -c 1 "$1" && printf x)" || return 1
+    case "$last" in x|$'\nx') ;; *) terminated=0 ;; esac
+    LC_ALL=C awk -v mode="$2" -v target="${3:-}" -v terminated="$terminated" \
+        -v expected_lines="${4:-}" -v expected_bytes="${5:-}" '
         function norm(s) {
             gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); gsub(/[[:space:]]+/, " ", s)
             return tolower(s)
@@ -91,6 +93,10 @@ spec_navigation() { # file budget|stats|compact|diagnostics|target [reference ke
         }
         END {
             if (NR && !terminated) { bytes[NR]--; raw_bytes-- }
+            if (expected_lines != "" && (NR != expected_lines || raw_bytes != expected_bytes)) {
+                printf "Incomplete navigation input: expected %d lines/%d bytes, checked %d/%d\n", expected_lines, expected_bytes, NR, raw_bytes
+                exit 1
+            }
             if (candidate) {
                 if (!start || !end || in_block || !definitions) bad("incomplete or empty navigation footer")
                 if (html) bad("unsupported HTML context; navigation retained")

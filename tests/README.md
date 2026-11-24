@@ -50,26 +50,24 @@ reproduce the duplicate number; synchronization markers avoid a scheduler-depend
 | Area | Suites |
 |------|--------|
 | Public catalog, neutral operations, installed references | catalog_sync, generalization, wiring, workflow_doc_coverage, workflow_contracts |
-| Installer ownership, harness targets, preservation, retired-file removal | init |
-| Partial copy/storage/managed-block/retirement/manifest failures, TERM/KILL, overlapping writes and coherent retry | upgrade_recovery |
-| 0.17 to 1.0 upgrade: retired files, untouched `specs/`, cutover message, gate warning, leftover features, a cutover that removes every 0.x folder, ignored leftovers, stale agent context | upgrade_1_0 |
-| Upgrade to 2.0 removes the ledger and retrospective files, keeps an edited ledger policy | upgrade_2_0 |
-| Optional subsystems: agent tiers only on request, recorded choice, kept when used, `--without`, pre-2.0 upgrades | optional_subsystems |
+| Installer ownership, harness targets, customization preservation, unsupported manifest rejection | init |
+| Partial copy/storage/managed-block/manifest failures, TERM/KILL, overlapping writes and coherent retry | upgrade_recovery |
+| Optional subsystems: agent tiers only on request, recorded choice, kept when used, `--without` | optional_subsystems |
 | Source-less adoption integrity, managed harness entries, kit pins | adoption_gate |
 | Agent tier resolution, shared baseline/overrides, projection rendering and drift | agent_tiers |
-| Change numbering across checkouts, worktrees, `planned:` markers and retired 0.x numbers (folders, `specs/archive.md`, git history, shallow clones), never overwriting, dirty-tree refusal | new_change |
+| Change numbering across checkouts, worktrees, `planned:` markers and compacted logs; no overwrites; dirty-tree refusal | new_change |
 | Worktree teardown and stale registrations | cleanup_change |
 | Shell escaping, path-escaping IDs, JSON safety | script_safety |
 | Generated status: markers, change State and Acceptance, records, inbox, longest pole | status |
-| Inbox identities/options, stale answers, legacy reconciliation diagnostics and owner/agent queue separation | inbox |
+| Inbox identities/options, stale answers, format rejection and owner/agent queue separation | inbox |
 | Outcome checkpoint projection: successful-change stalls, unknown/malformed accounting, worktree provenance and read-only reporting | outcome_progress |
 | Diagnostics: IDs, records, layout, ceilings, citations, inbox, evidence, example spec | doctor |
 | Effective provenance, ownership, winning model rules and explicit runtime unknowns | diagnostics_inventory |
-| Installed version versus spec layout, conservative migration states, unknown metadata and source-less diagnostics | adoption_state |
+| Installed version versus spec layout, unsupported inputs, unknown metadata and source-less diagnostics | adoption_state |
 | Current-source consumer installation, repeated upgrades, customization and source-less helpers | consumer_smoke |
 | Change bounds: constraints, non-goals and qualities in scope for a change's parts and journeys, ranges, later-stage items | bounds |
 | Explicit lifecycle orders, whole multiword names, transitions, invalid classifications, single-file canon and upgrade preservation | lifecycle |
-| Merge gate: change structure, trusted policy and native exact-head approvals | check_review, review_gate, pr_review |
+| Merge gate: record format, trusted reviewer areas and native exact-head approvals | check_review, review_record_format, review_lenses, review_gate, pr_review |
 | Immutable review packages and bounded round allocation | review_package |
 | Remote checkpoint observation | delivery_checkpoint |
 | Context-budget advisories and strict doctor | context_budget |

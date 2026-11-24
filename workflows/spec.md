@@ -24,7 +24,6 @@ everything in one change and deletes `SPEC.md`).
 | `specs/parts/p<n>-<slug>.md` | L2 summary | one part: why it exists, components with their behaviors and invariants, interfaces, failure, budgets | 200 each | a component moves to `parts/p<n>-<slug>/<component>.md` |
 | `specs/parts/p<n>-<slug>/<component>.md` | L2 | one component, once its part outgrows its budget | 200 each | it is two components |
 | `specs/SPEC.md` | L0–L2 | all of the above in one file, for a small project | 300 | the layout above, in one change |
-| `specs/archive.md` | history | the archive, in past tense: directions tried and why they stopped, lessons, notable outcomes, a few lines each with a git path at the recorded base commit; read on demand, never by default (`archive-template.md`) | 150 | condense older entries harder: their details stay in git at the base |
 
 Each level opens with a one-page summary that links its detail: `product.md`, `architecture.md`,
 each part file. A topic with little to say stays a short section of its summary until the summary
@@ -43,8 +42,9 @@ piece opens with its parent's title (`# P<n> <part> — <component>`; a decision
 and a link per piece, and IDs never change. Doctor checks that every link resolves, that every
 spec file is reached from `product.md` or `architecture.md` through links (a folder link reaches
 the files directly in it; a retired file is exempt), and that `observed.md` links its pieces.
-Links in `specs/archive.md` must resolve too; a git path is code (`git show <sha>:<path>`), not
-a link.
+The spec is current canon only; never cite `.prdkit/history/`. Read its archive only on
+demand for past directions, lessons or outcomes ([compact.md](compact.md)). Links in the archive
+must resolve too; a Git locator (`git show <sha>:<path>`) is code, not a link.
 
 ## Generated tracking navigation
 
@@ -182,6 +182,12 @@ Headings, diagrams and summary columns do not declare an order.
 - A part no journey needs is a question for the owner.
 - Components (API, storage, identity, sync) are sections of the part file. Each component's
   behaviors and invariants sit under it and keep the part's numbering (`P2.B-07`).
+- A separately tracked subpart has its own architecture parts-table row and main part file,
+  e.g. `# P2.1 Index`, with `**Parent**: P2` in the header before the first section (on its own
+  line or as a ` · ` field). The field, not the ID's spelling, declares the relationship.
+  The parent must be a known part with no parent of its own: only one level, no cycles.
+  Keep each obligation with the part or subpart that owns it (`P2.1.B-07`, `P2.1.I-01`);
+  the parent does not repeat its subparts' obligations.
 - External systems are not parts; the interfaces topic lists them.
 - Build and delivery tooling (CI, migrations, setup jobs, developer utilities) is not a part:
   the operations topic, one line each.
@@ -225,8 +231,9 @@ A line that only describes how the code currently does something is deleted: the
 
 ## Elements
 
-- **IDs**: `J-`, `R-`, `Q-`, `C-`, `N-` (L0); `P<n>` parts and `D-` decisions (L1); `P<n>.B-`
-  and `P<n>.I-` (L2), e.g. `P3.B-02`. Two or more digits. Never renumber; retire with
+- **IDs**: `J-`, `R-`, `Q-`, `C-`, `N-` (L0); `P<n>` or `P<n>.<n>` parts and `D-` decisions
+  (L1); `<part>.B-` and `<part>.I-` (L2), e.g. `P3.B-02`. Item numbers after `-` use two
+  or more digits. Never renumber; retire with
   `retired: <reason>` on the same line (a heading: `## D-12 <title> (retired: <reason>)`). An ID
   lives on one line: retired in place while its file stays; when its part or file goes, it is
   listed once under `## Retired` in `architecture/retired.md`, which `architecture.md` links:
@@ -254,6 +261,33 @@ A line that only describes how the code currently does something is deleted: the
   deferral is not one: it keeps its limit and revisit trigger in its home, and no agent overrides
   it. `product.md` has none.
 
+### Optional change metadata
+
+- In a change header before the first section, use `**Tags**: cleanup, small batch` for
+  grouping or filtering only. Separate tags by commas; each tag uses only ASCII lowercase
+  letters, digits, spaces, `-`, `_`, and `.`.
+  Omit the line or leave it blank if not stated. The open helper rejects malformed tags
+  in a customized template before creating a record or branch. Tags do not affect scope,
+  status signals, review, or acceptance. On close, the dated log line ends with ` · **Tags**: cleanup, small batch`
+  when valid tags are present. Omit `**Tags**` from the close helper's description argument;
+  the helper adds the suffix outside the 300-character description limit and escapes `_` and
+  `www.` to keep them literal in Markdown. Do the same when writing a close entry by hand.
+  Doctor advises on malformed tags; status omits them and close refuses them. Duplicate `Parts`,
+  `Journeys`, or `Tags` fields are errors in doctor, status, bounds, and close.
+- In `## Tasks`, use `- [ ] (P2.1) T003 <outcome; dependency; check name>` to assign a task.
+  The part must exist and be explicitly named in the header, e.g.
+  `**Parts**: P2, P2.1`; listing a parent does not implicitly list its children. A task without
+  the prefix is unassigned. Delete task lines on delivery per [change.md](change.md).
+- `status.sh --json` lists explicit relationships in `part_parents` (`id`, `parent`). For
+  each open change, `tags` is a list, `tasks_by_part` has `part`, `checked`, `total` for parts
+  with recorded assignments, and `unassigned_tasks` has `checked`, `total` for unassigned
+  tasks. Invalid assignments are reported separately in `invalid_task_parts` (`part`, `line`,
+  `reason`: `unknown`, `outside`, or `malformed`) and do not count toward task progress.
+  Part IDs are resolved in the checkout supplying the change record. An unstated list or tally
+  is `null`, not zero. Counts stay with the named part;
+  readers can roll up by following `part_parents` without counting any task twice.
+- These fields are optional. Do not infer a tag, parent, or task assignment from prose.
+
 ## Resolve owner answers
 
 `specs/inbox.md` is an owner-input queue with a temporary processing handoff, as defined in
@@ -267,9 +301,12 @@ implementation or merge need not be complete before the answered item leaves the
    answer durably before moving on if incorporation cannot finish immediately.
 2. Apply the decision to its canonical home: product intent in L0, design in L1/L2, authority in
    the constitution's Action policy, holds/waivers in `specs/records.md`. Record the disposition,
-   operative owner words verbatim, date and source (conversation reference, PR/comment URL or
-   recorded git revision/path). Relayed words keep their original source. A bare option number
-   also needs the selected option's meaning. The canonical entry is the record; do not duplicate a
+    operative owner words verbatim, date and source (conversation reference, PR/comment URL or
+    recorded git revision/path). For a long hold or waiver quote, use the checked authority
+    reference in [protocol.md](protocol.md), without shortening the operative row. The authority
+    file is exempt from reading budgets: it is verbatim evidence read only on demand.
+    Relayed words keep their original source. A bare option number also needs the selected
+    option's meaning. The canonical entry is the record; do not duplicate a
    transcript. Retain the inbox ID as plain provenance text or an
    immutable source link, not a live link back to an entry that will be removed. Update the actual
    governing requirement, design or policy, reconcile superseded contradictory text and affected
@@ -287,8 +324,8 @@ implementation or merge need not be complete before the answered item leaves the
    in the same edit.
    If folding is blocked, keep the answer under To incorporate as `processing`, with the blocker,
    next actor and destination; only an actual unanswered clarification belongs in Waiting for you.
-   Never delete solely because an old item says `folded`, `declined` or `deferred`; reconcile those
-   legacy items the same way. Acknowledge the decision, canonical path/ID, remaining work/holds and
+   Never delete solely because an item says `folded`, `declined` or `deferred`.
+   Acknowledge the decision, canonical path/ID, remaining work/holds and
    whether the inbox item was removed, narrowed or awaits processing. Never claim incorporated
    without that verification.
 
@@ -310,9 +347,10 @@ Budgets are reading budgets, never targets: never pad toward one, and never drop
 passes the line test to fit. A line counts once per 100 characters, so a long row counts as the
 lines it takes to read. Past a budget, tighten the wording, move detail to code or tests, or
 split (Layout). `observed.md` 150 lines, split into `observed/<area>.md`; an open change 150,
-split into changes that each ship on their own; `log.md` 150, older entries condensed into
-`archive.md` (compact.md); `inbox.md` 150, answers incorporated and the rest reviewed with the
-owner; `records.md` 150, lifted, expired and superseded lines removed (git keeps them).
+split into changes that each ship on their own; `.prdkit/history/log.md` and
+`.prdkit/history/archive.md` 150 each, older closes indexed in the archive
+even past a long-open change (compact.md); `inbox.md` 150, answers incorporated and the rest
+reviewed with the owner; `records.md` 150, lifted, expired and superseded lines removed (git keeps them).
 
 ## Organizing
 

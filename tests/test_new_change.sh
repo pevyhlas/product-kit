@@ -10,6 +10,13 @@ SCRIPT="$PROJ/.prdkit/scripts/bash/new-change.sh"
 MAIN_BRANCH="$(git -C "$PROJ" branch --show-current)"
 cd "$PROJ" || exit 1
 
+it "explicit numbering in an empty project emits no error diagnostic"
+run bash -c 'exec bash "$1" --json --no-branch --number 7 --short-name fresh-number desc 2>.git/fresh-number.err' _ "$SCRIPT"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '"CHANGE_ID":"007-fresh-number"'
+assert_eq "[prdkit] Continue all work for this change inside: $PROJ" "$(cat .git/fresh-number.err)" 'stderr only contains the normal location notice'
+rm -f specs/changes/007-fresh-number.md
+
 it "first change is numbered 001 and isolated in a worktree"
 run env PRDKIT_TODAY=2026-10-17 bash "$SCRIPT" --json --short-name "user-auth" "Add user authentication"
 assert_eq 0 "$STATUS" "script exits 0"
@@ -35,7 +42,7 @@ assert_contains "$(cat "$PROJ/.gitignore")" ".worktrees/" ".worktrees/ is ignore
 
 it "numbering increments to 002 even when 001 lives only in a worktree"
 assert_contains "$OUTPUT" '"UNCARRIED_SPECS":[]' "nothing left behind on a clean checkout"
-mkdir -p specs; printf '2026-10-17 owner "make export async" → open\n' > specs/inbox.md
+mkdir -p specs; printf '### Make export async\n*2026-10-17 · owner · processing*\n' > specs/inbox.md
 run bash "$SCRIPT" --json --short-name "next-thing" "Another change entirely"
 assert_contains "$OUTPUT" '"CHANGE_ID":"002-next-thing"' "second change is 002"
 
@@ -58,6 +65,157 @@ run bash "$SCRIPT" --json --number 6 "Build UI tools"
 assert_eq 0 "$STATUS" "acronym slug generation succeeds"
 assert_contains "$OUTPUT" '"CHANGE_ID":"006-build-ui-tools"' "short uppercase UI retained"
 assert_not_contains "$OUTPUT" 'bad substitution' "no Bash 4-only expansion"
+
+it "invalid template tags cannot create a record, branch or worktree"
+TAG_PROJ="$(make_inited_project)"; track_tmp "$TAG_PROJ"
+TAG_PROJ="$(cd "$TAG_PROJ" && pwd -P)"
+cd "$TAG_PROJ" || exit 1
+git add -A && git commit -qm installed || exit 1
+tag_script=.prdkit/scripts/bash/new-change.sh
+tag_template=.prdkit/templates/change-template.md
+printf '# Change: template\n\n**Opened**: <date> ·**Tags**: cli/v2 · **Tier**: T1\n' > "$tag_template"
+git add "$tag_template" && git commit -qm "invalid template tags" || exit 1
+printf '# Change: template\n\n**Tags**: cli-v2_1.0, small batch\n' > "$tag_template"
+run bash "$tag_script" --number 51 --short-name "invalid-tags" "desc"
+assert_eq 1 "$STATUS" "isolated changes validate the committed template, not the local edit"
+assert_contains "$OUTPUT" "Malformed Tags"
+assert_not_contains "$(git branch --list)" "051-invalid-tags"
+assert_eq absent "$([ -e .worktrees/051-invalid-tags ] && echo present || echo absent)"
+run bash "$tag_script" --no-branch --number 52 --short-name "valid-tags" "desc"
+assert_eq 0 "$STATUS" "record-only changes use the local template"
+assert_contains "$(cat specs/changes/052-valid-tags.md)" '**Tags**: cli-v2_1.0, small batch'
+printf '# Change: template\n\n**Tags**: cli/v2\n' > "$tag_template"
+run bash "$tag_script" --no-branch --number 53 --short-name "invalid-local-tags" "desc"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "Malformed Tags"
+assert_eq absent "$([ -e specs/changes/053-invalid-local-tags.md ] && echo present || echo absent)"
+cd "$PROJ" || exit 1
+
+it "a missing pinned template object refuses sparse allocation without a promisor fetch"
+partial="$(mktemp -d)" || exit 1
+track_tmp "$partial"
+git -C "$TAG_PROJ" config uploadpack.allowFilter true || exit 1
+if git clone -q --filter=blob:none --no-checkout "file://$TAG_PROJ" "$partial/clone" &&
+    [ "$(git -C "$partial/clone" config --bool --get remote.origin.promisor)" = true ]; then
+    (
+        cd "$partial/clone" || exit 1
+        git sparse-checkout set specs .prdkit/scripts .prdkit/memory &&
+            git checkout -q "$(git symbolic-ref --short HEAD)" &&
+            git init -q --bare --template= "$partial/local.git" &&
+            git rev-parse --path-format=absolute --git-path objects > "$partial/local.git/objects/info/alternates" || exit 1
+    ) || exit 1
+    template_oid="$(git -C "$TAG_PROJ" rev-parse "HEAD:$tag_template")" || exit 1
+    run git --git-dir="$partial/local.git" cat-file -e "$template_oid"
+    assert_eq 1 "$STATUS" "the committed template blob is actually absent"
+
+    # Exercise the pre-2.45 fallback even on runners with newer Git.
+    mkdir "$partial/bin" || exit 1
+    PARTIAL_REAL_GIT="$(command -v git)"; export PARTIAL_REAL_GIT
+    cat > "$partial/bin/git" <<'SH'
+#!/bin/sh
+if [ "$1" = version ]; then echo 'git version 2.39.5'; exit 0; fi
+exec "$PARTIAL_REAL_GIT" "$@"
+SH
+    chmod +x "$partial/bin/git" || exit 1
+    run_sparse_allocator() (
+        cd "$partial/clone" || exit 1
+        PATH="$1" GIT_ALLOW_PROTOCOL='' GIT_TRACE="$partial/trace" \
+            bash .prdkit/scripts/bash/new-change.sh --json --short-name missing-template desc
+    )
+    before="$(git -C "$partial/clone" worktree list --porcelain)"
+    for git_path in "$partial/bin:$PATH" "$PATH"; do
+        : > "$partial/trace"
+        run run_sparse_allocator "$git_path"
+        assert_eq 1 "$STATUS"
+        assert_contains "$OUTPUT" "cannot read $tag_template at"
+        assert_contains "$OUTPUT" 'make the committed file available locally'
+        assert_not_contains "$(cat "$partial/trace")" 'built-in: git fetch '
+        assert_eq "$before" "$(git -C "$partial/clone" worktree list --porcelain)"
+        assert_eq "$MAIN_BRANCH" "$(git -C "$partial/clone" branch --list --format='%(refname:short)')"
+        assert_eq absent "$([ -e "$partial/clone/.worktrees" ] && echo present || echo absent)"
+        assert_eq '' "$(git -C "$partial/clone" status --short)" 'no record or other change was made'
+    done
+else
+    _ok 'blob-filtered clones unavailable; skipped'
+fi
+
+it "a linked change template with an unfetched link or target refuses instead of falling back"
+LINK_PROJ="$(make_inited_project)"; track_tmp "$LINK_PROJ"
+LINK_PROJ="$(cd "$LINK_PROJ" && pwd -P)"
+cd "$LINK_PROJ" || exit 1
+mkdir -p docs && mv "$tag_template" docs/custom-change.md || exit 1
+ln -s custom-change.md docs/intermediate.md &&
+    ln -s ../../docs/intermediate.md "$tag_template" &&
+    git add -A && git commit -qm "two-hop linked change template" && git config uploadpack.allowFilter true || exit 1
+link_partial="$(mktemp -d)" || exit 1
+track_tmp "$link_partial"
+mkdir "$link_partial/bin" || exit 1
+PARTIAL_REAL_GIT="$(command -v git)"; export PARTIAL_REAL_GIT
+cat > "$link_partial/bin/git" <<'SH'
+#!/bin/sh
+if [ "$1" = version ]; then echo 'git version 2.39.5'; exit 0; fi
+exec "$PARTIAL_REAL_GIT" "$@"
+SH
+chmod +x "$link_partial/bin/git" || exit 1
+run_linked_allocator() ( # clone, PATH
+    cd "$1" || exit 1
+    PATH="$2" GIT_ALLOW_PROTOCOL='' GIT_TRACE="$link_partial/trace" \
+        bash .prdkit/scripts/bash/new-change.sh --json --short-name linked-template desc
+)
+# Sparse layouts: the original link absent, or the original link local and the
+# intermediate link and target absent.
+for layout in without-templates with-templates; do
+    clone="$link_partial/$layout"
+    if ! git clone -q --filter=blob:none --no-checkout "file://$LINK_PROJ" "$clone" ||
+        [ "$(git -C "$clone" config --bool --get remote.origin.promisor)" != true ]; then
+        _ok 'blob-filtered clones unavailable; skipped'
+        continue
+    fi
+    sparse=(specs .prdkit/scripts .prdkit/memory)
+    [ "$layout" = without-templates ] || sparse+=(.prdkit/templates)
+    (
+        cd "$clone" || exit 1
+        git sparse-checkout set "${sparse[@]}" &&
+            git checkout -q "$(git symbolic-ref --short HEAD)" &&
+            git init -q --bare --template= "$clone.objects.git" &&
+            git rev-parse --path-format=absolute --git-path objects > "$clone.objects.git/objects/info/alternates" || exit 1
+    ) || exit 1
+    for blob_path in "$tag_template" docs/intermediate.md docs/custom-change.md; do
+        expected=1
+        [ "$layout:$blob_path" != "with-templates:$tag_template" ] || expected=0
+        blob_oid="$(git -C "$LINK_PROJ" rev-parse "HEAD:$blob_path")" || exit 1
+        run git --git-dir="$clone.objects.git" cat-file -e "$blob_oid"
+        assert_eq "$expected" "$STATUS" "$layout: the $blob_path blob local state is as arranged"
+    done
+    for git_path in "$link_partial/bin:$PATH" "$PATH"; do
+        : > "$link_partial/trace"
+        run run_linked_allocator "$clone" "$git_path"
+        assert_eq 1 "$STATUS" "$layout: no silent built-in fallback for an unavailable link"
+        assert_contains "$OUTPUT" "cannot read $tag_template at"
+        assert_not_contains "$(cat "$link_partial/trace")" 'built-in: git fetch '
+        assert_eq absent "$([ -e "$clone/.worktrees" ] && echo present || echo absent)"
+        assert_eq '' "$(git -C "$clone" status --short)" 'no record or other change was made'
+    done
+done
+git rm -qf docs/custom-change.md && git commit -qm "dangling linked template" || exit 1
+run bash .prdkit/scripts/bash/new-change.sh --json --number 57 --short-name "dangling-link" "desc"
+assert_eq 0 "$STATUS" "a genuinely dangling link in an ordinary clone still falls back"
+assert_contains "$OUTPUT" '"CHANGE_ID":"057-dangling-link"'
+cd "$PROJ" || exit 1
+
+it "an uncommitted change template falls back despite unrelated template symlinks"
+cd "$TAG_PROJ" || exit 1
+git rm -qf "$tag_template" &&
+    ln -sf ../memory/config.md .prdkit/templates/architecture-template.md &&
+    git add -A && git commit -qm "drop change template; link a sibling" || exit 1
+run bash "$tag_script" --json --number 54 --short-name "sibling-link" "desc"
+assert_eq 0 "$STATUS" "a sibling symlink is not on the template path"
+assert_contains "$OUTPUT" '"CHANGE_ID":"054-sibling-link"'
+assert_not_contains "$OUTPUT" 'make the committed file available locally'
+ln -s missing-dir .prdkit/linked && git add .prdkit/linked && git commit -qm "dangling sibling dir link" || exit 1
+run bash "$tag_script" --json --number 55 --short-name "sibling-dir-link" "desc"
+assert_eq 0 "$STATUS" "a symlink beside an ancestor is not an ancestor"
+cd "$PROJ" || exit 1
 
 it "an empty intent or a non-numeric --number is rejected"
 run bash "$SCRIPT" --json --short-name "x"
@@ -107,6 +265,229 @@ assert_eq "absent" "$([ -d "$WT/.worktrees" ] && echo present || echo absent)" "
 assert_file "$WT/specs/changes/060-from-worktree.md" "record created in the current worktree"
 cd "$PROJ" || exit 1
 
+it "ordinary changes get a one-line pointer, not the programme checkpoint"
+POINTER='<!-- Outcome checkpoint format: .prdkit/scripts/bash/outcome-checkpoint.md -->'
+assert_eq 1 "$(grep -cxF "$POINTER" "$REC")" "one pointer to the canonical scaffold"
+assert_not_contains "$(cat "$REC")" '### Outcome checkpoint' "no scaffold heading"
+assert_not_contains "$(cat "$REC")" '**Selection**:' "no trailing scaffold fields"
+assert_contains "$(cat "$REC")" '<!-- Verdicts live' "the next template comment is preserved"
+
+it "doctor and status leave a pointer-only record alone"
+run bash -c 'cd "$1" && bash .prdkit/scripts/bash/doctor.sh --json' _ "$WT"
+assert_eq 0 "$STATUS" "doctor passes in the record's worktree: $OUTPUT"
+# The default Bounds example can have a trace advisory; it is unrelated to the pointer.
+assert_eq '[]' "$(printf '%s\n' "$OUTPUT" | jq -c '[.advisories[] | select(test("checkpoint"; "i"))]')" "no checkpoint advisory"
+run bash .prdkit/scripts/bash/status.sh --json
+assert_eq 0 "$STATUS" "status succeeds"
+assert_eq '[]' "$(printf '%s\n' "$OUTPUT" | jq -c '.outcome_progress')" "no outcome row"
+
+it "retrying the same ordinary change leaves its linked-worktree record alone"
+cp "$REC" .git/ordinary-before
+run bash "$SCRIPT" --no-branch --number 1 --short-name user-auth "Different intent"
+assert_eq 1 "$STATUS" "the existing identity is refused"
+assert_contains "$OUTPUT" "never overwritten" "the refusal explains why"
+run cmp -s .git/ordinary-before "$REC"
+assert_eq 0 "$STATUS" "ordinary record is byte-for-byte unchanged"
+
+it "--programme emits the full commented scaffold with unknown history"
+PROGRAMME_REC=specs/changes/061-programme.md
+run bash "$SCRIPT" --json --programme --no-branch --number 61 --short-name programme "Coordinate related changes"
+assert_eq 0 "$STATUS" "programme opens: $OUTPUT"
+assert_file "$PROGRAMME_REC" "programme record exists"
+if [ -f "$PROGRAMME_REC" ]; then
+    assert_not_contains "$(cat "$PROGRAMME_REC")" "$POINTER" "the scaffold replaces the pointer"
+    SCAFFOLD="$(sed -n '/^<!-- A programme or continuing follow-up queue/,/^-->$/p' "$PROGRAMME_REC")"
+    assert_eq 8 "$(printf '%s\n' "$SCAFFOLD" | grep -c '^\*\*')" "all checkpoint fields are in the comment"
+    assert_contains "$SCAFFOLD" '### Outcome checkpoint' "scaffold heading"
+    assert_contains "$SCAFFOLD" '**Selection**:' "scaffold includes its last field"
+    assert_contains "$SCAFFOLD" '**Progress**: unknown' "no unevidenced advance is assumed"
+    assert_contains "$SCAFFOLD" '**No-progress changes**: unknown' "unknown history is not a zero count"
+    assert_contains "$(cat "$PROGRAMME_REC")" '<!-- Verdicts live' "the next template comment is preserved"
+fi
+
+it "retrying creation cannot rewrite a filled checkpoint"
+mkdir -p specs/changes
+cat > "$PROGRAMME_REC" <<'MD'
+# Change: Coordinate related changes
+
+## State
+
+### Outcome checkpoint
+**Outcome**: A verified path
+**Milestone**: An integrated interface
+**Critical path**: Review the interface contract
+**Allocation**: One contract lane
+**Progress**: unknown
+**No-progress changes**: unknown
+**Progress limit**: 4
+MD
+# Deliberately omit the final newline, so a render pass cannot masquerade as a no-op.
+printf '**Selection**: Verify the interface contract  ' >> "$PROGRAMME_REC"
+cp "$PROGRAMME_REC" .git/programme-before
+for mode in '' --programme; do
+    run bash "$SCRIPT" ${mode:+"$mode"} --no-branch --number 61 --short-name programme "Different intent"
+    assert_eq 1 "$STATUS" "retry ${mode:-without opt-in} refuses the existing record"
+    assert_contains "$OUTPUT" 'never overwritten' "refusal happens at the record"
+    run cmp -s .git/programme-before "$PROGRAMME_REC"
+    assert_eq 0 "$STATUS" "filled record is byte-for-byte unchanged"
+done
+# The verifier requires LF-terminated Markdown. The retry checks above use a deliberately partial line.
+printf '\n' >> "$PROGRAMME_REC"
+run bash .prdkit/scripts/bash/status.sh --json
+assert_eq 0 "$STATUS" "status can read the resumed programme"
+assert_eq '["unknown",null]' "$(printf '%s\n' "$OUTPUT" | jq -c '.outcome_progress[] | select(.id == "061-programme") | [.count_signal, .no_progress_changes]')" "resume preserves unknown history"
+
+it "upgrade supplies a programme scaffold when a customized change template has no block"
+CUSTOM="$(make_project)"; track_tmp "$CUSTOM"
+cd "$CUSTOM" || exit 1
+SOURCE_TEMPLATE=.product-kit/templates/change-template.md
+TEMPLATE=.prdkit/templates/change-template.md
+SOURCE_SNIPPET=.product-kit/scripts/outcome-checkpoint.md
+SNIPPET=.prdkit/scripts/bash/outcome-checkpoint.md
+if [ -f "$SOURCE_SNIPPET" ]; then mv "$SOURCE_SNIPPET" .git/kit-scaffold; fi
+cat > "$SOURCE_TEMPLATE" <<'MD'
+# Change: <short name>
+**Opened**: <date>
+## State
+**Next**: Check the result
+<!-- A programme or continuing follow-up queue (workflows/planning.md, Protect the outcome):
+### Outcome checkpoint
+-->
+## Notes
+Keep this section.
+MD
+run bash .product-kit/scripts/init.sh
+assert_eq 0 "$STATUS" "pre-upgrade install succeeds: $OUTPUT"
+sed '/^<!-- A programme or continuing follow-up queue/,/^-->$/d' "$TEMPLATE" > .git/custom-template
+cp .git/custom-template "$TEMPLATE"
+cp "$PK_ROOT/templates/change-template.md" "$SOURCE_TEMPLATE"
+if [ -f .git/kit-scaffold ]; then mv .git/kit-scaffold "$SOURCE_SNIPPET"; fi
+snapshot_upgrade_fixture "$CUSTOM" || exit 1
+run bash .product-kit/scripts/init.sh --upgrade
+assert_eq 0 "$STATUS" "upgrade succeeds: $OUTPUT"
+run cmp -s .git/custom-template "$TEMPLATE"
+assert_eq 0 "$STATUS" "upgrade keeps the consumer template byte-for-byte"
+assert_file "$SNIPPET" "upgrade installs the canonical snippet"
+if [ -f "$SNIPPET" ]; then
+    HASH="$(source .prdkit/scripts/bash/install-lib.sh && install_hash_stream < "$SNIPPET")"
+    assert_contains "$(cat .prdkit/.manifest)" "$HASH  $SNIPPET" "manifest records the snippet's content"
+    printf '\nLocal edit.\n' >> "$SNIPPET"
+    run bash .prdkit/scripts/bash/doctor.sh --json
+    assert_contains "$OUTPUT" "Kit-owned content drift: $SNIPPET" "doctor detects snippet drift"
+    cp "$SOURCE_SNIPPET" "$SNIPPET"
+    printf '\n<!-- Revised kit snippet -->\n' >> "$SOURCE_SNIPPET"
+    snapshot_upgrade_fixture "$CUSTOM" || exit 1
+    run bash .product-kit/scripts/init.sh --upgrade
+    assert_eq 0 "$STATUS" "another upgrade refreshes kit-owned content: $OUTPUT"
+    run cmp -s "$SOURCE_SNIPPET" "$SNIPPET"
+    assert_eq 0 "$STATUS" "upgrade installs the revised canonical snippet"
+fi
+run env PRDKIT_TODAY=2026-10-17 bash .prdkit/scripts/bash/new-change.sh --programme --no-branch --number 1 --short-name custom "Custom programme"
+assert_eq 0 "$STATUS" "programme opens with the consumer template: $OUTPUT"
+CUSTOM_RECORD=specs/changes/001-custom.md
+assert_contains "$(cat "$CUSTOM_RECORD")" '**No-progress changes**: unknown' "missing history is still initialized as unknown"
+if [ -f "$SNIPPET" ]; then
+    {
+        printf '# Change: Custom programme\n**Opened**: 2026-10-17\n## State\n**Next**: Check the result\n'
+        cat "$SNIPPET"
+        printf '## Notes\nKeep this section.\n'
+    } > .git/expected
+    run cmp -s .git/expected "$CUSTOM_RECORD"
+    assert_eq 0 "$STATUS" "the canonical snippet is inserted in State, before the next section"
+fi
+
+it "a template missing only its final LF produces a record both verifiers can read"
+TEXT=$'# Change: Check record text\n\n**Opened**: 2026-10-17\n\n## State\n\n**Step**: intent\n**Waiting on**: nothing\n**Next**: Check the result  '
+printf '%s' "$TEXT" > "$TEMPLATE"
+printf '%s\n' "$TEXT" > .git/expected
+run bash .prdkit/scripts/bash/new-change.sh --no-branch --number 5 --short-name final-lf "Check record text"
+assert_eq 0 "$STATUS" "creation succeeds: $OUTPUT"
+run cmp -s .git/expected specs/changes/005-final-lf.md
+assert_eq 0 "$STATUS" "creation adds only the final LF"
+run bash .prdkit/scripts/bash/status.sh --json
+assert_eq 0 "$STATUS" "status reads the created record: $OUTPUT"
+run jq -e '.changes | any(.id == "005-final-lf")' <<< "$OUTPUT"
+assert_eq 0 "$STATUS" "status lists the created record"
+run bash .prdkit/scripts/bash/doctor.sh --json
+assert_eq 0 "$STATUS" "doctor reads the created record: $OUTPUT"
+run jq -e '.result == "pass"' <<< "$OUTPUT"
+assert_eq 0 "$STATUS" "doctor emits a passing JSON report"
+
+it "retired checkpoint scaffolds fail with the current template format"
+for opener in \
+    '<!-- A programme or continuing follow-up queue (workflows/planning.md):' \
+    '<!-- For a programme/continuing follow-up queue,'; do
+    printf '%s\n' '## State' "$opener" '### Outcome checkpoint' '-->' > "$TEMPLATE"
+    run bash .prdkit/scripts/bash/new-change.sh --no-branch --number 6 --short-name obsolete "Check an unsupported template"
+    assert_eq 1 "$STATUS" 'unsupported stock scaffold rejected'
+    assert_contains "$OUTPUT" 'current outcome checkpoint pointer'
+    assert_eq absent "$([ -e specs/changes/006-obsolete.md ] && echo present || echo absent)"
+done
+printf '%s\n' '## State' '### Outcome checkpoint' '**Outcome**: The result' > "$TEMPLATE"
+
+it "--programme keeps a checkpoint already present in a custom change template"
+run bash .prdkit/scripts/bash/new-change.sh --programme --no-branch --number 8 --short-name existing "Keep the existing scaffold"
+assert_eq 0 "$STATUS" "the custom template already has a checkpoint"
+run cmp -s "$TEMPLATE" specs/changes/008-existing.md
+assert_eq 0 "$STATUS" "no second scaffold or changes to the custom checkpoint"
+
+it "--programme ignores example headings and inserts before the next real section"
+N=9
+for heading in '### Outcome checkpoint' '## Example output' '### Outcome checkpoint'; do
+    case "$N" in
+        9|10) START='```markdown'; END='```' ;;
+        11) START='<!-- Example output'; END='-->' ;;
+    esac
+    {
+        sed '/^## Notes/,$d' .git/custom-template
+        printf '\n%s\n%s\n%s\n\n' "$START" "$heading" "$END"
+    } > .git/state
+    printf '## Notes\nKeep this section.\n' > .git/notes
+    cat .git/state .git/notes > "$TEMPLATE"
+    {
+        printf '# Change: Example headings\n**Opened**: 2026-10-17\n'
+        tail -n +3 .git/state
+        cat "$SNIPPET" .git/notes
+    } > .git/expected
+    run env PRDKIT_TODAY=2026-10-17 bash .prdkit/scripts/bash/new-change.sh --programme --no-branch \
+        --number "$N" --short-name example "Example headings"
+    assert_eq 0 "$STATUS" "creation succeeds for $START / $heading"
+    run cmp -s .git/expected "specs/changes/$(printf '%03d' "$N")-example.md"
+    assert_eq 0 "$STATUS" "the scaffold is in State outside $START / $heading"
+    N=$((N + 1))
+done
+
+it "--programme validates real header tags after rendering LF text and skipping fenced examples"
+render_tagged_fixture() { # line ending; omit the final terminator
+    printf '%s%s' '# Change: Example template' "$1" \
+        '**Opened**: <date>' "$1" '```markdown' "$1" '**Tags**: fenced/example' "$1" '```' "$1" \
+        '**Tags**: release-notes, batch_1.0' "$1" '## State' "$1" \
+        '```markdown' "$1" '### Outcome checkpoint' "$1" '```' "$1" "$POINTER" "$1"
+    printf '%s' '**Next**: Verify the change  '
+}
+render_tagged_fixture $'\r\n' > "$TEMPLATE"
+run env PRDKIT_TODAY=2026-10-17 bash .prdkit/scripts/bash/new-change.sh --programme --no-branch \
+    --number 12 --short-name tagged "Tagged programme"
+assert_eq 0 "$STATUS" "valid header tags are accepted; fenced example is ignored"
+{
+    render_tagged_fixture $'\n'
+    printf '\n'
+} | awk -v pointer="$POINTER" -v snippet="$SNIPPET" '
+    NR == 1 { print "# Change: Tagged programme"; next }
+    NR == 2 { print "**Opened**: 2026-10-17"; next }
+    $0 == pointer { while ((getline row < snippet) > 0) print row; next }
+    { print }
+' > .git/expected
+run cmp -s .git/expected specs/changes/012-tagged.md
+assert_eq 0 "$STATUS" "exact scaffold, fence, spacing and final LF are preserved"
+sed 's/release-notes/release\/notes/' "$TEMPLATE" > .git/invalid-tag-template
+cp .git/invalid-tag-template "$TEMPLATE"
+run bash .prdkit/scripts/bash/new-change.sh --programme --no-worktree --number 13 --short-name bad-tags "Invalid programme"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'Malformed Tags'
+assert_eq absent "$([ -e specs/changes/013-bad-tags.md ] && echo present || echo absent)"
+assert_not_contains "$(git branch --list)" '013-bad-tags'
+
 # --- Numbering across every claimed identity -----------------------------------------------
 PROJ2="$(make_inited_project)"; track_tmp "$PROJ2"
 PROJ2="$(cd "$PROJ2" && pwd -P)"
@@ -114,43 +495,302 @@ git -C "$PROJ2" add -A >/dev/null 2>&1; git -C "$PROJ2" commit -qm installed >/d
 SCRIPT2="$PROJ2/.prdkit/scripts/bash/new-change.sh"
 cd "$PROJ2" || exit 1
 
+it "any old history path blocks numbering, even if absent in a sparse checkout or only on an integration tip"
+mkdir -p specs
+for legacy in specs/log.md specs/log specs/archive.md; do
+    if [ "$legacy" = specs/log ]; then mkdir "$legacy"; else : > "$legacy"; fi
+    run bash "$SCRIPT2" --json --no-branch --short-name reused "desc"
+    assert_eq 1 "$STATUS" "$legacy blocks allocation"
+    assert_contains "$OUTPUT" 'git mv specs/log.md .prdkit/history/log.md'
+    assert_contains "$OUTPUT" 'git mv specs/log .prdkit/history/log'
+    assert_contains "$OUTPUT" 'git mv specs/archive.md .prdkit/history/archive.md'
+    assert_not_contains "$OUTPUT" 'CHANGE_ID'
+    if [ "$legacy" = specs/log ]; then rmdir "$legacy"; else rm "$legacy"; fi
+done
+git checkout -qb history-old-tip
+printf '%s\n' '**Allocated through**: 090' > specs/archive.md
+git add specs/archive.md && git commit -qm 'old archive' || exit 1
+git sparse-checkout set --no-cone '/*' '!/specs/archive.md' || exit 1
+assert_eq 'S specs/archive.md' "$(git ls-files -t -- specs/archive.md)"
+run bash "$SCRIPT2" --no-branch --number 89 --short-name hidden "desc"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'git mv specs/archive.md .prdkit/history/archive.md'
+git sparse-checkout disable || exit 1
+git update-ref refs/remotes/origin/main HEAD
+git checkout -q "$MAIN_BRANCH"
+run bash "$SCRIPT2" --no-branch --number 89 --short-name integration "desc"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'update stale branches and refs after moving'
+assert_contains "$OUTPUT" 'git mv specs/archive.md .prdkit/history/archive.md'
+git update-ref -d refs/remotes/origin/main
+git branch -q -D history-old-tip
+
+it "an old close in a sibling HEAD is not hidden by staging its deletion"
+sibling="$PROJ2/.worktrees/maintenance"
+git worktree add -qb maintenance "$sibling" HEAD || exit 1
+mkdir -p "$sibling/specs"
+printf -- '- 2026-10-17 001-done: closed\n' > "$sibling/specs/log.md"
+git -C "$sibling" add specs/log.md && git -C "$sibling" commit -qm 'old close' &&
+    git -C "$sibling" rm -q specs/log.md || exit 1
+assert_eq 'D  specs/log.md' "$(git -C "$sibling" status --porcelain)"
+run bash "$SCRIPT2" --json --no-branch --short-name staged-delete "desc"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'git mv specs/log.md .prdkit/history/log.md'
+assert_not_contains "$OUTPUT" 'CHANGE_ID'
+run test ! -d specs/changes
+assert_eq 0 "$STATUS" 'no record allocated'
+run bash -c 'cd "$1" && bash .prdkit/scripts/bash/doctor.sh --json' _ "$sibling"
+assert_eq 1 "$STATUS"
+assert_eq 1 "$(jq '.findings | length' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" 'git mv specs/log.md .prdkit/history/log.md'
+assert_eq 'D  specs/log.md' "$(git -C "$sibling" status --porcelain)"
+git -C "$sibling" restore --source=HEAD --staged --worktree -- specs/log.md &&
+    git worktree remove "$sibling" && git branch -qD maintenance || exit 1
+
+it "only committed integration policy adds trusted un-checked-out tips to the history snapshot"
+primary=refs/remotes/origin/main
+secondary=refs/remotes/origin/develop
+git update-ref "$primary" HEAD && git update-ref "$secondary" HEAD &&
+    git symbolic-ref refs/remotes/origin/HEAD "$primary" || exit 1
+printf -- '- 2026-10-17 091-done: closed\n' | trusted_edit "$secondary" specs/log.md || exit 1
+# Neither an unconfigured remote ref nor a working config can affect numbering.
+printf '\n## Configuration\n- review-integration-branches: origin/develop\n' >> .prdkit/memory/config.md
+run bash "$SCRIPT2" --json --no-branch --short-name untrusted "desc"
+assert_eq 0 "$STATUS" 'a working config does not establish trust'
+assert_contains "$OUTPUT" '"CHANGE_ID":"001-untrusted"'
+rm -f specs/changes/001-untrusted.md
+trusted_edit "$primary" .prdkit/memory/config.md <<'MD' || exit 1
+## Configuration
+- review-integration-branches: origin/develop, origin/missing
+MD
+git restore -- .prdkit/memory/config.md
+assert_not_contains "$(git worktree list --porcelain)" 'develop'
+run bash "$SCRIPT2" --json --no-branch --short-name trusted-old "desc"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'git mv specs/log.md .prdkit/history/log.md'
+assert_not_contains "$OUTPUT" 'CHANGE_ID'
+assert_eq '' "$(find specs -type f -print)"
+git update-ref "$secondary" HEAD || exit 1
+printf '**Allocated through**: 089\n' | trusted_edit "$secondary" .prdkit/history/archive.md || exit 1
+run bash "$SCRIPT2" --json --no-branch --number 89 --short-name trusted-floor "desc"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'allocated high-water mark 089'
+printf -- '- 2026-10-17 091-done: closed\n' | trusted_edit "$secondary" .prdkit/history/log.md || exit 1
+run bash "$SCRIPT2" --json --no-branch --number 91 --short-name trusted-closed "desc"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'allocated high-water mark 091'
+run bash "$SCRIPT2" --json --no-branch --short-name trusted-next "desc"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '"CHANGE_ID":"092-trusted-next"'
+rm -f specs/changes/092-trusted-next.md
+
+it "a tracked config symlink does not establish trust or block allocation"
+git checkout -qb linked-config || exit 1
+mv .prdkit/memory/config.md .prdkit/memory/shared-config.md
+printf '\n## Configuration\n- review-integration-branches: origin/develop\n' >> .prdkit/memory/shared-config.md
+ln -s shared-config.md .prdkit/memory/config.md
+git add .prdkit/memory && git commit -qm 'link the memory config' && git update-ref "$primary" HEAD || exit 1
+printf -- '- 2026-10-17 093-done: closed\n' | trusted_edit "$secondary" specs/log.md || exit 1
+run bash "$SCRIPT2" --json --no-branch --short-name config-link "desc"
+assert_eq 0 "$STATUS" "the policy reader does not follow the config symlink"
+assert_contains "$OUTPUT" '"CHANGE_ID":"001-config-link"'
+rm -f specs/changes/001-config-link.md
+git checkout -q "$MAIN_BRANCH" || exit 1
+git symbolic-ref --delete refs/remotes/origin/HEAD &&
+    git update-ref -d "$primary" && git update-ref -d "$secondary" && git branch -qD linked-config || exit 1
+
+it "a bare common repo is not a checkout even when its HEAD has legacy history"
+bare_fixture="$(mktemp -d)" || exit 1
+track_tmp "$bare_fixture"
+git clone -q --bare "$PROJ2" "$bare_fixture/common.git" &&
+    git -C "$bare_fixture/common.git" worktree add -qb linked "$bare_fixture/linked" "$MAIN_BRANCH" || exit 1
+(
+    cd "$bare_fixture/linked" || exit 1
+    git config user.name test && git config user.email t@example.com &&
+        git branch archived-maintenance &&
+        printf -- '- 2026-10-17 001-done: closed\n' | trusted_edit refs/heads/archived-maintenance specs/log.md
+) || exit 1
+git -C "$bare_fixture/common.git" symbolic-ref HEAD refs/heads/archived-maintenance || exit 1
+assert_eq false "$(git -C "$bare_fixture/common.git" rev-parse --is-inside-work-tree)"
+mkdir -p "$bare_fixture/common.git/specs"
+: > "$bare_fixture/common.git/specs/log.md"
+run bash -c 'cd "$1" && bash .prdkit/scripts/bash/new-change.sh --json --no-branch --short-name bare-linked desc' _ "$bare_fixture/linked"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '"CHANGE_ID":"001-bare-linked"'
+
 it "a stray numbered branch raises the next number"
 git -C "$PROJ2" branch 007-stray-branch
 run bash "$SCRIPT2" --json --no-worktree --short-name "first" "desc"
 assert_contains "$OUTPUT" '"CHANGE_ID":"008-first"' "stray 007 branch forces 008"
 git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; rm -rf "$PROJ2/specs/changes"
 
-it "closed changes in specs/log.md stay reserved"
-mkdir -p "$PROJ2/specs"
-printf '%s\n' '- 2026-10-01 012-old-change: did a thing — R-01 — https://example.invalid/pr/1' > "$PROJ2/specs/log.md"
+it "closed changes in .prdkit/history/log.md stay reserved"
+mkdir -p "$PROJ2/.prdkit/history"
+printf '%s\n' '- 2026-10-01 012-old-change: did a thing — R-01 — https://example.invalid/pr/1' > "$PROJ2/.prdkit/history/log.md"
 run bash "$SCRIPT2" --json --no-worktree --short-name "after-log" "desc"
 assert_contains "$OUTPUT" '"CHANGE_ID":"013-after-log"' "log entry 012 forces 013"
 git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; rm -rf "$PROJ2/specs/changes"
-mkdir -p "$PROJ2/specs/log"
-printf '%s\n' '- 2026-10-02 020-entry-closed: did another — R-01 — #2' > "$PROJ2/specs/log/020-entry-closed.md"
+mkdir -p "$PROJ2/.prdkit/history/log"
+printf '%s\n' '- 2026-10-02 020-entry-closed: did another — R-01 — #2' > "$PROJ2/.prdkit/history/log/020-entry-closed.md"
 run bash "$SCRIPT2" --json --no-worktree --short-name "after-entry" "desc"
-assert_contains "$OUTPUT" '"CHANGE_ID":"021-after-entry"' "an entry file in specs/log/ reserves 020 too"
+assert_contains "$OUTPUT" '"CHANGE_ID":"021-after-entry"' "an entry file in .prdkit/history/log/ reserves 020 too"
 git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; git -C "$PROJ2" branch -q -D 021-after-entry
-rm -rf "$PROJ2/specs/changes" "$PROJ2/specs/log"
+rm -rf "$PROJ2/specs/changes" "$PROJ2/.prdkit/history/log"
 
-it "a log condensed into specs/archive.md keeps its numbers reserved"
+it "invalid CRLF logs stop number allocation"
+badlog="$(make_inited_project)" || exit 1
+track_tmp "$badlog"
+mkdir -p "$badlog/.prdkit/history"
+printf -- '- 2026-10-01 001-repeat: already closed\r\n' > "$badlog/.prdkit/history/log.md"
+git -C "$badlog" -c core.autocrlf=false add -A && git -C "$badlog" commit -qm installed || exit 1
+run bash -c 'cd "$1" && bash .prdkit/scripts/bash/new-change.sh --json Repeat' _ "$badlog"
+assert_eq 1 "$STATUS" "unsupported text stops allocation"
+assert_contains "$OUTPUT" "expected LF-terminated Markdown"
+[ ! -e "$badlog/.worktrees/002-repeat" ] || _no "no worktree is created"
+[ ! -e "$badlog/.worktrees/001-repeat" ] || _no 'no worktree reuses the closed ID'
+
+it "a log condensed into .prdkit/history/archive.md keeps its numbers reserved"
 # shellcheck disable=SC2016 # backticks are Markdown code spans, not command substitution
-printf '# Demo — archive\n\n**Last 0.x feature**: none\n\n**Log condensed through**: 040; those entries: `git show abc1234:specs/log.md`.\n' > "$PROJ2/specs/archive.md"
+printf '# Demo — archive\n\n**Log condensed through**: 040; those entries: `git show abc1234:.prdkit/history/log.md`.\n' > "$PROJ2/.prdkit/history/archive.md"
 run bash "$SCRIPT2" --json --no-worktree --short-name "after-condensed" "desc"
 assert_contains "$OUTPUT" '"CHANGE_ID":"041-after-condensed"' "condensed through 040 forces 041"
 git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; git -C "$PROJ2" branch -qD 041-after-condensed; rm -rf "$PROJ2/specs/changes"
 run bash "$SCRIPT2" --json --no-worktree --number 35 --short-name "explicit-old" "desc"
 assert_eq 1 "$STATUS" "an explicit number at or below the mark is refused"
-assert_contains "$OUTPUT" 'change number 035 is reserved: specs/archive.md condenses the log through 040' "the refusal names the mark"
+assert_contains "$OUTPUT" 'change number 035 is reserved: .prdkit/history/archive.md condenses the log through 040' "the refusal names the mark"
 assert_eq absent "$([ -e "$PROJ2/specs/changes/035-explicit-old.md" ] && echo present || echo absent)" "no record is created"
+run bash "$SCRIPT2" --no-branch --number 000 --short-name zero "desc"
+assert_eq 1 "$STATUS" '000 is refused under a positive cutoff'
+assert_contains "$OUTPUT" 'change number 000 is reserved: .prdkit/history/archive.md condenses the log through 040'
+rm -f "$PROJ2/specs/changes/000-zero.md"
 # shellcheck disable=SC2016 # backticks are Markdown code spans, not command substitution
-for value in '040 — entries at `git show 9f81234:specs/log.md`' '040 as of 2026-10-30'; do
-    printf '# Demo — archive\n\n**Last 0.x feature**: none\n\n**Log condensed through**: %s\n' "$value" > "$PROJ2/specs/archive.md"
+for value in '040 — entries at `git show 9f81234:.prdkit/history/log.md`' '040 as of 2026-10-30' \
+             '**040**; those entries: `git show abc1234:.prdkit/history/log.md`.' '_040_' '`040`'; do
+    printf '# Demo — archive\n\n**Log condensed through**: %s\n' "$value" > "$PROJ2/.prdkit/history/archive.md"
     run bash "$SCRIPT2" --json --no-worktree --short-name "after-mark" "desc"
     assert_contains "$OUTPUT" '"CHANGE_ID":"041-after-mark"' "a sha or date after the number is no number: $value"
     git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; git -C "$PROJ2" branch -qD 041-after-mark; rm -rf "$PROJ2/specs/changes"
 done
-rm -f "$PROJ2/specs/archive.md"
+rm -f "$PROJ2/.prdkit/history/archive.md"
+
+it "sparse archive bounds automatic numbering and forbids filling earlier gaps"
+sparse_project="$(make_inited_project)" || exit 1
+track_tmp "$sparse_project"
+cd "$sparse_project" || exit 1
+sparse_new="$sparse_project/.prdkit/scripts/bash/new-change.sh"
+mkdir -p .prdkit/history
+# shellcheck disable=SC2016 # Markdown code span
+printf '**Log condensed through**: none; also 030-033, 035; those entries: `git show abc1234:.prdkit/history/log.md`.\n**Allocated through**: 035\n' > .prdkit/history/archive.md
+for num in 30 31 33 35; do
+    run bash "$sparse_new" --no-branch --number "$num" --short-name never-reuse "desc"
+    assert_eq 1 "$STATUS" "cannot reuse sparse number $num"
+    assert_contains "$OUTPUT" 'reserved by the condensed log index' 'the archive refusal is explicit'
+done
+run bash "$sparse_new" --json --no-branch --number 34 --short-name spare-gap "desc"
+assert_eq 1 "$STATUS" 'an unallocated gap below the sparse maximum cannot be filled'
+assert_contains "$OUTPUT" 'high-water mark 035; omit --number or use a number above 035'
+run bash "$sparse_new" --json --no-branch --short-name sparse-next "desc"
+assert_eq 0 "$STATUS" "valid sparse index without a cutoff"
+assert_contains "$OUTPUT" '"CHANGE_ID":"036-sparse-next"' "highest sparse member sets the next number"
+archive_ref=refs/remotes/origin/main
+git update-ref "$archive_ref" HEAD
+archive_text="$(cat .prdkit/history/archive.md)"
+trusted_edit "$archive_ref" .prdkit/history/archive.md <<< "$archive_text" || exit 1
+rm .prdkit/history/archive.md
+run bash "$sparse_new" --no-branch --number 31 --short-name stale "desc"
+assert_eq 1 "$STATUS" "a stale branch honors fetched origin/main without a symbolic origin/HEAD"
+assert_contains "$OUTPUT" 'reserved by the condensed log index'
+rm -f specs/changes/031-stale.md
+custom_ref=refs/remotes/origin/integration
+git update-ref "$custom_ref" HEAD
+git symbolic-ref refs/remotes/origin/HEAD "$custom_ref"
+# shellcheck disable=SC2016 # Markdown code span
+trusted_edit "$custom_ref" .prdkit/history/archive.md <<'MD' || exit 1
+**Log condensed through**: 020; also 050; those entries: `git show abc1234:.prdkit/history/log.md`.
+**Allocated through**: 052
+MD
+for num in 20 31 50; do
+    run bash "$sparse_new" --no-branch --number "$num" --short-name union "desc"
+    assert_eq 1 "$STATUS" "the union of integration refs reserves $num"
+    rm -f "specs/changes/0$num-union.md"
+done
+run bash "$sparse_new" --json --no-branch --short-name union-next "desc"
+assert_eq 0 "$STATUS" 'automatic allocation works with different integration tips'
+assert_contains "$OUTPUT" '"CHANGE_ID":"053-union-next"' 'the persisted floor on another tip determines allocation'
+git symbolic-ref --delete refs/remotes/origin/HEAD
+git update-ref -d "$custom_ref"
+git update-ref -d "$archive_ref"
+printf '**Log condensed through**: 002; also 030-033, 032;\n' > .prdkit/history/archive.md
+for num in auto explicit; do
+    if [ "$num" = auto ]; then run bash "$sparse_new" --no-branch "desc"
+    else run bash "$sparse_new" --number 34 --no-branch "desc"; fi
+    assert_eq 1 "$STATUS" "$num numbering cannot fall back to the cutoff"
+    assert_contains "$OUTPUT" '.prdkit/history/archive.md:1:' 'line-numbered error'
+done
+cd "$PROJ2" || exit 1
+
+it "committed log and record claims on a fetched integration ref raise the allocation floor"
+git update-ref refs/remotes/origin/main HEAD
+for claim in '.prdkit/history/log.md 070' '.prdkit/history/log/080-entry.md 080' 'specs/changes/090-record.md 090'; do
+    read -r path floor <<< "$claim"
+    case "$path" in
+        .prdkit/history/log.md) printf -- '- 2026-10-01 070-folded: already closed\r\n' ;;
+        *) printf '\n' ;; # The filename reserves the number, independently of its contents.
+    esac | trusted_edit refs/remotes/origin/main "$path" || exit 1
+    run bash "$SCRIPT2" --no-branch --number 69 --short-name gap "desc"
+    assert_eq 1 "$STATUS" "a stale checkout refuses the gap below $path"
+    assert_contains "$OUTPUT" "high-water mark $floor"
+    rm -f specs/changes/069-gap.md # Keep the replay independent when the refusal is broken.
+done
+run bash "$SCRIPT2" --json --no-branch --short-name fetched-next "desc"
+assert_contains "$OUTPUT" '"CHANGE_ID":"091-fetched-next"' 'automatic numbering also sees committed claims'
+rm -f specs/changes/{091,014}-fetched-next.md
+git update-ref -d refs/remotes/origin/main
+
+it "successive compactions cannot reissue the highest allocated number, even in a shallow clone"
+pass_project="$(make_inited_project)" || exit 1
+track_tmp "$pass_project"
+cd "$pass_project" || exit 1
+pass_new=.prdkit/scripts/bash/new-change.sh
+mkdir -p .prdkit/history
+printf -- '- 2026-10-01 005-first: original close\n' > .prdkit/history/log.md
+git add -A && git commit -qm 'first folded snapshot' || exit 1
+snapshot="$(git rev-parse HEAD)"
+# shellcheck disable=SC2016 # Markdown code span
+printf '**Log condensed through**: 002; also 005; those entries: `git show %s:.prdkit/history/log.md`.\n**Allocated through**: 005\n' "$snapshot" > .prdkit/history/archive.md
+printf -- '- 2026-10-02 compaction: first pass\n' > .prdkit/history/log.md
+git add .prdkit/history && git commit -qm 'index first sparse close' || exit 1
+first_pass="$(git rev-parse HEAD)"
+run bash "$pass_new" --no-branch --number 005 --short-name reused "desc"
+assert_contains "$OUTPUT" 'reserved by the condensed log index'
+printf -- '- 2026-10-03 004-second: older change closes later\n' > .prdkit/history/log.md
+git add .prdkit/history/log.md && git commit -qm 'second folded snapshot' || exit 1
+snapshot="$(git rev-parse HEAD)"
+# A bad pass forgets to carry 005 forward in the index, but keeps the allocation floor.
+# shellcheck disable=SC2016 # Markdown code span
+printf '**Log condensed through**: 002; also 004; those entries: `git show %s:.prdkit/history/log.md`.\n**Allocated through**: 005\n' "$snapshot" > .prdkit/history/archive.md
+printf -- '- 2026-10-04 compaction: second pass\n' > .prdkit/history/log.md
+git add .prdkit/history && git commit -qm 'second pass omits first close' || exit 1
+shallow_pass="$(mktemp -d)"; track_tmp "$shallow_pass"
+git clone -q --depth 2 "file://$pass_project" "$shallow_pass" || exit 1
+assert_eq true "$(git -C "$shallow_pass" rev-parse --is-shallow-repository)"
+assert_eq commit "$(git -C "$shallow_pass" cat-file -t "$snapshot")" 'the latest snapshot is present'
+run git -C "$shallow_pass" cat-file -e "$first_pass"
+assert_eq 1 "$STATUS" 'the first index commit is not present'
+git -C "$shallow_pass" sparse-checkout set --no-cone '/*' '!/.prdkit/history/archive.md' || exit 1
+assert_eq 'S .prdkit/history/archive.md' "$(git -C "$shallow_pass" ls-files -t -- .prdkit/history/archive.md)" \
+    'the new archive path is in the index but not materialized'
+for checkout in "$pass_project" "$shallow_pass"; do
+    cd "$checkout" || exit 1
+    run bash "$pass_new" --no-branch --number 005 --short-name reused "desc"
+    assert_eq 1 "$STATUS" 'the omitted sparse member is below the current floor'
+    assert_contains "$OUTPUT" 'high-water mark 005'
+    assert_eq absent "$([ -e specs/changes/005-reused.md ] && echo present || echo absent)"
+    rm -f specs/changes/005-reused.md # Test the automatic path independently.
+    run bash "$pass_new" --json --no-branch --short-name after-pass "desc"
+    assert_contains "$OUTPUT" '"CHANGE_ID":"006-after-pass"' 'automatic allocation uses the persisted floor plus one'
+done
+cd "$PROJ2" || exit 1
 
 it "changes the spec's planned: markers name stay reserved; comments and code blocks do not count"
 mkdir -p "$PROJ2/specs/product" "$PROJ2/specs/parts"
@@ -196,7 +836,7 @@ assert_eq "033-wrapped" "$ID" "wrapped inside the code span"
 planned_next "$(printf -- '- **R-22 Sync** (hypothesis, planned: 025-sync): it syncs.\n\n<!-- Example: - **R-04 Title** (validated, planned:\n  090-example) -->\n\n```text\n- **R-05** (validated, planned:\n  091-in-a-code-block)\n```')"
 assert_eq "026-wrapped" "$ID" "a wrapped marker in a comment or a fence does not count"
 
-it "an explicit --number overrides a reservation with a notice naming its holder; its own planned marker is none"
+it "an explicit --number cannot fill allocated history but can open an unallocated planned change"
 mkdir -p "$PROJ2/specs/product"
 printf '%s\n' '- **R-04 Export** (validated, planned: 060-export): the owner exports.' > "$PROJ2/specs/product/requirements.md"
 run bash "$SCRIPT2" --json --no-worktree --number 60 --short-name export "desc"
@@ -204,45 +844,37 @@ assert_contains "$OUTPUT" '"CHANGE_ID":"060-export"' "the planned change opens u
 assert_not_contains "$OUTPUT" "Notice" "its own planned marker holds nothing against it"
 git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; rm -rf "$PROJ2/specs/changes"
 run bash "$SCRIPT2" --json --no-worktree --number 12 --short-name other "desc"
-assert_eq 0 "$STATUS" "the override proceeds"
-assert_contains "$OUTPUT" "Notice: change number 012 is also held by closed change 012-old-change; --number overrides it" "a closed change"
-assert_contains "$OUTPUT" '"CHANGE_ID":"012-other"' "on the asked number"
+assert_eq 1 "$STATUS" "a closed change cannot be overridden"
+assert_contains "$OUTPUT" "high-water mark 012"
 git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; rm -rf "$PROJ2/specs/changes"
 run bash "$SCRIPT2" --json --no-worktree --number 60 --short-name other "desc"
 assert_contains "$OUTPUT" "Notice: change number 060 is also held by planned in the spec 060-export" "another planned slug"
 git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; rm -rf "$PROJ2/specs/changes"
-printf '**Last 0.x feature**: 036\n' > "$PROJ2/specs/archive.md"
-run bash "$SCRIPT2" --json --no-worktree --number 20 --short-name other "desc"
-assert_contains "$OUTPUT" "Notice: change number 020 is also held by specs/archive.md, 0.x features through 036-" "a number the archive's 0.x features cover"
-git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; rm -rf "$PROJ2/specs/changes" "$PROJ2/specs/product" "$PROJ2/specs/archive.md"
-git -C "$PROJ2" branch -qD 060-export 012-other 060-other 020-other
 
-it "0.x feature folders still on disk (before the cutover), live or archived, stay reserved"
-mkdir -p "$PROJ2/specs/features/_archive/020-old-feature"
-run bash "$SCRIPT2" --json --no-worktree --short-name "after-features" "desc"
-assert_contains "$OUTPUT" '"CHANGE_ID":"021-after-features"' "archived feature 020 forces 021"
-git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; rm -rf "$PROJ2/specs/changes"
-mkdir -p "$PROJ2/specs/archive/features/_archive/030-cut-over"
-run bash "$SCRIPT2" --json --no-worktree --short-name "after-cutover" "desc"
-assert_contains "$OUTPUT" '"CHANGE_ID":"031-after-cutover"' "archived canon 030 forces 031"
-git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; rm -rf "$PROJ2/specs/changes"
+it "retired counters in bold, inline code and table cells all block allocation"
+# shellcheck disable=SC2016 # The backticks are literal Markdown.
+for counter in '**Last 0.x feature**: 036' '- **`Last 0.x feature`**: 036' '| Last 0.x feature | 036 |'; do
+    printf '# Archive\n\n%s\n' "$counter" > "$PROJ2/.prdkit/history/archive.md"
+    branch_before="$(git -C "$PROJ2" for-each-ref refs/heads)"
+    run bash "$SCRIPT2" --json --no-worktree --short-name reserved "desc"
+    assert_eq 1 "$STATUS" "unsupported archive counter is refused: $counter"
+    assert_contains "$OUTPUT" ".prdkit/history/archive.md:3"
+    assert_contains "$OUTPUT" "Log condensed through"
+    assert_eq "$branch_before" "$(git -C "$PROJ2" for-each-ref refs/heads)" 'no branch allocated'
+    run test ! -d "$PROJ2/specs/changes"
+    assert_eq 0 "$STATUS" 'no record allocated'
+done
+rm -rf "$PROJ2/specs/changes" "$PROJ2/specs/product" "$PROJ2/.prdkit/history/archive.md"
+git -C "$PROJ2" branch -qD 060-export 060-other
 
-it "an archive.md that yields no 0.x feature number stops auto-numbering instead of reusing one"
-rm -rf "$PROJ2/specs/features" "$PROJ2/specs/archive"
-cp "$PROJ2/.prdkit/templates/archive-template.md" "$PROJ2/specs/archive.md"
-run bash "$SCRIPT2" --json --no-worktree --short-name "from-template" "desc"
-assert_eq 1 "$STATUS" "the unfilled template fails closed"
-assert_contains "$OUTPUT" "names no **Base** commit in this repository and no readable **Last 0.x feature** line" "the cause is named"
-assert_contains "$OUTPUT" "or pass --number" "the way out is named"
-assert_eq "$MAIN_BRANCH" "$(git -C "$PROJ2" branch --show-current)" "no branch was created"
-run bash "$SCRIPT2" --json --no-worktree --number 32 --short-name "from-template" "desc"
-assert_contains "$OUTPUT" '"CHANGE_ID":"032-from-template"' "an explicit --number still works"
-git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; rm -rf "$PROJ2/specs/changes"
-# shellcheck disable=SC2016 # backticks are Markdown code spans, not command substitution
-printf '# Demo — archive\n\n**Base**: `abc1234`, main before the cutover.\n**Last 0.x feature**: 036; new changes number above it.\n' > "$PROJ2/specs/archive.md"
-run bash "$SCRIPT2" --json --no-worktree --short-name "after-archive" "desc"
-assert_contains "$OUTPUT" '"CHANGE_ID":"037-after-archive"' "the last 0.x feature 036 forces 037"
-git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; rm -rf "$PROJ2/specs/changes" "$PROJ2/specs/archive.md"
+it "unsupported feature folders block numbering before a record is written"
+mkdir -p "$PROJ2/specs/features/020-previous"
+printf '# Unsupported folder\n' > "$PROJ2/specs/features/020-previous/spec.md"
+run bash "$SCRIPT2" --json --no-worktree --short-name current "desc"
+assert_eq 1 "$STATUS" 'unsupported layout refused'
+assert_contains "$OUTPUT" 'specs/changes/<id>.md records'
+assert_eq "$MAIN_BRANCH" "$(git -C "$PROJ2" branch --show-current)" 'no branch was created'
+rm -rf "$PROJ2/specs/features"
 
 it "a sibling worktree's open change raises the next number"
 SIB_PARENT="$(mktemp -d)"; track_tmp "$SIB_PARENT"
@@ -294,57 +926,6 @@ run env PATH="$STUB_DIR:$PATH" bash "$PROJ3/.prdkit/scripts/bash/new-change.sh" 
 assert_eq 0 "$STATUS" "script exits 0 despite the collision"
 assert_contains "$OUTPUT" "change number 001 taken by local branch 001-raced, using 002" "notice names the source and the new number"
 assert_contains "$OUTPUT" '"CHANGE_ID":"002-raced"' "change lands on the bumped number"
-
-# --- After the cutover the folders are gone from main: git keeps their numbers --------------------
-PROJ4="$(make_inited_project)"; track_tmp "$PROJ4"
-PROJ4="$(cd "$PROJ4" && pwd -P)"
-cd "$PROJ4" || exit 1
-mkdir -p specs/features/012-mid specs/features/036-last
-echo '# x' > specs/features/012-mid/spec.md; echo '# y' > specs/features/036-last/spec.md
-git add -A >/dev/null 2>&1; git commit -qm "0.x" >/dev/null
-BASE4="$(git rev-parse HEAD)"
-git rm -rq specs/features; git commit -qm cutover >/dev/null
-MAIN4="$(git branch --show-current)"
-next4() { # dir archive.md-content ('' = no file): the change id new-change.sh picks there
-    mkdir -p "$1/specs"; rm -f "$1/specs/archive.md"; [ -z "$2" ] || printf '%s\n' "$2" > "$1/specs/archive.md"
-    run bash -c 'cd "$1" && bash .prdkit/scripts/bash/new-change.sh --json --no-worktree --short-name probe probe' _ "$1"
-    ID4="$(printf '%s' "$OUTPUT" | sed -n 's/.*"CHANGE_ID":"\([^"]*\)".*/\1/p')"
-    git -C "$1" checkout -q "$MAIN4"; [ -z "$ID4" ] || git -C "$1" branch -qD "$ID4"; rm -rf "$1/specs/changes"
-}
-# shellcheck disable=SC2016 # backticks are Markdown code spans, not command substitution
-VARIANTS=("" '**Last 0.x feature**: 036; new changes number above it.' '- **Last 0.x feature**: 036'
-    '**Last 0.x feature:** 036' '**Last 0.x feature** — 036' '**Last 0.x features**: 001–036'
-    '**Last 0.x feature number**: 036' '## Last 0.x feature: 036' "$(printf '**Last 0.x feature**:\n036')"
-    '**Last 0.X feature**: 036' '**Last 0.x feature**: `036-last`' '**Last 0.x feature**: 001-036 (036-last)'
-    '**Last 0.x feature**: none before 2026-10-20' '| Last 0.x feature | 036 |')
-
-it "removed 0.x feature numbers stay reserved from git history, whatever archive.md says"
-for variant in "${VARIANTS[@]}"; do
-    next4 "$PROJ4" "$variant"; assert_eq "037-probe" "$ID4" "archive.md: ${variant:-missing}"
-done
-
-it "the base commit archive.md records reserves the feature folders it held"
-git checkout -q -b side "$BASE4"; mkdir -p specs/features/050-side; echo '# z' > specs/features/050-side/spec.md
-git add -A >/dev/null 2>&1; git commit -qm side >/dev/null; SIDE4="$(git rev-parse HEAD)"; git checkout -q "$MAIN4"
-next4 "$PROJ4" "$(printf '# Demo — archive\n\n**Base**: %s, main before the cutover.' "$SIDE4")"
-assert_eq "051-probe" "$ID4" "050 at the base forces 051, though history on main never removed it"
-
-it "in a shallow clone, without that history, archive.md reserves the numbers or numbering stops"
-echo x > later.txt; git add later.txt; git commit -qm later >/dev/null
-SHALLOW="$(mktemp -d)"; track_tmp "$SHALLOW"; rmdir "$SHALLOW"
-git clone -q --depth 1 "file://$PROJ4" "$SHALLOW" 2>/dev/null; SHALLOW="$(cd "$SHALLOW" && pwd -P)"
-for variant in "${VARIANTS[@]:1:11}" "${VARIANTS[13]}"; do
-    next4 "$SHALLOW" "$variant"; assert_eq "037-probe" "$ID4" "shallow, archive.md: $variant"
-done
-next4 "$SHALLOW" '**Last 0.x feature**: none'
-assert_eq "001-probe" "$ID4" "none says there were no 0.x features"
-next4 "$SHALLOW" ""
-assert_eq "001-probe" "$ID4" "no archive.md: numbering goes on"
-assert_contains "$OUTPUT" "Warning: shallow clone" "with a warning that removed folders are not in its history"
-next4 "$SHALLOW" "$(printf '# Demo — archive\n\n**Base**: %s.' "$BASE4")"
-assert_eq "" "$ID4" "a base the clone lacks and no Last line: numbering stops"
-assert_contains "$OUTPUT" "an old feature number could be reused" "and says why"
-
 
 it "a submodule install keeps its slash commands in a new change worktree"
 # The documented install: the kit as a real submodule, the default installer, a committed install,

@@ -39,8 +39,7 @@ identities first; these placeholders are not usable policy):
 `review-publishers` may list comma-separated `bot:` and `user:` numeric ids; `review-owner`
 lists personal `user:` ids. Use `gh api users/<login> --jq .id` or
 `gh api 'users/<slug>[bot]' --jq .id`. Do not list the shared `github-actions[bot]` identity:
-a branch can add workflows using it. Remove the retired `review-publisher-isolation` key
-only after the 3.0 check is enforcing and the 2.0 check is no longer required.
+a branch can add workflows using it. The native gate rejects `review-publisher-isolation`.
 An ID listed in both keys counts only as owner. The PR author is always ineligible.
 Reviewers submit normal reviews under their own accounts.
 

@@ -26,8 +26,9 @@ points small, operational contracts explicit, and examples generic.
   `# Threat model:` headers, quote the invariants in the PR and say which ones the
   change affects. The independent review checks the change against both blocks.
   A finding outside the stated threat model is at most Low unless the reviewer
-  shows a non-hostile sequence that triggers it. Follow [SECURITY.md](SECURITY.md)
-  for private vulnerability reporting.
+  shows a non-hostile sequence that triggers it.
+  A defect that can only cause a spurious failure (never a false pass) of a maintainer CI check is at most Low.
+  Follow [SECURITY.md](SECURITY.md) for private vulnerability reporting.
 - Note user-visible changes under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md). Leave
   `VERSION` alone: the maintainer decides when a change is released, and as which version
   (see Releases).
@@ -41,7 +42,7 @@ points small, operational contracts explicit, and examples generic.
 - `workflows/`: agent protocol, spec and change contracts, and operational behavior.
 - `templates/`: project-owned spec, change and policy scaffolds installed into consumers.
 - `scripts/`: deterministic helpers and the installer mapping. `scripts/maintainer/` holds
-  kit-only tooling (releases) that the installer never ships to consumers.
+  kit-only tooling that the installer never ships to consumers.
 
 The kit's own development records are kept privately and are not part of this repository.
 
@@ -63,6 +64,14 @@ Preserve license and upstream attribution.
 
 ## Validation
 
+**Verifier threat model.** Git and `gh` are trusted producers: a successful command's
+output is taken as complete. Check its exit status before consuming the result, including
+in pipelines; a failed lookup is not evidence of absence. A verifier must not pass on
+missing or unreadable required input, malformed records, or truncated, unterminated or
+CRLF on-disk verification text. Sparse and partial checkouts are in scope: read committed
+evidence from the tree when required, and report unavailable objects rather than assuming
+they are absent. There is no need to reconstruct successful Git or `gh` inventories.
+
 ```bash
 bash tests/run.sh
 git diff --check 4b825dc642cb6eb9a060e54bf8d69288fbee4904 HEAD
@@ -76,15 +85,60 @@ macOS stay portable to its `/bin/bash` 3.2 and BSD userland. Run relevant real-a
 locally for behavioral changes, recording driver/version and limitations. Mock-driver success
 only establishes evaluation plumbing. See [test docs](tests/README.md).
 
-**CI and the merge rule.** `CI` ([`ci.yml`](.github/workflows/ci.yml)) runs these three
-commands on a GitHub-hosted Ubuntu 24.04 runner for every pull request and every push to main.
-It also runs adoption-gate and doctor coverage with checksum-pinned legacy mawk (1.3.4 20200120);
-newer mawk releases support intervals and would not exercise that compatibility boundary.
-`CI (macOS)` ([`ci-macos.yml`](.github/workflows/ci-macos.yml)) runs the portable suites with
-macOS's native Bash 3.2 and BSD userland, for every pull request and push to main and on demand.
-Both must pass before a merge. Only `CI` decides releases: `CI (macOS)` neither triggers nor
-gates one. Pull-request runs get a read-only token and no secrets, and a run from an outside
-contributor waits for the maintainer's approval.
+**CI and the merge rule.** `CI` ([`ci.yml`](.github/workflows/ci.yml)) runs for every pull
+request and push to main. Two GitHub-hosted Ubuntu 24.04 jobs split the complete shell suite.
+A parallel checks job runs ShellCheck, the whitespace and jq checks, and reruns adoption gate,
+doctor, lifecycle and spec navigation with checksum-pinned legacy mawk (1.3.4 20200120), which
+lacks regex intervals.
+`CI (macOS)` ([`ci-macos.yml`](.github/workflows/ci-macos.yml)) runs the
+[native allowlist](tests/native-suites.txt) in four macOS jobs with Bash 3.2 and BSD userland,
+for every pull request and push to main and on demand. Shards use
+[median suite timings](tests/suite-weights.txt) for balancing, always include untimed suites
+from their input list, and log elapsed seconds after each suite. Locally, `bash tests/run.sh`
+still runs everything; `bash tests/run.sh --shard 1/2 --list` previews a shard (add `--native`
+for the macOS list). When macOS runner slots are busy, shards start in waves, so total
+workflow time can exceed the longest shard's run time.
+
+Pushing a new commit to a pull request cancels older runs of each CI workflow for that
+pull request. Other pull requests, pushes to main and manually dispatched runs are not
+cancelled by this policy. Required checks must pass for the current PR revision; an older
+revision's check cannot satisfy them.
+
+The required checks, `test` and `portable helpers (macOS)`, pass only when their expected
+shards (and the Linux checks job) all succeed. Both must pass before a merge. Only `CI`
+decides releases: `CI (macOS)` neither triggers nor gates one. Pull-request runs get a
+read-only token and no secrets, and a run from an outside contributor waits for the
+maintainer's approval.
+
+The Linux-only **Fails before the fix** job runs on pull requests, including title edits.
+It runs each added or changed `tests/test_*.sh` suite at the exact PR head and at the
+merge base with the PR head's entire `tests/` directory. Everything outside `tests/`,
+including scripts, templates, workflows and commands, stays at the merge base for the
+base run. The job summary shows both results and includes failure output; a missing
+base dependency can make the suite fail. **Isolation invariant:** base and head run on
+separate GitHub-hosted runners, so no process or local service from one snapshot can
+serve the other. Each snapshot job has a 20-minute limit. A third job compares both
+one-day result artifacts against the planned suites. A missing job, timeout, or
+incomplete result fails the check as `INCONCLUSIVE`, even for advisory titles.
+With no changed suites, neither snapshot runs and the final check succeeds.
+Titles such as `fix:`, `fix(scope):`, `fix!:` and `fix(scope)!:` need at least one suite that
+fails on base and passes on head.
+For other titles the comparison is advisory. The new job does not change branch protection
+or gate releases. To replay locally, use two separate checkouts. For suites that start
+services, put the checkouts on separate machines or VMs to reproduce CI isolation.
+Given `base` (the merge base) and `head` (the PR SHA), prepare a common plan:
+
+```bash
+git diff --no-renames --name-only -z --diff-filter=AMT "$base" "$head" \
+  -- ':(top,glob)tests/test_*.sh' > suites.z
+```
+
+In the base checkout restore the head's tests with
+`git restore --source="$head" --staged --worktree -- tests/`. Leave the exact head
+checkout intact. In each checkout, run the **head version** of the driver with
+`bash /path/to/fails-on-base.sh run /path/to/suites.z /path/to/result.json`.
+Bring both results and the plan together and run
+`bash /path/to/fails-on-base.sh compare suites.z base.json head.json 'fix: title'`.
 
 ## License
 

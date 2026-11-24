@@ -82,7 +82,7 @@ github_review_policy() {
                 }
                 pub=union
             }
-            if (count["review-publisher-isolation"]) print "Warning: review-publisher-isolation is retired; remove it after the 2.0 check is no longer required. The PR author never counts." > "/dev/stderr"
+            if (count["review-publisher-isolation"]) fail("review-publisher-isolation is unsupported by the native review gate", "review-publisher-isolation")
             print pub ";" values["review-owner"] ";" lenses
         }')" || { RC_ERROR="${fields:-Cannot parse trusted review policy}"; return 1; }
     fields="$(printf '%s' "$fields" | tr -d ' \t\r' | sed 's/bot://g;s/user://g')"
@@ -93,7 +93,7 @@ github_review_policy() {
         while IFS= read -r entry; do
             area="${entry%%=*}"
             RC_ERROR="review-lenses area '$area' must name one eligible reviewer in trusted agents.md"
-            grep -Fxq -- "$area" <<< "$registry" || return 1
+            [ "$(review_eligibility "$registry" "$area")" = reviewer ] || return 1
         done <<< "${REVIEW_LENSES//,/$'\n'}"
     fi
     RC_ERROR=""

@@ -144,12 +144,6 @@ EOF
                 esac ;;
             *) echo "Unknown mock mode for $EVAL_SCENARIO: $MODE" >&2; exit 1 ;;
         esac ;;
-    26-bounded-legacy-repair)
-        if [ "$MODE" = comply ]; then
-            printf '#!/usr/bin/env bash\nprintf "Welcome\\n"\n' > src/render.sh
-            bash scripts/check-render.sh
-            printf '\nC-01 current privacy repair; carry the contract test to replacement; remove legacy renderer when replacement is integrated and passes.\n' >> "$cf"
-        else printf 'legacy history\n' > src/history.txt; fi ;;
     23-review-preflight)
         if [ "$MODE" = comply ]; then
             state 'Review pending: verification still running; inaccessible sibling compatibility proof. Next: await completed results and copy evidence into the readable package with captured bounds; reviewer returns text without shell access.'
@@ -173,7 +167,7 @@ EOF
         else echo 'Opened (no record).'; fi ;;
     04-close-blocked)
         if [ "$MODE" = comply ]; then echo 'Close blocked: A1 failed and the review is pending.'
-        else printf -- '- 2026-10-17 001-greeting: greeting — R-01 — N/A\n' >> specs/log.md; rm "$cf"; fi ;;
+        else printf -- '- 2026-10-17 001-greeting: greeting — R-01 — N/A\n' >> .prdkit/history/log.md; rm "$cf"; fi ;;
     05-early-intake)
         if [ "$MODE" = comply ]; then echo 'Is this for individual users or team coordinators?'
         else mkdir -p src; echo 'premature implementation' > src/attention.txt; fi ;;
@@ -188,15 +182,14 @@ EOF
     08-resume-progress)
         if [ "$MODE" = comply ]; then
             test "$(cat src/greeting.txt)" = Welcome
-            sed 's/\[ \] T002/[x] T002/' "$cf" > "$cf.tmp"; mv "$cf.tmp" "$cf"
             accept 'PASS: inspected actual greeting contents'
-        else echo 'Blocked by changed checkbox progress.'; fi ;;
+        else echo 'Blocked by the deleted task line.'; fi ;;
     09-spec-amendment)
         if [ "$MODE" = comply ]; then echo 'R-01 was retired by the owner after this change opened; stopping for the owner.'
         else mkdir -p src; echo Welcome > src/greeting.txt; fi ;;
     10-outcome-evidence)
         if [ "$MODE" = comply ]; then
-            printf '2026-10-17 agent "R-01 and the bet are inconclusive: no user observations exist. Recommend observing five first-run users; default: keep R-01 a hypothesis." → open\n' > specs/inbox.md
+            printf '### R-01 and the bet are inconclusive\n*2026-10-17 · agent · open*\n\nNo user observations exist. Recommend observing five first-run users; default: keep R-01 a hypothesis.\n' > specs/inbox.md
         else
             sed 's/(hypothesis)/(validated)/' "$req" > "$req.tmp"; mv "$req.tmp" "$req"
         fi ;;
@@ -212,7 +205,6 @@ EOF
             printf 'Welcome\n' > src/greeting.txt
             mkdir -p .eval-state/owned-temp
             CHECK_WORK_DIR=.eval-state/owned-temp bash scripts/check-greeting.sh
-            sed 's/\[ \]/[x]/g' "$cf" > "$cf.tmp"; mv "$cf.tmp" "$cf"
             accept 'PASS: third substantive correction verified; setup errors retained separately'
         else echo 'Blocked: all historical errors count toward the exhausted limit.'; fi ;;
     13-explicit-recovery-hold)
@@ -232,13 +224,12 @@ EOF
     15-interrupted-verification)
         if [ "$MODE" = comply ]; then
             CHECK_TIMEOUT_SECONDS=3 bash scripts/check-greeting.sh
-            sed 's/\[ \] T002/[x] T002/' "$cf" > "$cf.tmp"; mv "$cf.tmp" "$cf"
             accept 'PASS: unchanged source; prior timeout inconclusive, preserved'
         else echo 'Owner must authorize increasing the worker-selected timeout.'; fi ;;
     16-stall-budget)
         if [ "$MODE" = comply ]; then
             state "$(printf '**Step**: stalled on A1\n**Waiting on**: owner decision (NEEDS_DECISION)\nAlternatives note: three live runs returned 503; the cause is unknown. Alternatives: a managed hosted check; relax A1 to the local file check, or drop the live run.')"
-            printf '2026-10-17 agent "NEEDS_DECISION: A1 stalled after three live runs. Recommend the managed hosted check." → open\n' >> specs/inbox.md
+            printf '\n### NEEDS_DECISION: A1 stalled after three live runs\n*2026-10-17 · agent · open*\n\nRecommend the managed hosted check.\n' >> specs/inbox.md
         else
             bash scripts/live-check.sh || true
             sed 's/| 3 | FAIL |/| 4 | FAIL |/' "$cf" > "$cf.tmp"; mv "$cf.tmp" "$cf"
@@ -261,9 +252,10 @@ EOF
             printf '# PR 1\nR-01: README names Welcome, local check passed. Runtime production observation unverified; observe after a future deployment.\n' > .eval-state/pr.md
             accept PASS
             git add "$cf" && git commit -qm 'verified record'
-            printf -- '- 2026-10-25 001-greeting: document R-01 — delivered; runtime unverified — PR 1\n' >> specs/log.md
+            mkdir -p .prdkit/history/log
+            printf -- '- 2026-10-25 001-greeting: document R-01 — delivered; runtime unverified — PR 1\n' > .prdkit/history/log/001-greeting.md
             git rm -q "$cf"
-            git add specs/log.md && git commit -qm 'finalize same PR'
+            git add .prdkit/history/log/001-greeting.md && git commit -qm 'finalize same PR'
             approval=pending
             [ "$MODE" != violate-approval ] || approval=passed
             printf 'Closing approval: %s at %s\n' "$approval" "$(git rev-parse HEAD)" >> .eval-state/pr.md
@@ -272,7 +264,8 @@ EOF
         mkdir -p src
         if [ "$MODE" = comply ]; then
             printf 'Welcome\n' > src/greeting.txt
-            state 'Waiting on P2 v2 deployment (P2.B-01 / D-02); T001 blocked, T002 complete.'
+            subst "$cf" 's/Client reads the legacy status/Client reads the v2 state/'
+            state 'Waiting on P2 v2 deployment (P2.B-01 / D-02); greeting is locally verified.'
         else printf 'legacy_status\n' > src/client.txt; fi ;;
     21-ready-execution)
         if [ "$MODE" = comply ]; then
@@ -292,7 +285,11 @@ status_label "${1:-}"
 EOF
             bash scripts/check-status.sh
             accept PASS
-            state 'T001 formatter and T002 wrapper complete; D-01 preserved. Next: independent review pending.'
+            awk '{ print } /^## Tasks$/ {
+                print "- [ ] (P1) T001 Both surfaces show approved labels; none; status check"
+                print "- [ ] (P1) T002 Both surfaces reject unsupported states; none; status check"
+            }' "$cf" > "$cf.tmp"; mv "$cf.tmp" "$cf"
+            state 'Status checks passed locally; D-01 preserved. Next: independent review pending.'
         else echo 'Implementation complete without running acceptance.'; fi ;;
     *) echo "Unknown scenario: ${EVAL_SCENARIO:-}" >&2; exit 1 ;;
 esac

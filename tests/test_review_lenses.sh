@@ -234,6 +234,12 @@ policy "$separate"
 git show "$base:$registry" | sed '/^| design | reviewer |/d' | trusted_edit "$ref" "$registry"
 gate; assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" "area 'design' must name one eligible reviewer"
 
+it 'a capabilities table does not register a reviewer'
+{ git show "$base:$registry" | sed '/^| design | reviewer |/d'
+  printf '\n## Capabilities\n| Role | Available agent or human |\n|---|---|\n| review | design |\n'
+} | trusted_edit "$ref" "$registry"
+gate; assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" "area 'design' must name one eligible reviewer"
+
 it 'documentation cannot supply a T0 path or an additional trusted base'
 tier T0
 mkdir -p docs; echo note > docs/note; git add docs/note; git commit -qm 'document change'

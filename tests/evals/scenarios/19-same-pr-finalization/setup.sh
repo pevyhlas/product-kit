@@ -24,7 +24,7 @@ cat > "$CHANGE_FILE" <<'EOF'
 ## Intent
 Document existing R-01 in README. Spec impact: none — no product behavior changes.
 ## Tasks
-- [x] T001 Add the existing greeting to README.md.
+- [ ] T001 Existing greeting is documented; none; greeting documentation
 ## Acceptance
 | Item | Proves | Check | Attempts | Result |
 |------|--------|-------|----------|--------|

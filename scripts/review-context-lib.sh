@@ -151,7 +151,7 @@ review_context_build() {
     fi
     while IFS= read -r -d '' path; do
         case "$path" in specs/*.md) ;; *) continue ;; esac
-        case "$path" in specs/changes/*|specs/log/*) continue ;; esac
+        case "$path" in specs/changes/*) continue ;; esac
         if blob="$(context_object "$HEAD_SHA" "$path")"; then
             mkdir -p "$(dirname "$CTX_TMP/material/$path")"
             if ! GIT_NO_LAZY_FETCH=1 git -C "$REPO_ROOT" cat-file blob "$blob" > "$CTX_TMP/material/$path" ||
@@ -195,7 +195,9 @@ review_context_build() {
         case "$path" in specs/parts/*) context_span "$HEAD_SHA" "$path" 1 all parts "part and cross-interface obligations" ;; esac
     done < <(spec_files "$CTX_TMP/material")
     if [ -n "$record_rev" ]; then
-        header="$(awk "$SPEC_SKIP_AWK"'{ if (spec_skip($0)) next } /^## / { exit } { print }' "$CTX_TMP/material/$record")"
+        header="$(awk "$SPEC_SKIP_AWK $SPEC_CHANGE_TAG_AWK"'
+            { $0 = change_without_tags($0) }
+            { if (spec_skip($0)) next } /^## / { exit } { print }' "$CTX_TMP/material/$record")"
         count="$(printf '%s\n' "$header" | awk '{ n+=gsub(/\*\*Parent\*\*:/,"&") } END { print n+0 }')"
         parent_field="$(printf '%s\n' "$header" | awk '/\*\*Parent\*\*:/ { sub(/^.*\*\*Parent\*\*:[[:space:]]*/, ""); sub(/·.*/, ""); sub(/[[:space:]]+$/, ""); print }')"
         parent="$(printf '%s\n' "$parent_field" | grep -Eo '[0-9]{3,}-[a-z0-9]+(-[a-z0-9]+)*' | LC_ALL=C sort -u || true)"
@@ -234,7 +236,7 @@ review_context_build() {
             awk "$SPEC_SKIP_AWK"'
                 { if (spec_skip($0)) next }
                 /\]\(https?:/ { print "external child link at line " NR " requires captured context" }
-                /-[0-9][0-9]+[[:space:]]*(to|through|–|—|\.\.)[[:space:]]*(P[0-9]+\.[BI]|[JRQCDN])?-[0-9]/ {
+                /-[0-9][0-9]+[[:space:]]*(to|through|–|—|\.\.)[[:space:]]*(P[0-9]+(\.[0-9]+)?\.[BI]|[JRQCDN])?-[0-9]/ {
                     print "ID range at child line " NR " requires explicit complete context"
                 }' "$CTX_TMP/material/$record")
         # spec_links supplies safely normalized paths. Anchored links require a unique heading;
@@ -258,7 +260,7 @@ review_context_build() {
         context_gap changed-spec "cannot completely enumerate changed canon"
     fi
     while IFS= read -r -d '' path; do
-        case "$path" in specs/changes/*|specs/log*|specs/archive*) continue ;; specs/*) ;; *) continue ;; esac
+        case "$path" in specs/changes/*) continue ;; specs/*) ;; *) continue ;; esac
         if blob="$(context_object "$HEAD_SHA" "$path")"; then
             context_span "$HEAD_SHA" "$path" 1 all changed-spec "changed canon, unabridged"
         else context_gap changed-spec "deleted/unsafe changed canon $(printf '%q' "$path"); inspect full diff"; fi

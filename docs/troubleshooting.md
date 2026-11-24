@@ -4,22 +4,19 @@
 |---------|-------------|
 | Public commands unavailable | Run the installer for the selected harness; or ask the agent to read `.prdkit/workflows/protocol.md` |
 | Missing workflow or template | `/prdkit-doctor`, then inspect `init.sh --check` before reinstalling |
-| Doctor or init: "needs a cutover" / 0.x layout | Between changes, run `/prdkit-init`; see [migrating to 1.0](migrating-to-1.0.md) |
-| Doctor: two canons | Finish the cutover (`compact.md`, Cutover): condense `specs/product-spec/`, `specs/targets/` and `specs/features/` into the spec and `specs/archive.md`, turn a feature the owner keeps open into a change record, then `git rm` them |
-| Doctor: archive on main | Condense `specs/archive/` into `specs/archive.md` and remove it with `git rm` (`compact.md`, Restructure); git keeps the files |
-| Doctor: `specs/archive.md` has no readable Last line or Base commit; `new-change.sh` stops: "an old feature number could be reused" | Write `**Base**: <sha>` (the main commit the cutover started from) and `**Last 0.x feature**: <NNN, or none>` as in `archive-template.md`, or pass `--number` |
-| Doctor: agent context names removed 0.x paths | Point `CLAUDE.md`/`AGENTS.md` at the current spec, and history questions at `specs/archive.md`; qualify another repository's path as `owner/repo:path` |
-| CI fails: a kit helper such as `check-artifacts.sh` not found | 1.0 removed it: `init.sh --check` lists each call under RETIRED; replace it ([migrating](migrating-to-1.0.md)); a `check-signoff.sh` step becomes `check-review.sh` ([CI gates](ci-gates.md)) |
+| Doctor or init: unsupported spec layout or install manifest | Use the current layout and manifest format named in the error. The kit does not convert older installations. |
 | Doctor: undefined or retired ID cited | Fix the citation, or retire the test that still cites a retired line in the same PR |
 | Doctor: malformed record | Each `specs/records.md` line is `TYPE id key=value … — reason`; the template comment lists the keys |
 | Doctor: file over its reading budget | Tighten the wording or split the file ([spec.md](../workflows/spec.md), Layout); never drop an item to fit, never pad up to a budget |
 | Doctor: a spec file "is reached from no summary" | Give it a line and a link in its parent (the file it was split from, or `architecture.md` for a topic or `retired.md`); a retired file needs `retired:` in its heading |
 | Doctor: a stage "runs in none of the environments" | Name the environment in the stage's **Environment** line as `specs/architecture/environments.md` spells it, or add a row for it there; `none` suits a stage with nothing running |
 | Doctor: "Link at … points to …, which does not exist" | Fix the path; name a file removed from main on purpose as code, `git show <sha>:<path>`, not as a link |
-| Doctor: closed without a log entry | Add `specs/log/<id>.md` holding `- <date> <id>: <what changed>` in the PR that deletes the change record |
-| `close-change.sh`: “could not create the hard link” | Check the `ln` error. If the filesystem does not support hard links in `specs/log/`, move the checkout to one that does and retry the same close. The record is still open; no log entry needs cleanup. |
+| Doctor: closed without a log entry | Add `.prdkit/history/log/<id>.md` holding `- <date> <id>: <what changed>` in the PR that deletes the change record |
+| `close-change.sh`: “could not create the hard link” | Check the `ln` error. If the filesystem does not support hard links in `.prdkit/history/log/`, move the checkout to one that does and retry the same close. The record is still open; no log entry needs cleanup. |
 | Status or doctor: missing, blank or duplicate State field | In `## State`, give `**Waiting on**:` and `**Next**:` one nonblank line each. For examples, use a fence or start an HTML comment on its own line. Inline `<!--` is ordinary field text. |
-| Doctor: malformed log entry | Make `specs/log/<id>.md` one line, `- <date> <id>: <what changed>`, naming the change its file name gives |
+| Doctor: malformed log entry | Make `.prdkit/history/log/<id>.md` one line, `- <date> <id>: <what changed>`, naming the change its file name gives |
+| Old history paths remain | Move them with the `git mv` commands in the diagnostic and commit the move. Refresh stale worktrees and integration refs before allocating or closing a change |
+| Doctor: close row over 200 characters | Keep intent, IDs and parts, disposition, and PR. Leave details on the PR |
 | Status or doctor: merged without closing | Close it in the next relevant PR, carried by that PR's record before its final review ([review workflow](../workflows/review.md#closing)); a change that spans PRs is a parent with an outcome checkpoint |
 | Doctor: local machine path | Rewrite it relative to the repository, or as `org/repo` plus a path for another repository |
 | Doctor: raw evidence under `specs/` | `git rm --cached` it, keep it under `.prdkit/cache/evidence/`, and link it from Acceptance |
@@ -43,8 +40,7 @@
 | `cleanup-change.sh` says git refused the removal | The message carries git's reason, such as a locked worktree (`git worktree unlock <path>`); uncommitted changes are reported as such. Submodules alone never block it |
 | `cleanup-change.sh --closed` leaves a closed change's worktree | It removes only the layout `new-change.sh` creates, `.worktrees/<id>` on branch `<id>`. Remove any other worktree by id |
 | Agent context file huge, slow costly turns | Keep `CLAUDE.md`/`AGENTS.md` to orientation and pointers within `context-budget-bytes` |
-| Old `/prdkit-*` commands or helpers still installed | Run `init.sh --upgrade`; it removes kit files no longer shipped (`--check` lists them as RETIRED) |
-| Upgrade kept an edited retired template | Fold what you need into the constitution or a 1.0 template, then delete it |
+| Unsupported installed command or helper | Check the current kit mapping and reconcile the installation manually; `--upgrade` does not retire old kit files |
 | A helper exits 2: resolved root has no `.prdkit/` | Run the installed copy under `<project>/.prdkit/scripts/bash/` from a project whose Git root holds `.prdkit/` |
 | `init.sh` exits 2: unknown harness, or the list would drop a recorded one | Separate names with commas or spaces and keep every recorded harness; see [removing a harness](harnesses.md#removing-a-harness) |
 | Slash commands missing in a change worktree; `new-change.sh` warns that links do not resolve | The install uses `--symlink` and the worktree lacks the kit: run the `git submodule update --init` it names, or switch once with `init.sh --upgrade --copy` and commit |

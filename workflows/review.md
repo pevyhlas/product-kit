@@ -1,15 +1,19 @@
 # Review, merge and closing
 
-**Inputs**: a built change with its acceptance results, its record, PR and diff, the spec it
+**Inputs**: a change with its acceptance results, its record, PR and diff, the spec it
 touches, the reviewers registered in `.prdkit/memory/agents.md`, and project policy.
 **Writes**: the review package, reports and GitHub reviews on the PR, the final PR
-context, the log entry (`specs/log/<id>.md`) and the record's deletion.
+context, the log entry (`.prdkit/history/log/<id>.md`) and the record's deletion.
 **Result**: a closed change whose exact head may merge, or review pending or a recorded blocker.
 
 Read this before dispatching review, merging or closing. [change.md](change.md) opens and builds
 the change; the tier is in [protocol.md](protocol.md).
 
 ## Review
+
+Check task deletions against the PR's delivery. A deleted task is delivered unless the PR
+description lists it on a `Drops: <change-id> T004, T005` line. Do not check off, annotate
+or log delivered tasks.
 
 The reviewer is a fresh context that did not implement the change. Reviews are run by the worker,
 not CI. Send `.prdkit/templates/review-prompt-template.md`, the change record, the spec sections
@@ -28,6 +32,18 @@ checkout first with original source provenance, then attach or place the package
 reviewer's actual access boundary. Verify access before a costly review round. For uncommitted
 work send the tracked diff plus the untracked file contents, with their hashes. Without a
 trustworthy package, review is pending.
+
+For spec edits, judge each line at its edited level: [Levels](spec.md#levels),
+[What earns a line](spec.md#what-earns-a-line) and Left open ([Elements](spec.md#elements)).
+Send those rules with the prompt. Snapshot the installed prompt and `.prdkit/workflows/spec.md`
+with `--context` if the trusted copies are tracked at the reviewed head; otherwise attach both
+at dispatch.
+Use the `level` category for detail the edit adds at the wrong level or over budget.
+
+In a spec-only change, apply the existing severities to contradictions with constraints, decisions
+or non-goals; wrong or owner-unauthorized one-way doors; unobservable acceptance outcomes; missing
+bounds; and facts given a second home. Requests for step logic, field-level schemas or test
+procedures in L0–L2 or the change record are low (advisory); tag them `defer: implementing PR`.
 
 Critical and high findings block, medium blocks under `Rigor: full`, low is advisory. A failed
 tool run is not a product FAIL and an absent reviewer is not approval. Preserve each report
@@ -70,9 +86,10 @@ Without `--pr` a successful structural preview exits 3 and cannot authorize merg
 ## Closing
 
 A PR-scoped change closes in that same PR when its required acceptance and review pass, or by
-explicit owner disposition. Whatever deletes a record, an owner-disposed cancellation included,
-adds its log entry in the same PR. Required live gates still block. Non-gating runtime
-observations need no cleanup PR, and no permanent task archive is required.
+explicit owner disposition. For a single-PR change, deleting the record delivers its tasks with
+the change, except tasks marked as dropped in the PR description. Whatever deletes a record,
+an owner-disposed cancellation included, adds its change-level log entry in the same PR.
+Required live gates still block. Non-gating runtime observations need no cleanup PR.
 
 Before final review: reconcile the approved spec delta with actual behavior. Remove only built
 `planned` markers; preserve unbuilt intent and hypotheses. Known unmet required work needs an
@@ -86,11 +103,12 @@ discarded after useful context is durable. A child PR updates only its row and t
 its parent, and never copies its plan, findings or evidence there.
 
 After the current PR head passes, run `.prdkit/scripts/bash/close-change.sh --pr <url> <id> "<intent> — <IDs> — <disposition;
-runtime unknown if relevant> — <PR>"`, which writes the log entry `specs/log/<id>.md` and deletes
-the record once `check-review.sh` passes. The text is at most 300 characters: carried findings and
-follow-ups go to the parent's row or the spec, evidence stays on the PR. One file per closed
+runtime unknown if relevant> — <PR>"`, which writes the log entry `.prdkit/history/log/<id>.md` and deletes
+the record once `check-review.sh` passes. Keep the full row within 200 characters, including
+date, change ID and any tags. Carried findings and follow-ups go to the parent's row or the
+spec; evidence stays on the PR. One file per closed
 change means two branches that each close a change never conflict in the log; compaction folds
-the entries into `specs/log.md` ([compact.md](compact.md)).
+the entries into `.prdkit/history/log.md` ([compact.md](compact.md)).
 
 The closing commit uses the checkout's ambient Git identity. To use an agent identity, set
 `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` for the

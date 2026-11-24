@@ -94,21 +94,48 @@ bindings() { # head [branch] [target]
     jq -n --arg sha "$tip" --arg ref "refs/heads/$t" '{ref:$ref,object:{type:"commit",sha:$sha}}' \
         > "$GH_STUB_DIR/routes/git_ref_heads_${t}.json"
 }
-launch() {
+invoke_launcher() {
     if env -i PATH="$ORIGINAL_PATH" GH_TOKEN=synthetic-read-token GITHUB_EVENT_NAME=pull_request \
         GITHUB_REPOSITORY=owner/repo GITHUB_REPOSITORY_ID=42 \
         "$@" \
         "$REAL_BASH" --noprofile --norc "$FIX/launcher" --repository owner/repo --event "$FIX/event" \
         > "$FIX/stdout" 2>"$FIX/stderr"; then STATUS=0; else STATUS=$?; fi
     OUTPUT="$(cat "$FIX/stdout")"
+}
+launch() {
+    invoke_launcher "$@"
     assert_eq "$EXPECTED_BASH" "$(cat "$FIX/interpreter")" 'actual nested supervisor interpreter'
     assert_eq 1 "$(printf '%s' "$OUTPUT" | jq -s length)" 'one structured stdout object'
     assert_eq '' "$(find "$FIX/scratch" -mindepth 1 -print)" 'owned scratch cleaned'
 }
 assert_terminated() {
     local state
+    if [[ ! "$1" =~ ^[1-9][0-9]*$ ]]; then _no "$2" "missing or invalid fixture PID"; return; fi
     state="$(ps -o stat= -p "$1" 2>/dev/null || true)"
-    case "$state" in ''|Z*) _ok "$2" ;; *) _no "$2" "$state" ;; esac
+    state="${state//[[:space:]]/}"
+    if [[ -z "$state" || "$state" =~ ^Z[+\<NsL]*$ ]]; then _ok "$2"; else _no "$2" "$state"; fi
+}
+await_fixture() { # explicit fixture readiness, including on a loaded runner
+    local pid="$1" first="$2" second="${3:-$2}" end=$((SECONDS+120))
+    while [ "$SECONDS" -lt "$end" ]; do
+        if [ -s "$first" ] && [ -s "$second" ]; then return 0; fi
+        kill -0 "$pid" 2>/dev/null || return 1
+        sleep 0.1
+    done
+    return 1
+}
+arm_fixture_deadline() { # capture basename, readiness file, bounded's deadline variable
+    # Keep the normal deadline as a fallback if the fixture never starts. Once
+    # ready, shorten only the selected clock and let the real check expire it.
+    awk -v capture="$1" -v ready="$FIX/$2" -v clock="$3" '
+        { print }
+        /^    while \[ ! -f "\$operation\/work.status" \]; do$/ {
+            print "        if [ \"$out\" = \"$root/" capture "\" ] && [ -s \"" ready "\" ] && [ -z \"${fixture_armed:-}\" ]; then"
+            print "            local fixture_armed=1; " clock "=$((SECONDS+2))"
+            print "        fi"
+        }
+    ' "$FIX/launcher" > "$FIX/short"
+    mv "$FIX/short" "$FIX/launcher"
 }
 bindings "$HEAD_SHA"
 
@@ -240,8 +267,8 @@ git checkout -q --detach "$HEAD_SHA"
 
 it 'closed unnumbered carrier is recovered by the native gate, including its log'
 git rm -q specs/changes/001-carrier.md
-mkdir -p specs/log
-printf -- '- 2026-01-01 001-carrier: closed\n' > specs/log/001-carrier.md
+mkdir -p .prdkit/history/log
+printf -- '- 2026-01-01 001-carrier: closed\n' > .prdkit/history/log/001-carrier.md
 git add -A; git commit -qm close
 CLOSED="$(git rev-parse HEAD)"
 bindings "$CLOSED"; launch
@@ -372,8 +399,7 @@ for fault in multiple malformed nul binding preview wrong-type missing-publisher
     git branch -f main HEAD
     bindings "$HEAD_SHA"
     if [ "$fault" = timeout ]; then
-        sed 's/bounded 180 /bounded 1 /' "$FIX/launcher" > "$FIX/short"
-        mv "$FIX/short" "$FIX/launcher"
+        arm_fixture_deadline native.json native-descendant end
     fi
     launch
     instrument
@@ -389,8 +415,7 @@ for fault in multiple malformed nul binding preview wrong-type missing-publisher
             143|137) _ok 'actual signalled native exit preserved, not synthetic watchdog 124' ;;
             *) _no 'actual native timeout exit lost' "$OUTPUT" ;;
         esac
-        STATE="$(ps -o stat= -p "$(cat "$FIX/native-descendant")" 2>/dev/null || true)"
-        case "$STATE" in ''|Z*) _ok 'native descendant terminated' ;; *) _no 'native descendant survived' "$STATE" ;; esac
+        assert_terminated "$(cat "$FIX/native-descendant")" 'native descendant terminated'
     fi
 done
 git branch -f main "$BASE"
@@ -412,12 +437,9 @@ env -i PATH="$ORIGINAL_PATH" GH_TOKEN=synthetic GITHUB_EVENT_NAME=pull_request \
     "$REAL_BASH" "$FIX/launcher" --repository owner/repo --event "$FIX/event" \
     > "$FIX/stdout" 2>"$FIX/stderr" &
 LAUNCHER_PID=$!
-for n in 1 2 3 4 5 6 7 8 9 10; do
-    [ ! -f "$FIX/native-ready" ] || [ ! -f "$FIX/native-descendant" ] || break
-    sleep 1
-done
+await_fixture "$LAUNCHER_PID" "$FIX/native-ready" "$FIX/native-descendant" || :
 assert_file "$FIX/native-ready"
-kill -TERM "$LAUNCHER_PID"
+kill -TERM "$LAUNCHER_PID" 2>/dev/null || :
 if wait "$LAUNCHER_PID"; then STATUS=0; else STATUS=$?; fi
 assert_eq 1 "$STATUS"
 assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
@@ -541,29 +563,25 @@ select_at "$AA" "$BB"; assert_eq 1 "$STATUS" 'multiple merge bases refuse'
 # Restore host control and short bounds only in disposable instrumentation.
 it 'timeouts kill owned descendant groups and cleanup before emitting the result'
 instrument
-sed 's/bounded 120 /bounded 1 /g' "$FIX/launcher" > "$FIX/short"
-mv "$FIX/short" "$FIX/launcher"
+arm_fixture_deadline fetch.out descendant end
 bindings "$HEAD_SHA"
+rm -f "$FIX/descendant"
 touch "$FIX/hang"; launch; rm "$FIX/hang"
 assert_eq acquisition "$(printf '%s' "$OUTPUT" | jq -r .error.code)"
 if [ -f "$FIX/descendant" ]; then
     PID="$(cat "$FIX/descendant")"
     # A zombie has terminated but can remain briefly until the host init reaps it.
-    STATE="$(ps -o stat= -p "$PID" 2>/dev/null || true)"
-    case "$STATE" in ''|Z*) _ok 'descendant terminated' ;; *) _no 'descendant survived watchdog' "$STATE" ;; esac
+    assert_terminated "$PID" 'descendant terminated'
 else _no 'timeout reached owned descendant fixture'; fi
 
-it 'whole-invocation watchdog is independent of per-acquisition bounds'
+it 'the overall budget can cancel a subprocess before its per-operation limit'
 instrument
-# Isolate the overall timer in this disposable copy. Otherwise the per-operation remaining-time
-# clamp arms the two watchdogs together and their scheduling race is not an overall-timer oracle.
-sed -e 's/deadline=$((SECONDS+600))/deadline=$((SECONDS+5))/' \
-    -e '/^    \[ "\$seconds" -le "\$remaining" \] || seconds="\$remaining"$/d' \
-    "$FIX/launcher" > "$FIX/short"
-mv "$FIX/short" "$FIX/launcher"
+arm_fixture_deadline fetch.out descendant deadline
+rm -f "$FIX/descendant"
 touch "$FIX/hang"; launch; rm "$FIX/hang"
 assert_eq 1 "$STATUS"
 assert_eq overall-timeout "$(printf '%s' "$OUTPUT" | jq -r .error.code)"
+assert_file "$FIX/descendant" 'overall budget interrupted a running fetch'
 
 it 'cancellation cleans owned groups before emitting refusal'
 instrument
@@ -574,13 +592,9 @@ env -i PATH="$ORIGINAL_PATH" GH_TOKEN=synthetic GITHUB_EVENT_NAME=pull_request \
     "$REAL_BASH" "$FIX/launcher" --repository owner/repo --event "$FIX/event" \
     > "$FIX/stdout" 2>"$FIX/stderr" &
 LAUNCHER_PID=$!
-# Bounded synchronization with this owned fixture, not a live-system polling probe.
-for n in 1 2 3 4 5 6 7 8 9 10; do
-    [ ! -f "$FIX/descendant" ] || break
-    sleep 1
-done
+await_fixture "$LAUNCHER_PID" "$FIX/descendant" || :
 assert_file "$FIX/descendant" 'fetch descendant ready before cancellation'
-kill -TERM "$LAUNCHER_PID"
+kill -TERM "$LAUNCHER_PID" 2>/dev/null || :
 if wait "$LAUNCHER_PID"; then STATUS=0; else STATUS=$?; fi
 rm "$FIX/hang"
 assert_eq 1 "$STATUS"
@@ -589,16 +603,12 @@ assert_eq interrupted "$(jq -r .error.code "$FIX/stdout")"
 assert_terminated "$(cat "$FIX/descendant")" 'fetch cancellation terminates descendant'
 assert_eq '' "$(find "$FIX/scratch" -mindepth 1 -print)" 'cancellation cleans invocation scratch'
 
-it 'cleanup failure prevents a valid native success'
+it 'scratch deletion failure prevents a valid native success'
 instrument
 touch "$FIX/cleanup-fail"
 # The normal helper intentionally asserts cleanup; test the failure contract separately.
-if env -i PATH="$ORIGINAL_PATH" GH_TOKEN=synthetic GITHUB_EVENT_NAME=pull_request \
-    GITHUB_REPOSITORY=owner/repo GITHUB_REPOSITORY_ID=42 \
-    "$REAL_BASH" "$FIX/launcher" --repository owner/repo --event "$FIX/event" \
-    > "$FIX/stdout" 2>"$FIX/stderr"; then STATUS=0; else STATUS=$?; fi
+invoke_launcher
 rm "$FIX/cleanup-fail"
-OUTPUT="$(cat "$FIX/stdout")"
 assert_eq 1 "$STATUS"
 assert_eq cleanup-failed "$(printf '%s' "$OUTPUT" | jq -r .error.code)"
 assert_eq 0 "$(printf '%s' "$OUTPUT" | jq -r .native_exit)"

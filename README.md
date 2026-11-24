@@ -93,7 +93,7 @@ Agent:  Change 012 adds requirement R-04 with the code. Acceptance A1 passes on 
 | **Large products**         | ⚠️ Designed for it (layered spec, agents read only what a change touches), but proven on only a handful of projects |
 | **Agents**                 | ⚠️ Installs for Claude Code, OpenCode, Codex and other `AGENTS.md` readers; [real-agent testing](docs/harnesses.md) is still limited |
 | **Many repos**             | ⚠️ One spec per repo; a shared interface belongs to the repo that provides it                         |
-| **Maturity**               | ⚠️ Experimental: 2.0.3, one maintainer                                                                |
+| **Maturity**               | ⚠️ Experimental: 2.2.0, one maintainer                                                                |
 | **Roadmap**                | ⚠️ Lifecycle stages (Idea → MVP → GA) and which journeys belong to each; no dates or timelines        |
 | **Ticketing**              | ❌ Not a ticket tracker; the work itself lives in git, pull requests and CI                           |
 | **One-off scripts**        | ❌ A spec costs more than it saves                                                                    |
@@ -118,7 +118,7 @@ Agent:  Change 012 adds requirement R-04 with the code. Acceptance A1 passes on 
 
 ```text
 Add Product-Kit (https://github.com/pevyhlas/product-kit) to this repository as a git
-submodule at .product-kit, pinned to tag v2.0.3, and run .product-kit/scripts/init.sh.
+submodule at .product-kit, pinned to tag v2.2.0, and run .product-kit/scripts/init.sh.
 Then adopt it by following .prdkit/workflows/init.md.
 ```
 
@@ -151,7 +151,7 @@ The agent installs the kit, reads your repository, fills in the project constitu
 
 ```bash
 git submodule add https://github.com/pevyhlas/product-kit .product-kit
-git -C .product-kit checkout v2.0.3
+git -C .product-kit checkout v2.2.0
 bash .product-kit/scripts/init.sh
 ```
 
@@ -194,7 +194,7 @@ Optional subsystems install only on request. `--with agent-tiers` adds tier-base
 | `.prdkit/templates/`, `.prdkit/scripts/bash/` | Spec templates and helper scripts |
 | `.prdkit/memory/` | Your settings: `constitution.md`, `agents.md`, `config.md` |
 | `.prdkit/.manifest` | Version, harnesses, optional subsystems and file hashes, so upgrades know what you edited |
-| `.gitignore` | `.prdkit/cache/`, `.worktrees/`, and `.prdkit/ledger/` and `.prdkit/retrospective/` for local data from kits before 2.0 |
+| `.gitignore` | `.prdkit/cache/` and `.worktrees/` for local data |
 
 `specs/` is yours. The installer never creates or edits anything there.
 
@@ -229,9 +229,6 @@ The tier governs the review work in addition to this host check:
 
 <br>
 
-**Adopting 3.0?** Follow [Migrating to 3.0](docs/migrating-to-3.0.md) to configure GitHub
-review identities and update CI before switching the gate.
-
 On a clean upgrade branch in the consumer repo:
 
 ```bash
@@ -242,10 +239,11 @@ bash .product-kit/scripts/init.sh --check     # read-only; expected drift can ex
 ```
 
 Replace `vX.Y.Z` with the selected tag. Inspect the drift, then run
-`bash .product-kit/scripts/init.sh --upgrade`. Upgrade from a clean, committed checkout with the trusted default branch fetched.
+`bash .product-kit/scripts/init.sh --upgrade` from a clean, committed checkout. Older kit
+formats are unsupported and must be reconciled manually before upgrading.
 Kit-owned commands and scripts are refreshed if unmodified; customized managed files that would be
 overwritten block the upgrade. Project-owned edits are kept and the installer never touches
-`specs/`. For a gated 2.0 upgrade PR, add its numbered review record **after** installation.
+`specs/`. For a gated upgrade PR, add its numbered review record **after** installation.
 Each [CHANGELOG](CHANGELOG.md) entry says what else to do.
 
 </details>
@@ -265,7 +263,10 @@ L2  specs/parts/<part>.md       one box: why it exists, components, behaviors, i
     code and tests              the exact implementation; tests cite the IDs they prove
 ```
 
-Around it: open changes in `specs/changes/` (implementation records finalize in their own PR), one line per closed change in `specs/log.md` (written as `specs/log/<id>.md`, folded in at compaction), owner direction and open questions in `specs/inbox.md`, and holds, waivers and deployments in `specs/records.md`. A small project can keep everything in one `specs/SPEC.md`.
+Open changes live in `specs/changes/`, owner direction and open questions in `specs/inbox.md`,
+and holds, waivers and deployments in `specs/records.md`. A small project can keep its canon
+in one `specs/SPEC.md`. Closed changes go in tracked `.prdkit/history/log/<id>.md`, one line
+each, folded into `.prdkit/history/log.md` at compaction. The spec never cites history.
 
 <details>
 <summary><b>Example: a product page and a journey</b> (from <a href="examples/request-service"><code>examples/request-service</code></a>)</summary>
@@ -333,7 +334,7 @@ The requester gets the resolution without asking for an update.
 | `/prdkit-product`   | Shape or edit product intent (L0), with the owner's words quoted               |
 | `/prdkit-target`    | Discover and plan work across product intent and design, with dependencies and gates |
 | `/prdkit-learn`     | Evaluate outcomes against the thesis, qualities and hypotheses                 |
-| `/prdkit-init`      | Adopt the kit, or cut a 0.x project over to the 1.1 layout                     |
+| `/prdkit-init`      | Adopt the kit in a project                     |
 | `/prdkit-configure` | Constitution, action policy, capabilities and settings                         |
 | `/prdkit-doctor`    | Read-only diagnosis of layout, budgets, IDs, records and agent context         |
 
@@ -374,16 +375,6 @@ Yes. Ask for a hold; it's recorded in `specs/records.md` and stays in force unti
 <br>
 
 Pick one owner per change: the kit creates the worktree, or open changes with `--no-worktree` and let the agent tool handle isolation. See [worktrees across harnesses](docs/harnesses.md#worktrees-across-harnesses).
-
-</details>
-
-<details>
-<summary><b>Coming from Product-Kit 0.x?</b></summary>
-
-<br>
-
-Upgrade and run one cutover under 1.x with `/prdkit-init` before moving to 2.0.
-See [migrating to 1.0](docs/migrating-to-1.0.md).
 
 </details>
 

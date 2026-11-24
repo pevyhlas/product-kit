@@ -171,6 +171,63 @@ assert_not_contains "$OUTPUT" "so not in scope: P9 P" "a part behavior cites a d
 run bash "$BOUNDS" 005-capture
 assert_not_contains "$OUTPUT" "Not in the parts table" "no note when every part is defined"
 
+it "a subpart in Parts is not reduced to its parent and Tags do not widen scope"
+cat >> specs/architecture.md <<'MD'
+
+| Part | Purpose | Maturity | Owns data | Serves | Spec |
+|------|---------|----------|-----------|--------|------|
+| P2.1 Index | indexes records | hypothesis | none | none | none |
+MD
+cat >> specs/product/constraints.md <<'MD'
+
+- **C-91 Recovery**: recover reads. Scope: every P2.1 read.
+- **C-92 Scheduling**: schedule retries. Scope: every P3 job.
+MD
+printf '# Change: index\n\n**Parts**: P2.1\n**Tags**: p3\n**Tier**: T1\n' > specs/changes/016-index.md
+run bash "$BOUNDS" 016-index
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" 'in scope: P2.1)'
+assert_contains "$OUTPUT" '- C-91 Recovery'
+assert_not_contains "$OUTPUT" 'C-92'
+
+it "compact legacy separators preserve both parts and journeys in bounds and the opened date"
+printf '# Change: compact\n\n**Opened**: 2026-10-16 ·**Parts**: P1 · **Journeys**: J-02 · **Tier**: T1 · **Parent**: none\n' > specs/changes/017-compact.md
+printf '%s\n' '- **C-99 Journey constraint**: keep the journey. Scope: J-02.' >> specs/product/constraints.md
+run bash "$BOUNDS" 017-compact
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '- C-02 Phone storage cap'
+assert_contains "$OUTPUT" '- C-99 Journey constraint'
+compact_bounds="$OUTPUT"
+run env PRDKIT_TODAY=2026-10-17 bash .prdkit/scripts/bash/status.sh --json
+assert_eq '["2026-10-16",1,"none"]' "$(jq -c '.changes[] | select(.id == "017-compact") | [.opened,.age_days,.parent]' <<< "$OUTPUT")"
+printf '# Change: compact\n\n**Opened**: 2026-10-16 ·**Parts**: P1 · **Tags**: prose **Parts**: P3·**Journeys**: J-02 · **Tier**: T1\n' > specs/changes/017-compact.md
+run bash "$BOUNDS" 017-compact
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '- C-02 Phone storage cap'
+assert_contains "$OUTPUT" '- C-99 Journey constraint'
+assert_eq "$compact_bounds" "$OUTPUT" "tag prose cannot add the part that neither real field names"
+rm specs/changes/017-compact.md
+
+it "ambiguous scope cannot produce a partial set of bounds"
+printf '# Change: ambiguous\n\n**Parts**: P1 · **Parts**: P2\n' > specs/changes/017-ambiguous.md
+run bash "$BOUNDS" 017-ambiguous
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'Duplicate Parts field'
+assert_not_contains "$OUTPUT" 'Bounds for'
+printf '# Change: ambiguous\n\n**Parts**: P1\n**Tags**: cleanup\n**Tags**: another\n' > specs/changes/017-ambiguous.md
+run bash "$BOUNDS" 017-ambiguous
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'Duplicate Tags field'
+printf '# Change: ambiguous\n\n**Parts**: P1 ·**Parts**: P2\n' > specs/changes/017-ambiguous.md
+run bash "$BOUNDS" 017-ambiguous
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'Duplicate Parts field'
+run bash .prdkit/scripts/bash/doctor.sh --json
+assert_contains "$(jq -r '.findings[]' <<< "$OUTPUT")" 'Duplicate Parts field'
+run bash .prdkit/scripts/bash/status.sh --json
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'Duplicate Parts field'
+
 it "no parts or journeys, or --all, lists every live item"
 run bash "$BOUNDS" 006-misc
 assert_contains "$OUTPUT" "- C-03 Server region" "everything in scope"

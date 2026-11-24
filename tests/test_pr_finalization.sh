@@ -38,15 +38,16 @@ EOF
 git add -A; git commit -qm 'child with inherited scope'
 # Parent disposition/deletion is substantive reviewed content, before final review.
 git rm -q specs/changes/001-programme.md
-printf -- '- 2026-10-25 001-programme: integrated outcome — R-01 — delivered; runtime unverified — PR 1\n' > specs/log.md
+mkdir -p .prdkit/history/log
+printf -- '- 2026-10-25 001-programme: integrated outcome — R-01 — delivered; runtime unverified — PR 1\n' > .prdkit/history/log/001-programme.md
 git add -A; git commit -qm 'prepare parent disposition for combined review'
 
 use_gh_stub
 approve_head
 pr=https://github.com/owner/repo/pull/7
 git rm -q specs/changes/002-final-child.md
-printf -- '- 2026-10-25 002-final-child: final implementation — R-01 — delivered; runtime unverified — PR 1\n' >> specs/log.md
-git add specs/log.md; git commit -qm 'finalize carrier in same PR'
+printf -- '- 2026-10-25 002-final-child: final implementation — R-01 — delivered; runtime unverified — PR 1\n' > .prdkit/history/log/002-final-child.md
+git add .prdkit/history/log; git commit -qm 'finalize carrier in same PR'
 
 it "one exact-head gate covers the child and already-reviewed parent deletion"
 review_head
@@ -59,7 +60,7 @@ assert_eq 0 "$STATUS" "same-PR multi-record finalization passes"
 assert_contains "$OUTPUT" '"record_only":false' "real source scope, not a cleanup exemption"
 assert_contains "$OUTPUT" '"tier":"T3"' "combined tier retained"
 assert_eq '' "$(git ls-tree -r --name-only HEAD specs/changes)" "no cleanup records remain"
-assert_eq 2 "$(grep -c '^-' specs/log.md)" "both dispositions retained"
+assert_eq 2 "$(cat .prdkit/history/log/*.md | grep -c '^-' )" "both dispositions retained"
 
 it "changes outside carrier metadata still need review"
 printf 'unreviewed change\n' >> src/app.txt

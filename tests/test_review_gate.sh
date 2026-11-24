@@ -13,12 +13,11 @@ cat > .prdkit/memory/config.md <<'EOF'
 - review-host: github
 - review-publishers: bot:1001, user:1002, user:1003, user:1004
 - review-owner: user:1003, user:1005
-- review-publisher-isolation: shared
 - review-t0-paths: docs/
 EOF
 printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n| second | reviewer |\n' >> .prdkit/memory/agents.md
-mkdir -p specs
-printf -- '- 2026-01-02 002-earlier: completed\n' > specs/log.md
+mkdir -p .prdkit/history
+printf -- '- 2026-01-02 002-earlier: completed\n' > .prdkit/history/log.md
 git add -A; git commit -qm baseline
 BASE="$(git rev-parse HEAD)"
 git update-ref refs/remotes/origin/main HEAD
@@ -49,7 +48,11 @@ fx_owner_review 7 APPROVED "$HEAD_SHA" '{"author":{"databaseId":1002}}'
 online; assert_eq 1 "$STATUS" 'even an allowlisted PR author never counts'
 fx_review 7 'reviewed' '{"state":"APPROVED"}'
 online; assert_eq 0 "$STATUS" "eligible publisher: $OUTPUT"
-assert_contains "$OUTPUT" 'review-publisher-isolation is retired'
+git show "$BASE:.prdkit/memory/config.md" | { cat; echo '- review-publisher-isolation: shared'; } |
+    trusted_edit refs/remotes/origin/main .prdkit/memory/config.md
+online; assert_eq 1 "$STATUS" 'retired receipt policy fails closed'
+assert_contains "$OUTPUT" 'review-publisher-isolation is unsupported'
+git update-ref refs/remotes/origin/main "$BASE"; online
 assert_contains "$OUTPUT" '"authority":"host"'
 assert_contains "$OUTPUT" '"reviewer":1001'
 
@@ -133,6 +136,11 @@ it 'offline structure is a preview and cannot approve'
 run bash "$CHECK" --json 001-reviewed
 assert_eq 3 "$STATUS" "$OUTPUT"
 assert_contains "$OUTPUT" '"result":"preview"'
+for retired in --receipts --save-receipts; do
+    run bash "$CHECK" "$retired" snapshot 001-reviewed
+    assert_eq 2 "$STATUS"
+    assert_contains "$OUTPUT" "Unknown option: $retired"
+done
 
 it 'the direct gate refuses two best merge bases even with an eligible approval'
 other="$(git commit-tree "$BASE^{tree}" -p "$BASE" -m 'independent target commit')"
@@ -171,7 +179,7 @@ for level in T0 T1 T2 T3; do
         online; assert_eq 0 "$STATUS" 'dismissed objection no longer blocks T0'
         assert_contains "$OUTPUT" '"reviews":[]'
         assert_contains "$OUTPUT" '"blocking":[]'
-        echo 'unrelated rewrite' > specs/log.md; git commit -qam 'shared log is not automatically exempt'
+        echo 'unrelated rewrite' > .prdkit/history/log.md; git commit -qam 'shared log is not automatically exempt'
         fx_pr 7 "$(git rev-parse HEAD)"; online; assert_eq 1 "$STATUS" 'T0 must qualify structurally'
         assert_contains "$OUTPUT" 'T0 is docs only'
         continue

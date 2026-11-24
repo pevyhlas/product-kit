@@ -17,6 +17,135 @@ assert_contains "$OUTPUT" "No spec yet" "missing spec named"
 assert_contains "$OUTPUT" "No open changes." "no changes"
 assert_contains "$OUTPUT" "No DEPLOY records — what is live is unknown." "live state unknown, not assumed"
 assert_contains "$OUTPUT" "None: no open changes, holds or owner questions." "no longest pole"
+run bash "$STATUS_SH" --json
+assert_eq 'null' "$(jq -c '.part_parents' <<< "$OUTPUT")" "unstated parents are null"
+
+it "the retired one-digit journey bullet is not a live spec item"
+mkdir -p specs
+printf '# Product\n\n- **J-1 Search** (hypothesis): Locate a result.\n' > specs/product.md
+run bash "$STATUS_SH" --json
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'specs/product.md:3'
+assert_contains "$OUTPUT" 'J-01'
+rm -f specs/product.md
+
+it "optional change metadata reports assignments separately from acceptance"
+mkdir -p specs/changes specs/parts
+cat > specs/changes/001-metadata.md <<'MD'
+# Change: Metadata
+
+**Opened**: 2026-10-16
+**Parts**: P2, P2.1, P3
+**Tags**: cleanup,small batch, cli-v2_1.0
+**Tier**: T1
+**Parent**: none
+
+## Intent
+**Tags**: not the header
+- [x] (P2) Not in Tasks
+
+## Tasks
+- [x] (P2.1) First
+- [ ] (P2.1) Second
+  - [X] (P2) Third
+- [ ] Unassigned
+<!--
+- [x] (P2) Example
+-->
+~~~~
+~~~
+- [x] (P2) Another example
+~~~~
+
+## Acceptance
+| A1 | behavior | the check | 1 | PASS |
+MD
+printf '# P2 Core\n' > specs/parts/p2-core.md
+printf '# P2.1 Index\n\n**What it is**: a subpart · **Parent**: P2\n' > specs/parts/p2.1-index.md
+printf '# Change: Legacy\n\n## Tasks\n- [ ] Untagged\n' > specs/changes/002-legacy.md
+run bash "$STATUS_SH" --json
+assert_eq 0 "$STATUS"
+assert_eq '["cleanup","small batch","cli-v2_1.0"]' "$(jq -c '.changes[] | select(.id == "001-metadata") | .tags' <<< "$OUTPUT")"
+assert_eq '[{"part":"P2.1","checked":1,"total":2},{"part":"P2","checked":1,"total":1}]' \
+    "$(jq -c '.changes[] | select(.id == "001-metadata") | .tasks_by_part' <<< "$OUTPUT")"
+assert_eq '{"checked":0,"total":1}' "$(jq -c '.changes[] | select(.id == "001-metadata") | .unassigned_tasks' <<< "$OUTPUT")"
+assert_eq '1' "$(jq '.changes[] | select(.id == "001-metadata") | .acceptance.passed' <<< "$OUTPUT")"
+assert_eq '[null,null,{"checked":0,"total":1}]' \
+    "$(jq -c '.changes[] | select(.id == "002-legacy") | [.tags,.tasks_by_part,.unassigned_tasks]' <<< "$OUTPUT")"
+assert_eq '[{"id":"P2.1","parent":"P2"}]' "$(jq -c '.part_parents' <<< "$OUTPUT")"
+run bash "$STATUS_SH"
+assert_contains "$OUTPUT" "tags: cleanup, small batch, cli-v2_1.0"
+assert_contains "$OUTPUT" "tasks: P2.1 1/2 checked"
+assert_not_contains "$OUTPUT" "tasks: P3"
+assert_contains "$OUTPUT" "P2.1 (parent: P2)"
+run bash .prdkit/scripts/bash/read-spec.sh specs/changes/001-metadata.md
+assert_contains "$OUTPUT" "**Tags**: cleanup,small batch, cli-v2_1.0"
+assert_contains "$OUTPUT" "- [x] (P2.1) First"
+run bash .prdkit/scripts/bash/read-spec.sh specs/parts/p2.1-index.md
+assert_contains "$OUTPUT" "**Parent**: P2"
+rm specs/changes/{001-metadata,002-legacy}.md specs/parts/{p2-core,p2.1-index}.md
+
+it "tag prose cannot override change workflow fields"
+cat > specs/changes/003-boundaries.md <<'MD'
+# Change: Field boundaries
+**Opened**: 2026-10-16 · **Tier**: T1 · **Parent**: none
+**Tags**: cleanup **Parent**: 099-programme **Opened**: 2000-01-01
+## Notes
+Example note.
+MD
+run bash "$STATUS_SH" --json
+assert_eq 0 "$STATUS"
+assert_eq '["none","2026-10-16",null]' "$(jq -c '.changes[0] | [.parent,.opened,.tags]' <<< "$OUTPUT")"
+assert_not_contains "$OUTPUT" '099-programme'
+printf '**Parent**: 098-notes\n' >> specs/changes/003-boundaries.md
+run bash "$STATUS_SH" --json
+assert_eq '098-notes' "$(jq -r '.changes[0].parent' <<< "$OUTPUT")" "ordinary non-tag lines retain legacy behavior"
+rm specs/changes/003-boundaries.md
+
+it "inline tags preserve the programme link and opened date"
+cat > specs/changes/099-programme.md <<'MD'
+# Change: Programme
+**Opened**: 2026-10-10
+**Parent**: none
+
+## State
+**Waiting on**: nothing
+**Next**: continue
+MD
+for variant in untagged parent-tight opened-tight spaced; do
+    case "$variant" in
+        untagged) header='**Opened**: 2026-10-16 · **Parent**: 099-programme · **Tier**: T1' ;;
+        parent-tight) header='**Opened**: 2026-10-16 · **Parent**: 099-programme·**Tags**: batch · **Tier**: T1' ;;
+        opened-tight) header='**Opened**: 2026-10-16·**Tags**: batch · **Parent**: 099-programme · **Tier**: T1' ;;
+        spaced) header='**Opened**: 2026-10-16 · **Parent**: 099-programme · **Tags**: batch · **Tier**: T1' ;;
+    esac
+    tags='["batch"]'
+    [ "$variant" != untagged ] || tags=null
+    printf '# Change: Child\n\n%s\n' "$header" > specs/changes/004-child.md
+    run bash "$STATUS_SH" --json
+    if ! assert_eq 0 "$STATUS" "$variant: status succeeds"; then
+        printf '       %s\n' "$OUTPUT"
+        continue
+    fi
+    assert_eq "[\"099-programme\",\"2026-10-16\",1,$tags]" \
+        "$(jq -c '.changes[] | select(.id == "004-child") | [.parent,.opened,.age_days,.tags]' <<< "$OUTPUT")" \
+        "$variant: legacy fields and optional tags"
+    assert_eq '["099-programme"]' "$(jq -c '[.outcome_progress[].id]' <<< "$OUTPUT")" \
+        "$variant: programme outcome row remains visible"
+done
+rm specs/changes/{004-child,099-programme}.md
+
+it "duplicate header fields are errors even when no tasks have assignments"
+for label in Parts Journeys Tags; do
+    printf '# Change: Ambiguous\n\n**%s**: first\n**%s**: second\n' "$label" "$label" > specs/changes/003-ambiguous.md
+    run bash "$STATUS_SH" --json
+    assert_eq 1 "$STATUS"
+    assert_contains "$OUTPUT" "Duplicate $label field"
+    run bash .prdkit/scripts/bash/doctor.sh --json
+    assert_eq 1 "$STATUS"
+    assert_contains "$(jq -r '.findings[]' <<< "$OUTPUT")" "Duplicate $label field"
+done
+rm specs/changes/003-ambiguous.md
 
 mkdir -p specs/parts specs/changes specs/product
 it "a past-date hold still blocks until the owner lifts that specific hold"
@@ -177,13 +306,21 @@ cat > specs/inbox.md <<'MD'
 <!-- <date> <owner|agent> "<words>" → open
 2020-01-01 owner "a format example, never parsed" → open -->
 
-2026-10-01 owner "Add CSV export" → folded: 004-export
-2026-10-05 agent "Managed export service or library? Recommend library; default library" → open
-2026-10-06 owner "Ship before the fair"
-2026-10-16T09:10Z owner "go ahead with the export" → open
 Notes that are not an inbox line
 
 ## Waiting for you
+
+### Add CSV export
+*2026-10-01 · owner · folded: 004-export*
+
+### Managed export service or library?
+*2026-10-05 · agent · open*
+
+### Ship before the fair
+*2026-10-06 · agent*
+
+### Go ahead with the export
+*2026-10-16T09:10Z · owner · processing*
 
 ### Keep the CSV header row?
 *2026-10-08 · agent · open*
@@ -261,7 +398,7 @@ assert_contains "$OUTPUT" "2026-10-05 agent, 12 days:" "open question with age"
 assert_contains "$OUTPUT" "(no disposition)" "line without a disposition surfaced"
 assert_not_contains "$OUTPUT" "Add CSV export" "folded line is not queued"
 assert_not_contains "$OUTPUT" "format example" "comment lines are never parsed"
-assert_contains "$OUTPUT" "2026-10-16 owner, 1 days: \"go ahead with the export\"" "a timestamped line is queued"
+assert_contains "$OUTPUT" "Go ahead with the export" "timestamped owner direction is visible"
 assert_contains "$OUTPUT" "2026-10-08 agent, 9 days: Keep the CSV header row?" "a headed item is queued by its title"
 assert_not_contains "$OUTPUT" "Notes that are not" "an unparsed line is not queued"
 
@@ -298,63 +435,64 @@ it "status is read-only"
 assert_eq "$before" "$(git status --porcelain; git show-ref; cat specs/*.md specs/changes/*.md)" "no file, index or ref changes"
 
 it "compaction is due after ten closed changes since the last pass, and only then"
-{ i=1; while [ "$i" -le 9 ]; do printf -- '- 2026-10-%02d %03d-c: done — R-01 — #%d\n' "$i" "$((i + 100))" "$i"; i=$((i + 1)); done; } > specs/log.md
+mkdir -p .prdkit/history
+{ i=1; while [ "$i" -le 9 ]; do printf -- '- 2026-10-%02d %03d-c: done — R-01 — #%d\n' "$i" "$((i + 100))" "$i"; i=$((i + 1)); done; } > .prdkit/history/log.md
 run bash "$STATUS_SH"
 assert_not_contains "$OUTPUT" "Compaction due" "nine closed changes are not yet due"
-printf -- '- 2026-10-10 110-c: done — R-01 — #10\n' >> specs/log.md
+printf -- '- 2026-10-10 110-c: done — R-01 — #10\n' >> .prdkit/history/log.md
 run bash "$STATUS_SH"
-assert_contains "$OUTPUT" "Compaction due: 10 changes closed and no pass recorded in specs/log.md" "ten with no pass on record"
-printf -- '- 2026-10-10 compaction: tightened P1\n' >> specs/log.md
+assert_contains "$OUTPUT" "Compaction due: 10 changes closed and no pass recorded in .prdkit/history/log.md" "ten with no pass on record"
+printf -- '- 2026-10-10 compaction: tightened P1\n' >> .prdkit/history/log.md
 run bash "$STATUS_SH"
 assert_not_contains "$OUTPUT" "Compaction due" "a pass resets the count"
-{ i=1; while [ "$i" -le 10 ]; do printf -- '- 2026-10-%d %03d-c: done — R-01 — #%d\n' "$((i < 2 ? 10 : i))" "$((i + 110))" "$i"; i=$((i + 1)); done; } >> specs/log.md
+{ i=1; while [ "$i" -le 10 ]; do printf -- '- 2026-10-%d %03d-c: done — R-01 — #%d\n' "$((i < 2 ? 10 : i))" "$((i + 110))" "$i"; i=$((i + 1)); done; } >> .prdkit/history/log.md
 run bash "$STATUS_SH"
 assert_contains "$OUTPUT" "Compaction due: 10 changes closed since the last pass (2026-10-10)" "entries after the pass count, by line order: same-day and unpadded dates too"
 run bash "$STATUS_SH" --json
 assert_contains "$OUTPUT" '"compaction":{"closed_since_last":10,"last":"2026-10-10","due":true}' "JSON carries it"
-printf -- '- 2026-10-11 compaction: split P2\n' >> specs/log.md
-{ i=1; while [ "$i" -le 9 ]; do printf -- '- 2026-10-11 %03d-c: done — R-01 — #%d\n' "$((i + 120))" "$i"; i=$((i + 1)); done; } >> specs/log.md
+printf -- '- 2026-10-11 compaction: split P2\n' >> .prdkit/history/log.md
+{ i=1; while [ "$i" -le 9 ]; do printf -- '- 2026-10-11 %03d-c: done — R-01 — #%d\n' "$((i + 120))" "$i"; i=$((i + 1)); done; } >> .prdkit/history/log.md
 run bash "$STATUS_SH" --json
 assert_contains "$OUTPUT" '"compaction":{"closed_since_last":9,"last":"2026-10-11","due":false}' "oldest first: the entries below the latest of several passes"
-rm specs/log.md
+rm .prdkit/history/log.md
 
 it "in a newest-first log, the changes above the latest compaction line count"
 newest_log() { # first change number, last, day of month: entries from the newest down
     i="$1"; while [ "$i" -ge "$2" ]; do printf -- '- 2026-10-%02d %03d-c: done — R-01 — #%d\n' "$3" "$i" "$i"; i=$((i - 1)); done
 }
-{ printf '# Closed changes\n\n'; newest_log 176 101 20; printf -- '- 2026-10-01 100-c: first — R-01 — #1\n'; } > specs/log.md
+{ printf '# Closed changes\n\n'; newest_log 176 101 20; printf -- '- 2026-10-01 100-c: first — R-01 — #1\n'; } > .prdkit/history/log.md
 run bash "$STATUS_SH"
-assert_contains "$OUTPUT" "Compaction due: 77 changes closed and no pass recorded in specs/log.md" "no pass: every entry counts"
-{ printf '# Closed changes\n\n- 2026-10-21 compaction: tightened P1\n'; sed -n '3,$p' specs/log.md; } > specs/log.next
-mv specs/log.next specs/log.md
+assert_contains "$OUTPUT" "Compaction due: 77 changes closed and no pass recorded in .prdkit/history/log.md" "no pass: every entry counts"
+{ printf '# Closed changes\n\n- 2026-10-21 compaction: tightened P1\n'; sed -n '3,$p' .prdkit/history/log.md; } > .prdkit/history/log.next
+mv .prdkit/history/log.next .prdkit/history/log.md
 run bash "$STATUS_SH" --json
 assert_contains "$OUTPUT" '"compaction":{"closed_since_last":0,"last":"2026-10-21","due":false}' "a pass on top counts nothing below it"
-{ printf '# Closed changes\n\n'; newest_log 186 177 22; printf -- '- 2026-10-22 compaction: split P2\n'; sed -n '3,$p' specs/log.md; } > specs/log.next
-mv specs/log.next specs/log.md
+{ printf '# Closed changes\n\n'; newest_log 186 177 22; printf -- '- 2026-10-22 compaction: split P2\n'; sed -n '3,$p' .prdkit/history/log.md; } > .prdkit/history/log.next
+mv .prdkit/history/log.next .prdkit/history/log.md
 run bash "$STATUS_SH"
 assert_contains "$OUTPUT" "Compaction due: 10 changes closed since the last pass (2026-10-22)" "only the entries above the latest of several passes, same-day ones too"
-{ printf '# Closed changes\n\n'; newest_log 187 187 23; sed -n '3,$p' specs/log.md; } > specs/log.next
-mv specs/log.next specs/log.md
+{ printf '# Closed changes\n\n'; newest_log 187 187 23; sed -n '3,$p' .prdkit/history/log.md; } > .prdkit/history/log.next
+mv .prdkit/history/log.next .prdkit/history/log.md
 run bash "$STATUS_SH" --json
 assert_contains "$OUTPUT" '"compaction":{"closed_since_last":11,"last":"2026-10-22","due":true}' "a new entry on top adds to the count"
-rm specs/log.md
+rm .prdkit/history/log.md
 
 it "an unreadable tracked folded log refuses status and produces a structured doctor finding"
-awk 'BEGIN { for (i = 101; i <= 110; i++) printf "- 2026-10-17 %d-c: done\n", i }' > specs/log.md
-git add -- specs/log.md
+awk 'BEGIN { for (i = 101; i <= 110; i++) printf "- 2026-10-17 %d-c: done\n", i }' > .prdkit/history/log.md
+git add -- .prdkit/history/log.md
 run bash "$STATUS_SH" --json
 assert_eq 0 "$STATUS" "status succeeds while the folded log is readable"
 assert_contains "$OUTPUT" '"compaction":{"closed_since_last":10,"last":null,"due":true}' "ten readable closes make compaction due"
-chmod 000 specs/log.md || exit 1
-if cat specs/log.md >/dev/null 2>&1; then
+chmod 000 .prdkit/history/log.md || exit 1
+if cat .prdkit/history/log.md >/dev/null 2>&1; then
     _ok "skipped unreadable-log checks: this user can read mode-000 files"
 else
-    run env LC_ALL=C awk 1 specs/log.md
+    run env LC_ALL=C awk 1 .prdkit/history/log.md
     log_read_status="$STATUS"
     run bash -c 'bash "$1" --json 2> status.stderr' _ "$STATUS_SH"
     assert_eq "$log_read_status" "$STATUS" "status preserves the native read failure"
     assert_eq '' "$OUTPUT" "status emits no JSON rather than due:false"
-    assert_contains "$(cat status.stderr)" "specs/log.md" "status names the unreadable log on stderr"
+    assert_contains "$(cat status.stderr)" ".prdkit/history/log.md" "status names the unreadable log on stderr"
     run bash -c 'bash "$1" --json 2> doctor.stderr' _ "$PROJ/.prdkit/scripts/bash/doctor.sh"
     assert_eq 1 "$STATUS" "doctor exits with a finding rather than the raw read error"
     assert_eq fail "$(jq -r '.result' <<< "$OUTPUT")" "doctor emits valid failure JSON"
@@ -362,18 +500,15 @@ else
     assert_not_contains "$OUTPUT" "Compaction due" "doctor does not infer a compaction count"
     rm status.stderr doctor.stderr
 fi
-chmod 600 specs/log.md
-git rm -fq -- specs/log.md
+chmod 600 .prdkit/history/log.md
+git rm -fq -- .prdkit/history/log.md
 
-it "live 0.x canon beside the 1.0 spec is two canons; values with quotes stay valid JSON"
+it "unsupported spec layouts stop status"
 mkdir -p specs/targets/t1; : > specs/targets/t1/target.md
-printf '2026-10-07 owner "say \\"hi\\" \\\\ now" → open\n' >> specs/inbox.md
-run bash "$STATUS_SH"
-assert_contains "$OUTPUT" "Two canons" "both layouts flagged"
 run bash "$STATUS_SH" --json
-if command -v python3 >/dev/null 2>&1; then
-    if printf '%s' "$OUTPUT" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; then _ok "escaped JSON"; else _no "escaped JSON" "$OUTPUT"; fi
-fi
+assert_eq 1 "$STATUS" "status fails rather than reporting incomplete state"
+assert_contains "$OUTPUT" "specs/changes/<id>.md records" "current layout named"
+rm specs/targets/t1/target.md
 
 it "the parts table's Maturity column is found by its header"
 P11="$(make_inited_project)"; track_tmp "$P11"
@@ -419,11 +554,35 @@ assert_eq 1 "$(printf '%s\n' "$OUTPUT" | sed -n '/^In flight$/,/^Live$/p' | grep
 assert_not_contains "$OUTPUT" "stale copy" "the worktree copy wins"
 rm -f specs/changes/001-greet.md
 
+it "task parts use the inventory of the checkout containing the winning record"
+mkdir -p specs/parts .worktrees/001-greet/specs/parts
+printf '# P9 Root only\n' > specs/parts/p9-root.md
+printf '# P8 Child only\n' > .worktrees/001-greet/specs/parts/p8-child.md
+probe=.worktrees/001-greet/specs/changes/001-greet.md
+cp "$probe" "$_SCRATCH_CWD/original-change"
+cat > "$probe" <<'MD'
+# Change: Warmer greeting
+**Parts**: P8, P9
+## Tasks
+- [x] (P8) Known in the worktree
+- [x] (P9) Not known in the worktree
+MD
+run bash "$P2/.prdkit/scripts/bash/status.sh" --json
+assert_eq 0 "$STATUS"
+assert_eq '[{"part":"P8","checked":1,"total":1}]' "$(jq -c '.changes[0].tasks_by_part' <<< "$OUTPUT")"
+assert_eq '[{"part":"P9","line":5,"reason":"unknown"}]' "$(jq -c '.changes[0].invalid_task_parts' <<< "$OUTPUT")"
+run bash "$P2/.prdkit/scripts/bash/status.sh"
+assert_contains "$OUTPUT" "unknown task part P9"
+assert_not_contains "$OUTPUT" "tasks: P9"
+mv "$_SCRATCH_CWD/original-change" "$probe"
+rm specs/parts/p9-root.md .worktrees/001-greet/specs/parts/p8-child.md
+
 it "a change the root's log records as closed is not open, though an older worktree carries it"
-printf -- '- 2026-10-19 001-greet: warmer greeting — R-01 — #1\n' > specs/log.md
+mkdir -p .prdkit/history
+printf -- '- 2026-10-19 001-greet: warmer greeting — R-01 — #1\n' > .prdkit/history/log.md
 run bash "$P2/.prdkit/scripts/bash/status.sh"
 assert_not_contains "$OUTPUT" "001-greet — Warmer greeting" "closed on the default branch"
-rm -f specs/log.md
+rm -f .prdkit/history/log.md
 
 it "an item passed on its third attempt is not stalled"
 cat > .worktrees/001-greet/specs/changes/001-greet.md <<'MD'

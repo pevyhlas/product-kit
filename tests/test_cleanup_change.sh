@@ -459,6 +459,9 @@ git -C "$PROJ" worktree remove --force "$PROJ/.worktrees/014-current" >/dev/null
 it "review and check evidence in the worktree's ignored cache survives removal"
 # The documented close -> merge -> cleanup sequence: the review package and retrospective live
 # only in the worktree's gitignored cache, which `git worktree remove` would delete silently.
+# Model a checkout that already ignores its local enrichment and spool data; a
+# fresh install no longer adds these rules.
+printf '\n/.prdkit/retrospective/\n/.prdkit/ledger/\n' >> "$PROJ/.git/info/exclude"
 git -C "$PROJ" add -A >/dev/null 2>&1; git -C "$PROJ" commit -qm installed >/dev/null 2>&1  # .gitignore covers .prdkit/cache/
 git -C "$PROJ" worktree add -qb 016-evidence "$PROJ/.worktrees/016-evidence" >/dev/null 2>&1
 EV="$PROJ/.worktrees/016-evidence/.prdkit/cache"
@@ -1043,8 +1046,8 @@ assert_file "$PROJ/.worktrees/$id/$rel" 'M4: source still available'
 assert_file "$PROJ/${rel%/*}.previous/report.txt" 'fixture rotated the published copy'
 
 # --- --closed: sweep every closed change's worktree ----------------------------------------------
-# Closed means the record specs/changes/<id>.md is gone from, and the log (specs/log.md or the entry
-# file specs/log/<id>.md) has the line on, the trusted integration branch (origin/HEAD), never the
+# Closed means the record specs/changes/<id>.md is gone from, and the log (.prdkit/history/log.md or the entry
+# file .prdkit/history/log/<id>.md) has the line on, the trusted integration branch (origin/HEAD), never the
 # worktree's own branch.
 BRANCH="$(git -C "$PROJ" symbolic-ref --short HEAD)"
 for id in 060-closed-clean 061-open 062-closed-dirty 063-closed-locked 064-self-claimed 065-logged-record 066-never-logged; do
@@ -1059,10 +1062,10 @@ git -C "$PROJ" worktree lock --reason "held" "$PROJ/.worktrees/063-closed-locked
 # 064 closes itself on its own branch only; the trusted branch never hears of it.
 (
     cd "$PROJ/.worktrees/064-self-claimed" || exit 1
-    mkdir -p specs/log
-    printf -- '- 2026-11-10 064-self-claimed: done\n' > specs/log.md
-    printf -- '- 2026-11-10 064-self-claimed: done\n' > specs/log/064-self-claimed.md
-    git add specs && git commit -qm 'claim closed'
+    mkdir -p .prdkit/history/log
+    printf -- '- 2026-11-10 064-self-claimed: done\n' > .prdkit/history/log.md
+    printf -- '- 2026-11-10 064-self-claimed: done\n' > .prdkit/history/log/064-self-claimed.md
+    git add .prdkit/history && git commit -qm 'claim closed'
 )
 
 it "--closed refuses outright when no trusted integration branch resolves"
@@ -1077,15 +1080,15 @@ assert_eq 0 "$STATUS" "nothing was removed"
 
 # The trusted branch records 060, 062, 063, 065, 067 as closed, 065 with its record still present,
 # 060 in its entry file.
-mkdir -p "$PROJ/specs/changes" "$PROJ/specs/log"
+mkdir -p "$PROJ/specs/changes" "$PROJ/.prdkit/history/log"
 {
     printf -- '- 2026-11-10 067-closed-here: x\n- 2026-11-09 065-logged-record: x\n- 2026-11-08 063-closed-locked: x\n'
     printf -- '- 2026-11-07 062-closed-dirty: x\n'
-} > "$PROJ/specs/log.md"
-printf -- '- 2026-11-06 060-closed-clean: x\n' > "$PROJ/specs/log/060-closed-clean.md"
+} > "$PROJ/.prdkit/history/log.md"
+printf -- '- 2026-11-06 060-closed-clean: x\n' > "$PROJ/.prdkit/history/log/060-closed-clean.md"
 printf '# 061-open\n' > "$PROJ/specs/changes/061-open.md"
 printf '# 065-logged-record\n' > "$PROJ/specs/changes/065-logged-record.md"
-git -C "$PROJ" add specs >/dev/null 2>&1; git -C "$PROJ" commit -qm 'close changes' >/dev/null 2>&1
+git -C "$PROJ" add specs .prdkit/history >/dev/null 2>&1; git -C "$PROJ" commit -qm 'close changes' >/dev/null 2>&1
 git -C "$PROJ" update-ref "refs/remotes/origin/$BRANCH" HEAD
 git -C "$PROJ" symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$BRANCH"
 
@@ -1155,8 +1158,8 @@ git -C "$PROJ" worktree add -qb 094-closed-exact "$PROJ/.worktrees/094-closed-ex
 {
     printf -- '- 2026-11-11 090-closed-detached: x\n- 2026-11-11 091-closed-other-branch: x\n'
     printf -- '- 2026-11-11 092-closed-elsewhere: x\n- 2026-11-11 093-closed-renamed: x\n- 2026-11-11 094-closed-exact: x\n'
-} >> "$PROJ/specs/log.md"
-git -C "$PROJ" add specs >/dev/null 2>&1; git -C "$PROJ" commit -qm 'close more' >/dev/null 2>&1
+} >> "$PROJ/.prdkit/history/log.md"
+git -C "$PROJ" add specs .prdkit/history >/dev/null 2>&1; git -C "$PROJ" commit -qm 'close more' >/dev/null 2>&1
 git -C "$PROJ" update-ref "refs/remotes/origin/$BRANCH" HEAD
 run bash "$CLEAN" --json --closed
 assert_eq 0 "$STATUS" "nothing refused"
@@ -1182,10 +1185,10 @@ rm -rf "$PROJ2/.worktrees/103-stale-sub"
 run bash -c 'cd "$1" && bash .prdkit/scripts/bash/new-change.sh --short-name separate "Separate change"' _ "$PROJ2"
 assert_eq 0 "$STATUS" "creating an unrelated change succeeds"
 assert_eq "$stale_tip" "$(git --git-dir="$store" --work-tree="$PROJ2" rev-parse 'HEAD^{commit}')" "new change leaves local-only module commit intact"
-mkdir -p "$PROJ2/specs/changes"
-printf -- '- 2026-11-10 070-sub-closed: x\n' > "$PROJ2/specs/log.md"
+mkdir -p "$PROJ2/specs/changes" "$PROJ2/.prdkit/history"
+printf -- '- 2026-11-10 070-sub-closed: x\n' > "$PROJ2/.prdkit/history/log.md"
 printf '# 071-sub-open\n' > "$PROJ2/specs/changes/071-sub-open.md"
-git -C "$PROJ2" add specs >/dev/null 2>&1; git -C "$PROJ2" commit -qm 'close' >/dev/null 2>&1
+git -C "$PROJ2" add specs .prdkit/history >/dev/null 2>&1; git -C "$PROJ2" commit -qm 'close' >/dev/null 2>&1
 B2="$(git -C "$PROJ2" symbolic-ref --short HEAD)"
 git -C "$PROJ2" update-ref "refs/remotes/origin/$B2" HEAD
 git -C "$PROJ2" symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$B2"

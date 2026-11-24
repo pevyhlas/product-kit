@@ -8,29 +8,152 @@ change by change.
 
 ## [Unreleased]
 
+### Added
+
+- Optional `review-lenses` maps registered reviewers to GitHub accounts. One App can cover
+  several areas; the gate reports the approving account and review per area. With lenses
+  configured, T3 needs a mapped `design` approval plus a separate owner approval (#161).
+
 ### Changed
 
-- **Breaking: the review gate uses native GitHub approvals on the exact PR head.**
-  The 2.x tier minimums are unchanged: T0 needs no approval, T1–T3 need an independent
-  publisher, and T3 also needs an owner. An ID listed in both roles counts only as
-  owner. The PR author never counts. An eligible account’s outstanding `CHANGES_REQUESTED`
-  blocks every tier, including T0, across pushes. Only that reviewer’s later approval
-  on the exact current head or dismissal of the objection itself clears it.
-  Receipt publication, snapshots, carry-forward and reconciliation are removed (#138).
-  **Adoption:** keep the 2.0 publisher and `review-publisher-isolation` until the new
-  required check enforces approvals on the protected branch. See [Migrating to 3.0](docs/migrating-to-3.0.md).
-- **Optional per-area GitHub reviews:** `review-lenses` maps existing reviewer names
-  to accounts. One App can cover several areas; T3 requires a mapped `design`
-  approval plus the owner. The live gate reports the approving account and review
-  per area. Without lenses, publisher policy works as before (#161).
-- Before adopting 3.0, move HTML comments and fenced examples below the Configuration
-  section of `config.md` and use that heading name only once, including in examples.
+- Reviewers submit approvals or changes requested directly on GitHub under their own
+  identities. After a local close, push the closing commit for its required reviews.
+
+### Changed (breaking)
+
+- The 3.0 gate checks native GitHub reviews on the exact PR head. T0 needs no approval;
+  T1–T3 need an independent publisher, and T3 also needs an owner. An ID in both roles
+  counts only as owner. The PR author counts for neither. Open objections block every tier
+  across pushes until the objector approves the current head or the objection itself is
+  dismissed (#138).
+- Review policy requires a unique Configuration heading. Comments and fenced examples
+  before or within that section are rejected.
+
+### Removed (breaking)
+
+- Removed receipt publication, replay, snapshots and cross-head approval inheritance.
+  The native gate rejects the retired `review-publisher-isolation` setting.
+
+### Fixed
+
+- The launcher refuses a pass when the native result does not match the checked head,
+  trusted target, or required review roles and areas.
+
+## [2.2.0] — 2026-11-24 — tracked history, coverage check and checked owner quotes
+
+### Added
+
+- Compaction can index closed changes even after an earlier change stays open. Add exact
+  closed-number ranges to the archive's **Log condensed through** line and retrieve the full
+  entries from Git. A separate **Allocated through** line preserves the allocation floor if
+  a sparse member is omitted. Explicit numbering must exceed that floor and the highest ID
+  visible in the checked archive indexes, logs and change records. Existing cutoff-only
+  archives in the supported format need no allocation-floor migration.
+- Pull request CI shows which changed test suites fail before the fix and pass on the PR head.
+  With no changed suites the check passes, including for `fix` titles. Otherwise,
+  conventional `fix` titles require at least one reproducing suite; other titles are advisory.
+  Base and head run on separate hosted runners, so a base worker cannot answer a head test.
+  The check compares one-day result artifacts; missing or incomplete evidence fails the check.
+- Holds and waivers can keep long verbatim owner quotes in `specs/authority.md` using
+  checked references. Status and doctor validate the references without shortening the
+  scope or end condition in the row. No migration needed.
+
+### Changed
+
+- Spec-only reviews judge edits at their spec level and defer test procedures to the
+  implementing PR. Acceptance names observable outcomes; review gates are unchanged.
+  No migration needed.
+- Change tasks describe outcomes, dependencies and named checks. The delivering PR deletes their
+  lines without checking them off or logging them; an optional `Drops:` line distinguishes
+  dropped tasks. Keep execution details in the ignored plan or PR.
+
+### Changed (breaking)
+
+- Closed changes and the archive now live in tracked `.prdkit/history/`, not in `specs/`.
+  From the project root, run the lines for the paths you have, then commit the move:
+
+  ```bash
+  mkdir -p .prdkit/history
+  git mv specs/log.md .prdkit/history/log.md
+  git mv specs/log .prdkit/history/log
+  git mv specs/archive.md .prdkit/history/archive.md
+  ```
+
+  If the destination `log/` already exists, move the remaining entry files individually;
+  do not nest the directory or overwrite entries. Update stale worktrees and integration
+  refs before allocating or closing changes. Keep `.prdkit/history/` tracked and ignore
+  `.prdkit/cache/`, not all of `.prdkit/`. The installer warns about blocking ignore
+  rules without rewriting them. Update the folded log header to match
+  `history-log-template.md`, and remove any links to history from the spec.
+  Preserve the archive's condensed numbers and allocation floor. If a sparse index points
+  to the old path, commit its referenced folded log at `.prdkit/history/log.md` on a durable
+  Git ref, and point the index to that snapshot. For a cutoff-only index, keep the bare
+  cutoff and move the old Git locator to a separate archive note. No old-path reader is provided.
+- Each close row is at most 200 characters, including its date, change ID and any tags:
+  `<intent> — <IDs and parts> — <disposition> — <PR>` after the prefix. Shorten existing
+  overlong live rows; leave task lists and acceptance evidence on the PR.
+
+### Removed (breaking)
+
+- Removed kit migration guides and cutover/restructure instructions, installer retirement and
+  review-migration flags, historical State verdict and receipt clearance paths, reviewer
+  registration via the capabilities table, and compatibility readers for old install manifests,
+  feature counters, programme checkpoints, inbox entries and agent tier maps.
+  Review requires a per-change close entry at the closing commit. Agents must migrate an older
+  install manually; Product-Kit provides no migration tooling. Ordinary upgrades and consumer
+  data-migration guidance remain.
+  To upgrade a 2.1 install, first delete `.prdkit/scripts/bash/review-legacy-lib.sh` and
+  `.prdkit/scripts/bash/review-upgrade-lib.sh` and their `.prdkit/.manifest` lines, commit, then
+  run `init.sh --upgrade`. Otherwise the upgrade refuses because the manifest lists files the kit
+  no longer installs.
+
+### Fixed
+
+- Opening a change in a partial clone reads the pinned template without fetching and
+  stops before creating a worktree if the template object is missing. Review still
+  recognizes integration branches configured in a locally available policy on older Git.
+- PR review launcher groups now have live guard leaders that signal only their own groups.
+  The launcher checks for surviving members without waiting for a leader and confirms the
+  groups are absent at the kernel level before deleting scratch. If it cannot verify shutdown
+  or output drain, it refuses and retains scratch.
+
+## [2.1.0] — 2026-11-23 — task parts, change tags and fail-closed verifiers
+
+### Added
+
+- Changes can group tasks by part and carry lowercase tags into the close log. Parts can
+  declare one level of subparts. Doctor checks task assignments and parent links, and status
+  reports the optional data without treating it as acceptance. Opening a change checks tags
+  from customized templates before creating the record. No migration needed.
+
+### Changed
+
+- **Faster contributor CI.** Two Ubuntu shards run the complete shell suite alongside a
+  separate checks job, and four macOS shards keep the existing native coverage. The runner
+  balances suites by measured duration and logs per-suite seconds. Required check names and
+  release gating are unchanged; all expected jobs must succeed. New PR commits cancel
+  superseded runs for that PR without cancelling main or manual runs.
 - Cleanup and close tests now run against seeded combinations of local Git states and
   check that commits and working files survive. The generator is test-only.
+- `new-change.sh` emits only a one-line outcome checkpoint pointer by default. Use `--programme`
+  to include the commented scaffold for a programme or continuing queue, even if the customized
+  change template omits it. Existing records are untouched.
+
+### Fixed
+
+- `init.sh --upgrade` accepts any 2.x install and skips the 1.x review transition for it. It
+  previously refused installs newer than 2.0, so a 2.1 install could not upgrade.
+- Adoption (including pinned-source proof), delivery, doctor, status, and change-close
+  preflight fail rather than treating an incomplete inventory as clean. Parsed spec input
+  and line-oriented verifier evidence require LF line endings and a final newline;
+  `read-spec.sh --raw` still returns the original bytes.
+- Docs-only review passes report the path and blocker checks without claiming receipt coverage.
+- Test suites can no longer consume the runner's pending suite list via stdin. The runner
+  fails if the number of suites run differs from the plan.
 
 ### Documentation
 
-- Document safety invariants and threat models in the worktree, close, review collection, adoption,
+- Document safety invariants and threat models in the worktree, close, publication, adoption,
   review and upgrade scripts. Contributor and review checklists now ask for those contracts
   to be checked when the scripts change. Script behavior is unchanged.
 

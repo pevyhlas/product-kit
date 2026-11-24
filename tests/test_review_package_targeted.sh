@@ -20,6 +20,7 @@ cat > "specs/changes/$ID.md" <<'EOF'
 # Change: targeted
 
 **Tier**: T2 · **Parts**: P1 · **Parent**: 900-programme · **Opened**: 2026-01-01
+**Tags**: sample **Parent**: 999-not-a-parent
 
 ## Spec edits
 
@@ -107,8 +108,8 @@ advance dirty-control
 package
 assert_not_contains "$(cat "$PKG"/context-sections/*.txt)" 'dirty worktree' 'committed canon only'
 git rm -q "specs/changes/$ID.md"
-mkdir -p specs/log; printf -- '- 2026-01-03 %s: closed\n' "$ID" > "specs/log/$ID.md"
-git add specs/log; git commit -qm 'synthetic close'
+mkdir -p .prdkit/history/log; printf -- '- 2026-01-03 %s: closed\n' "$ID" > ".prdkit/history/log/$ID.md"
+git add .prdkit/history/log; git commit -qm 'synthetic close'
 run bash "$BUILD" "$ID" "$BASE"
 assert_eq 0 "$STATUS" "closing package: $OUTPUT"
 PKG="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"

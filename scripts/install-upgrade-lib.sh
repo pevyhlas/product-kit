@@ -1,66 +1,6 @@
 #!/usr/bin/env bash
-# Read-only 2.0 installer preflight. Sourced by init.sh; no host writes.
-# shellcheck disable=SC2034 # Installer and report outputs are shared across sourced files.
-upgrade_source_2() {
-    upgrade_version_2 "$PK_VERSION"
-}
-
-upgrade_version_2() {
-    local major="${1%%.*}"
-    case "$major" in ''|*[!0-9]*) return 1 ;; esac
-    [ "$major" -ge 2 ]
-}
-
-upgrade_policy_context() {
-    UP_REFS="$(spec_trusted_refs "$TARGET")"
-    UP_DEFAULT="$(printf '%s\n' "$UP_REFS" | sed -n 1p)"
-    UP_POLICY_AT=""
-    if [ -n "$UP_DEFAULT" ]; then
-        UP_POLICY_AT="$(git -C "$TARGET" rev-parse --verify "$UP_DEFAULT^{commit}")" || return 1
-    fi
-}
-
-upgrade_rigor_diagnosis() {
-    local root="$TARGET" lines entry input
-    UP_RIGOR=unknown
-    lines='(none)'
-    if [ -n "$UP_POLICY_AT" ]; then
-        entry="$(git -C "$TARGET" ls-tree "$UP_POLICY_AT" -- .prdkit/memory/constitution.md)" || return 1
-        if [ -n "$entry" ]; then
-            input="$(mktemp)" || return 1
-            if ! git -C "$TARGET" show "$UP_POLICY_AT:.prdkit/memory/constitution.md" > "$input" || ! review_file_without_nul "$input"; then
-                rm -f "$input"
-                echo 'The default branch constitution cannot be read completely as text; nothing was written.' >&2
-                return 1
-            fi
-            # Parse exactly the bytes whose complete read and text shape succeeded.
-            # The shared grammar is unchanged; no second Git read can replace them.
-            UP_RIGOR="$(read_rigor_text < "$input")"
-            lines="$(tr -d '\r' < "$input" |
-                awk '{ line=$0; if (sub(/^[-*[:space:]]*[Rr]igor\**:\**[[:space:]]*/, "", line)) { printf "%s\"%s\"", sep, $0; sep="; " } }')"
-            rm -f "$input"
-            [ -n "$lines" ] || lines='(none)'
-        fi
-    fi
-    [ "$UP_RIGOR" = unknown ] || return 0
-    cat >&2 <<EOF
-The default branch's constitution must hold exactly one Rigor line whose value is light or
-full, followed by a space or the end of the line. Found: $lines
-(a colon after the value is not accepted). Write it as "- **Rigor**: full — medium blocks" and
-merge that in its own PR first, then rerun.
-EOF
-    return 1
-}
-
-upgrade_preflight() {
-    local version
-    version="$(install_manifest_value "$MANIFEST" version)" || { echo 'P1: target must hold a 1.x, 2.x or 3.x manifest; nothing was written.' >&2; return 1; }
-    case "$version" in 1.*|2.*|3.*) ;; *) echo 'P1: target must hold a 1.x, 2.x or 3.x manifest; nothing was written.' >&2; return 1 ;; esac
-    spec_objects_local "$TARGET" || return 1
-    [ -n "$UP_POLICY_AT" ] || { echo 'No trusted integration base: establish origin/HEAD with its history fetched.' >&2; return 1; }
-    upgrade_checkout_clean || return 1
-}
-
+# Read-only installer preflight and recovery. Sourced by init.sh.
+# shellcheck disable=SC2154 # Installer state comes from init.sh.
 # Snapshot a HEAD entry without filters or git-show absence masking.
 upgrade_head_file() { # relative path destination link-metadata
     local entry mode blob
@@ -103,32 +43,15 @@ upgrade_resolved_destination() { # also resolve the existing parent of a new des
 # Before any renderer or target write: root-file edits cannot share a destination
 # with installation/deletion, another root edit, the source, or the record namespace.
 upgrade_destinations_safe() (
-    local work src rel action line dest other role root record_root entry blob manifest
+    local work src rel dest other role root record_root
     work="$(mktemp -d)" || return 1
     trap 'rm -rf "$work"' EXIT
     : > "$work/planned"
     while IFS=$'\t' read -r src rel; do printf '%s\037installed %s\n' "$TARGET/$rel" "$rel"; done <<< "$KIT_FILES" > "$work/roles"
+    for rel in $REMOVE_OPTIONS_FILES; do printf '%s\037optional file %s\n' "$TARGET/$rel" "$rel" >> "$work/roles"; done
     for rel in .prdkit/.manifest .prdkit/.manifest.tmp .prdkit/.install-state .prdkit/.install-lock; do
         printf '%s\037installer metadata %s\n' "$TARGET/$rel" "$rel" >> "$work/roles"
     done
-    # Include retired destinations from both the retained and committed manifests.
-    entry="$(git -C "$TARGET" ls-tree HEAD -- .prdkit/.manifest)" || return 1
-    case "$entry" in '100644 blob '*|'100755 blob '*)
-        blob="${entry%%$'\t'*}"; blob="${blob##* }"
-        git -C "$TARGET" cat-file blob "$blob" > "$work/previous" || return 1 ;;
-        *) : > "$work/previous" ;;
-    esac
-    for manifest in "$MANIFEST" "$work/previous"; do
-        [ -f "$manifest" ] || continue
-        while IFS= read -r line; do
-            rel="${line#*  }"
-            [[ "$rel" =~ $KIT_FILE_RE || "$rel" =~ $INSTALLED_RE ]] || continue
-            printf '%s\037recorded/retired %s\n' "$TARGET/$rel" "$rel" >> "$work/roles"
-        done < "$manifest"
-    done
-    while IFS=$'\t' read -r rel action; do
-        [ "$action" != remove ] || printf '%s\037retired %s\n' "$TARGET/$rel" "$rel" >> "$work/roles"
-    done < <(list_retired_commands; list_retired_kit_files)
     LC_ALL=C sort -u "$work/roles" > "$work/unique-roles" || return 1
     record_root="$(upgrade_resolved_destination "$TARGET/specs/changes")" || return 1
     while IFS=$'\037' read -r dest role; do
@@ -156,7 +79,7 @@ upgrade_destinations_safe() (
 )
 
 upgrade_render_expected() { # caller-owned work directory -> head/, rendered/, paths (NUL)
-    local work="$1" src rel entry rec cur kit ignore hash line dest trailing action
+    local work="$1" src rel entry rec cur kit ignore hash dest trailing
     mkdir -p "$work/head/.prdkit" "$work/rendered" || return 1
     upgrade_head_file .prdkit/.manifest "$work/head/.prdkit/.manifest" "$work/head-links/.prdkit/.manifest" || return 1
     # The last committed manifest, never a dirty intermediate, is the ownership baseline.
@@ -194,28 +117,15 @@ upgrade_render_expected() { # caller-owned work directory -> head/, rendered/, p
         cp "$src" "$dest" || return 1
         case "$rel" in .prdkit/scripts/bash/*.sh) chmod +x "$dest" || return 1 ;; esac
     done < "$work/files"
-    # Every retired recorded path is part of the planned deletion set, even after a retry
-    # already deleted it. Project-owned customized retired conffiles remain untouched.
-    if [ -f "$MANIFEST" ]; then
-        while IFS= read -r line; do
-            rel="${line#*  }"
-            [[ "$rel" =~ $KIT_FILE_RE || "$rel" =~ $INSTALLED_RE ]] || continue
-            awk -F '\t' -v p="$rel" '$2==p { found=1 } END { exit !found }' "$work/files" && continue
-            case "$rel" in .prdkit/memory/*) case " $RETIRED_MEMORY " in *" ${rel##*/} "*) ;; *) continue ;; esac ;; esac
-            upgrade_head_file "$rel" "$work/head/$rel" "$work/head-links/$rel" || return 1
-            case "$rel" in .prdkit/templates/*|.prdkit/memory/*)
-                if [ -f "$work/head-links/$rel" ] || { [ -f "$work/head/$rel" ] && [ "$(hash_file "$work/head/$rel")" != "${line%%  *}" ]; }; then continue; fi ;;
-            esac
-            printf '%s\0' "$rel" >> "$work/paths" || return 1
-        done < "$MANIFEST"
-    fi
-    while IFS=$'\t' read -r rel action; do
-        [ "$action" = remove ] || continue
-        printf '%s\0' "$rel" >> "$work/paths" || return 1
-        if [ ! -e "$work/head/$rel" ] && [ ! -L "$work/head/$rel" ]; then
-            upgrade_head_file "$rel" "$work/head/$rel" "$work/head-links/$rel" || return 1
+    for rel in $REMOVE_OPTIONS_FILES; do
+        upgrade_head_file "$rel" "$work/head/$rel" "$work/head-links/$rel" || return 1
+        if [[ "$rel" = .prdkit/templates/* ]]; then
+            rec="$(recorded_hash "$rel")"
+            if [ -f "$work/head-links/$rel" ] ||
+                { [ -f "$work/head/$rel" ] && [ "$(hash_file "$work/head/$rel")" != "$rec" ]; }; then continue; fi
         fi
-    done < <(list_retired_commands; list_retired_kit_files)
+        printf '%s\0' "$rel" >> "$work/paths" || return 1
+    done
     for rel in AGENTS.md .gitignore; do
         [ "$rel" != AGENTS.md ] || has_harness agents || continue
         if dest="$(root_file_path "$rel")"; then dest="${dest#"$TARGET"/}"; else continue; fi
@@ -272,8 +182,8 @@ upgrade_render_expected() { # caller-owned work directory -> head/, rendered/, p
 }
 
 upgrade_marker_valid() { # rendered work; only metadata the installer actually emits
-    local marker="$PRDKIT_DIR/.install-state" phase path version allowed=false rel
-    [ -f "$marker" ] && [ ! -L "$marker" ] && [ ! -x "$marker" ] && review_file_without_nul "$marker" || return 1
+    local marker="$PRDKIT_DIR/.install-state" phase path version
+    [ -f "$marker" ] && [ ! -L "$marker" ] && [ ! -x "$marker" ] && verify_lf_file "$marker" || return 1
     if git -C "$TARGET" ls-files --error-unmatch -- .prdkit/.install-state >/dev/null 2>&1; then return 1; fi
     awk '/^(phase|path|source-version): / { n++; next } { bad=1 } END { exit bad || n!=3 }' "$marker" || return 1
     phase="$(install_manifest_value "$marker" phase)" && path="$(install_manifest_value "$marker" path)" &&
@@ -282,11 +192,7 @@ upgrade_marker_valid() { # rendered work; only metadata the installer actually e
     case "$phase:$path" in
         prepare:.prdkit|managed-section:AGENTS.md|ignore:.gitignore|manifest:.prdkit/.manifest) return 0 ;;
         file:*) awk -F '\t' -v p="$path" '$2==p { found=1 } END { exit !found }' "$1/files"; return ;;
-        retire:*)
-            [[ "$path" =~ $KIT_FILE_RE || "$path" =~ $INSTALLED_RE ]] || return 1
-            if awk -F '\t' -v p="$path" '$2==p { found=1 } END { exit !found }' "$1/files"; then return 1; fi
-            while IFS= read -r -d '' rel; do [ "$rel" != "$path" ] || allowed=true; done < "$1/paths"
-            $allowed ;;
+        optional:*) case " $REMOVE_OPTIONS_FILES " in *" $path "*) return 0 ;; esac; return 1 ;;
         *) return 1 ;;
     esac
 }

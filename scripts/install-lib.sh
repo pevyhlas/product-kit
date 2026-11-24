@@ -23,7 +23,8 @@ install_file_targets() { # source-path harnesses options [literal output prefix]
             case "$harnesses" in *' opencode '*) printf '%s.opencode/commands/%s\n' "$prefix" "$base" || return 1 ;; esac ;;
         workflows/*.md) printf '%s.prdkit/workflows/%s\n' "$prefix" "$base" ;;
         scripts/init.sh) ;;
-        scripts/*.sh|scripts/agents-section.md) printf '%s.prdkit/scripts/bash/%s\n' "$prefix" "$base" ;;
+        scripts/*.sh|scripts/agents-section.md|scripts/outcome-checkpoint.md)
+            printf '%s.prdkit/scripts/bash/%s\n' "$prefix" "$base" ;;
         templates/*.md)
             printf '%s.prdkit/templates/%s\n' "$prefix" "$base" || return 1
             for pair in $MEMORY_SEEDS; do
@@ -52,13 +53,17 @@ render_agents_section() {
 }
 
 managed_agents_section() {
-    local newline=1
+    local newline=1 last last_line
     [ -f "$1" ] || return 1
     # Validate raw text before tail, shell strings or awk can discard input bytes.
     # Load the shared byte-safe contract in isolation for standalone library callers too.
     (source "$(dirname "${BASH_SOURCE[0]}")/common.sh" && review_file_without_nul "$1") || return 1
     # A line printer must not invent a terminator that the managed bytes did not have.
-    if [ -n "$(tail -c 1 "$1")" ] && [ "$(tail -n 1 "$1")" = "$AGENTS_END" ]; then newline=0; fi
+    last="$(tail -c 1 "$1" && printf x)" || return 1
+    if [ "$last" != $'\nx' ]; then
+        last_line="$(tail -n 1 "$1")" || return 1
+        if [ "$last_line" = "$AGENTS_END" ]; then newline=0; fi
+    fi
     LC_ALL=C awk -v begin="$AGENTS_BEGIN" -v end="$AGENTS_END" -v newline="$newline" '
         $0 == begin { starts++; if(section || ends) bad=1; section=1 }
         section { if($0 == end && !newline) printf "%s", $0; else print }
@@ -90,6 +95,26 @@ install_manifest_value() {
     } END { if(count != 1 || value == "") exit 1; print value }' "$1"
 }
 
+install_manifest_format() {
+    local mode options
+    verify_lf_file "$1" &&
+        install_manifest_value "$1" version >/dev/null &&
+        install_manifest_value "$1" harnesses >/dev/null &&
+        mode="$(install_manifest_value "$1" mode)" &&
+        options="$(install_manifest_value "$1" options)" || return 1
+    case "$mode" in copy|symlink) ;; *) return 1 ;; esac
+    case "$options" in none|agent-tiers) ;; *) return 1 ;; esac
+    LC_ALL=C awk '
+        /^(version|harnesses|mode|options|agents-section): / { next }
+        NF == 0 { next }
+        length($1) == 64 && $1 ~ /^[0-9a-f]+$/ && substr($0, 65, 2) == "  " &&
+            substr($0, 67) ~ /^(\.(claude|opencode)\/commands\/prdkit[^\/]*\.md|\.prdkit\/(scripts\/bash|templates|memory|workflows)\/[A-Za-z0-9_.-]+)$/ &&
+            substr($0, 67) !~ /\/\.\.?$/ { next }
+        { bad = 1 }
+        END { exit bad }
+    ' "$1"
+}
+
 # Exact stage-0 gitlink only: a directory pathspec also matches nested submodules.
 install_source_pin() {
     git -C "$1" ls-files -s -- ":(literal)$2" 2>/dev/null |
@@ -98,23 +123,29 @@ install_source_pin() {
 
 # Print findings, rather than mutating any installation. Project-owned hashes may differ.
 install_findings() {
-    local root="$1" manifest="$1/.prdkit/.manifest" harnesses mode line hash path actual section expected dir
-    local owned=0
-    for path in .prdkit/.install-lock .prdkit/.install-state; do
-        if git -C "$root" ls-files --error-unmatch -- "$path" >/dev/null 2>&1; then
-            printf 'Tracked installer runtime artifact: %s; remove it from the index and keep it ignored\n' "$path"
-        fi
-    done
+    local root="$1" manifest="$1/.prdkit/.manifest" harnesses mode line hash path actual section expected dir artifacts
+    local owned=0 checked=0
+    if git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        artifacts="$(verify_lines git -C "$root" ls-files -- .prdkit/.install-lock .prdkit/.install-state)" || return 1
+        while IFS= read -r path; do
+            [ -z "$path" ] || printf 'Tracked installer runtime artifact: %s; remove it from the index and keep it ignored\n' "$path"
+        done <<< "$artifacts"
+    fi
     if [ -e "$root/.prdkit/.install-state" ] || [ -L "$root/.prdkit/.install-state" ]; then
         printf 'Incomplete install: .prdkit/.install-state remains; inspect it and retry the same source with init.sh --upgrade\n'
     fi
     if [ ! -f "$manifest" ]; then printf 'Missing installed file: .prdkit/.manifest\n'; return 0; fi
+    if ! verify_lf_file "$manifest"; then printf 'Invalid install manifest: expected non-empty LF-terminated text\n'; return 0; fi
+    expected="$(wc -l < "$manifest")" || return 1
     install_manifest_value "$manifest" version >/dev/null || printf 'Manifest must record exactly one version\n'
     harnesses="$(install_manifest_value "$manifest" harnesses || true)"
     [ -n "$harnesses" ] || printf 'Manifest must record configured harnesses\n'
-    mode="$(install_manifest_value "$manifest" mode || true)"; mode="${mode:-symlink}"
+    mode="$(install_manifest_value "$manifest" mode || true)"
     case "$mode" in copy|symlink) ;; *) printf 'Invalid manifest install mode: %s\n' "$mode" ;; esac
+    install_manifest_format "$manifest" ||
+        printf 'Invalid install manifest: expected version, harnesses, mode (copy or symlink), and options (none or agent-tiers)\n'
     while IFS= read -r line; do
+        checked=$((checked + 1))
         case "$line" in version:*|harnesses:*|mode:*|options:*|agents-section:*|'') continue ;; esac
         hash="${line%%  *}"; path="${line#*  }"
         if ! [[ "$hash" =~ ^[0-9a-f]{64}$ ]]; then printf 'Invalid manifest hash entry: %s\n' "$line"; continue; fi
@@ -129,6 +160,7 @@ install_findings() {
                 [ "$actual" = "$hash" ] || printf 'Kit-owned content drift: %s\n' "$path" ;;
         esac
     done < "$manifest"
+    [ "$checked" -eq "$expected" ] || printf 'Incomplete install manifest: expected %s lines, checked %s\n' "$expected" "$checked"
     [ "$owned" -gt 0 ] || printf 'Manifest records no installed kit-owned files\n'
     # Kit-named commands on disk that the manifest does not record: a harness the manifest
     # no longer lists (an upgrade run with a narrower --harness) or a hand-made command. The
@@ -146,13 +178,15 @@ install_findings() {
     done
     case " $(printf '%s' "$harnesses" | tr ',' ' ') " in
         *' agents '*|*' codex '*)
-            if section="$(managed_agents_section "$root/AGENTS.md")"; then
+            if section="$(managed_agents_section "$root/AGENTS.md" && printf x)"; then
+                section="${section%x}"
                 expected="$(install_manifest_value "$manifest" agents-section || true)"
                 if [ -n "$expected" ]; then
-                    actual="$(printf '%s\n' "$section" | install_hash_stream)"
+                    actual="$(printf '%s' "$section" | install_hash_stream)" || return 1
                     [ "$actual" = "$expected" ] || printf 'Kit-owned AGENTS.md managed section drift\n'
-                elif [ "$section" != "$(render_agents_section)" ]; then
-                    printf 'AGENTS.md managed section does not match the installed entry contract\n'
+                else
+                    expected="$(render_agents_section && printf x)" || return 1
+                    [ "$section" = "${expected%x}" ] || printf 'AGENTS.md managed section does not match the installed entry contract\n'
                 fi
             else printf 'Missing or malformed Product-Kit managed section in AGENTS.md\n'; fi ;;
     esac

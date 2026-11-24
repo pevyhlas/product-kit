@@ -6,7 +6,7 @@ own the operational behavior, starting with [protocol.md](../workflows/protocol.
 
 - [`/prdkit`](../commands/prdkit.md) — route a request: owner direction to the inbox and the
   spec, bounded work into a new or open change, questions answered from the spec and code,
-  overflow or a 0.x layout to compaction. `--explore` edits nothing, `--plan` writes a change
+  overflow to compaction. `--explore` edits nothing, `--plan` writes a change
   record and proportional execution plan without code, `--execute` runs the bounded change;
   ready work consumes approved product/design intent. `continue` resumes from the
   change's State after checking actual repository state.
@@ -24,8 +24,7 @@ own the operational behavior, starting with [protocol.md](../workflows/protocol.
   together, then plan a programme: coverage, bounded children, dependency outcomes and owner gates.
 - [`/prdkit-learn`](../commands/prdkit-learn.md) — compare observations with the thesis,
   qualities and hypotheses; proposals go to the owner through the inbox.
-- [`/prdkit-init`](../commands/prdkit-init.md) — guided adoption, or the one-time cutover of a
-  0.x project.
+- [`/prdkit-init`](../commands/prdkit-init.md) — guided adoption.
 - [`/prdkit-configure`](../commands/prdkit-configure.md) — constitution, action policy,
   capabilities and optional settings.
 - [`/prdkit-doctor`](../commands/prdkit-doctor.md) — read-only diagnostics; `--json`, and
@@ -34,31 +33,15 @@ own the operational behavior, starting with [protocol.md](../workflows/protocol.
 On a harness without native slash commands, ask it to read `.prdkit/workflows/protocol.md` and
 follow the matching installed operation. A command name does not grant extra action authority.
 
-## Installed version, spec layout and migration
+When using `new-change.sh` directly, pass `--programme` to include the commented outcome
+checkpoint scaffold for a programme parent or continuing follow-up queue. Ordinary records get
+only a pointer to the format. See [Running a change](../workflows/change.md).
 
-Ordinary `status.sh` and `doctor.sh` output includes these three observations separately.
-Their `--json` output adds an `adoption` object, for example a current kit with legacy specs:
+## Installed version and spec layout
 
-```json
-{"installed_version":"2.0.0","spec_layout":"0.x","mixed_spec_forms":false,"migration_state":"required"}
-```
-
-`installed_version` comes only from `.prdkit/.manifest`; missing, empty or duplicate version
-metadata yields `null` (text: `unknown`), even if a source checkout is present. This is the
-recorded installation version, not an integrity verdict; doctor findings report drift separately.
-
-| Observed layout | `spec_layout` | `migration_state` |
-|---|---|---|
-| Legacy 0.x canon only | `0.x` | `required` |
-| Legacy and current canons | `both` | `incomplete` |
-| Current spec with single-file and split forms together | `1.0` | `incomplete` |
-| Current spec, one form | `1.0` | `not-indicated` |
-| No recognized spec | `none` | `unknown` |
-
-`1.0` is the existing layout-family marker for current 1.x specs, not the installed kit version.
-`mixed_spec_forms` identifies competing `specs/SPEC.md` and split files. Layout detection keeps
-the existing rules for ignored legacy leftovers and empty `.gitkeep` directories.
-Migration state is derived from layout only: `not-indicated` never certifies migration completion
-or owner acceptance. Updating the installed kit does not rewrite `specs/`.
-Existing status `layout`/`mixed_spec_forms` and opt-in doctor `configuration.version` stay available;
-the summary adds no findings and does not change exit codes or require `--inventory`.
+The `status.sh` and `doctor.sh` adoption summary distinguishes the recorded installation
+version from the spec layout. In JSON, `adoption.installed_version` comes from
+`.prdkit/.manifest` and is `null` if unknown. `adoption.spec_layout` is `1.0` for the current
+layout family, `none` if no spec is recognized, or `unsupported` for an unsupported layout.
+`adoption.mixed_spec_forms` flags competing single-file and split specs. The install version
+does not certify the spec or the installed files.

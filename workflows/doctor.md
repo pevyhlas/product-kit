@@ -4,15 +4,15 @@
 **Writes**: none.
 **Result**: concrete findings and the smallest repair for each.
 
-Run `.prdkit/scripts/bash/doctor.sh` (`--json`, `--strict`): 0.x layout or two canons, a
-`specs/archive/` folder on main, a `specs/archive.md` whose base commit or last 0.x feature
-cannot be read, agent context naming removed 0.x paths, files over their reading budgets, cited
+Run `.prdkit/scripts/bash/doctor.sh` (`--json`, `--strict`): unsupported formats, competing spec forms,
+files over their reading budgets, cited
 IDs that are undefined or retired, malformed records, a closed change without its log entry,
-a malformed `specs/log/<id>.md`, a reviewed record merged without closing,
+a malformed `.prdkit/history/log/<id>.md`, a close row over 200 characters, a spec link to
+history, old history paths (move them as the diagnostic says), a reviewed record merged without closing,
 past-due hold reminders and expired waivers, open inbox items by age, pending answers, retained resolved and
-one-line inbox items, missing inbox metadata/provenance, duplicate IDs/option keys and stale answer
+missing inbox metadata/provenance, duplicate IDs/option keys and stale answer
 revisions, local machine
-paths, links to missing files in the spec and `specs/archive.md`, spec files no summary links
+paths, links to missing files in the spec and `.prdkit/history/archive.md`, spec files no summary links
 (1.1 layout), `observed/` pieces `observed.md` does not link, a lifecycle stage naming no
 environment the environments topic lists, raw evidence under `specs/`, oversized agent context
 files and agent projection drift. Trace advisories, counted by code under `trace` in `--json`:
@@ -23,6 +23,10 @@ close, duplicate inbox identities/fields/option keys and mismatched answer revis
 the rest are advisories that `--strict` fails. The kit's `scripts/init.sh --check` reports
 installation drift. Never repair during diagnosis or read a clean report as readiness.
 
+For a checked `ref=` reason, doctor reports the verified row's scope and end condition
+(`authority_records` in JSON, when present), not the quote. A broken reference is a malformed
+record, reported at its line in `specs/records.md`.
+
 Text and JSON (`budget_excess_reading_lines`, a nonnegative integer) report the total
 reading lines over budget: sum `max(reading lines - budget, 0)` over the files checked
 for reading budgets, not the number of advisories or the files' whole lengths. The same
@@ -30,19 +34,17 @@ for reading budgets, not the number of advisories or the files' whole lengths. T
 excluded, malformed blocks still count, and a reader failure is a finding, not evidence
 of zero excess. Byte-based agent context budgets are separate.
 Compaction due is an advisory at ten closes since the latest compaction
-line, in either log order, plus every pending `specs/log/<id>.md` entry. If the folded
+line, in either log order, plus every pending `.prdkit/history/log/<id>.md` entry. If the folded
 log cannot be read, doctor reports a finding instead of a count.
+On older Git in a partial clone, doctor warns if the legacy history paths cannot be
+checked in HEAD using local objects. Working paths and the index are still checked.
 
 The "Merged without closing" advisory needs the default-branch ref and its tree and blob
 objects locally, not full history. CI checkouts should fetch full history (for example,
 `fetch-depth: 0` with `actions/checkout`) for the separate history-based
 "Closed without a log entry" check.
 
-Ordinary text and JSON also separate installed kit version (manifest), observed spec layout and
-layout-derived migration state. `required` means legacy 0.x; `incomplete` means competing canons
-or spec forms; `not-indicated` means current layout only; `unknown` means no recognized spec.
-Neither a current installed version nor `not-indicated` verifies migration completion. Missing
-or ambiguous manifest version stays unknown; the source checkout is not a substitute.
+Ordinary text and JSON distinguish the recorded install version from observed spec layout.
 
 For configuration/provenance questions add `--inventory --json`. It reports installed hashes,
 project-owned customizations, source pins and resolved versus projected agent models with winning

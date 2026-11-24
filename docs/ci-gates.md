@@ -28,8 +28,7 @@ adoption restrictions on every PR. It is **not pinned-source proof**:
   shared baseline, and its vendored snapshot matches its recorded provenance (sha256 and
   library commit: this catches hand edits and baseline mismatch, not upstream origin). Once the map
   declares a `Tier baseline:`, every agent projection must exist and match the resolved
-  model/variant and neutral body (`render-agents.sh --check` is the same check, and also
-  runs on legacy literal maps when invoked directly).
+  model/variant and neutral body (`render-agents.sh --check` checks the same projection rules).
 
 Consumers may impose additional restrictions in the `## Configuration` section of
 `.prdkit/memory/config.md`:
@@ -46,6 +45,8 @@ checkout at all (a `mode: symlink` install still needs the source present for it
 to resolve). When the kit source is readable, its VERSION and shipped command set are
 cross-checked as well. `--json` includes `source_verification:"not-requested"` alongside
 `result`, `checks` and `findings`; a pass in this lane must not be treated as source proof.
+Both adoption lanes expect a non-empty LF-terminated manifest and, when present, adoption
+configuration. A failed or incomplete inventory is not a clean result.
 
 ### Strict pinned-source installation proof
 
@@ -78,9 +79,9 @@ bytes the links actually serve. Committed proof checks link text, not a mutable 
 The AGENTS.md managed section is compared with pinned data without executing source code;
 in-repository aliases work, and bytes outside the section remain project-owned.
 
-Customized memory/templates and customized retired conffiles remain project-owned. Expected
+Customized memory/templates remain project-owned. Expected
 conffiles must still exist, but their bytes, modes and prior pristine hashes need not match
-the new source. Retired kit-owned helpers/commands may not remain installed. Explicit
+the new source. Kit-owned paths outside the pinned mapping are rejected. Explicit
 `adoption-pin` and `adoption-manifest-sha256` restrictions still reject drift; the installer
 does not silently rewrite or ignore them.
 
@@ -91,7 +92,7 @@ equality to the committed pin, **not** source provenance, publisher trust, revie
 release approval or permission to merge. Execute the checker and its libraries from a trusted
 installation when relying on its result; candidate-controlled verification code can lie.
 
-Once policy, publisher, release/source and committed-record prerequisites are prepared, a
+Once policy, reviewer accounts, release/source and committed-record prerequisites are prepared, a
 consumer without additional frozen pin/hash restrictions can apply an upgrade with one
 `bash .product-kit/scripts/init.sh --upgrade` command and verify it without copying hashes.
 This proof alone does not make the upgrade review-free or complete the release prerequisites.
@@ -148,6 +149,9 @@ Policy comes from the current `origin/HEAD`, never the candidate or its merge ba
 `review-host: github`, numeric `review-publishers` or `review-lenses`, and `review-owner` on the default branch.
 `--base` must resolve to the default target or a listed `review-integration-branches` ref.
 The gate checks the change record, closure log, trusted Rigor, tier floor and T0 path rules.
+It rejects a `**Review**:` field in the State of an affected record, including at the fork
+or in a commit that later deleted the field. A close must have its own per-change entry at
+the closing commit; the shared log alone cannot establish a close.
 See [the configuration template](../templates/config-template.md) for key syntax.
 
 ### Trusted all-PR execution — `check-pr-review.sh`
@@ -210,7 +214,8 @@ PR head, not a group or its constituent PRs. Adding `merge_group` to W does not
 implement that mapping or check their live approvals. Consumers requiring queue
 support or protection against a concurrent dismissal must keep their existing
 enforcement until they have a separately verified merge-time control. Prove the
-rerun behavior with the [one-PR cutover test](migrating-to-3.0.md#prove-enforcement-on-one-pilot-pr).
+rerun behavior on a protected pilot PR: dismiss its approval and verify that the rerun blocks
+the same head, then approve it again and verify that a fresh run passes.
 
 [events]: https://docs.github.com/en/enterprise-cloud@latest/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/troubleshooting-rules#supported-ruleset-workflow-events
 [rules]: https://docs.github.com/en/enterprise-cloud@latest/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets
@@ -230,7 +235,7 @@ contained regular Git blob (100644 or 100755) from W; no symlink/gitlink or cand
 Exclude BASH_ENV, ENV, SHELLOPTS, BASHOPTS, exported BASH_FUNC_* functions, loader/language injection,
 caller proxies, credential helpers and **all** inherited GIT_* variables. Unsetting them in an
 already-started poisoned shell is too late. The launcher's later defensive sanitization is not
-this constructor. gh/jq/Git/core tools must be installed in trusted host tool locations, not the
+this constructor. Install gh, jq, Git and core tools in trusted host tool locations, not the
 workspace, caller bin directory, user configuration or gh extensions. Deliver the credential only
 ephemerally; never a publisher write token, persisted login or credential-bearing URL.
 
@@ -262,16 +267,26 @@ and **complete** S..H history (side branches and merge-created additions include
 present at S. Git 2.31+ combined-diff capability is required; incomplete history, no/multiple bases
 or zero/multiple assignments refuse. The native gate owns record recovery, closure, tier and native review evaluation.
 
-Bounds are 600 seconds overall, 120 per acquisition/selection/extraction and 180 for the native
-gate, with five seconds TERM-to-KILL grace for owned process groups. Dedicated FIFO readers cap
-stdout/stderr at 4 MiB each; reaching the ceiling refuses with `capture-limit`, never truncated
-success. Selector history streams are separately capped. These capture limits do **not** impose
-a file-size limit on Git packs/objects or native working files. Cancellation is deferred through
-each launch-to-ownership registration. Teardown stops the overall watchdog first, queues repeated
-catchable signals and allows up to five seconds for capture readers to drain after writers stop.
-All owned processes are terminated/reaped before deleting only the invocation's scratch.
-Cleanup failure refuses. Uncatchable runner termination can leave no complete result and is not
-PASS. stdout is one buffered JSON object, newline-terminated:
+The launcher checks a 600-second overall budget, with up to 120 seconds per acquisition,
+selection or extraction and 180 seconds for the native gate before cleanup. FIFO readers cap
+stdout and stderr at 4 MiB each; native output at the ceiling refuses with `capture-limit`, never
+truncated success. Selector history streams are separately capped. These limits do **not** cap
+Git objects or native working files.
+
+The launcher queues catchable cancellation, including during startup and cleanup. Only a group’s
+own guard leader may signal it; the launcher sends private FIFO requests, never signals to a
+remembered process-group ID. If required, the guard sends TERM, allows five seconds, and sends
+KILL at most once, ending the guard itself. After release or KILL, the launcher only observes.
+It polls the process table without calling `wait` on a leader, and treats ambiguous states
+(including Linux `Zl`) as live. It allows readers a separate five-second drain window.
+Before deleting scratch, it checks that the kernel reports every recorded group absent,
+since a process-table scan can miss a fork/exit handoff. An existing group (even a reused
+ID) or any other probe error prevents deletion. If shutdown or drain cannot be verified,
+it refuses with `cleanup-failed` and retains scratch.
+If KILL prevents reporting the native exit, `native_exit` is null. This checks supervised
+process groups; it does not contain processes that leave them. Uncatchable runner termination
+can leave no complete result and is not PASS. stdout is one buffered JSON object,
+newline-terminated:
 
 ```json
 {"launcher":"complete","error":null,"native_exit":0,"native":{}}
@@ -288,13 +303,6 @@ Only native exit 0, host pass, empty problems and matching change/PR/H/T/P/canon
 the exact-head approvals required for that tier can exit 0. Usage exits 2; all other refusals/failures exit 1.
 Missing/partial host data never falls back to offline success. Final CI certifies the actual remote H.
 
-It replaces the 0.x `check-signoff.sh`, but not one for one. The 0.x gate ran on every pull
-request touching `gated-paths` and required a `readiness.md` with fingerprinted evidence; 1.0
-drops that record, the fingerprint and `evidence-fingerprint.sh`; all-PR integration requires a
-unique review carrier rather than skipping unnumbered branches. `init.sh --upgrade` warns while `signoff-requirements.md` still lists
-`gated-paths:`; replace the CI step and fold the review policy into the constitution's `Review
-and checks` at the cutover.
-
 ## Spec and context advisories — `doctor.sh --strict`
 
 ```
@@ -302,18 +310,17 @@ bash .prdkit/scripts/bash/doctor.sh --strict
 ```
 
 Doctor always fails on malformed or duplicate IDs, malformed records, installation drift,
-agent definition or tier-map findings, a malformed `specs/log/<id>.md`, and a change record
+agent definition or tier-map findings, old history paths, malformed or overlong close rows,
+spec links to history, and a change record
 deleted in history without its log entry (`check-review.sh` fails the same at close).
-It reports, as advisories: a 0.x layout or two canons, a `specs/archive/` folder on main, a
-`specs/archive.md` whose base commit or last 0.x feature cannot be read, agent context naming
-removed 0.x paths, spec files over their reading budgets,
+It reports unsupported kit layouts and formats as findings. Advisories include spec files over their reading budgets,
 cited IDs that are undefined or retired (in spec files and tests), a reviewed change record
 still on the default branch and in the checkout with no child or outcome checkpoint keeping it
 open (merged without closing, including T0 and records with no verdict), trace
 drift (`Code:` paths not in the repository, stale `planned:` markers, unallocated R/Q items and
 parts, change records restating or citing undefined IDs), past-due hold reminders and expired waivers,
-open inbox items and their age, retained resolved items, inbox items in the old one-line form, local machine paths in
-specs and agent context, links to missing files in the spec and `specs/archive.md`, spec files
+open inbox items and their age, retained resolved items, local machine paths in
+specs and agent context, links to missing files in the spec and `.prdkit/history/archive.md`, spec files
 that no chain of links from
 `product.md` or `architecture.md` reaches (1.1 layout; retired files exempt) and `observed.md`
 pieces it does not link, a lifecycle stage naming no environment that
@@ -330,7 +337,7 @@ the sum of each reading-budget file's excess, not its whole size or the advisory
 The total uses the same reading-line count as the advisories: validated generated
 navigation is excluded, and a reader failure makes the total incomplete and fails doctor.
 Byte-based agent context budgets are separate. Compaction due is an advisory at ten closes
-since the latest compaction line in either log order, including pending `specs/log/<id>.md`
+since the latest compaction line in either log order, including pending `.prdkit/history/log/<id>.md`
 files.
 
 The "Merged without closing" advisory needs the default-branch ref and its tree and blob

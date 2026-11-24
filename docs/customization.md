@@ -47,8 +47,7 @@ The `.ref` file (library commit + sha256) lets doctor detect hand edits to the s
 mismatch with the `Tier baseline:` commit; it does not prove the snapshot came from that upstream commit, so
 review the vendoring diff. `Baseline snapshot:` must be a relative path inside the
 repository. With a baseline, a `Hand-owned agents:` line names projections kept without a
-neutral definition; any other unowned projection is a finding. Legacy literal tables keep
-working.
+neutral definition; any other unowned projection is a finding.
 
 ## Rigor and proportion
 
@@ -63,8 +62,8 @@ findings block under both. No universal persona or end-to-end test count applies
 
 Ordinary upgrades preserve edited templates and memory and refresh unmodified kit-owned
 commands, internal workflows, and scripts. `--check` reports changes to those files as
-KIT-OWNED EDITS. Starting with 2.0, `--upgrade` requires a clean, committed checkout and a
-local trusted default ref. It refuses to overwrite or delete customized managed content,
+KIT-OWNED EDITS. `--upgrade` requires a clean, committed checkout. It refuses to overwrite
+or delete customized managed content,
 even when committed or ignored. Files under `specs/` are not managed installer files.
 Customize policy and templates instead of forking operational instructions.
 
@@ -72,23 +71,15 @@ The installer writes and deletes only inside the project. It refuses, before wri
 when a directory it writes into (`.prdkit/` and its subdirectories, or a selected harness's
 `.claude/commands/` or `.opencode/commands/`) is a symlink or resolves outside the project, or when
 a directory sits where it installs a file. Replacing a kit-owned file with a custom symlink
-blocks a 2.0 upgrade; the installer never writes through it. A plain upgrade keeps symlinked
+blocks an upgrade; the installer never writes through it. A plain upgrade keeps symlinked
 templates and memory files. `--upgrade --force` still has to pass the overwrite checks.
 `AGENTS.md` and `.gitignore` may link to a file inside the project (for example, `AGENTS.md`
-can link to `CLAUDE.md`). A 2.0 upgrade refuses links to root files outside the project.
-A manifest entry outside the installed layout is ignored with a warning, never deleted.
-
-The manifest records selected harnesses and pristine hashes. It supports drift detection and
-safe ordinary upgrades, not automatic conversion of a 0.x spec ([migrating to 1.0](migrating-to-1.0.md)).
-For the current upgrade procedure, see [migrating to 3.0](migrating-to-3.0.md).
-Commands the kit no longer ships (retired, disabled or unsupported entry points) are
-reported by `--check` as RETIRED and removed by `--upgrade` when the previous manifest
-recorded them or they are symlinks into the kit's `commands/`; retired workflows and helpers
-are removed, and a retired template, or the seeded memory file of a removed subsystem
-(`task-ledger.md` in 2.0), is removed unless you edited it; other memory files are never removed.
-The files of an optional subsystem that is no longer selected (`--without`, or a pre-2.0 install
-that never used agent tiers) are removed the same way; an unrecorded hand-made `prdkit*.md` file or a user's own symlink is kept and
-named in a warning, since it would otherwise keep loading into every session.
+can link to `CLAUDE.md`). An upgrade refuses links to root files outside the project.
+An unsupported manifest entry blocks the upgrade; it is never deleted by the installer.
+The manifest records version, harnesses, install mode, selected options and pristine file
+hashes. Upgrade from a clean, committed checkout. To deselect agent tiers, use
+`--without agent-tiers`; the installer removes its managed files only when the project no
+longer uses the subsystem, preserving a customized template.
 An explicit `--harness` list may not drop a recorded harness (see
 [removing a harness](harnesses.md#removing-a-harness)). Doctor and the adoption gate report
 any `prdkit*.md` command file the manifest does not record.
@@ -130,7 +121,7 @@ switch. An install made before copies became the default keeps its symlinks unti
 ## Agent context budget
 
 Agent context files (`CLAUDE.md`, `AGENTS.md` and harness equivalents) hold stable orientation
-and pointers only; delivered truth goes to the spec, and history to `specs/log.md` and Git.
+and pointers only; delivered truth goes to the spec, and history to `.prdkit/history/log.md` and Git.
 `context-budget-bytes` (default 16384, 0 disables) in `.prdkit/memory/config.md` bounds them:
 doctor reports a file over it as an advisory, and `doctor.sh --strict` fails on it for an
 opt-in CI gate (see [CI gates](ci-gates.md)). The kit never writes these files beyond the

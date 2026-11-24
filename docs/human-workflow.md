@@ -48,8 +48,7 @@ A separate answer archive is normally redundant and can become stale. Use one on
 audit/retention need, with the spec remaining authoritative.
 
 Existing inboxes are reconciled by `/prdkit-inbox`, not by deleting everything labelled folded.
-Upgrading the kit leaves `specs/` untouched, so ask the command to review legacy entries after
-adoption. A preview shows the proposed routing without editing files.
+Upgrading the kit leaves `specs/` untouched.
 
 ## During a change
 

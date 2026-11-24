@@ -45,8 +45,8 @@ it "review is independent, tiered and never empty"
 assert_contains "$protocol" '| T0 | docs only, no behavior change | none |' "T0"
 assert_contains "$protocol" '| T3 | L0 edit or L1 one-way door | design review plus the owner |' "T3"
 assert_contains "$review" 'Never dispatch a round with no source change' "no empty re-review"
-for suite in review_gate pr_review; do
-    assert_contains "$(cat "$PK_ROOT/.github/workflows/ci-macos.yml")" "/bin/bash tests/test_$suite.sh" "$suite runs under native macOS Bash"
+for suite in review_gate review_record_format review_lenses pr_review; do
+    assert_eq 1 "$(grep -cxF "test_$suite.sh" "$TESTS_DIR/native-suites.txt" || true)" "$suite is in the native macOS allowlist"
 done
 assert_contains "$review" 'did not implement' "independent reviewer"
 assert_contains "$review" 'untracked file contents' "uncommitted review includes new files"
@@ -79,13 +79,53 @@ assert_contains "$spec" 'binds later work in its L1/L2 home now' "binding decisi
 assert_contains "$(flat "$T/review-prompt-template.md")" '**One home**' "reviewer checks one home"
 assert_contains "$(flat "$T/review-prompt-template.md")" 'never a required input' "the spec search never stalls a review"
 
-it "changes: spec edits with code, test edits touch IDs, Spec impact lines, no no-op notes"
-assert_contains "$change" 'Spec edits land in the PR whose code and tests realize them' "spec with code"
+it "spec-only reviews defer proof mechanics, not current spec defects"
+assert_contains "$review" '[Levels](spec.md#levels)' "review points to the canonical level rules"
+assert_contains "$review" 'Send those rules with the prompt.' "dispatcher supplies the canonical rules"
+assert_contains "$review" 'Snapshot the installed prompt and `.prdkit/workflows/spec.md` with `--context` if the trusted copies are tracked at the reviewed head; otherwise attach both at dispatch.' "dispatcher attaches the rules and prompt when not tracked at the reviewed head"
+assert_contains "$review" 'Use the `level` category' "added excess detail is a level finding"
+assert_contains "$review" 'are low (advisory); tag them `defer: implementing PR`' "deferral cannot block under full rigor"
+assert_contains "$review" 'Critical and high findings block, medium blocks under `Rigor: full`, low is advisory.' "severity scale unchanged"
+assert_contains "$change" 'state bounded PR obligations as observable outcomes' "acceptance states an observable outcome"
+assert_contains "$change" 'proof design (oracles, fixtures, controls) belongs in the implementing PR' "implementation review checks proof design"
+
+it "changes: planned direction can land separately, built behavior ships with code and tests"
+assert_contains "$change" 'Spec edits that claim built behavior land in the PR whose code and tests realize them.' "built spec with code"
+assert_contains "$change" 'Owner-approved, unbuilt intent may land in a spec-only PR under the [`planned:` rule](spec.md#elements).' "planned exception requires owner direction and links the rule"
+assert_contains "$change" 'A spec-only PR proves its spec obligations, not the future runtime outcome.' "spec acceptance does not prove runtime behavior"
+
+it "changes: test edits touch IDs, Spec impact lines, no no-op notes"
 assert_contains "$change" 'also edits that ID' "tests and IDs move together"
 assert_contains "$change" 'Spec impact: none — <reason>' "spec impact"
 assert_contains "$change" 'Unaffected changes' "no no-op notes"
 assert_contains "$change" 'one sentence of disposition' "parent dispositions stay one sentence"
 assert_contains "$change" '.prdkit/scripts/bash/check-delivery.sh --json' "remote checkpoint verified"
+
+it "change tasks are outcome-only and leave the record in their delivering PR"
+implementation="$(flat "$W/implementation.md")"
+change_template="$(flat "$T/change-template.md")"
+pr_template="$(cat "$T/pr-summary-template.md")"
+task_example='- [ ] (P2.1) T003 <outcome; dependency; check name>'
+drops='Drops: <change-id> T004, T005'
+assert_contains "$change_template" "$task_example" "template shows an outcome-level task"
+assert_contains "$spec" "$task_example" "part assignment uses the same format"
+assert_not_contains "$spec" '- [x] (P' "part metadata does not teach checked-off tasks"
+assert_contains "$change" 'no paths, line ranges or commands' "execution details stay out of the record"
+assert_contains "$implementation" 'in the cache or the PR, not the record' "planning keeps execution details elsewhere"
+assert_contains "$implementation" '- [ ] T001 <outcome; dependency; check name>' "execution uses unchecked outcome lines"
+for workflow in "$change" "$implementation"; do
+    assert_contains "$workflow" 'unique within the change; never reuse or renumber them' "task keys are local and permanent"
+done
+assert_contains "$change" 'The PR that delivers a task deletes its line' "delivery deletes the line"
+assert_contains "$change" 'No `[x]`, delivered note or history entry for the task' "no task archive"
+assert_contains "$implementation" 'Local verification is not delivery' "verified work is not yet delivered"
+assert_contains "$review" 'For a single-PR change, deleting the record delivers its tasks' "single-PR tasks are delivered at close"
+assert_eq 1 "$(grep -cxF "$drops" "$T/pr-summary-template.md" || true)" "standalone Drops line in the PR template"
+assert_contains "$pr_template" 'uncomment only for tasks dropped rather than delivered' "Drops is optional"
+for workflow in "$change" "$implementation" "$review" "$pr_template"; do
+    assert_contains "$workflow" "$drops" "one Drops syntax"
+    assert_not_contains "$workflow" 'Delivers:' "delivery needs no annotation"
+done
 
 it "dropped v4 rules stay dropped"
 all="$(flat "$W"/*.md "$T"/*.md "$PK_ROOT"/commands/*.md)"
@@ -94,16 +134,11 @@ assert_not_contains "$all" 'Only the owner writes HOLD' "agents record owner-dec
 assert_contains "$(flat "$T/records-template.md")" 'never invent one' "agents never invent holds"
 assert_not_contains "$all" '(proposed)' "no proposed constraints"
 
-it "cutover condenses old canon, removes it from main, and never picks between contradictions"
+it "compaction preserves current canon and keeps history off the default load path"
 compact="$(flat "$W/compact.md")"
-assert_contains "$compact" 'do not' "contradictions are not resolved by the agent"
-assert_contains "$compact" '**Still binds**' "binding rules, decisions and facts go into the spec"
-assert_contains "$compact" '**Worth remembering**' "directions tried go into the archive digest"
-assert_contains "$compact" 'Then `git rm` them all; git keeps them.' "no raw archive on main"
-assert_not_contains "$compact" '`git mv`' "nothing is moved under an archive folder"
-assert_contains "$compact" 'becomes a change record' "no leftover 0.x feature"
-assert_contains "$protocol" '`specs/archive.md` only on demand' "the archive is read on demand"
+assert_contains "$compact" 'never by dropping items' "preserve current canon"
+assert_contains "$compact" 'Log condensed through' "preserve numbering after log compaction"
+assert_contains "$protocol" '`.prdkit/history/archive.md` only on demand' "the archive is read on demand"
 assert_not_contains "$protocol" '`specs/archive/`' "no archive folder on the load table"
-assert_contains "$(flat "$T/archive-template.md")" 'never by default' "the template says agents do not load it"
 
 finish

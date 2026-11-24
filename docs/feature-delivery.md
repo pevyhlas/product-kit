@@ -20,9 +20,10 @@ policy, verifies it and converges the diff against intent. No routine re-approva
 Ordinary code choices stay local; consequential product/design findings go back to their existing
 decision process. A library limitation is evidence, not a new product requirement.
 
-Small fixes keep tasks inline. Larger changes may use one ignored execution plan; useful context
-and progress belong on the same PR, not solely in a local cache. No scheduler or task service is
-needed. Projects supply commands, policy, actual reviewers and environments, not their own methodology.
+Small fixes keep tasks inline. Task lines describe outcomes, dependencies and named checks; keep
+paths, line ranges and commands in the ignored execution plan or PR. Useful context belongs on
+the PR, not solely in a local cache. No scheduler or task service is needed. Projects supply
+commands, policy, actual reviewers and environments, not their own methodology.
 
 ## Example: requests through a durable queue
 
@@ -47,6 +48,10 @@ function structure. If the selected store cannot preserve identity across retrie
 design conflict; it cannot replace Q-01 with “duplicates are allowed” or add a convenient user limit.
 
 ## Finalize on the same PR
+
+The delivering PR deletes each task line rather than checking it off or logging it. A single-PR
+change delivers its tasks when the closing PR deletes the record. A `Drops: <change-id> T004, T005`
+line in the PR description distinguishes dropped tasks from delivered ones.
 
 Before final review, the PR contains canonical scope/design references, useful approach and task/check
 mapping, verification at actual revisions/environments, review evidence and explicit remaining

@@ -18,11 +18,10 @@
 #                   error; default: the manifest's recorded set, else claude,agents plus
 #                   auto-detected harnesses). On an existing install the list must keep
 #                   every recorded harness: dropping one is refused (see docs/harnesses.md)
-#   --dry-run       With --upgrade, check the planned installation without writing
 #   --upgrade       Refresh kit-owned files (commands + scripts, always), auto-update
 #                   unmodified templates/memory, add new files. Consumer edits to
 #                   templates/memory are preserved and listed; edits to kit-owned
-#                   commands/scripts are refused on 2.0 upgrades (older sources overwrite).
+#                   commands/scripts are reported by --check and refused on upgrade.
 #   --with NAME     Also install an optional subsystem (agent-tiers: render-agents.sh and the
 #                   neutral agent-definition template). The manifest records the choice and
 #                   later runs keep it; a project that uses agent tiers (.prdkit/agents/*.md
@@ -40,12 +39,11 @@
 # files from consumer edits.
 #
 # Invariants:
-# --upgrade has no direct install destination under specs/. Preflight for a 2.x
-# source refuses destinations resolving into specs/changes/ and customized
+# --upgrade has no direct install destination under specs/. Preflight
+# refuses destinations resolving into specs/changes/ and customized
 # overwrite/delete destinations. A supported root-file alias (such as a symlinked
 # AGENTS.md) can still direct edits to its target elsewhere under specs/.
 # Keep customized conffiles by default; never write through their symlinks.
-# Review migration dry-run reports without installing or publishing reviews.
 #
 # Threat model:
 # Include overlapping installers, pre-existing path aliases and interrupted writes.
@@ -63,8 +61,7 @@ PK_ROOT="$(CDPATH="" cd "$SCRIPT_DIR/.." && pwd -P)"
 source "$SCRIPT_DIR/install-lib.sh"
 source "$SCRIPT_DIR/spec-lib.sh"
 source "$SCRIPT_DIR/common.sh"
-source "$SCRIPT_DIR/review-policy-lib.sh"
-source "$SCRIPT_DIR/review-upgrade-lib.sh"
+source "$SCRIPT_DIR/install-upgrade-lib.sh"
 
 PK_VERSION="unknown"
 [ -f "$PK_ROOT/VERSION" ] && PK_VERSION="$(head -n 1 "$PK_ROOT/VERSION" | tr -d '[:space:]')"
@@ -79,15 +76,14 @@ TARGET=""
 HARNESS_RAW=""
 WITH_RAW=""
 WITHOUT_RAW=""
-DRY_RUN=false
-IGNORE_ENTRIES=".prdkit/ledger/ .prdkit/cache/ .prdkit/retrospective/ .worktrees/ .prdkit/.install-lock .prdkit/.install-state"
+REMOVE_OPTIONS_FILES=""
+IGNORE_ENTRIES=".prdkit/cache/ .worktrees/ .prdkit/.install-lock .prdkit/.install-state"
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --copy) MODE_COPY=true; MODE_EXPLICIT=true ;;
         --symlink) MODE_COPY=false; MODE_EXPLICIT=true ;;
         --upgrade) UPGRADE=true ;;
-        --dry-run) DRY_RUN=true ;;
         --check) CHECK=true ;;
         --force) FORCE=true ;;
         --harness)
@@ -115,10 +111,6 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-
-if $DRY_RUN && { ! $UPGRADE || $CHECK || ! upgrade_source_2; }; then
-    echo '--dry-run requires --upgrade on a current kit' >&2; exit 2
-fi
 # --- Resolve target project root ---
 if [ -z "$TARGET" ]; then
     if git -C "$PWD" rev-parse --show-toplevel >/dev/null 2>&1; then
@@ -143,6 +135,10 @@ SCRIPT_OUT="$PRDKIT_DIR/scripts/bash"
 MANIFEST="$PRDKIT_DIR/.manifest"
 INITIAL_MANIFEST=absent
 [ ! -f "$MANIFEST" ] || INITIAL_MANIFEST="$(install_hash_stream < "$MANIFEST")"
+if [ "$INITIAL_MANIFEST" != absent ] && ! install_manifest_format "$MANIFEST"; then
+    echo 'Invalid .prdkit/.manifest: expected LF text with unique version, harnesses, mode (copy or symlink), options (none or agent-tiers), and SHA-256 entries for installed kit paths; nothing was written.' >&2
+    exit 1
+fi
 
 # --- Resolve install harnesses -----------------------------------------------
 # Product-Kit's core is markdown + bash, so commands can be installed for more
@@ -153,6 +149,8 @@ INITIAL_MANIFEST=absent
 #              never per-project, so its install is the AGENTS.md fallback)
 #   agents   → AGENTS.md managed section   (any AGENTS.md-reading harness)
 KNOWN_HARNESSES="claude opencode codex agents"
+
+spec_require_layout "$TARGET" || exit 1
 
 harness_valid() {
     case " $KNOWN_HARNESSES " in *" $1 "*) return 0 ;; *) return 1 ;; esac
@@ -230,10 +228,8 @@ has_harness codex && add_harness agents
 # --- Resolve optional subsystems ----------------------------------------------
 # The core install is the same for every project; an optional subsystem installs only when the
 # consumer asks for it (--with), an earlier install recorded it (`options:` in the manifest), or
-# the project already uses it. 2.0 has one: agent-tiers, the neutral agent definitions and
-# render-agents.sh. agent-tiers-lib.sh stays core, because doctor and the adoption gate check the
-# tier map in agents.md. A manifest written before 2.0 has no `options:` line; its install keeps
-# agent tiers only when the project uses them.
+# the project already uses it. agent-tiers-lib.sh stays core, because doctor and the
+# adoption gate check the tier map in agents.md.
 KNOWN_OPTIONS="agent-tiers"
 OPTIONS=""
 has_option() {
@@ -251,9 +247,6 @@ option_used() { # name -> 0 when the project's files already depend on the subsy
 }
 # Kit files that belong to an optional subsystem, by kit-relative path: 0 when the file is core
 # or its subsystem is selected for this install.
-kit_file_wanted() {
-    install_file_selected "$1" "$OPTIONS"
-}
 RECORDED_OPTIONS=""
 if [ -f "$MANIFEST" ] && grep -q '^options: ' "$MANIFEST"; then
     RECORDED_OPTIONS="$(grep '^options: ' "$MANIFEST" | head -n 1)"
@@ -278,6 +271,19 @@ for opt in $KNOWN_OPTIONS; do
             echo "       Remove those first, or keep the subsystem." >&2
             exit 2
         fi
+        if $UPGRADE; then
+            previous_options="$RECORDED_OPTIONS"
+            # If interrupted after manifest publication, the committed manifest
+            # still describes the option whose removal the retry must verify.
+            if [ -f "$PRDKIT_DIR/.install-state" ] && spec_objects_local "$TARGET"; then
+                previous_options="$(GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 \
+                    git -C "$TARGET" cat-file blob HEAD:.prdkit/.manifest |
+                    awk '/^options: / { print substr($0, 10) }')" || exit 1
+            fi
+            case " $previous_options " in *" $opt "*)
+                REMOVE_OPTIONS_FILES=".prdkit/scripts/bash/render-agents.sh .prdkit/templates/agent-definition-template.md" ;;
+            esac
+        fi
         continue
     fi
     case " $RECORDED_OPTIONS " in *" $opt "*) with=true ;; esac
@@ -286,18 +292,9 @@ done
 
 # The previous install's command mode wins unless --copy/--symlink is passed
 # explicitly, so an upgrade never silently flips an install between copies and symlinks.
-# Pre-0.10 manifests recorded no mode; infer it from the installed files (any regular
-# copy means copies; otherwise an installed symlink means symlinks).
 if ! $MODE_EXPLICIT && [ -f "$MANIFEST" ]; then
     if grep -q '^mode: symlink$' "$MANIFEST"; then
         MODE_COPY=false
-    elif ! grep -q '^mode: ' "$MANIFEST"; then
-        saw_copy=false; saw_link=false
-        for probe in "$TARGET/.claude/commands/prdkit.md" "$TARGET/.opencode/commands/prdkit.md"; do
-            if [ -L "$probe" ]; then saw_link=true
-            elif [ -e "$probe" ]; then saw_copy=true; fi
-        done
-        if ! $saw_copy && $saw_link; then MODE_COPY=false; fi
     fi
 fi
 
@@ -313,18 +310,13 @@ hash_file() {
     fi
 }
 
-# Memory seed mapping is shared with the verifier in install-lib.sh.
-# Seeded memory files of removed subsystems (2.0: the execution ledger). Upgrade retires them like
-# a template, removing an unedited copy; any other memory file is project-owned and never deleted.
-RETIRED_MEMORY="task-ledger.md"
-
 # Emit every file the kit installs as "<kit-source><TAB><path-relative-to-target>".
 # This single list drives installation, the manifest, and --check, so the three
 # can never disagree about what "installed" means.
 list_kit_files() {
     local src
     for src in "$PK_ROOT"/commands/prdkit*.md "$PK_ROOT"/workflows/*.md \
-        "$PK_ROOT"/scripts/*.sh "$PK_ROOT"/scripts/agents-section.md "$PK_ROOT"/templates/*.md; do
+        "$PK_ROOT"/scripts/*.sh "$PK_ROOT"/scripts/{agents-section,outcome-checkpoint}.md "$PK_ROOT"/templates/*.md; do
         [ -e "$src" ] || continue
         install_file_targets "${src#"$PK_ROOT"/}" "$HARNESSES" "$OPTIONS" "$src"$'\t' || return 1
     done
@@ -335,6 +327,20 @@ KIT_FILES="$(list_kit_files)" && [ -n "$KIT_FILES" ] || {
     echo 'Cannot enumerate kit files; nothing was written.' >&2
     exit 1
 }
+if [ "$INITIAL_MANIFEST" != absent ]; then
+    unsupported="$(LC_ALL=C awk -F '\t' -v optional="$REMOVE_OPTIONS_FILES" '
+        BEGIN { n=split(optional, paths, " "); for (i=1; i<=n; i++) current[paths[i]]=1 }
+        FILENAME=="-" { current[$2]=1; next }
+        /^(version|harnesses|mode|options|agents-section): / || $0 ~ /^[[:space:]]*$/ { next }
+        { path=substr($0, 67); if (!(path in current)) print path }
+    ' - "$MANIFEST" <<< "$KIT_FILES")" || exit 1
+    if [ -n "$unsupported" ]; then
+        while IFS= read -r rel; do
+            printf 'Unsupported install manifest entry: %s is not in the current kit mapping. Reconcile the installation manually; nothing was written.\n' "$rel" >&2
+        done <<< "$unsupported"
+        exit 1
+    fi
+fi
 
 # Pristine hash recorded in the manifest for a relative path (empty if none).
 recorded_hash() {
@@ -387,10 +393,6 @@ is_kit_command_link() {
 # kit installs (a single file name, never a `/` or `..` segment); case patterns are no check,
 # since `*` also matches `/`. A directory the installer writes into must be a real directory
 # inside TARGET, and a kit-owned file is replaced rather than written through a symlink.
-NAME_RE='[A-Za-z0-9_][A-Za-z0-9_.-]*'
-KIT_FILE_RE="^\\.prdkit/(scripts/bash/($NAME_RE\\.sh|agents-section\\.md)|workflows/$NAME_RE\\.md|templates/$NAME_RE\\.md)\$"
-INSTALLED_RE="^(\\.(claude|opencode)/commands/$NAME_RE\\.md|\\.prdkit/memory/$NAME_RE\\.md)\$"
-MEMORY_FILE_RE="^\\.prdkit/memory/$NAME_RE\\.md\$"
 
 # Physical path of a file, following a chain of symlinks (no readlink -f or realpath, which
 # macOS lacks). Fails for an unresolvable directory or a chain longer than 40 links.
@@ -428,128 +430,8 @@ root_file_path() {
     case "$path" in "$TARGET"/*) printf '%s\n' "$path" ;; *) return 1 ;; esac
 }
 
-# Kit-named commands installed in a harness command directory that the current kit no
-# longer ships (retired or formerly disabled/unsupported entry points). They would keep
-# loading into every session's command listing. Emits "<rel>\t<remove|keep>": remove when
-# the previous manifest recorded the file or it is a symlink into the kit's commands/
-# directory (kit-installed); keep, with a warning, for anything else the kit cannot prove it
-# installed (an unrecorded regular file or a user's own symlink).
-list_retired_commands() {
-    local dir file name rel
-    for dir in .claude/commands .opencode/commands; do
-        [ -d "$TARGET/$dir" ] || continue
-        # A command directory that is not a real directory inside TARGET is never cleaned (the
-        # install refuses it for a selected harness before writing anything).
-        if managed_dir_problem "${dir%/*}" >/dev/null || managed_dir_problem "$dir" >/dev/null; then continue; fi
-        for file in "$TARGET/$dir"/prdkit*.md; do
-            { [ -e "$file" ] || [ -L "$file" ]; } || continue
-            name="$(basename "$file")"
-            [ -e "$PK_ROOT/commands/$name" ] && continue
-            rel="$dir/$name"
-            if { [ -L "$file" ] && is_kit_command_link "$file"; } || [ -n "$(recorded_hash "$rel")" ]; then
-                printf '%s\tremove\n' "$rel"
-            else
-                printf '%s\tkeep\n' "$rel"
-            fi
-        done
-    done
-}
-
-# Kit-owned scripts/workflows, templates and RETIRED_MEMORY files that the previous manifest
-# recorded but the current kit no longer ships or installs (for example a retired helper, the
-# memory file of a removed subsystem, or a file of an optional subsystem not selected). Emits "<rel>\t<remove|keep>": kit-owned files, and templates and
-# memory files still matching their recorded hash, are removed; an edited template or memory
-# file is project-owned content and is kept with a warning, as is a symlinked one. A manifest
-# path outside the installed layout is ignored with a warning, never touched.
-list_retired_kit_files() {
-    local line rel src
-    [ -f "$MANIFEST" ] || return 0
-    while IFS= read -r line; do
-        case "$line" in version:*|harnesses:*|mode:*|options:*|agents-section:*|'') continue ;; esac
-        rel="${line#*  }"
-        if [[ $rel =~ $MEMORY_FILE_RE ]]; then
-            case " $RETIRED_MEMORY " in *" ${rel##*/} "*) src="" ;; *) continue ;; esac
-        elif ! [[ $rel =~ $KIT_FILE_RE ]]; then
-            [[ $rel =~ $INSTALLED_RE ]] ||
-                printf 'Warning: ignoring a .prdkit/.manifest entry outside the installed layout: %s\n' "$rel" >&2
-            continue
-        else
-            case "$rel" in
-                .prdkit/scripts/bash/*) src="$PK_ROOT/scripts/${rel##*/}" ;;
-                .prdkit/workflows/*) src="$PK_ROOT/workflows/${rel##*/}" ;;
-                *) src="$PK_ROOT/templates/${rel##*/}" ;;
-            esac
-        fi
-        { { [ -z "$src" ] || [ ! -e "$src" ] || ! kit_file_wanted "${src#"$PK_ROOT"/}"; } && [ -f "$TARGET/$rel" ]; } || continue
-        case "$rel" in
-            .prdkit/templates/*|.prdkit/memory/*)
-                if [ ! -L "$TARGET/$rel" ] && [ "$(hash_file "$TARGET/$rel")" = "${line%%  *}" ]; then printf '%s\tremove\n' "$rel"
-                else printf '%s\tkeep\n' "$rel"; fi ;;
-            *) printf '%s\tremove\n' "$rel" ;;
-        esac
-    done < "$MANIFEST"
-}
-
-# Project files that reference a kit file this kit does not ship (a retired 0.x helper, template
-# or workflow): "<file>\t<name>". CI workflows always; in a git work tree, every other tracked
-# file too (project scripts, tests and harness settings), except prose (*.md), recorded diffs
-# and specs/. A reference, outside a # comment, is a kit path to a file the kit does not ship
-# that is gone from the project or was installed by the kit (the manifest records it; a
-# template the project added is its own), or a retired helper's name as a quoted string (a
-# script that builds the path). The installer never edits these files.
-KIT_PATH_RE='(\.prdkit/(scripts/bash|templates|workflows)|\.product-kit/(scripts|templates|workflows))/[A-Za-z0-9_.-]+\.(sh|md)'
-RETIRED_HELPERS='artifact-lib.sh check-artifacts.sh check-canon.sh check-implement-gates.sh
-check-prerequisites.sh check-signoff.sh cleanup-feature.sh create-new-feature.sh
-evidence-fingerprint.sh evidence-lib.sh parts-lib.sh record-analysis.sh resolve-context.sh
-review-scope-lib.sh review-scope.sh setup-plan.sh status-lib.sh update-agent-context.sh
-ledger-emit.sh ledger-spool-adapter.sh json-lib.sh retrospective.sh record-review.sh review-reports-lib.sh'
-kit_file_retired() { # installed or kit path -> 0 when the kit does not ship or install it and it is the kit's
-    local kit="${1#.prdkit/}"
-    kit="${kit#.product-kit/}"; kit="${kit/#scripts\/bash\//scripts/}"
-    case "$1" in
-        .product-kit/*) [ -e "$PK_ROOT/$kit" ] && return 1; return 0 ;;
-    esac
-    [ -e "$PK_ROOT/$kit" ] && kit_file_wanted "$kit" && return 1
-    [ ! -e "$TARGET/$1" ] && return 0
-    [ -f "$MANIFEST" ] && awk -v rel="$1" 'substr($0, index($0, "  ") + 2) == rel { found = 1 } END { exit !found }' "$MANIFEST"
-}
-list_retired_ci_calls() {
-    local file rel ref name alt quoted names="$RETIRED_HELPERS"
-    # A deselected optional subsystem's files are gone from the install too, so a script that
-    # builds their path breaks the same way.
-    has_option agent-tiers || names="$names render-agents.sh agent-definition-template.md"
-    alt="$(printf '%s' "$names" | tr -s ' \n' '||' | sed 's/[.]/\\./g')"
-    quoted="[\"']($alt)[\"']"
-    {
-        for file in "$TARGET"/.github/workflows/*.yml "$TARGET"/.github/workflows/*.yaml; do
-            [ -f "$file" ] && printf '%s\0' "${file#"$TARGET"/}"
-        done
-        if git -C "$TARGET" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-            set -- . ':(exclude).prdkit' ':(exclude).product-kit' ':(exclude)specs' ':(exclude)*.md' \
-                ':(exclude)*.patch' ':(exclude)*.diff'
-            git -C "$TARGET" grep -z -I -l -E -e "$KIT_PATH_RE" -e "$quoted" -- "$@" 2>/dev/null || true
-        fi
-    } | LC_ALL=C sort -z -u | while IFS= read -r -d '' rel; do
-        [ -f "$TARGET/$rel" ] || continue
-        { grep -vE '^[[:space:]]*#' "$TARGET/$rel" 2>/dev/null || true; } | {
-            { grep -oE "$KIT_PATH_RE|$quoted" || true; } | while IFS= read -r ref; do
-                case "$ref" in
-                    \"*|\'*) name="${ref#?}"; name="${name%?}"; [ "$name" = "${rel##*/}" ] || printf '%s\n' "$name" ;;
-                    *) ! kit_file_retired "$ref" || printf '%s\n' "${ref##*/}" ;;
-                esac
-            done
-        } | LC_ALL=C sort -u | while IFS= read -r name; do printf '%s\t%s\n' "$rel" "$name"; done
-    done
-    return 0
-}
 
 # --- --check: read-only drift report ----------------------------------------
-if upgrade_source_2 && { $UPGRADE || $CHECK; }; then
-    spec_objects_local "$TARGET" || { echo 'Cannot read trusted policy without fetching missing objects; nothing was written.' >&2; exit 1; }
-    export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
-    upgrade_policy_context
-    upgrade_rigor_diagnosis || { if $DRY_RUN; then exit 1; fi; }
-fi
 if $CHECK; then
     incomplete=false
     if [ -e "$PRDKIT_DIR/.install-state" ] || [ -L "$PRDKIT_DIR/.install-state" ]; then
@@ -557,13 +439,11 @@ if $CHECK; then
         echo 'Incomplete install: .prdkit/.install-state records an unfinished write phase; retry the same source with --upgrade.'
     fi
     if [ ! -f "$MANIFEST" ]; then
-        echo "No manifest at .prdkit/.manifest — reinstall or upgrade to generate one:"
-        echo "  bash .product-kit/scripts/init.sh --upgrade"
+        echo "No manifest at .prdkit/.manifest — run init.sh without --upgrade for a new installation."
         exit 1
     fi
     echo "Product-Kit check — kit version $PK_VERSION, installed $(head -n 1 "$MANIFEST")"
     echo
-
     OUTDATED=()
     MODIFIED=()
     KITMOD=()
@@ -593,20 +473,6 @@ if $CHECK; then
             esac
         fi
     done <<< "$KIT_FILES"
-
-    RETIRED=()
-    while IFS=$'\t' read -r rel action; do
-        [ -n "$rel" ] && RETIRED+=("$rel|$action")
-    done < <(list_retired_commands)
-    RETIRED_FILES=()
-    while IFS=$'\t' read -r rel action; do
-        [ -n "$rel" ] && RETIRED_FILES+=("$rel|$action")
-    done < <(list_retired_kit_files)
-
-    RETIRED_CI=()
-    while IFS=$'\t' read -r rel name; do
-        [ -n "$rel" ] && RETIRED_CI+=("$rel: $name")
-    done < <(list_retired_ci_calls)
 
     if has_harness agents; then
         if managed="$(managed_agents_section "$TARGET/AGENTS.md")"; then
@@ -644,11 +510,7 @@ if $CHECK; then
     if [ ${#KITMOD[@]} -gt 0 ]; then
         drift=1
         echo "KIT-OWNED EDITS — managed files or text you changed since install:"
-        if upgrade_source_2; then
-            echo "--upgrade refuses to overwrite these customizations. Reconcile them before upgrading."
-        else
-            echo "This older installer may overwrite these customizations during --upgrade; back them up first."
-        fi
+        echo "--upgrade refuses to overwrite these customizations. Reconcile them before upgrading."
         echo "Move project-specific policy to .prdkit/memory/constitution.md where appropriate:"
         for entry in "${KITMOD[@]}"; do
             rel="${entry%%|*}"
@@ -665,44 +527,17 @@ if $CHECK; then
         for rel in "${NEWFILES[@]}"; do echo "  $rel"; done
         echo
     fi
-    if [ ${#RETIRED[@]} -gt 0 ]; then
-        drift=1
-        echo "RETIRED — kit-named commands the kit no longer ships (--upgrade removes kit-installed ones):"
-        for entry in "${RETIRED[@]}"; do
-            if [ "${entry#*|}" = remove ]; then echo "  ${entry%%|*}"
-            else echo "  ${entry%%|*} (not recorded as kit-installed; kept — remove it by hand if unused)"; fi
-        done
-        echo
-    fi
-    if [ ${#RETIRED_FILES[@]} -gt 0 ]; then
-        drift=1
-        echo "RETIRED — installed kit files the kit no longer ships or installs (--upgrade removes kit-owned and unmodified ones):"
-        for entry in "${RETIRED_FILES[@]}"; do
-            if [ "${entry#*|}" = remove ]; then echo "  ${entry%%|*}"
-            else echo "  ${entry%%|*} (edited since install; kept — fold or delete it by hand)"; fi
-        done
-        echo
-    fi
-    manual=0
-    if [ ${#RETIRED_CI[@]} -gt 0 ]; then
-        manual=1
-        echo "RETIRED — CI workflows and project files that reference kit files the kit no longer ships or installs"
-        echo "(--upgrade never edits them; replace or remove each reference, see the kit's docs/migrating-to-1.0.md):"
-        for entry in "${RETIRED_CI[@]}"; do echo "  $entry"; done
-        echo
-    fi
     if [ ${#CUSTOMIZED[@]} -gt 0 ]; then
         echo "CUSTOMIZED — memory files, expected to diverge (informational; --upgrade preserves these):"
         for rel in "${CUSTOMIZED[@]}"; do echo "  $rel"; done
         echo
     fi
 
-    if [ "$drift" -eq 0 ] && [ "$manual" -eq 0 ]; then
+    if [ "$drift" -eq 0 ]; then
         echo "Everything up to date — nothing to do."
         exit 0
     fi
-    if [ "$drift" -eq 0 ]; then echo "The install is up to date; fix the references listed above by hand."
-    else echo "Run 'bash .product-kit/scripts/init.sh --upgrade' to apply the safe changes."; fi
+    echo "Run 'bash .product-kit/scripts/init.sh --upgrade' to apply the safe changes."
     exit 1
 fi
 
@@ -734,11 +569,30 @@ if [ -n "$PROBLEMS" ]; then
     exit 1
 fi
 
-if upgrade_source_2 && $UPGRADE; then
+if $UPGRADE; then
+    [ "$INITIAL_MANIFEST" != absent ] || { echo 'No install manifest; run init.sh without --upgrade to install.' >&2; exit 1; }
+    spec_objects_local "$TARGET" || { echo 'Cannot check the installation without fetching missing objects; nothing was written.' >&2; exit 1; }
+    export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
     upgrade_destinations_safe || exit 1
-    upgrade_preflight || exit 1
+    upgrade_checkout_clean || exit 1
     upgrade_no_overwrite || exit 1
-    if $DRY_RUN; then echo "Upgrade preflight passed; nothing was written."; exit 0; fi
+    if [ -n "$REMOVE_OPTIONS_FILES" ]; then
+        # Exclude the exact installed paths from the validated manifest, not their
+        # directories: a consumer can keep a tracked wrapper alongside kit scripts.
+        search_paths=(. ':(top,exclude,literal).prdkit/.manifest' ':(top,exclude,literal).product-kit')
+        installed_paths="$(LC_ALL=C awk 'length($1) == 64 && $1 ~ /^[0-9a-f]+$/ { print substr($0, 67) }' "$MANIFEST")" || exit 1
+        while IFS= read -r rel; do
+            [ -z "$rel" ] || search_paths+=(":(top,exclude,literal)$rel")
+        done <<< "$installed_paths"
+        if references="$(git -C "$TARGET" grep --no-color -n -I -E -e 'render-agents\.sh|agent-definition-template\.md' \
+            --and --not -e '^[[:space:]]*#' -- "${search_paths[@]}")"; then
+            printf 'Error: --without agent-tiers would remove files still referenced by tracked project files. Update these references or keep the subsystem:\n%s\n' "$references" >&2
+            exit 1
+        elif [ "$?" -ne 1 ]; then
+            echo 'Cannot check tracked references before removing agent-tiers; nothing was written.' >&2
+            exit 1
+        fi
+    fi
 fi
 
 # Serialize writes, with a retained phase marker rather than pretending the whole install is
@@ -767,10 +621,6 @@ current_manifest=absent
 if [ "$INITIAL_MANIFEST" != "$current_manifest" ]; then
     echo 'Error: manifest changed while preparing the install; retry to resolve current ownership/harness settings.' >&2
     exit 1
-fi
-old_gate=false
-if $UPGRADE && upgrade_source_2; then
-    if grep -qE "^[[:xdigit:]]+  \.prdkit/scripts/bash/review-receipts-lib\.sh$" "$MANIFEST"; then old_gate=true; fi
 fi
 record_progress() {
     INSTALL_PHASE="$1"; INSTALL_PATH="$2"
@@ -914,32 +764,17 @@ while IFS=$'\t' read -r src rel; do
     esac
 done <<< "$KIT_FILES"
 
-# Remove kit-installed commands the kit no longer ships, so retired entry points stop
-# loading into every session. Unrecorded regular files are reported, never deleted.
-RETIRED_REMOVED=()
-RETIRED_KEPT=()
-while IFS=$'\t' read -r rel action; do
-    [ -n "$rel" ] || continue
-    if [ "$action" = remove ]; then
-        record_progress retire "$rel"
-        rm -f "$TARGET/$rel"
-        RETIRED_REMOVED+=("$rel")
-    else
-        RETIRED_KEPT+=("$rel")
+for rel in $REMOVE_OPTIONS_FILES; do
+    dest="$TARGET/$rel"
+    if [[ "$rel" = .prdkit/templates/* ]] &&
+        { [ -L "$dest" ] || { [ -f "$dest" ] && [ "$(hash_file "$dest")" != "$(recorded_hash "$rel")" ]; }; }; then
+        echo "Kept customized optional template: $rel"
+    elif [ -e "$dest" ] || [ -L "$dest" ]; then
+        record_progress optional "$rel"
+        rm -f "$dest"
+        echo "Removed optional file: $rel"
     fi
-done < <(list_retired_commands)
-RETIRED_FILES_REMOVED=()
-RETIRED_FILES_KEPT=()
-while IFS=$'\t' read -r rel action; do
-    [ -n "$rel" ] || continue
-    if [ "$action" = remove ]; then
-        record_progress retire "$rel"
-        rm -f "$TARGET/$rel"
-        RETIRED_FILES_REMOVED+=("$rel")
-    else
-        RETIRED_FILES_KEPT+=("$rel")
-    fi
-done < <(list_retired_kit_files)
+done
 
 # --- AGENTS.md managed section -----------------------------------------------
 # For harnesses without a per-project slash-command mechanism (Codex CLI, any
@@ -1044,27 +879,6 @@ if [ ${#CF_SYMLINKED[@]} -gt 0 ]; then
     echo "  symlink, even with --force. Compare each with the kit's version by hand:"
     for rel in "${CF_SYMLINKED[@]}"; do echo "    $rel"; done
 fi
-if [ ${#RETIRED_REMOVED[@]} -gt 0 ]; then
-    echo "✓ Removed ${#RETIRED_REMOVED[@]} retired kit command(s) no longer shipped:"
-    for rel in "${RETIRED_REMOVED[@]}"; do echo "    $rel"; done
-fi
-if [ ${#RETIRED_KEPT[@]} -gt 0 ]; then
-    echo "⚠ Kept ${#RETIRED_KEPT[@]} kit-named command(s) the kit does not ship and did not record installing;"
-    echo "  they still load in every session — remove them if they are not deliberately project-owned:"
-    for rel in "${RETIRED_KEPT[@]}"; do echo "    $rel"; done
-fi
-if [ ${#RETIRED_FILES_REMOVED[@]} -gt 0 ]; then
-    echo "✓ Removed ${#RETIRED_FILES_REMOVED[@]} retired kit file(s) no longer shipped or installed:"
-    for rel in "${RETIRED_FILES_REMOVED[@]}"; do echo "    $rel"; done
-    case " ${RETIRED_FILES_REMOVED[*]} " in *" .prdkit/scripts/bash/render-agents.sh "*)
-        echo "  Agent tiers are optional from 2.0 and this project has no agent definitions; install them"
-        echo "  again with --with agent-tiers." ;;
-    esac
-fi
-if [ ${#RETIRED_FILES_KEPT[@]} -gt 0 ]; then
-    echo "⚠ Kept ${#RETIRED_FILES_KEPT[@]} edited template or memory file(s) the kit no longer ships or installs; fold or delete them by hand:"
-    for rel in "${RETIRED_FILES_KEPT[@]}"; do echo "    $rel"; done
-fi
 if [ ${#KIT_OVERWRITTEN[@]} -gt 0 ]; then
     echo "⚠ Overwrote ${#KIT_OVERWRITTEN[@]} kit-owned file(s) you had edited — commands/scripts are"
     echo "  kit-owned and always refreshed, so your local changes to these were replaced:"
@@ -1073,12 +887,10 @@ if [ ${#KIT_OVERWRITTEN[@]} -gt 0 ]; then
 fi
 
 # --- Seed .gitignore entries for kit-managed local state ---------------------
+# .prdkit/history/ is consumer-owned and tracked; never ignore .prdkit/ as a whole.
 # .prdkit/cache/ holds raw evidence (review packages, test output), which records link instead
 # of committing; .worktrees/ is where new-change.sh puts isolated change checkouts.
-# .prdkit/ledger/ (event spool) and .prdkit/retrospective/ (usage-enrichment inputs: agent
-# names, token counts, costs, notes) hold local data written by kits before 2.0, which removed
-# the ledger and the retrospective; cleanup-change.sh still preserves that data, so it stays
-# ignored and never enters a routine add. Seeding them here means no later command has to mutate a tracked
+# Seeding them here means no later command has to mutate a tracked
 # .gitignore mid-run (which would dirty the tree it is about to check). A symlinked .gitignore is
 # edited at its target only while that stays inside the project.
 record_progress ignore .gitignore
@@ -1094,6 +906,17 @@ if GITIGNORE="$(root_file_path .gitignore)"; then
     done
 else
     echo "⚠ .gitignore is a symlink that leads outside the project; left untouched. Ignore these by hand: $IGNORE_ENTRIES"
+fi
+if git -C "$TARGET" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    # Check prospective adds even when existing history is already tracked.
+    for history_path in .prdkit/history/log.md .prdkit/history/log/001-example.md .prdkit/history/archive.md; do
+        if git -C "$TARGET" check-ignore --no-index -q -- "$history_path"; then
+            rule="$(git -C "$TARGET" check-ignore --no-index -v -- "$history_path")" || rule="$history_path"
+            printf 'Warning: Git ignores history: %s\n  Narrow this ignore rule to track .prdkit/history/; keep .prdkit/cache/ ignored.\n' "$rule" >&2
+        elif [ "$?" -ne 1 ]; then
+            printf 'Warning: could not check Git ignore rules for %s; make sure history is tracked and .prdkit/cache/ stays ignored.\n' "$history_path" >&2
+        fi
+    done
 fi
 
 # --- Write the install manifest ----------------------------------------------
@@ -1131,40 +954,10 @@ rm -f "$PRDKIT_DIR/.install-state"
 INSTALL_DONE=true
 echo "✓ Manifest written to .prdkit/.manifest"
 
-# A 0.x spec layout keeps working as plain files, but 1.0 workflows need one current canon.
-# The installer does not perform the spec cutover; that is agent work with the owner (compact.md).
-LAYOUT="$(spec_layout "$TARGET")"
-case "$LAYOUT" in
-    0.x|both)
-        echo
-        echo "⚠ This project needs a cutover before 1.0 workflows apply: its specs/ still holds"
-        echo "  0.x canon (specs/product-spec/, specs/targets/ or specs/features/). specs/ was not"
-        echo "  modified. Between changes, with the owner, run /prdkit-init (Cutover in"
-        echo "  .prdkit/workflows/compact.md); doctor reports the layout until then."
-        ;;
-esac
-RETIRED_CI_CALLS="$(list_retired_ci_calls)"
-if [ -n "$RETIRED_CI_CALLS" ]; then
-    echo
-    echo "⚠ CI workflows or project files reference kit files this kit no longer ships or installs; those calls"
-    echo "  now fail. Replace or remove them (the kit's docs/migrating-to-1.0.md lists the replacements):"
-    printf '%s\n' "$RETIRED_CI_CALLS" | while IFS=$'\t' read -r rel name; do echo "    $rel: $name"; done
-    has_option agent-tiers || case "$RETIRED_CI_CALLS" in *render-agents.sh*|*agent-definition-template.md*)
-        echo "  render-agents.sh and the agent-definition template install with --with agent-tiers." ;;
-    esac
-fi
-if [ -f "$MEM_DIR/signoff-requirements.md" ] && grep -qE '^[-*][[:space:]]*gated-paths:' "$MEM_DIR/signoff-requirements.md" 2>/dev/null; then
-    echo
-    echo "⚠ .prdkit/memory/signoff-requirements.md configures the 0.x CI sign-off gate. 1.0 replaces"
-    echo "  check-signoff.sh with check-review.sh, which checks a change's recorded review verdicts;"
-    echo "  a CI job that runs check-signoff.sh now fails. Replace it (the kit's docs/ci-gates.md)."
-fi
-
 if $UPGRADE; then
     echo
     echo "Upgrade complete (commands re-linked, scripts refreshed, unmodified templates/memory updated, modified templates/memory preserved)."
     echo "Run 'bash .product-kit/scripts/init.sh --check' anytime to see install drift."
-    if $old_gate; then echo "Existing review receipts are ignored; you may delete them. See docs/migrating-to-3.0.md."; fi
     echo "Run /prdkit-status for the current state."
     exit 0
 fi
@@ -1180,6 +973,6 @@ Next steps:
   3. Use /prdkit-status for visibility and /prdkit-doctor for diagnostics
 
 To upgrade later, choose a release tag and commit the .product-kit pin in this project first.
-Run 'bash .product-kit/scripts/init.sh --check' (drift is expected on a new pin), then follow
-the selected release's upgrade instructions in docs/migrating-to-3.0.md.
+Run 'bash .product-kit/scripts/init.sh --check' (drift is expected on a new pin), then
+'bash .product-kit/scripts/init.sh --upgrade' from the clean checkout.
 EOF

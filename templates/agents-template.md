@@ -14,8 +14,7 @@ where independence is not required; a reviewer never reviews its own implementat
 <!-- Register stable lowercase identities before their reviews are used. Integrate this policy
 first: check-review reads the trusted integration branch's current registry, never the change's.
 Role is exactly reviewer or maker. A maker is never eligible, even if listed as a reviewer too.
-Legacy capability rows above also register exact identities for Independent review/Review or
-Implementation/Maker; use one form per identity, since duplicate registrations are ambiguous.
+Capability rows above describe responsibilities; only this registry grants reviewer eligibility.
 | Identity | Role |
 |----------|------|
 | code-review | reviewer |
@@ -44,5 +43,4 @@ Hand-owned agents: <projection names kept without a definition, comma-separated;
 | <tier:NAME or agent:NAME> | <claude, opencode or *> | <exact id or blank> | <variant or blank> | <why it deviates> |
 ```
 
-Every override needs a Reason. Without a baseline, a literal
-`| Tier | Claude Code model | OpenCode model | OpenCode variant |` table still renders.
+Every override needs a Reason. Neutral definitions require a pinned shared baseline.

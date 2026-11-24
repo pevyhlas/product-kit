@@ -58,6 +58,9 @@ base_canonical=""
 if [ -n "$base_canonical" ] && printf '%s\n' "$approved_refs" | grep -qxF -- "$base_canonical"; then
     import_base="$(git -C "$root" rev-parse "$base_ref^{commit}")"; base_trusted=true
 fi
+if [ "${PRDKIT_CLOSE_CHECK_HISTORY:-}" = 1 ] && $base_trusted; then
+    spec_require_history_tips "$root" "$import_base" || exit 1
+fi
 trusted_default="$(printf '%s\n' "$approved_refs" | sed -n 1p)"
 policy_at=""
 [ -z "$trusted_default" ] || policy_at="$(git -C "$root" rev-parse --verify --quiet "$trusted_default^{commit}" || true)"
@@ -92,11 +95,16 @@ if github_review_policy "$root" "$policy_at"; then
     fi
 else problems+=("$RC_ERROR")
 fi
+if $base_trusted; then
+    if ! record_problem="$(review_record_history "$root" "$id" "$import_base" "$head" "$work")"; then
+        problems+=("Cannot validate the change record format: fetch the complete local history, trees and record blobs")
+    elif [ -n "$record_problem" ]; then problems+=("$record_problem"); fi
+fi
 # Every **Tier** field in a record on stdin, one per line: T0-T3, or ? when its whole value (up to
 # the next · or the end of the line, in optional backticks) is not exactly one tier: T1/T3, T1-T3,
 # T1x, "T1, T3" and "T1 T3" are not tiers.
 record_tiers() {
-    awk '{ s = $0; sub(/\r$/, "", s)
+    awk "$SPEC_CHANGE_TAG_AWK"'{ s = change_without_tags($0); sub(/\r$/, "", s)
         while ((i = index(s, "**Tier**:")) > 0) {
             s = substr(s, i + 9); v = s; j = index(v, "·"); if (j) v = substr(v, 1, j - 1)
             gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
@@ -107,7 +115,7 @@ record_tiers() {
 # For a floor, every T0-T3 named in any **Tier** field value (up to the next ·), so that a
 # malformed earlier value such as T1/T3 still counts at its highest.
 floor_tiers() {
-    awk '{ s = $0
+    awk "$SPEC_CHANGE_TAG_AWK"'{ s = change_without_tags($0)
         while ((i = index(s, "**Tier**:")) > 0) {
             s = substr(s, i + 9); v = s; j = index(v, "·"); if (j) v = substr(v, 1, j - 1)
             while (match(v, /T[0-3]/)) { print substr(v, RSTART, 2); v = substr(v, RSTART + 2) }
@@ -131,72 +139,19 @@ t0_paths() { # rev -> configured entries, one per line
 }
 metadata_mode_problems() { # rev -> the record or log path when it is there but not a regular file
     local file entry
-    for file in "$path" specs/log.md "specs/log/$id.md"; do
+    for file in "$path" .prdkit/history/log.md ".prdkit/history/log/$id.md"; do
         entry="$(GIT_NO_REPLACE_OBJECTS=1 git -C "$root" ls-tree "$1" -- "$file")" || return 1
         case "$entry" in ""|"100644 blob "*) ;; *) printf '%s\n' "$file" ;; esac
     done
 }
-_review_blob_text() { # root blob file
-    local size kept
-    GIT_NO_REPLACE_OBJECTS=1 git -C "$1" cat-file blob "$2" > "$3" 2>/dev/null || return 2
-    size="$(set -o pipefail; wc -c < "$3" | tr -d ' ')" || return 2
-    kept="$(set -o pipefail; tr -d '\000' < "$3" | wc -c | tr -d ' ')" || return 2
-    [ -n "$size" ] && [ -n "$kept" ] || return 2
-    [ "$size" = "$kept" ]
-}
-
-# A legacy shared-log close is metadata only if the selected record was deleted in this
-# range, there is no per-change entry, and exactly one well-formed line was added for it.
-# Return the blob ID of the log without that line, or fail to keep the original log delta.
-_review_shared_log_without_close() { # root id start rev old-mode old-id new-id oldtext newtext deletion-text
-    local root="$1" id="$2" start="$3" rev="$4" oldmode="$5" last entry lines deletion_lines
-    local record="specs/changes/$id.md" own="specs/log/$id.md"
-    is_change_id "$id" && spec_objects_local "$root" || return 1
-    [ "$(git -C "$root" ls-tree "$rev" -- "$record" "$own" || echo unreadable)" = "" ] &&
-        [ "$(git -C "$root" ls-tree "$start" -- "$own" || echo unreadable)" = "" ] || return 1
-    last="$(git -C "$root" log -1 --format=%H "$start..$rev" -- "$record")" && [ -n "$last" ] || return 1
-    entry="$(git -C "$root" ls-tree "$last^" -- "$record")" || return 1
-    case "$entry" in "100644 blob "*) ;; *) return 1 ;; esac
-    entry="$(git -C "$root" ls-tree "$last" -- specs/log.md)" || return 1
-    case "$entry" in "100644 blob "*) ;; *) return 1 ;; esac
-    _review_blob_text "$root" "$last:specs/log.md" "${10}" || return 1
-    deletion_lines="$(wc -l < "${10}")" || return 1
-
-    if [ "$oldmode" = 000000 ]; then : > "$8" || return 1
-    else _review_blob_text "$root" "$6" "$8" || return 1; fi
-    _review_blob_text "$root" "$7" "$9" || return 1
-    lines="$(wc -l < "$9")" || return 1
-    # Preserve every other byte, including a missing final newline on a retained line.
-    ( set -o pipefail
-      LC_ALL=C awk -v id="$id" -v lines="$lines" -v deletion_lines="$deletion_lines" '
-        BEGIN { key = "^- [0-9-]+ " id ":" }
-        FILENAME == ARGV[1] { if ($0 ~ key) old++; next }
-        FILENAME == ARGV[2] {
-            if ($0 ~ key) { at_close++; original=$0; terminated=(FNR <= deletion_lines) }
-            next
-        }
-        $0 ~ key {
-            n++
-            if ($0 != original || terminated != (FNR <= lines)) next
-            text=$0
-            if (FNR <= lines) sub(/\r$/, "", text)
-            if (text !~ /\r/ && text ~ ("^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] " id ": .*[^[:space:]]")) valid++
-            next
-        }
-        { printf "%s%s", $0, (FNR <= lines ? "\n" : "") }
-        END { exit (old || at_close != 1 || n != 1 || valid != 1) }
-      ' "$8" "${10}" "$9" | git -C "$root" hash-object --no-filters --stdin )
-}
-
 t0_violations() { # from to
     local allowed raw meta file old new entry ok
     allowed="$(t0_paths "$policy_at")"
     raw="$(LC_ALL=C GIT_NO_REPLACE_OBJECTS=1 git -C "$root" -c core.quotepath=true diff --raw --no-abbrev \
         --no-renames --no-ext-diff --no-textconv --no-color --no-relative --ignore-submodules=none "$1" "$2" -- . \
-        ":(top,literal,exclude)$path" ":(top,literal,exclude)specs/log/$id.md")" || return 1
+        ":(top,literal,exclude)$path" ":(top,literal,exclude).prdkit/history/log/$id.md")" || return 1
     while IFS="$(printf '\t')" read -r meta file; do
         [ -n "$meta" ] || continue
-        if [ "$file" = specs/log.md ] && [ -z "$shared_log_delta" ]; then continue; fi
         old="${meta%% *}"; old="${old#:}"; new="${meta#* }"; new="${new%% *}"
         ok=false
         case "$old:$new" in 000000:100644|100644:100644|100644:000000) ok=true ;; esac
@@ -219,9 +174,9 @@ t0_violations() { # from to
 }
 path="specs/changes/$id.md"
 spec_l01=(specs/product.md specs/product specs/architecture.md specs/architecture specs/SPEC.md specs/decisions)
-changed_since() { # sha [pathspec...] -> paths changed from sha to head; check the shared log separately
+changed_since() { # sha [pathspec...] -> paths changed from sha to head, including edits to the folded log
     local sha="$1"; shift
-    [ "$#" -gt 0 ] || set -- . ":(exclude)$path" ":(exclude)specs/log.md" ":(exclude)specs/log/$id.md"
+    [ "$#" -gt 0 ] || set -- . ":(exclude)$path" ":(exclude).prdkit/history/log/$id.md"
     git -C "$root" diff --name-only --no-renames --ignore-submodules=none "$sha" "$head" -- "$@" | tr '\n' ' ' | sed 's/ $//'
 }
 
@@ -233,37 +188,40 @@ elif last="$(git -C "$root" log -1 --format=%H "$head" -- "$path" 2>/dev/null)" 
 fi
 if [ -z "$record_at" ]; then
     hint=" (a shallow clone needs the branch history)"
-    ! git -C "$root" cat-file -e "$head:specs/features/$id" 2>/dev/null ||
-        hint=" (a 0.x feature the owner keeps open becomes a change record at the cutover or restructure; see .prdkit/workflows/compact.md)"
     problems+=("No change record $path at $head or in its history$hint")
+elif ! GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -C "$root" cat-file blob "$record_at:$path" > "$work/selected-record" ||
+    ! verify_lf_file "$work/selected-record"; then
+    problems+=("$path at $record_at must be readable LF-terminated Markdown")
 else
     # Closing a change deletes its record; the same history must add its log entry.
     if [ "$record_at" = "$head" ]; then :
     elif ! log="$(spec_log_entries_at "$root" "$head")"; then
         problems+=("$id is closed (its record is deleted), but the log at $head cannot be read without fetching from the promisor remote (a partial clone with Git older than 2.45): fetch the branch's blobs or use Git 2.45+")
     elif ! grep -q "^- [0-9-]* $id:" <<< "$log"; then
-        problems+=("$id is closed (its record is deleted) but the log at $head has no '- <date> $id: <what changed>' entry (specs/log/$id.md, as close-change.sh writes it, or a line in specs/log.md)")
+        problems+=("$id is closed (its record is deleted) but the log at $head has no '- <date> $id: <what changed>' entry (.prdkit/history/log/$id.md, as close-change.sh writes it, or its compacted line in .prdkit/history/log.md)")
+    elif ! log_mode="$(GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -C "$root" ls-tree "$last" -- ".prdkit/history/log/$id.md")" ||
+        [[ "$log_mode" != '100644 blob '* ]] ||
+        ! GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -C "$root" cat-file blob "$last:.prdkit/history/log/$id.md" > "$work/close-entry" ||
+        ! spec_log_entry_valid "$work/close-entry" "$id"; then
+        problems+=("$id was closed without .prdkit/history/log/$id.md at the closing commit; use the current per-change entry format from close-change.sh, not a direct edit to .prdkit/history/log.md")
     fi
     # Each log path must be a plain file. The per-change entry is exactly one line.
     while read -r log_mode log_type log_sha log_path; do
         case "$log_mode $log_type" in
             "100644 blob"|"100755 blob")
-                [ "$log_path" != specs/log.md ] || continue
+                [ "$log_path" != .prdkit/history/log.md ] || continue
                 if ! spec_objects_local "$root"; then
                     problems+=("$log_path at $head cannot be checked without fetching from the promisor remote (a partial clone with Git older than 2.45): fetch the branch's blobs or use Git 2.45+")
                     continue
                 fi
-                # Read to a sentinel, so trailing blank lines count; a missing object reads as empty.
-                entry_text="$(GIT_NO_LAZY_FETCH=1 git -C "$root" cat-file blob "$log_sha" 2>/dev/null; echo .)"
-                entry_text="${entry_text%.}"
-                if [ "$(printf '%s' "$entry_text" | awk 'END { print NR }')" != 1 ] ||
-                    ! grep -q "^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] $id: ." <<< "$entry_text"; then
-                    problems+=("$log_path at $head must hold one line, '- <date> $id: <what changed>'")
+                if ! GIT_NO_LAZY_FETCH=1 git -C "$root" cat-file blob "$log_sha" > "$work/head-close-entry" 2>/dev/null ||
+                    ! spec_log_entry_valid "$work/head-close-entry" "$id"; then
+                    problems+=("$log_path at $head must hold one line, '- <date> $id: <what changed>', ending in LF")
                 fi ;;
             *) problems+=("$log_path at $head is not a regular file; the log and the change's entry are plain files") ;;
         esac
-    done < <(GIT_NO_LAZY_FETCH=1 git -C "$root" ls-tree "$head" -- specs/log.md "specs/log/$id.md" 2>/dev/null)
-    record="$(git -C "$root" show "$record_at:$path" | review_text_stream)" || { echo "Unreadable change record: $path" >&2; exit 1; }
+    done < <(GIT_NO_LAZY_FETCH=1 git -C "$root" ls-tree "$head" -- .prdkit/history/log.md ".prdkit/history/log/$id.md" 2>/dev/null)
+    record="$(cat "$work/selected-record")"
     # The tier is the record's single **Tier** field; a second one, even in a comment, is refused.
     claims="$(printf '%s\n' "$record" | record_tiers)"
     case "$claims" in
@@ -325,23 +283,8 @@ else
             problems+=("$(printf '%s' "$odd" | tr '\n' ' ' | sed 's/ $//') is not a regular, non-executable file at $where, so changing it cannot be exempt from review; fix it on the base first")
         fi
     done
-    shared_log_delta=""
-    if [ -n "$start" ]; then
-        if ! shared_log_delta="$(git -C "$root" diff --raw --no-abbrev --no-renames "$start" "$head" -- specs/log.md)"; then
-            shared_log_delta=unreadable
-            problems+=("The shared log's diff from ${start:0:12} to $head cannot be checked")
-        elif [ -n "$shared_log_delta" ]; then
-            read -r old new oid nid _ <<< "${shared_log_delta#:}"
-            case "$old:$new" in 000000:100644|100644:100644)
-                if normalized="$(_review_shared_log_without_close "$root" "$id" "$start" "$head" "$old" "$oid" "$nid" "$work/old" "$work/new" "$work/deletion")"; then
-                    if [ "$old" = 000000 ]; then oid="$(git -C "$root" hash-object --stdin < /dev/null)"; fi
-                    [ "$normalized" != "$oid" ] || shared_log_delta=""
-                fi ;;
-            esac
-        fi
-    fi
     if $base_trusted && [ -n "$start" ] && [ "$start" != "$head" ] &&
-        [ -z "$shared_log_delta" ] && [ -z "$(changed_since "$start")" ]; then
+        [ -z "$(changed_since "$start")" ]; then
         record_only=true
     fi
     if [ "$tier" = T0 ] && ! $record_only && [ -n "$policy_at" ] && [ -n "$start" ]; then
