@@ -71,6 +71,10 @@ change by change.
   Review requires a per-change close entry at the closing commit. Agents must migrate an older
   install manually; Product-Kit provides no migration tooling. Ordinary upgrades and consumer
   data-migration guidance remain.
+  To upgrade a 2.1 install, first delete `.prdkit/scripts/bash/review-legacy-lib.sh` and
+  `.prdkit/scripts/bash/review-upgrade-lib.sh` and their `.prdkit/.manifest` lines, commit, then
+  run `init.sh --upgrade`. Otherwise the upgrade refuses because the manifest lists files the kit
+  no longer installs.
 
 ### Fixed
 
