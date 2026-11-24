@@ -8,6 +8,7 @@ MAP="$PROJ/.prdkit/memory/agents.md"
 CONSTITUTION="$PROJ/.prdkit/memory/constitution.md"
 DEF="$PROJ/.prdkit/agents/example-review.md"
 INPUT="$PROJ/saved report.md"
+ORIGINAL="$PROJ/original scaffold.md"
 mkdir -p "$PROJ/.prdkit/agents" "$PROJ/.prdkit/agent-library" "$PROJ/.opencode/agents" || exit 1
 
 cat > "$MAP" <<'EOF'
@@ -20,6 +21,17 @@ cat > "$MAP" <<'EOF'
 |----------|------|
 | commented | reviewer |
 -->
+~~~markdown
+| Identity | Role |
+|----------|------|
+| tilde-example | reviewer |
+~~~
+```markdown
+| Identity | Role |
+|----------|------|
+| backtick-example | reviewer |
+```
+
 | Identity | Role |
 |----------|------|
 | example-review | reviewer |
@@ -77,14 +89,15 @@ Model: test/override
 ## Findings'
 assert_eq "$expected" "$OUTPUT" "fixed header, override wins instead of projection or baseline"
 HEADER="$OUTPUT"
+printf '%s\n' "$HEADER" > "$ORIGINAL"
 run scaffold example-review claude
 assert_eq 0 "$STATUS"
 assert_contains "$OUTPUT" 'Since: initial'
 assert_contains "$OUTPUT" 'Model: test/other' "harness and mapped baseline tier select the model"
 assert_not_contains "$OUTPUT" 'Verdict:' "scaffold never chooses a verdict"
 
-it "scaffold refuses an unregistered, commented-out or maker identity"
-for name in not-listed commented maker-review; do
+it "scaffold refuses unregistered, hidden example and maker identities"
+for name in not-listed commented tilde-example backtick-example maker-review; do
     run scaffold "$name" opencode
     assert_eq 2 "$STATUS"
     assert_contains "$OUTPUT" 'expected one reviewer entry'
@@ -107,6 +120,46 @@ run scaffold example-review opencode
 assert_eq 2 "$STATUS"
 assert_contains "$OUTPUT" 'sha256 mismatch'
 mv "$snapshot.saved" "$snapshot" || exit 1
+
+it "strict lint checks every stamp against the original scaffold"
+{ report; trailer PASS 0 0 0 0; } > "$INPUT"
+run lint --strict --scaffold "$ORIGINAL"
+assert_eq 0 "$STATUS"
+assert_eq '' "$OUTPUT"
+for label in Reviewer Base Head Since Scope Model; do
+    { report | sed "s/^$label:.*/$label: altered/"; trailer PASS 0 0 0 0; } > "$INPUT"
+    run lint --strict --scaffold "$ORIGINAL"
+    assert_eq 1 "$STATUS"
+    assert_contains "$OUTPUT" "preserve the original scaffold line for $label:"
+done
+{ printf '## Findings\n'; trailer PASS 0 0 0 0; } > "$INPUT"
+run lint --strict
+assert_eq 0 "$STATUS" "standalone reports need no tier-map stamps"
+run lint --strict --scaffold "$ORIGINAL"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'preserve the original scaffold line for Reviewer:'
+assert_contains "$OUTPUT" 'preserve the original scaffold line for Model:'
+{ report | sed '/^Since:/d'; trailer PASS 0 0 0 0; } > "$INPUT"
+run lint --strict --scaffold "$ORIGINAL"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'preserve the original scaffold line for Since:'
+{ report | sed '/^Model:/p'; trailer PASS 0 0 0 0; } > "$INPUT"
+run lint --strict --scaffold "$ORIGINAL"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'duplicate report header field: model'
+{ report | awk '{ print } /^Model:/ { print "- **mOdEl**: alternate" }'; trailer PASS 0 0 0 0; } > "$INPUT"
+run lint --strict
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'duplicate report header field: model'
+run lint --scaffold "$ORIGINAL"
+assert_eq 0 "$STATUS" "default lint still reports issues without strict status"
+assert_contains "$OUTPUT" 'duplicate report header field: model'
+run lint --strict --scaffold "$ORIGINAL.missing"
+assert_eq 2 "$STATUS"
+printf 'not a scaffold\n' > "$ORIGINAL.invalid"
+run lint --strict --scaffold "$ORIGINAL.invalid"
+assert_eq 2 "$STATUS"
+assert_contains "$OUTPUT" 'must be the original unedited scaffold output'
 
 it "zero findings and valid nonblocking findings lint cleanly"
 { report; trailer PASS 0 0 0 0; } > "$INPUT"
@@ -148,6 +201,13 @@ for severity in Critical High; do
     run lint --strict --rigor light
     assert_eq 1 "$STATUS"
 done
+
+it "lint enforces the prompt severity ordering"
+{ report; finding Low; finding High; trailer FAIL 0 1 0 1; } > "$INPUT"
+run lint --strict
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'list findings in Critical, High, Medium, Low order'
+assert_not_contains "$OUTPUT" 'last line must match the findings' "the count can still match"
 
 it "lint diagnoses each malformed field and reconciles actual finding counts"
 {
@@ -193,10 +253,17 @@ run lint --strict
 assert_eq 1 "$STATUS" "a fenced trailer is not the verdict"
 run normalize
 assert_eq 2 "$STATUS"
+# shellcheck disable=SC2016 # Literal Markdown code span.
+{ printf '%s\n' '```literal```'; report; trailer PASS 0 0 0 0; } > "$INPUT"
+run lint --strict
+assert_eq 0 "$STATUS" "a backtick code span is not a fence opener"
+run normalize
+assert_eq 0 "$STATUS"
+assert_eq "$(cat "$INPUT")" "$OUTPUT"
 
 it "normalize changes only the explicit verdict, and never edits the file"
-for value in '  lGtM ' 'ACCEPTED' 'passed' 'APPROVED' 'FAIL' 'rejected' 'CHANGES_REQUESTED' 'Request Changes'; do
-    case "$value" in FAIL|rejected|CHANGES_REQUESTED|'Request Changes') canonical=FAIL ;; *) canonical=PASS ;; esac
+for value in '  lGtM ' 'ACCEPTED' 'passed' 'APPROVED' 'SOUND' 'FAIL' 'rejected' 'CHANGES_REQUESTED' 'CHANGES_REQUIRED' 'Request Changes'; do
+    case "$value" in FAIL|rejected|CHANGES_REQUESTED|CHANGES_REQUIRED|'Request Changes') canonical=FAIL ;; *) canonical=PASS ;; esac
     { report; printf 'Verdict: %s\nCounts: keep this literal\n' "$value"; } > "$INPUT"
     before="$(cat "$INPUT")"
     run normalize
@@ -210,11 +277,13 @@ run "$BASH" "$HELPER" lint --strict "$INPUT.normalized"
 assert_eq 0 "$STATUS" "normalization produces a report that can be linted"
 
 it "normalize refuses missing and unknown verdicts; unreadable input is not a lint finding"
-for verdict in '' 'Verdict: pending' 'Verdict: PASS (conditional)'; do
+for verdict in '' 'Verdict: pending' 'Verdict: PASS (conditional)' 'Verdict: SOUND with reservations' 'Verdict: CHANGES_REQUIRED or SOUND'; do
     { report; printf '%s\nCounts: 0 critical, 0 high, 0 medium, 0 low\n' "$verdict"; } > "$INPUT"
-    run normalize
-    assert_eq 2 "$STATUS"
-    assert_contains "$OUTPUT" 'expected a recognized Verdict: value'
+    rc=0
+    normalize > "$INPUT.result" 2> "$INPUT.error" || rc=$?
+    assert_eq 2 "$rc"
+    assert_contains "$(cat "$INPUT.error")" 'expected a recognized Verdict: value'
+    assert_eq 0 "$(wc -c < "$INPUT.result" | tr -d '[:space:]')" "refusal writes no report"
 done
 printf 'Verdict: PASS\nCounts: binary\000text\n' > "$INPUT"
 run lint --strict
@@ -223,4 +292,46 @@ assert_contains "$OUTPUT" 'LF-terminated text file'
 run "$BASH" "$HELPER" lint --strict "$INPUT.missing"
 assert_eq 2 "$STATUS"
 assert_contains "$OUTPUT" "$INPUT.missing"
+
+it "normalize accepts exactly 1 MiB and refuses an oversized report without stdout"
+{ report; trailer PASS 0 0 0 0; } > "$INPUT.body"
+body_bytes="$(wc -c < "$INPUT.body")"
+awk -v n="$((1048576 - body_bytes))" 'BEGIN {
+    padding = sprintf("%1023s", "x")
+    while (n >= 1024) { print padding; n -= 1024 }
+    if (n) print substr(padding, 1, n - 1)
+}' > "$INPUT" || exit 1
+cat "$INPUT.body" >> "$INPUT"
+assert_eq 1048576 "$(wc -c < "$INPUT" | tr -d '[:space:]')"
+normalize > "$INPUT.result" || exit 1
+if cmp -s "$INPUT" "$INPUT.result"; then _ok "limit is inclusive"; else _no "limit is inclusive"; fi
+printf '\n' >> "$INPUT"
+rc=0
+normalize > "$INPUT.result" 2> "$INPUT.error" || rc=$?
+assert_eq 2 "$rc"
+assert_contains "$(cat "$INPUT.error")" 'exceeds the normalize limit'
+assert_eq 0 "$(wc -c < "$INPUT.result" | tr -d '[:space:]')" "no partial output"
+
+it "delivery failures override otherwise successful output"
+if [ -c /dev/full ] && ! (printf 'x' > /dev/full) 2>/dev/null; then
+    rc=0
+    scaffold example-review opencode > /dev/full 2> "$INPUT.error" || rc=$?
+    assert_eq 2 "$rc" "scaffold output write failure"
+    assert_contains "$(cat "$INPUT.error")" 'cannot write report scaffold'
+    { report; trailer APPROVED 0 0 0 0; } > "$INPUT"
+    rc=0
+    normalize > /dev/full 2> "$INPUT.error" || rc=$?
+    assert_eq 2 "$rc" "normalize output write failure"
+    assert_contains "$(cat "$INPUT.error")" 'cannot write normalize output'
+    for flags in advisory strict; do
+        rc=0
+        if [ "$flags" = strict ]; then
+            lint --strict > /dev/full 2> "$INPUT.error" || rc=$?
+        else
+            lint > /dev/full 2> "$INPUT.error" || rc=$?
+        fi
+        assert_eq 2 "$rc" "$flags lint output write failure"
+        assert_contains "$(cat "$INPUT.error")" 'cannot write lint output'
+    done
+fi
 finish

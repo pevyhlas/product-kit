@@ -7,7 +7,7 @@ usage() {
 Usage:
   review-report.sh scaffold --reviewer NAME --harness HARNESS --base REV --head REV
                             --scope TEXT [--since REV]
-  review-report.sh lint [--strict] [--rigor light|full] REPORT
+  review-report.sh lint [--strict] [--rigor light|full] [--scaffold ORIGINAL] REPORT
   review-report.sh normalize REPORT
 
 scaffold writes a header and an empty Findings section to stdout, with no verdict.
@@ -21,8 +21,8 @@ Leave that section empty for zero findings. Otherwise use one block per finding:
     Scenario: What happens and why it matters.
     Evidence: What demonstrates it (or where to find the evidence).
 
-Use exactly Critical, High, Medium or Low and a positive line number. The last two
-lines, with no text or blank lines after them, must be:
+List Critical, High, Medium and Low findings in that order; use positive line
+numbers. The last two lines, with no text or blank lines after them, must be:
 
   Verdict: PASS
   Counts: 0 critical, 0 high, 0 medium, 0 low
@@ -31,13 +31,19 @@ Use PASS or FAIL and the actual counts. Critical and high block PASS; medium als
 blocks under full rigor. Supply trusted policy's --rigor, or lint uses the installed
 project's constitution. A PASS with medium findings needs known rigor.
 
+The coordinator keeps the original scaffold and passes it with --scaffold to
+check that the returned header is unchanged. Without a tier map, omit --scaffold;
+header fields are then optional, but must not be repeated.
+
 normalize writes a copy to stdout, changing only the explicit Verdict: line
 immediately before the final Counts: line. It does not infer a verdict from counts.
-Values are matched case-insensitively, ignoring surrounding whitespace:
+Input is limited to 1 MiB (1,048,576 bytes). Values are matched case-insensitively,
+ignoring surrounding whitespace:
 
-  PASS | PASSED | APPROVE | APPROVED | ACCEPT | ACCEPTED | LGTM -> PASS
+  PASS | PASSED | APPROVE | APPROVED | ACCEPT | ACCEPTED
+       | LGTM | SOUND                                          -> PASS
   FAIL | FAILED | REJECT | REJECTED | REQUEST CHANGES
-       | CHANGES REQUESTED | CHANGES_REQUESTED                  -> FAIL
+       | CHANGES REQUESTED | CHANGES_REQUESTED | CHANGES_REQUIRED -> FAIL
 
 Exit 0: ran (lint diagnostics on stdout); 1: lint diagnostics with --strict;
 2: could not run, including normalize without a recognized explicit verdict.
@@ -59,6 +65,27 @@ source "$SCRIPT_DIR/common.sh" || die 'cannot load common.sh; reinstall the kit'
 source "$SCRIPT_DIR/spec-lib.sh" || die 'cannot load spec-lib.sh; reinstall the kit'
 source "$SCRIPT_DIR/review-policy-lib.sh" || die 'cannot load review-policy-lib.sh; reinstall the kit'
 export LC_ALL=C
+
+# Used only by the report helper, including its call to the existing registry
+# parser. A backtick opener cannot have a backtick in its info string.
+REPORT_SKIP_AWK='function spec_skip(line,    marker, ending, opener) {
+    marker = line; sub(/^ ? ? ?/, "", marker)
+    if (report_fence != "") {
+        ending = marker; sub(/[ \t]+$/, "", ending)
+        if (length(ending) >= length(report_fence) && (ending ~ /^`+$/ || ending ~ /^~+$/) &&
+            substr(ending, 1, 1) == substr(report_fence, 1, 1)) report_fence = ""
+        return 1
+    }
+    if (report_comment || line ~ /^[ \t]*<!--/) { report_comment = !index(line, "-->"); return 1 }
+    if (match(marker, /^```+|^~~~+/)) {
+        opener = substr(marker, 1, RLENGTH)
+        if (substr(opener, 1, 1) == "~" || !index(substr(marker, RLENGTH + 1), "`")) {
+            report_fence = opener
+            return 1
+        }
+    }
+    return 0
+}'
 
 scaffold() {
     local reviewer='' harness='' base='' head='' since='' scope='' value seen=' ' key
@@ -96,7 +123,7 @@ scaffold() {
 
     verify_lf_file "$root/.prdkit/memory/agents.md" ||
         die 'expected readable LF text in .prdkit/memory/agents.md; register the reviewer and configure the tier map there'
-    registry="$(review_registry < "$root/.prdkit/memory/agents.md")" ||
+    registry="$(SPEC_SKIP_AWK="$REPORT_SKIP_AWK" review_registry < "$root/.prdkit/memory/agents.md")" ||
         die 'cannot read the Review registry in .prdkit/memory/agents.md'
     eligibility="$(review_eligibility "$registry" "$reviewer")" || die 'cannot check reviewer eligibility'
     [ "$eligibility" = reviewer ] ||
@@ -124,7 +151,7 @@ scaffold() {
 
 if [ "$mode" = scaffold ]; then scaffold "$@"; exit; fi
 
-strict=false; rigor=''; report=''
+strict=false; rigor=''; report=''; original=''
 while [ "$#" -gt 0 ]; do
     case "$mode:$1" in
         lint:--strict) strict=true ;;
@@ -133,6 +160,11 @@ while [ "$#" -gt 0 ]; do
             rigor="${2:-}"
             case "$rigor" in light|full) ;; *) die '--rigor needs light or full' ;; esac
             shift ;;
+        lint:--scaffold)
+            [ -z "$original" ] || die 'supply --scaffold only once'
+            original="${2:-}"
+            case "$original" in ''|-*) die '--scaffold needs the original scaffold file' ;; esac
+            shift ;;
         *:-*) die "unknown $mode option '$1'; see --help (prefix local paths starting with - with ./)" ;;
         *) [ -z "$report" ] || die "$mode takes one report file; see --help"
             report="$1" ;;
@@ -140,8 +172,26 @@ while [ "$#" -gt 0 ]; do
     shift
 done
 [ -n "$report" ] || die "$mode needs a report file; see --help"
-if ! [ -f "$report" ] || ! verify_lf_file "$report" allow-empty; then
+[ -f "$report" ] || die "cannot read '$report' as a regular file"
+if [ "$mode" = normalize ]; then
+    limit=1048576
+    local_copy="$(mktemp)" || die 'cannot allocate temporary report storage'
+    trap 'rm -f "$local_copy"' EXIT
+    # Read at most one byte beyond the limit, even if the input grows during the read.
+    head -c "$((limit + 1))" < "$report" > "$local_copy" ||
+        die "cannot copy '$report' to temporary storage"
+    bytes="$(wc -c < "$local_copy")" || die "cannot measure '$report'"
+    [ "$bytes" -le "$limit" ] || die "'$report' exceeds the normalize limit of 1 MiB (1,048,576 bytes)"
+else
+    local_copy="$report"
+fi
+if ! verify_lf_file "$local_copy" allow-empty; then
     die "cannot read '$report' as an LF-terminated text file"
+fi
+if [ -n "$original" ]; then
+    if ! [ -f "$original" ] || ! verify_lf_file "$original"; then
+        die "cannot read '$original' as an LF-terminated original scaffold"
+    fi
 fi
 
 if [ "$mode" = lint ] && [ -z "$rigor" ]; then
@@ -153,11 +203,45 @@ if [ "$mode" = lint ] && [ -z "$rigor" ]; then
     fi
 fi
 
-status=0
 # Keep two lines in reserve for the trailer. Use awk status 3 for a completed
-# lint with findings (or a normalization refusal), not for execution failures.
-awk -v mode="$mode" -v rigor="$rigor" "$SPEC_METADATA_SKIP_AWK"'
+# lint with findings or a normalization refusal. cat checks writes that some
+# awks fail to report (e.g. a full output device).
+REPORT_SCAFFOLD="$original" awk -v mode="$mode" -v rigor="$rigor" "$REPORT_SKIP_AWK"'
+    BEGIN {
+        split("Critical High Medium Low", severities)
+        for (i = 1; i <= 4; i++) rank[severities[i]] = i
+        split("Reviewer Base Head Since Scope Model", labels)
+        original = ENVIRON["REPORT_SCAFFOLD"]
+        if (original != "" && !read_scaffold(original)) { invalid_scaffold = 1; exit 4 }
+    }
+    function read_scaffold(file,   line, i, prefix, extra) {
+        if ((getline line < file) != 1 || line != "# Review report") return 0
+        if ((getline line < file) != 1 || line != "") return 0
+        for (i = 1; i <= 6; i++) {
+            prefix = labels[i] ": "
+            if ((getline line < file) != 1 || index(line, prefix) != 1 ||
+                substr(line, length(prefix) + 1) !~ /[^[:space:]]/) return 0
+            stamp[i + 2] = line
+        }
+        if ((getline line < file) != 1 || line != "") return 0
+        if ((getline line < file) != 1 || line != "## Findings") return 0
+        extra = getline line < file
+        close(file)
+        return extra == 0
+    }
     function problem(n, text) { printf "line %d: %s\n", n, text; bad = 1 }
+    function header(line, skip,   key, sep) {
+        if (skip) return
+        if (NR in stamp && line == stamp[NR]) matched[NR] = 1
+        sep = index(line, ":")
+        if (!sep) return
+        key = tolower(substr(line, 1, sep - 1))
+        gsub(/^[ \t]+|[ \t]+$/, "", key)
+        sub(/^[-*+][ \t]+/, "", key)
+        gsub(/\*\*|__|`/, "", key)
+        if (key ~ /^(reviewer|base|head|since|scope|model)$/ && seen[key]++)
+            problem(NR, "duplicate report header field: " key)
+    }
     function finish_finding() {
         if (!start) return
         if (!scenario) problem(start, "finding needs a nonblank Scenario: line")
@@ -182,9 +266,14 @@ awk -v mode="$mode" -v rigor="$rigor" "$SPEC_METADATA_SKIP_AWK"'
             line = substr(line, 3)
             sep = index(line, ": ")
             severity = (sep ? substr(line, 1, sep - 1) : "")
-            if (severity !~ /^(Critical|High|Medium|Low)$/)
+            if (!(severity in rank))
                 problem(n, "start a finding with - Critical:, - High:, - Medium: or - Low:")
-            else count[severity]++
+            else {
+                count[severity]++
+                if (rank[severity] < previous_rank)
+                    problem(n, "list findings in Critical, High, Medium, Low order")
+                previous_rank = rank[severity]
+            }
             location = (sep ? substr(line, sep + 2) : "")
             if (location !~ /^[^[:space:]].*:[1-9][0-9]*$/)
                 problem(n, "give the finding a file:line location with a positive line number")
@@ -197,17 +286,22 @@ awk -v mode="$mode" -v rigor="$rigor" "$SPEC_METADATA_SKIP_AWK"'
     function normalized(verdict) {
         sub(/^Verdict:[ \t]*/, "", verdict); sub(/[ \t]+$/, "", verdict)
         verdict = tolower(verdict)
-        if (verdict ~ /^(pass|passed|approve|approved|accept|accepted|lgtm)$/) return "PASS"
-        if (verdict ~ /^(fail|failed|reject|rejected|request changes|changes requested|changes_requested)$/) return "FAIL"
+        if (verdict ~ /^(pass|passed|approve|approved|accept|accepted|lgtm|sound)$/) return "PASS"
+        if (verdict ~ /^(fail|failed|reject|rejected|request changes|changes requested|changes_requested|changes_required)$/) return "FAIL"
         return ""
     }
     {
+        hidden = spec_skip($0)
         if (mode == "normalize") lines[NR] = $0
-        else if (NR > 2) body(before, NR - 2, before_hidden)
+        else {
+            header($0, hidden)
+            if (NR > 2) body(before, NR - 2, before_hidden)
+        }
         before = last; before_hidden = last_hidden
-        last = $0; last_hidden = metadata_skip($0)
+        last = $0; last_hidden = hidden
     }
     END {
+        if (invalid_scaffold) exit 4
         verdict_line = NR >= 2 && !before_hidden && before ~ /^Verdict:/
         counts_line = NR >= 1 && !last_hidden && last ~ /^Counts:/
         if (mode == "normalize") {
@@ -218,6 +312,9 @@ awk -v mode="$mode" -v rigor="$rigor" "$SPEC_METADATA_SKIP_AWK"'
             print last
             exit
         }
+        if (original != "")
+            for (i = 3; i <= 8; i++)
+                if (!matched[i]) problem(i, "preserve the original scaffold line for " labels[i - 2] ":")
         if (NR >= 2 && !verdict_line) body(before, NR - 1, before_hidden)
         if (NR >= 1 && !counts_line) body(last, NR, last_hidden)
         finish_finding()
@@ -236,11 +333,14 @@ awk -v mode="$mode" -v rigor="$rigor" "$SPEC_METADATA_SKIP_AWK"'
         }
         if (bad) exit 3
     }
-' < "$report" || status=$?
+' < "$local_copy" | cat
+statuses=("${PIPESTATUS[@]}")
+[ "${statuses[1]}" -eq 0 ] || die "cannot write $mode output; check the output destination"
 
-case "$status:$mode" in
+case "${statuses[0]}:$mode" in
     0:*) exit 0 ;;
     3:lint) if $strict; then exit 1; else exit 0; fi ;;
     3:normalize) die 'expected a recognized Verdict: value immediately before the final Counts: line; see --help' ;;
+    4:lint) die "'$original' must be the original unedited scaffold output" ;;
     *) die "cannot $mode '$report'; check the input and output" ;;
 esac
