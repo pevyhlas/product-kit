@@ -41,7 +41,7 @@ assert_contains "$OUTPUT" '"findings":[],"advisories":[],"trace":{"code-path":0,
 assert_contains "$OUTPUT" '"readiness":"not-evaluated"' "never a readiness claim"
 assert_eq 0 "$(printf '%s\n' "$OUTPUT" | jq '.budget_excess_reading_lines')" "no reading-budget excess"
 
-it "the optional design summary is a link root and has no findings when well formed"
+it "the design summary is a link root and literal links and IDs in either fence style are skipped"
 mkdir -p specs/product
 cat > specs/design.md <<'MD'
 # UI design
@@ -50,6 +50,16 @@ cat > specs/design.md <<'MD'
 ## Composition
 Q-01 still holds for [the part](parts/p1-web.md).
 ## Copy
+~~~~md
+~~~
+[Tilde example](tilde-example.md). J-97.
+~~~
+~~~~
+````md
+```
+[Backtick example](backtick-example.md). J-98.
+```
+````
 ## Decisions
 - 2026-10-16 — See [decision](decisions/D-01.md).
 MD

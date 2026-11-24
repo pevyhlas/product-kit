@@ -28,18 +28,34 @@ SPEC_ID_AWK='function spec_ids(s, where,   pre, post, tok, w) {
     }
 }'
 
-# Metadata readers ignore both kinds of Markdown fences, including shorter inner fences.
-SPEC_METADATA_SKIP_AWK='function metadata_skip(line,    marker, ending) {
-    marker = line; sub(/^ ? ? ?/, "", marker)
-    if (metadata_code != "") {
-        ending = marker; sub(/[[:space:]]+$/, "", ending)
-        if (length(ending) >= length(metadata_code) && (ending ~ /^`+$/ || ending ~ /^~+$/) &&
-            substr(ending, 1, 1) == substr(metadata_code, 1, 1)) metadata_code = ""
-        return 1
+# Only a fence of the same kind, at least as long and without an info string, closes a block.
+# Shared spec readers also accept backtick fences nested in lists, as they did before.
+SPEC_SKIP_AWK='function spec_fence(line, open, indented_backticks,    marker) {
+    marker = line
+    if (indented_backticks && marker ~ /^[[:space:]]*```/) sub(/^[[:space:]]*/, "", marker)
+    else sub(/^ ? ? ?/, "", marker)
+    if (open) {
+        sub(/[[:space:]]+$/, "", marker)
+        if (length(marker) >= length(open) && marker ~ /^(`+|~+)$/ &&
+            substr(marker, 1, 1) == substr(open, 1, 1)) return ""
+        return open
     }
-    if (metadata_comment || line ~ /^[[:space:]]*<!--/) { metadata_comment = !index(line, "-->"); return 1 }
-    if (match(marker, /^```+|^~~~+/)) { metadata_code = substr(marker, 1, RLENGTH); return 1 }
-    return 0
+    if (match(marker, /^```+|^~~~+/)) return substr(marker, 1, RLENGTH)
+    return ""
+}
+function metadata_skip(line,    was_fenced) {
+    if (metadata_comment || (!metadata_code && line ~ /^[[:space:]]*<!--/)) {
+        metadata_comment = !index(line, "-->"); return 1
+    }
+    was_fenced = metadata_code; metadata_code = spec_fence(line, metadata_code, 0)
+    return was_fenced || metadata_code
+}
+function spec_skip(line,    was_fenced) {
+    if (comment || (!fence && line ~ /^[[:space:]]*<!--/)) {
+        comment = !index(line, "-->"); return 1
+    }
+    was_fenced = fence; fence = spec_fence(line, fence, 1)
+    return was_fenced || fence
 }'
 
 # Read metadata only at the start of a field, never inside its prose. For readers of the
@@ -72,19 +88,10 @@ function metadata_header(s,   label, value, rest, field, kept, original, has_tag
 }'
 
 # Additive input hook: no change to any line without a header Tags field.
-SPEC_CHANGE_TAG_AWK="$SPEC_METADATA_SKIP_AWK $SPEC_HEADER_AWK"'function change_without_tags(line) {
+SPEC_CHANGE_TAG_AWK="$SPEC_SKIP_AWK $SPEC_HEADER_AWK"'function change_without_tags(line) {
     if (tag_section || metadata_skip(line)) return line
     if (line ~ /^##+[[:space:]]/) { tag_section = 1; return line }
     return metadata_header(line)
-}'
-
-# Lines inside HTML comments and code fences are format notes, never content.
-SPEC_SKIP_AWK='function spec_skip(line) {
-    if (fence) { if (line ~ /^[[:space:]]*```/) fence = 0; return 1 }
-    if (line ~ /^[[:space:]]*```/) { fence = 1; return 1 }
-    if (comment) { if (index(line, "-->")) comment = 0; return 1 }
-    if (line ~ /^[[:space:]]*<!--/) { if (!index(line, "-->")) comment = 1; return 1 }
-    return 0
 }'
 
 # The default order; a canonical lifecycle header can replace it with **Stages**: A > B > C.
@@ -723,7 +730,7 @@ spec_part_headings() { # root
         expected="$(wc -l < "$path")" || return 1
         component=0; case "$file" in specs/parts/*/*) component=1 ;; esac
         # shellcheck disable=SC2016 # the single-quoted program uses awk fields
-        row="$(cd "$root" && verify_lines awk -v expected="$expected" -v component="$component" "$SPEC_METADATA_SKIP_AWK $SPEC_HEADER_AWK"'
+        row="$(cd "$root" && verify_lines awk -v expected="$expected" -v component="$component" "$SPEC_SKIP_AWK $SPEC_HEADER_AWK"'
             /^#[[:space:]]+P[0-9]+(\.[0-9]+)?([[:space:]]|$)/ && !part { part = $2 }
             { if (metadata_skip($0)) next }
             !section && /^##+[[:space:]]/ { section = 1 }
@@ -939,7 +946,7 @@ spec_authority_ref() { # root anchor
     [ -f "$file" ] || { echo 'missing authority file specs/authority.md' >&2; return 1; }
     review_file_without_nul "$file" 2>/dev/null ||
         { echo 'cannot read specs/authority.md as LF text' >&2; return 1; }
-    if entry="$(LC_ALL=C awk -v anchor="$anchor" "$SPEC_METADATA_SKIP_AWK"'
+    if entry="$(LC_ALL=C awk -v anchor="$anchor" "$SPEC_SKIP_AWK"'
         index($0, "\r") { problem = 12; exit }
         !metadata_skip($0) {
             h = $0; sub(/^ ? ? ?/, "", h)
@@ -1118,7 +1125,7 @@ spec_change_metadata() { # file [tags|status|create]
     verify_lf_file "$file" || return 1
     expected="$(wc -l < "$file")" || return 1
     # shellcheck disable=SC2016 # the single-quoted program uses awk fields
-    rows="$(verify_lines awk -v expected="$expected" -v mode="$mode" "$SPEC_METADATA_SKIP_AWK $SPEC_HEADER_AWK"'
+    rows="$(verify_lines awk -v expected="$expected" -v mode="$mode" "$SPEC_SKIP_AWK $SPEC_HEADER_AWK"'
         function tag_list(value,   a, i, n, tag, out) {
             n = split(value, a, ",")
             for (i = 1; i <= n; i++) {
@@ -1406,7 +1413,7 @@ spec_unclosed_changes() { # root rev
         record_text="$(GIT_NO_LAZY_FETCH=1 verify_lines git -C "$root" cat-file blob "$rev:$path")" || return 1
         [ -n "$record_text" ] || { printf 'Empty committed change record: %s\n' "$path" >&2; return 1; }
         printf '%s\n' "$record_text" |
-            awk -v id="$(spec_field "$(basename "$path" .md)")" "$SPEC_SKIP_AWK $SPEC_CHANGE_TAG_AWK"'
+            awk -v id="$(spec_field "$(basename "$path" .md)")" "$SPEC_CHANGE_TAG_AWK"'
             function trim(s) { gsub(/`/, "", s); gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
             { $0 = change_without_tags($0) }
             { gsub(/\037/, " "); if (spec_skip($0)) next }
