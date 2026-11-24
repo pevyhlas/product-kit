@@ -139,54 +139,64 @@ else
     _ok 'blob-filtered clones unavailable; skipped'
 fi
 
-it "a linked change template whose own blob is absent refuses instead of falling back"
+it "a linked change template with an unfetched link or target refuses instead of falling back"
 LINK_PROJ="$(make_inited_project)"; track_tmp "$LINK_PROJ"
 LINK_PROJ="$(cd "$LINK_PROJ" && pwd -P)"
 cd "$LINK_PROJ" || exit 1
 mkdir -p docs && mv "$tag_template" docs/custom-change.md || exit 1
-ln -s ../../docs/custom-change.md "$tag_template" &&
-    git add -A && git commit -qm "linked change template" && git config uploadpack.allowFilter true || exit 1
+ln -s custom-change.md docs/intermediate.md &&
+    ln -s ../../docs/intermediate.md "$tag_template" &&
+    git add -A && git commit -qm "two-hop linked change template" && git config uploadpack.allowFilter true || exit 1
 link_partial="$(mktemp -d)" || exit 1
 track_tmp "$link_partial"
-if git clone -q --filter=blob:none --no-checkout "file://$LINK_PROJ" "$link_partial/clone" &&
-    [ "$(git -C "$link_partial/clone" config --bool --get remote.origin.promisor)" = true ]; then
-    (
-        cd "$link_partial/clone" || exit 1
-        git sparse-checkout set specs .prdkit/scripts .prdkit/memory &&
-            git checkout -q "$(git symbolic-ref --short HEAD)" &&
-            git init -q --bare --template= "$link_partial/local.git" &&
-            git rev-parse --path-format=absolute --git-path objects > "$link_partial/local.git/objects/info/alternates" || exit 1
-    ) || exit 1
-    for blob_path in "$tag_template" docs/custom-change.md; do
-        blob_oid="$(git -C "$LINK_PROJ" rev-parse "HEAD:$blob_path")" || exit 1
-        run git --git-dir="$link_partial/local.git" cat-file -e "$blob_oid"
-        assert_eq 1 "$STATUS" "the $blob_path blob is actually absent"
-    done
-    mkdir "$link_partial/bin" || exit 1
-    PARTIAL_REAL_GIT="$(command -v git)"; export PARTIAL_REAL_GIT
-    cat > "$link_partial/bin/git" <<'SH'
+mkdir "$link_partial/bin" || exit 1
+PARTIAL_REAL_GIT="$(command -v git)"; export PARTIAL_REAL_GIT
+cat > "$link_partial/bin/git" <<'SH'
 #!/bin/sh
 if [ "$1" = version ]; then echo 'git version 2.39.5'; exit 0; fi
 exec "$PARTIAL_REAL_GIT" "$@"
 SH
-    chmod +x "$link_partial/bin/git" || exit 1
-    run_linked_allocator() (
-        cd "$link_partial/clone" || exit 1
-        PATH="$1" GIT_ALLOW_PROTOCOL='' GIT_TRACE="$link_partial/trace" \
-            bash .prdkit/scripts/bash/new-change.sh --json --short-name linked-template desc
-    )
+chmod +x "$link_partial/bin/git" || exit 1
+run_linked_allocator() ( # clone, PATH
+    cd "$1" || exit 1
+    PATH="$2" GIT_ALLOW_PROTOCOL='' GIT_TRACE="$link_partial/trace" \
+        bash .prdkit/scripts/bash/new-change.sh --json --short-name linked-template desc
+)
+# Sparse layouts: the original link absent, or the original link local and the
+# intermediate link and target absent.
+for layout in without-templates with-templates; do
+    clone="$link_partial/$layout"
+    if ! git clone -q --filter=blob:none --no-checkout "file://$LINK_PROJ" "$clone" ||
+        [ "$(git -C "$clone" config --bool --get remote.origin.promisor)" != true ]; then
+        _ok 'blob-filtered clones unavailable; skipped'
+        continue
+    fi
+    sparse=(specs .prdkit/scripts .prdkit/memory)
+    [ "$layout" = without-templates ] || sparse+=(.prdkit/templates)
+    (
+        cd "$clone" || exit 1
+        git sparse-checkout set "${sparse[@]}" &&
+            git checkout -q "$(git symbolic-ref --short HEAD)" &&
+            git init -q --bare --template= "$clone.objects.git" &&
+            git rev-parse --path-format=absolute --git-path objects > "$clone.objects.git/objects/info/alternates" || exit 1
+    ) || exit 1
+    for blob_path in "$tag_template" docs/intermediate.md docs/custom-change.md; do
+        expected=1
+        [ "$layout:$blob_path" != "with-templates:$tag_template" ] || expected=0
+        blob_oid="$(git -C "$LINK_PROJ" rev-parse "HEAD:$blob_path")" || exit 1
+        run git --git-dir="$clone.objects.git" cat-file -e "$blob_oid"
+        assert_eq "$expected" "$STATUS" "$layout: the $blob_path blob local state is as arranged"
+    done
     for git_path in "$link_partial/bin:$PATH" "$PATH"; do
         : > "$link_partial/trace"
-        run run_linked_allocator "$git_path"
-        assert_eq 1 "$STATUS" "no silent built-in fallback for an unavailable link"
+        run run_linked_allocator "$clone" "$git_path"
+        assert_eq 1 "$STATUS" "$layout: no silent built-in fallback for an unavailable link"
         assert_contains "$OUTPUT" "cannot read $tag_template at"
         assert_not_contains "$(cat "$link_partial/trace")" 'built-in: git fetch '
-        assert_eq absent "$([ -e "$link_partial/clone/.worktrees" ] && echo present || echo absent)"
-        assert_eq '' "$(git -C "$link_partial/clone" status --short)" 'no record or other change was made'
+        assert_eq absent "$([ -e "$clone/.worktrees" ] && echo present || echo absent)"
+        assert_eq '' "$(git -C "$clone" status --short)" 'no record or other change was made'
     done
-else
-    _ok 'blob-filtered clones unavailable; skipped'
-fi
+done
 git rm -qf docs/custom-change.md && git commit -qm "dangling linked template" || exit 1
 run bash .prdkit/scripts/bash/new-change.sh --json --number 57 --short-name "dangling-link" "desc"
 assert_eq 0 "$STATUS" "a genuinely dangling link in an ordinary clone still falls back"

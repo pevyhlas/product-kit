@@ -368,17 +368,23 @@ TODAY="${PRDKIT_TODAY:-$(date +%Y-%m-%d)}"
 RECORD_TMP="$(mktemp -d)"
 RENDERED_RECORD="$RECORD_TMP/record"
 stage_record_input() { # project-relative path, temp path, pinned start commit
-    local path="$1" staged="$2" rev="$3" entry oid type parent rows meta name on_path
+    local path="$1" staged="$2" rev="$3" entry oid type parent rows meta name
     local paths=("$path")
     entry="$(_spec_history_git "$REPO_ROOT" cat-file --batch-check --follow-symlinks <<< "$rev:$path")" || return 1
     read -r oid type _ <<< "$entry"
-    case "$oid" in dangling|loop|notdir|symlink) type="$oid" ;; esac
+    case "$oid" in
+        dangling|loop|notdir|symlink)
+            # A link that cannot be followed. In a partial clone any link or target
+            # along the chain may be an object that was never fetched, so only an
+            # ordinary clone keeps the built-in fallback.
+            ! partial_clone "$REPO_ROOT"
+            return ;;
+    esac
     [ "$type" != blob ] || { _spec_history_git "$REPO_ROOT" cat-file blob "$oid" > "$staged"; return; }
-    # Batch mode reports both absent paths and missing objects as "missing"; a link it
-    # cannot follow ("dangling", "loop", "notdir", "symlink") may be one whose own blob
-    # is not local. Keep the fallback only if the tree shows no entry for the path and
-    # no symlink on the path itself or one of its exact ancestors, or, for a link that
-    # cannot be followed, only if every such symlink blob is local.
+    [ "$type" = missing ] || return 0
+    # Batch mode reports both absent paths and missing objects as "missing". Keep the
+    # fallback only if the tree shows no entry for the path and no symlink on the path
+    # itself or one of its exact ancestors.
     parent="$path"
     while [[ "$parent" = */* ]]; do
         parent="${parent%/*}"
@@ -386,16 +392,15 @@ stage_record_input() { # project-relative path, temp path, pinned start commit
     done
     rows="$(verify_lines _spec_history_git "$REPO_ROOT" ls-tree -t "$rev" -- "${paths[@]}")" || return 1
     while IFS=$'\t' read -r meta name; do
-        on_path=false
-        for parent in "${paths[@]}"; do [ "$name" != "$parent" ] || on_path=true; done
-        $on_path || continue
-        if [ "$type" = missing ]; then
-            [ "$name" != "$path" ] || return 1
-            [[ "$meta" != '120000 '* ]] || return 1
-        elif [[ "$meta" = '120000 '* ]]; then
-            _spec_history_git "$REPO_ROOT" cat-file -e "${meta##* }" 2>/dev/null || return 1
-        fi
+        [ "$name" != "$path" ] || return 1
+        [[ "$meta" = '120000 '* ]] || continue
+        for parent in "${paths[@]}"; do [ "$name" != "$parent" ] || return 1; done
     done <<< "$rows"
+}
+partial_clone() { # root -> 0 when a promisor remote may hold objects not stored locally
+    git -C "$1" config --get extensions.partialclone >/dev/null 2>&1 && return 0
+    git -C "$1" config --name-only --get-regexp '^remote\..*\.partialclonefilter$' >/dev/null 2>&1 && return 0
+    git -C "$1" config --bool --get-regexp '^remote\..*\.promisor$' 2>/dev/null | grep ' true$' >/dev/null
 }
 record_input() { # project-relative path, temp path, optional pinned start commit
     local path="$1" staged="$2"
