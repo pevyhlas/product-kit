@@ -38,9 +38,11 @@ change by change.
   before or within that section are rejected.
 - Upgrading a 2.x install is one coordinated cutover; the 2.x and 3.0 gates accept no common
   policy, so never merge the policy change on its own:
-  1. Pause merges. Settle every open 2.x receipt failure under the old gate, or have its
-     reviewer resubmit the objection as a native "changes requested" review. The 3.0 gate
-     ignores 2.x receipts, so an unsettled one stops blocking.
+  1. Pause merges. The 3.0 gate ignores 2.x receipts, so an unsettled receipt failure stops
+     blocking. Settle every one under the old gate first. To carry one over instead, an
+     account in the new `review-publishers` or `review-owner` list, other than the PR author,
+     must request changes on each affected open PR, and the new gate must report it as
+     blocking before merges resume.
   2. In one change on the trusted default branch, bump the kit pin, run `init.sh --upgrade`,
      set `review-host`, `review-publishers` and `review-owner` as described in
      `.prdkit/templates/config-template.md`, and drop `review-publisher-isolation`. Switch the
