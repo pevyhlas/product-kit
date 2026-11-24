@@ -106,9 +106,10 @@ report it as incomplete. Keep the original source revision available and retry i
 `init.sh --upgrade`, then check integrity. A marker can remain even after manifest publication;
 it still requires a coherent retry, not deletion to make the gate green.
 For a missing retired path, a retry verifies the committed file independently of the marker.
-It checks regular files after Git's checkout conversion (including line endings) and checks
-the target of committed command symlinks. If required Git objects are missing locally,
-the retry refuses rather than fetching them.
+It checks a regular file's raw committed bytes, or those same bytes with every LF changed
+to CRLF if the blob contains no CR. It does not apply checkout settings or run Git filters.
+For committed command symlinks, it checks the link target. If required Git objects are missing
+locally, the retry refuses rather than fetching them.
 
 The write phase uses an exclusive `.prdkit/.install-lock` file with PID/host. Concurrent writers
 are refused rather than waiting on stale ownership data. Normal failure/TERM releases the lock;

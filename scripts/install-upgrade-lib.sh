@@ -27,23 +27,45 @@ upgrade_committed_manifest() (
         [ ! -f "$work/link" ] && install_manifest_format "$work/manifest" && cat "$work/manifest"
 )
 
-upgrade_retired_head_state() { # relative path, pristine install hash
-    local rel="$1" rec="$2" entry hash link_target
+# Encode octets for Bash printf instead of using a line-oriented substitution:
+# preserve arbitrary bytes and do not add a newline at EOF.
+upgrade_retired_crlf() {
+    LC_ALL=C od -An -v -to1 "$1" | LC_ALL=C awk '
+        {
+            for (i=1; i<=NF; i++) {
+                if ($i == "012") out=out "\\0015"
+                out=out "\\0" $i
+            }
+            if (length(out) >= 4096) { print out; out="" }
+        }
+        END { if (length(out)) print out }' |
+        while IFS= read -r octets; do printf '%b' "$octets" || return 1; done
+}
+
+upgrade_retired_head_state() ( # relative path, pristine install hash
+    local rel="$1" rec="$2" entry hash link_target work status
     case "$rel" in .prdkit/memory/*) echo kept; return 0 ;; esac
     entry="$(git -C "$TARGET" ls-tree HEAD -- ":(top,literal)$1")" || return 1
     case "${entry%% *}" in
         '') echo absent; return 0 ;;
         100644|100755)
-            # The manifest hashes working-tree bytes; a raw HEAD blob may have
-            # been normalized on commit. Use Git's checkout conversion.
-            hash="$(git -C "$TARGET" cat-file --filters "HEAD:$rel" | install_hash_stream)" || return 1
+            work="$(mktemp -d)" || return 1
+            trap 'rm -rf "$work"' EXIT
+            git -C "$TARGET" cat-file blob "HEAD:$rel" > "$work/blob" || return 1
+            hash="$(install_hash_stream < "$work/blob")" || return 1
+            if [ "$hash" = "$rec" ]; then echo unedited; return 0; fi
+            # Permit only the fixed LF-to-CRLF form of a CR-free blob, never
+            # checkout-configured conversions or external filter output.
+            if LC_ALL=C grep -aq $'\r' "$work/blob"; then echo kept; return 0
+            else status=$?; [ "$status" -eq 1 ] || return 1; fi
+            hash="$(upgrade_retired_crlf "$work/blob" | install_hash_stream)" || return 1
             if [ "$hash" = "$rec" ]; then echo unedited; return 0; fi ;;
         120000)
             link_target="$(git -C "$TARGET" cat-file blob "HEAD:$rel" && printf x)" || return 1
             if is_retired_kit_link "$rel" "${link_target%x}"; then echo unedited; return 0; fi ;;
     esac
     echo kept
-}
+)
 
 upgrade_same_file() { # real file rendered regular file link-metadata
     if [ -f "$3" ]; then

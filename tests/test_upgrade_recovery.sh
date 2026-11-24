@@ -252,24 +252,27 @@ for fault in retired published; do
     if [ -e "$PROJ/.prdkit/.install-state" ]; then _no 'marker not cleared'; else _ok 'retry clears marker'; fi
 done
 
-it "recovery checks normalized HEAD bytes and rejects a changed committed blob"
+it "normalized retirement resumes despite a core.eol change, without accepting edited bytes"
 PROJ="$(make_project)"; track_tmp "$PROJ"
 PROJ="$(CDPATH='' cd "$PROJ" && pwd -P)"
 rel=.prdkit/templates/retired-eol.md
 edited=.prdkit/templates/retired-edited-eol.md
-printf 'original line\r\n' > "$PROJ/.product-kit/templates/retired-eol.md"
+printf 'original line\r\nno final newline' > "$PROJ/.product-kit/templates/retired-eol.md"
 printf 'original line\r\n' > "$PROJ/.product-kit/templates/retired-edited-eol.md"
 bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" >/dev/null || exit 1
-printf '/%s text eol=crlf\n' "$rel" "$edited" > "$PROJ/.gitattributes"
+printf '/%s text\n' "$rel" "$edited" > "$PROJ/.gitattributes"
+git -C "$PROJ" config core.autocrlf false
+git -C "$PROJ" config core.eol crlf
 printf 'Run retired-eol.md\n' > "$PROJ/guide.md"
 printf 'consumer version\r\n' > "$PROJ/$edited"
 rm "$PROJ/.product-kit/templates/retired-eol.md" "$PROJ/.product-kit/templates/retired-edited-eol.md"
 snapshot_upgrade_fixture "$PROJ" || exit 1
-assert_eq "$(printf 'original line\r\n' | install_hash_stream)" "$(install_hash_stream < "$PROJ/$rel")"
-assert_eq "$(printf 'original line\n' | install_hash_stream)" "$(git -C "$PROJ" show "HEAD:$rel" | install_hash_stream)"
+assert_eq "$(printf 'original line\r\nno final newline' | install_hash_stream)" "$(install_hash_stream < "$PROJ/$rel")"
+assert_eq "$(printf 'original line\nno final newline' | install_hash_stream)" "$(git -C "$PROJ" show "HEAD:$rel" | install_hash_stream)"
 run env PATH="$SHIMS:$PATH" FAULT=retired-eol FAULT_ROOT="$PROJ" bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade
 assert_eq 79 "$STATUS" "$OUTPUT"
 assert_contains "$(cat "$PROJ/.prdkit/.install-state")" 'phase: retired'
+git -C "$PROJ" config core.eol lf
 rm "$PROJ/$edited"
 run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade
 assert_eq 1 "$STATUS" 'retry refuses a committed content customization deleted outside the installer'
@@ -280,6 +283,33 @@ assert_eq 0 "$STATUS" "$OUTPUT"
 assert_contains "$OUTPUT" 'guide.md:1:Run retired-eol.md'
 assert_contains "$OUTPUT" "  $edited"
 if [ -e "$PROJ/.prdkit/.install-state" ]; then _no 'marker not cleared'; else _ok 'retry clears marker'; fi
+
+it "recovery neither runs a smudge driver nor accepts its output for a deleted edit"
+PROJ="$(make_project)"; track_tmp "$PROJ"
+PROJ="$(CDPATH='' cd "$PROJ" && pwd -P)"
+rel=.prdkit/templates/retired-filter.md
+printf 'unchanged anchor\n' > "$PROJ/.product-kit/templates/retired-eol.md"
+printf 'pristine bytes\n' > "$PROJ/.product-kit/templates/retired-filter.md"
+bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" >/dev/null || exit 1
+printf '/%s -text filter=retirement-test\n' "$rel" > "$PROJ/.gitattributes"
+printf 'committed edit\n' > "$PROJ/$rel"
+rm "$PROJ/.product-kit/templates/retired-eol.md" "$PROJ/.product-kit/templates/retired-filter.md"
+snapshot_upgrade_fixture "$PROJ" || exit 1
+cat > "$PROJ/.git/retirement-smudge" <<'EOF'
+cat >/dev/null
+: > .git/retirement-smudge-ran
+printf 'pristine bytes\n'
+EOF
+git -C "$PROJ" config filter.retirement-test.smudge 'bash .git/retirement-smudge'
+run env PATH="$SHIMS:$PATH" FAULT=retired-eol FAULT_ROOT="$PROJ" bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade
+assert_eq 79 "$STATUS" "$OUTPUT"
+assert_contains "$(cat "$PROJ/.prdkit/.install-state")" 'phase: retired'
+rm "$PROJ/$rel"
+run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade
+assert_eq 1 "$STATUS" 'retry refuses to accept filtered output as pristine'
+assert_contains "$OUTPUT" "not a validated installer-owned intermediate state: $rel"
+if [ -e "$PROJ/.git/retirement-smudge-ran" ]; then _no 'smudge driver ran'; else _ok 'smudge driver never invoked'; fi
+assert_file "$PROJ/.prdkit/.install-state" 'refusal preserves recovery marker'
 
 it "overlapping writers refuse before mutation and the original writer finishes coherently"
 PROJ="$(make_inited_project)"; track_tmp "$PROJ"
