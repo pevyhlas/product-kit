@@ -139,6 +139,60 @@ else
     _ok 'blob-filtered clones unavailable; skipped'
 fi
 
+it "a linked change template whose own blob is absent refuses instead of falling back"
+LINK_PROJ="$(make_inited_project)"; track_tmp "$LINK_PROJ"
+LINK_PROJ="$(cd "$LINK_PROJ" && pwd -P)"
+cd "$LINK_PROJ" || exit 1
+mkdir -p docs && mv "$tag_template" docs/custom-change.md || exit 1
+ln -s ../../docs/custom-change.md "$tag_template" &&
+    git add -A && git commit -qm "linked change template" && git config uploadpack.allowFilter true || exit 1
+link_partial="$(mktemp -d)" || exit 1
+track_tmp "$link_partial"
+if git clone -q --filter=blob:none --no-checkout "file://$LINK_PROJ" "$link_partial/clone" &&
+    [ "$(git -C "$link_partial/clone" config --bool --get remote.origin.promisor)" = true ]; then
+    (
+        cd "$link_partial/clone" || exit 1
+        git sparse-checkout set specs .prdkit/scripts .prdkit/memory &&
+            git checkout -q "$(git symbolic-ref --short HEAD)" &&
+            git init -q --bare --template= "$link_partial/local.git" &&
+            git rev-parse --path-format=absolute --git-path objects > "$link_partial/local.git/objects/info/alternates" || exit 1
+    ) || exit 1
+    for blob_path in "$tag_template" docs/custom-change.md; do
+        blob_oid="$(git -C "$LINK_PROJ" rev-parse "HEAD:$blob_path")" || exit 1
+        run git --git-dir="$link_partial/local.git" cat-file -e "$blob_oid"
+        assert_eq 1 "$STATUS" "the $blob_path blob is actually absent"
+    done
+    mkdir "$link_partial/bin" || exit 1
+    PARTIAL_REAL_GIT="$(command -v git)"; export PARTIAL_REAL_GIT
+    cat > "$link_partial/bin/git" <<'SH'
+#!/bin/sh
+if [ "$1" = version ]; then echo 'git version 2.39.5'; exit 0; fi
+exec "$PARTIAL_REAL_GIT" "$@"
+SH
+    chmod +x "$link_partial/bin/git" || exit 1
+    run_linked_allocator() (
+        cd "$link_partial/clone" || exit 1
+        PATH="$1" GIT_ALLOW_PROTOCOL='' GIT_TRACE="$link_partial/trace" \
+            bash .prdkit/scripts/bash/new-change.sh --json --short-name linked-template desc
+    )
+    for git_path in "$link_partial/bin:$PATH" "$PATH"; do
+        : > "$link_partial/trace"
+        run run_linked_allocator "$git_path"
+        assert_eq 1 "$STATUS" "no silent built-in fallback for an unavailable link"
+        assert_contains "$OUTPUT" "cannot read $tag_template at"
+        assert_not_contains "$(cat "$link_partial/trace")" 'built-in: git fetch '
+        assert_eq absent "$([ -e "$link_partial/clone/.worktrees" ] && echo present || echo absent)"
+        assert_eq '' "$(git -C "$link_partial/clone" status --short)" 'no record or other change was made'
+    done
+else
+    _ok 'blob-filtered clones unavailable; skipped'
+fi
+git rm -qf docs/custom-change.md && git commit -qm "dangling linked template" || exit 1
+run bash .prdkit/scripts/bash/new-change.sh --json --number 57 --short-name "dangling-link" "desc"
+assert_eq 0 "$STATUS" "a genuinely dangling link in an ordinary clone still falls back"
+assert_contains "$OUTPUT" '"CHANGE_ID":"057-dangling-link"'
+cd "$PROJ" || exit 1
+
 it "an uncommitted change template falls back despite unrelated template symlinks"
 cd "$TAG_PROJ" || exit 1
 git rm -qf "$tag_template" &&
