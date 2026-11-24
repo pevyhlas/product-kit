@@ -116,8 +116,8 @@ design="specs/design.md"
 if [ -f "$root/$design" ]; then
     budget_fix 100 "tighten the summary and link longer decisions; keep implementation values in code" "$root/$design"
     # shellcheck disable=SC2016 # awk uses $0 for the input line
-    rows="$(verify_lines awk "$SPEC_SKIP_AWK"'
-        !spec_skip($0) {
+    rows="$(verify_lines awk "$SPEC_METADATA_SKIP_AWK"'
+        !metadata_skip($0) {
             h = $0; sub(/^ ? ? ?##[[:blank:]]+/, "", h)
             if (h == $0) next
             sub(/[[:blank:]]+#+[[:blank:]]*$/, "", h); sub(/[[:blank:]]+$/, "", h)

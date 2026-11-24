@@ -199,7 +199,7 @@ review_context_build() {
         case "$path" in specs/parts/*) context_span "$HEAD_SHA" "$path" 1 all parts "part and cross-interface obligations" ;; esac
     done < <(spec_files "$CTX_TMP/material")
     if [ -n "$record_rev" ]; then
-        header="$(awk "$SPEC_CHANGE_TAG_AWK"'
+        header="$(awk "$SPEC_SKIP_AWK $SPEC_CHANGE_TAG_AWK"'
             { $0 = change_without_tags($0) }
             { if (spec_skip($0)) next } /^## / { exit } { print }' "$CTX_TMP/material/$record")"
         count="$(printf '%s\n' "$header" | awk '{ n+=gsub(/\*\*Parent\*\*:/,"&") } END { print n+0 }')"
