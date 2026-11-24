@@ -331,18 +331,75 @@ run bash -c 'cd "$1" && bash .product-kit/scripts/init.sh --upgrade' _ "$PROJ5"
 assert_eq 0 "$STATUS" "plain upgrade succeeds in symlink mode"
 assert_symlink "$PROJ5/.claude/commands/prdkit.md" "plain upgrade preserves symlink mode"
 assert_contains "$(cat "$PROJ5/.prdkit/.manifest")" 'mode: symlink' "symlink mode stays recorded"
-it "an installed file absent from the current mapping blocks upgrade without deletion"
+hash_of() { (sha256sum "$1" 2>/dev/null || shasum -a 256 "$1") | cut -d' ' -f1; }
+
+it "upgrade retires unedited files and reports consumer follow-up"
 ZERO_HASH="$(printf '%064d' 0)"
 PROJ6="$(make_inited_project)"; track_tmp "$PROJ6"
-cp "$PROJ6/.prdkit/scripts/bash/common.sh" "$PROJ6/.prdkit/scripts/bash/earlier.sh"
-printf '%s  .prdkit/scripts/bash/earlier.sh\n' "$ZERO_HASH" >> "$PROJ6/.prdkit/.manifest"
-snapshot_upgrade_fixture "$PROJ6" || exit 1
-for flag in --check --upgrade; do
-    run bash "$PROJ6/.product-kit/scripts/init.sh" --target "$PROJ6" "$flag"
-    assert_eq 1 "$STATUS" "unsupported install entry refuses $flag"
-    assert_contains "$OUTPUT" 'earlier.sh is not in the current kit mapping'
-    assert_eq '' "$(git -C "$PROJ6" status --porcelain)" 'refusal performs no writes'
+pristine=.prdkit/scripts/bash/earlier.sh
+edited=.prdkit/scripts/bash/edited.sh
+foreign=.prdkit/scripts/bash/foreign.sh
+memory=.prdkit/memory/earlier-policy.md
+missing=.prdkit/scripts/bash/already-absent.sh
+printf 'original bytes\n' > "$PROJ6/$pristine"
+printf 'edited bytes\n' > "$PROJ6/$edited"
+cp "$PROJ6/$pristine" "$PROJ6/$memory"
+cp "$PROJ6/$pristine" "$PROJ6/consumer-target"
+ln -s ../../../consumer-target "$PROJ6/$foreign"
+for rel in "$pristine" "$edited" "$foreign" "$memory" "$missing"; do
+    printf '%s  %s\n' "$(hash_of "$PROJ6/$pristine")" "$rel" >> "$PROJ6/.prdkit/.manifest"
 done
+printf 'Run earlier.sh\nUsed to run already-absent.sh\n' > "$PROJ6/.prdkit/scripts/bash/consumer-wrapper.sh"
+printf 'Call earlier.sh (untracked by the installer)\n' > "$PROJ6/.product-kit/reference.md"
+printf 'Reference earlier.sh from a kept retired file\n' >> "$PROJ6/$edited"
+snapshot_upgrade_fixture "$PROJ6" || exit 1
+run bash "$PROJ6/.product-kit/scripts/init.sh" --target "$PROJ6" --check
+assert_eq 1 "$STATUS" 'retired entries are drift'
+assert_contains "$OUTPUT" "RETIRED — unedited"
+assert_contains "$OUTPUT" "  $pristine"
+assert_contains "$OUTPUT" "RETIRED — kept"
+for rel in "$edited" "$foreign" "$memory" "$missing"; do assert_contains "$OUTPUT" "  $rel"; done
+run bash "$PROJ6/.product-kit/scripts/init.sh" --target "$PROJ6"
+assert_eq 1 "$STATUS" 'plain rerun does not retire files'
+assert_contains "$OUTPUT" 'run with --upgrade'
+assert_eq '' "$(git -C "$PROJ6" status --porcelain)" 'check and plain rerun perform no writes'
+
+run bash "$PROJ6/.product-kit/scripts/init.sh" --target "$PROJ6" --upgrade
+assert_eq 0 "$STATUS" 'retirement with consumer follow-up succeeds'
+assert_contains "$OUTPUT" "Removed retired kit file: $pristine"
+assert_contains "$OUTPUT" 'Upgrade complete'
+assert_contains "$OUTPUT" "Kept retired files"
+for rel in "$edited" "$foreign" "$memory"; do assert_contains "$OUTPUT" "  $rel"; done
+assert_contains "$OUTPUT" 'consumer-wrapper.sh:1:Run earlier.sh'
+assert_not_contains "$OUTPUT" 'consumer-wrapper.sh:2:'
+assert_not_contains "$OUTPUT" '.product-kit/reference.md:'
+assert_not_contains "$OUTPUT" "$edited:"
+assert_not_contains "$OUTPUT" "Removed retired kit file: $missing"
+assert_eq 'original bytes' "$(cat "$PROJ6/$memory")" 'retired memory is kept even when pristine'
+assert_contains "$(cat "$PROJ6/$edited")" 'edited bytes'
+assert_eq 'original bytes' "$(cat "$PROJ6/consumer-target")" 'foreign link target remains unchanged'
+assert_symlink "$PROJ6/$foreign" 'foreign symlink is kept'
+for rel in "$pristine" "$missing"; do
+    if [ -e "$PROJ6/$rel" ] || [ -L "$PROJ6/$rel" ]; then _no "$rel still exists"; else _ok "$rel absent"; fi
+done
+for rel in "$pristine" "$edited" "$foreign" "$memory" "$missing"; do
+    assert_not_contains "$(cat "$PROJ6/.prdkit/.manifest")" "$rel" 'retired path is no longer managed'
+done
+run bash "$PROJ6/.product-kit/scripts/init.sh" --target "$PROJ6" --check
+assert_eq 0 "$STATUS" 'retired files no longer count as drift after upgrade'
+
+it "a dangling command link from a symlink install is retired"
+PROJ7="$(make_project)"; track_tmp "$PROJ7"
+printf 'retiring command\n' > "$PROJ7/.product-kit/commands/prdkit-earlier.md"
+bash "$PROJ7/.product-kit/scripts/init.sh" --target "$PROJ7" --symlink >/dev/null || exit 1
+link=.claude/commands/prdkit-earlier.md
+assert_symlink "$PROJ7/$link"
+rm "$PROJ7/.product-kit/commands/prdkit-earlier.md"
+snapshot_upgrade_fixture "$PROJ7" || exit 1
+run bash "$PROJ7/.product-kit/scripts/init.sh" --target "$PROJ7" --upgrade --copy
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" "Removed retired kit file: $link"
+if [ -L "$PROJ7/$link" ]; then _no 'dangling command remains'; else _ok 'dangling command removed'; fi
 
 # Containment: each project below sits in its own base directory, so a sentinel next to it is
 # outside the target but inside the test's scratch space.
@@ -353,8 +410,6 @@ contained_project() { # echoes the project dir, inside a fresh tracked base dire
     proj="$(make_project)" || return 1
     mv "$proj" "$base/proj" && echo "$base/proj"
 }
-hash_of() { (sha256sum "$1" 2>/dev/null || shasum -a 256 "$1") | cut -d' ' -f1; }
-
 it "a manifest path outside the installed layout fails without writes"
 PROJ8="$(contained_project)"; track_tmp "${PROJ8%/proj}"
 ( cd "$PROJ8" && bash .product-kit/scripts/init.sh --copy ) >/dev/null 2>&1
@@ -366,6 +421,34 @@ assert_eq 1 "$STATUS" "format error blocks upgrade"
 assert_contains "$OUTPUT" "SHA-256 entries for installed kit paths"
 assert_file "${PROJ8%/proj}/victim.sh" "a file outside the project survives"
 assert_eq '' "$(git -C "$PROJ8" status --porcelain)" 'no writes'
+
+it "retirement refuses a symlinked command directory even for an unselected harness"
+P="$(contained_project)"; track_tmp "${P%/proj}"
+bash "$P/.product-kit/scripts/init.sh" --target "$P" --harness agents >/dev/null || exit 1
+mkdir -p "$P/.opencode" "${P%/proj}/commands"
+ln -s ../../commands "$P/.opencode/commands"
+printf 'outside bytes\n' > "${P%/proj}/commands/prdkit-earlier.md"
+printf '%s  .opencode/commands/prdkit-earlier.md\n' \
+    "$(hash_of "${P%/proj}/commands/prdkit-earlier.md")" >> "$P/.prdkit/.manifest"
+snapshot_upgrade_fixture "$P" || exit 1
+run bash "$P/.product-kit/scripts/init.sh" --target "$P" --upgrade
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" '.opencode/commands is a symlink'
+assert_file "${P%/proj}/commands/prdkit-earlier.md" 'will not delete outside the project'
+assert_eq '' "$(git -C "$P" status --porcelain)" 'no writes'
+
+it "retirement refuses to delete the target of a managed root file alias"
+P="$(make_inited_project)"; track_tmp "$P"
+mv "$P/AGENTS.md" "$P/.prdkit/templates/earlier.md"
+ln -s .prdkit/templates/earlier.md "$P/AGENTS.md"
+printf '%s  .prdkit/templates/earlier.md\n' \
+    "$(hash_of "$P/.prdkit/templates/earlier.md")" >> "$P/.prdkit/.manifest"
+snapshot_upgrade_fixture "$P" || exit 1
+run bash "$P/.product-kit/scripts/init.sh" --target "$P" --upgrade
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'Root-file edit AGENTS.md overlaps retired file'
+assert_file "$P/AGENTS.md" 'managed section is still readable'
+assert_eq '' "$(git -C "$P" status --porcelain)" 'no writes'
 
 it "upgrade refuses a kit-owned symlink instead of writing through it"
 PROJ9="$(contained_project)"; track_tmp "${PROJ9%/proj}"

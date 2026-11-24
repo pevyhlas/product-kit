@@ -19,6 +19,27 @@ upgrade_head_file() { # relative path destination link-metadata
     esac
 }
 
+upgrade_committed_manifest() (
+    local work
+    work="$(mktemp -d)" || return 1
+    trap 'rm -rf "$work"' EXIT
+    upgrade_head_file .prdkit/.manifest "$work/manifest" "$work/link" &&
+        [ ! -f "$work/link" ] && install_manifest_format "$work/manifest" && cat "$work/manifest"
+)
+
+upgrade_retired_head_state() (
+    local work link_target
+    work="$(mktemp -d)" || return 1
+    trap 'rm -rf "$work"' EXIT
+    upgrade_head_file "$1" "$work/file" "$work/link" || return 1
+    if [ -f "$work/link" ]; then
+        link_target="$(cat "$work/file" && printf x)" || return 1
+        retired_file_state "$1" "$2" "$work/file" "${link_target%x}"
+    else
+        retired_file_state "$1" "$2" "$work/file"
+    fi
+)
+
 upgrade_same_file() { # real file rendered regular file link-metadata
     if [ -f "$3" ]; then
         [ -L "$1" ] && [ "$(readlink "$1")" = "$(cat "$2")" ]
@@ -54,6 +75,15 @@ upgrade_destinations_safe() (
     done
     LC_ALL=C sort -u "$work/roles" > "$work/unique-roles" || return 1
     record_root="$(upgrade_resolved_destination "$TARGET/specs/changes")" || return 1
+    if [ ${#RETIRED_REMOVE[@]} -gt 0 ]; then
+        for rel in "${RETIRED_REMOVE[@]}"; do
+            # Preflight checked every parent. Removal unlinks the file, never its link target.
+            case "$TARGET/$rel/" in "$PK_ROOT/"*|"$TARGET/specs/changes/"*|"$record_root/"*)
+                echo "Planned destination (retired $rel) overlaps the kit source or protected specs/changes/; nothing was written." >&2
+                return 1 ;;
+            esac
+        done
+    fi
     while IFS=$'\037' read -r dest role; do
         other="$(upgrade_resolved_destination "$dest")" || { echo "Cannot resolve planned destination ($role); nothing was written." >&2; return 1; }
         case "$other/" in "$TARGET/specs/changes/"*|"$record_root/"*)
@@ -74,6 +104,14 @@ upgrade_destinations_safe() (
                 echo "Root-file edit $root overlaps $role at $dest; nothing was written." >&2; return 1
             fi
         done < "$work/planned"
+        if [ ${#RETIRED_REMOVE[@]} -gt 0 ]; then
+            for rel in "${RETIRED_REMOVE[@]}"; do
+                if [ "$dest" = "$TARGET/$rel" ]; then
+                    echo "Root-file edit $root overlaps retired file $rel; nothing was written." >&2
+                    return 1
+                fi
+            done
+        fi
         printf '%s\037root-file edit %s\n' "$dest" "$root" >> "$work/planned"
     done
 )
@@ -126,6 +164,14 @@ upgrade_render_expected() { # caller-owned work directory -> head/, rendered/, p
         fi
         printf '%s\0' "$rel" >> "$work/paths" || return 1
     done
+    # Only committed files that matched their retired ownership entry can be
+    # missing as a result of the previous run. The rendered outcome is absence.
+    if [ ${#RETIRED_DELETED[@]} -gt 0 ]; then
+        for rel in "${RETIRED_DELETED[@]}"; do
+            upgrade_head_file "$rel" "$work/head/$rel" "$work/head-links/$rel" || return 1
+            printf '%s\0' "$rel" >> "$work/paths" || return 1
+        done
+    fi
     for rel in AGENTS.md .gitignore; do
         [ "$rel" != AGENTS.md ] || has_harness agents || continue
         if dest="$(root_file_path "$rel")"; then dest="${dest#"$TARGET"/}"; else continue; fi
@@ -182,7 +228,7 @@ upgrade_render_expected() { # caller-owned work directory -> head/, rendered/, p
 }
 
 upgrade_marker_valid() { # rendered work; only metadata the installer actually emits
-    local marker="$PRDKIT_DIR/.install-state" phase path version
+    local marker="$PRDKIT_DIR/.install-state" phase path version entry
     [ -f "$marker" ] && [ ! -L "$marker" ] && [ ! -x "$marker" ] && verify_lf_file "$marker" || return 1
     if git -C "$TARGET" ls-files --error-unmatch -- .prdkit/.install-state >/dev/null 2>&1; then return 1; fi
     awk '/^(phase|path|source-version): / { n++; next } { bad=1 } END { exit bad || n!=3 }' "$marker" || return 1
@@ -193,6 +239,13 @@ upgrade_marker_valid() { # rendered work; only metadata the installer actually e
         prepare:.prdkit|managed-section:AGENTS.md|ignore:.gitignore|manifest:.prdkit/.manifest) return 0 ;;
         file:*) awk -F '\t' -v p="$path" '$2==p { found=1 } END { exit !found }' "$1/files"; return ;;
         optional:*) case " $REMOVE_OPTIONS_FILES " in *" $path "*) return 0 ;; esac; return 1 ;;
+        retired:*)
+            # An ignored file can already be gone with no HEAD entry. This validates
+            # the marker path, not the dirty paths (those still need a rendered outcome).
+            while IFS= read -r entry; do
+                if [ -n "$entry" ] && [ "${entry#*  }" = "$path" ]; then return 0; fi
+            done <<< "$RETIRED_ENTRIES"
+            return 1 ;;
         *) return 1 ;;
     esac
 }

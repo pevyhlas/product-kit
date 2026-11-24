@@ -2,8 +2,8 @@
 # Faults at real command boundaries, not installer-only test hooks. Each retry uses real tools.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 source "$PK_ROOT/scripts/install-lib.sh"
-REAL_CP="$(command -v cp)"; REAL_MV="$(command -v mv)"; REAL_MKTEMP="$(command -v mktemp)"
-export REAL_CP REAL_MV REAL_MKTEMP
+REAL_CP="$(command -v cp)"; REAL_MV="$(command -v mv)"; REAL_MKTEMP="$(command -v mktemp)"; REAL_RM="$(command -v rm)"
+export REAL_CP REAL_MV REAL_MKTEMP REAL_RM
 SHIMS="$(mktemp -d)"; track_tmp "$SHIMS"
 cat > "$SHIMS/fault" <<'EOF'
 #!/usr/bin/env bash
@@ -31,15 +31,17 @@ case "$tool:$FAULT" in
     mv:agents) if [ "$last" = "$FAULT_ROOT/AGENTS.md" ]; then exit 75; fi ;;
     mv:manifest) if [ "$last" = "$FAULT_ROOT/.prdkit/.manifest" ]; then exit 76; fi ;;
     mv:published) if [ "$last" = "$FAULT_ROOT/.prdkit/.manifest" ]; then "$REAL_MV" "$@" || exit; exit 76; fi ;;
+    rm:retired) if [ "$last" = "$FAULT_ROOT/.claude/commands/prdkit-retired.md" ]; then "$REAL_RM" "$@" || exit; exit 79; fi ;;
     mktemp:storage) case "$last" in *prdkit-install*) exit 77 ;; esac ;;
 esac
 case "$tool" in
     cp) exec "$REAL_CP" "$@" ;; mv) exec "$REAL_MV" "$@" ;;
     mktemp) exec "$REAL_MKTEMP" "$@" ;;
+    rm) exec "$REAL_RM" "$@" ;;
 esac
 EOF
 chmod +x "$SHIMS/fault"
-for tool in cp mv mktemp; do ln -s fault "$SHIMS/$tool"; done
+for tool in cp mv mktemp rm; do ln -s fault "$SHIMS/$tool"; done
 
 it 'a partial mapping cannot become a successful partial install'
 PROJ="$(make_project)"; track_tmp "$PROJ"
@@ -213,6 +215,39 @@ assert_file "$PROJ/.prdkit/.install-state"
 run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --without agent-tiers
 assert_eq 0 "$STATUS" "$OUTPUT"
 assert_eq absent "$([ -e "$PROJ/.prdkit/.install-state" ] && echo present || echo absent)"
+
+for fault in retired published; do
+    it "retirement resumes after $fault failure, without accepting a deleted customization"
+    PROJ="$(make_project)"; track_tmp "$PROJ"
+    PROJ="$(CDPATH='' cd "$PROJ" && pwd -P)"
+    printf 'retiring command\n' > "$PROJ/.product-kit/commands/prdkit-retired.md"
+    printf 'retiring script\n' > "$PROJ/.product-kit/scripts/retired.sh"
+    bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --symlink >/dev/null || exit 1
+    rm "$PROJ/.product-kit/commands/prdkit-retired.md" "$PROJ/.product-kit/scripts/retired.sh"
+    printf 'consumer version\n' > "$PROJ/.prdkit/scripts/bash/retired.sh"
+    printf 'Run prdkit-retired.md\n' > "$PROJ/guide.md"
+    snapshot_upgrade_fixture "$PROJ" || exit 1
+    marker=retired
+    expected=79
+    if [ "$fault" = published ]; then marker=manifest; expected=76; fi
+    run env PATH="$SHIMS:$PATH" FAULT="$fault" FAULT_ROOT="$PROJ" bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --copy
+    assert_eq "$expected" "$STATUS" "$OUTPUT"
+    assert_contains "$(cat "$PROJ/.prdkit/.install-state")" "phase: $marker"
+    if [ -L "$PROJ/.claude/commands/prdkit-retired.md" ]; then _no 'retired link remains'; else _ok 'retired link already removed'; fi
+    rm "$PROJ/.prdkit/scripts/bash/retired.sh"
+    run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --copy
+    assert_eq 1 "$STATUS" 'retry refuses unrelated deletion'
+    assert_contains "$OUTPUT" 'not a validated installer-owned intermediate state: .prdkit/scripts/bash/retired.sh'
+    git -C "$PROJ" restore -- .prdkit/scripts/bash/retired.sh || exit 1
+    run bash "$PROJ/.product-kit/scripts/init.sh" --target "$PROJ" --upgrade --copy
+    assert_eq 0 "$STATUS" "$OUTPUT"
+    assert_contains "$OUTPUT" 'Kept retired files'
+    assert_contains "$OUTPUT" '  .prdkit/scripts/bash/retired.sh'
+    assert_contains "$OUTPUT" 'guide.md:1:Run prdkit-retired.md'
+    assert_eq 'consumer version' "$(cat "$PROJ/.prdkit/scripts/bash/retired.sh")"
+    assert_not_contains "$(cat "$PROJ/.prdkit/.manifest")" '/retired.sh'
+    if [ -e "$PROJ/.prdkit/.install-state" ]; then _no 'marker not cleared'; else _ok 'retry clears marker'; fi
+done
 
 it "overlapping writers refuse before mutation and the original writer finishes coherently"
 PROJ="$(make_inited_project)"; track_tmp "$PROJ"

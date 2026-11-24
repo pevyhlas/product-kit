@@ -64,7 +64,7 @@ reproduce the duplicate number; synchronization markers avoid a scheduler-depend
 | Area | Suites |
 |------|--------|
 | Public catalog, neutral operations, installed references | catalog_sync, generalization, wiring, workflow_doc_coverage, workflow_contracts |
-| Installer ownership, harness targets, customization preservation, unsupported manifest rejection | init |
+| Installer ownership, harness targets, customization preservation, retired files, malformed manifest rejection | init |
 | Partial copy/storage/managed-block/manifest failures, TERM/KILL, overlapping writes and coherent retry | upgrade_recovery |
 | Optional subsystems: agent tiers only on request, recorded choice, kept when used, `--without` | optional_subsystems |
 | Source-less adoption integrity, managed harness entries, kit pins | adoption_gate |

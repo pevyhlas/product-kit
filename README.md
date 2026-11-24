@@ -241,11 +241,14 @@ bash .product-kit/scripts/init.sh --check     # read-only; expected drift can ex
 ```
 
 Replace `vX.Y.Z` with the selected tag. Inspect the drift, then run
-`bash .product-kit/scripts/init.sh --upgrade` from a clean, committed checkout. Older kit
-formats are unsupported and must be reconciled manually before upgrading.
-Kit-owned commands and scripts are refreshed if unmodified; customized managed files that would be
-overwritten block the upgrade. Project-owned edits are kept and the installer never touches
-`specs/`. For a gated upgrade PR, add its numbered review record **after** installation.
+`bash .product-kit/scripts/init.sh --upgrade` from a clean, committed checkout.
+Unedited files no longer shipped by the kit are removed. Edited retired files, foreign symlinks and
+retired memory files are kept and listed for you to delete or fold into project-owned files.
+Review any warnings about tracked references to removed files. Unsupported manifest formats still
+need manual reconciliation. Kit-owned commands and scripts that the kit still ships are refreshed
+if unmodified; customized managed files that would be overwritten block the upgrade. Project-owned
+edits are kept and the installer never touches `specs/`. For a gated upgrade PR, add its numbered
+review record **after** installation.
 Each [CHANGELOG](CHANGELOG.md) entry says what else to do.
 
 </details>

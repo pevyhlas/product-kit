@@ -8,6 +8,11 @@ change by change.
 
 ## [Unreleased]
 
+### Changed
+
+- Upgrades remove unedited retired kit files, list retired files kept for manual follow-up,
+  and warn about tracked references to removed files.
+
 ## [2.2.0] — 2026-11-24 — tracked history, coverage check and checked owner quotes
 
 ### Added
