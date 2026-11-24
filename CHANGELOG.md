@@ -16,6 +16,10 @@ change by change.
 - Versioning is documented as 3.x.y in the changelog, CONTRIBUTING and the kit's constitution:
   breaking changes bump the minor number, not the major.
 
+### Fixed
+
+- The review gate enforces and names the highest trusted tier across every change record touched in the branch's history (#197).
+
 ## [3.0.0] — 2026-11-24 — native GitHub review gate and optional UI design summary
 
 ### Added

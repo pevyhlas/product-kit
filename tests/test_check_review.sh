@@ -237,6 +237,116 @@ assert_eq 1 "$STATUS" "a tier below the trusted base's record fails"
 assert_contains "$OUTPUT" "The record claims T1, but its floor is T2, from the trusted base (origin/$DEFAULT)" "names the trusted floor"
 git update-ref "refs/remotes/origin/$DEFAULT" "$TRUSTED_TIP"
 
+it "untouched records do not affect the carrier's tier"
+git checkout -q -b multiple-records "$DEFAULT"
+OTHER=specs/changes/002-other.md
+RENAMED=specs/changes/004-renamed.md
+mkdir -p specs/changes
+printf '# Change: Other\n\n**Tier**: T3\n' > "$OTHER"
+printf '# Change: Low\n\n**Tier**: T1\n' > specs/changes/003-low.md
+git add specs/changes; git commit -qm "open records on the base"
+MULTI_BASE="$(git rev-parse HEAD)"
+git update-ref "refs/remotes/origin/$DEFAULT" "$MULTI_BASE"
+record T1
+CARRIER_HEAD="$(git rev-parse HEAD)"
+run bash "$CHECK" --json 001-greet
+assert_eq 3 "$STATUS"
+assert_contains "$OUTPUT" '"tier":"T1"'
+
+it "downgrading another open record requires its trusted tier"
+printf '# Change: Other\n\n**Tier**: T1\n' > "$OTHER"
+git commit -qam "lower the other record"
+run bash "$CHECK" --json 001-greet
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" '"tier":"T3"'
+assert_contains "$OUTPUT" "its floor is T3, from the trusted base (origin/$DEFAULT) ($OTHER)"
+use_gh_stub; approve_head
+run bash "$CHECK" --json --pr https://github.com/owner/repo/pull/7 001-greet
+assert_eq 1 "$STATUS" "a publisher's exact-head approval is not sufficient"
+assert_contains "$OUTPUT" '"authority":"host"'
+assert_contains "$OUTPUT" "T3 also requires a review-owner APPROVED review"
+git reset -q --hard "$CARRIER_HEAD"
+
+it "a deleted-and-recreated record counts even with no net diff for it"
+git rm -q "$OTHER"; git commit -qm "delete the other record"
+git show "$MULTI_BASE:$OTHER" > "$OTHER"
+git add "$OTHER"; git commit -qm "recreate the other record"
+run bash "$CHECK" --json 001-greet
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" '"tier":"T3"'
+assert_contains "$OUTPUT" "its floor is T3, from the trusted base (origin/$DEFAULT) ($OTHER)"
+git reset -q --hard "$CARRIER_HEAD"
+
+it "a non-carrier change discarded by a merge still counts"
+git checkout -q -b side-record-edit
+git rm -q "$OTHER"; git commit -qm "remove the other record on the side branch"
+git checkout -q multiple-records
+git commit --allow-empty -qm "advance the carrier branch"
+git merge -qs ours side-record-edit
+run bash "$CHECK" --json 001-greet
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "its floor is T3, from the trusted base (origin/$DEFAULT) ($OTHER)"
+git reset -q --hard "$CARRIER_HEAD"
+git branch -q -D side-record-edit
+
+it "both sides of a non-carrier rename count"
+git mv "$OTHER" "$RENAMED"; git commit -qm "rename the other record"
+run bash "$CHECK" --json 001-greet
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" '"tier":"T3"'
+assert_contains "$OUTPUT" "its floor is T3, from the trusted base (origin/$DEFAULT) ($OTHER)"
+git reset -q --hard "$CARRIER_HEAD"
+git show "$MULTI_BASE:$OTHER" | trusted_edit "refs/remotes/origin/$DEFAULT" "$RENAMED"
+git mv specs/changes/003-low.md "$RENAMED"; git commit -qm "move to a path with a trusted record"
+run bash "$CHECK" --json 001-greet
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" '"tier":"T3"'
+assert_contains "$OUTPUT" "its floor is T3, from the trusted base (origin/$DEFAULT) ($RENAMED)"
+git reset -q --hard "$CARRIER_HEAD"
+git update-ref "refs/remotes/origin/$DEFAULT" "$MULTI_BASE"
+
+it "non-carriers do not supply floors from candidate-only tiers"
+printf '# Change: New\n\n**Tier**: T3\n' > "$RENAMED"
+git add "$RENAMED"; git commit -qm "add a non-carrier record"
+run bash "$CHECK" --json 001-greet
+assert_eq 3 "$STATUS"
+assert_contains "$OUTPUT" '"tier":"T1"'
+git reset -q --hard "$CARRIER_HEAD"
+
+it "editing another record without changing its tier still raises the floor"
+printf '\n## Notes\n\nA clarification.\n' >> "$OTHER"
+git commit -qam "clarify the other record"
+run bash "$CHECK" --json 001-greet
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" '"tier":"T3"'
+assert_contains "$OUTPUT" "its floor is T3, from the trusted base (origin/$DEFAULT) ($OTHER)"
+OTHER_EDIT="$(git rev-parse HEAD)"
+
+it "an ambiguous or unreadable tier in a touched trusted record fails closed"
+for trusted_text in '**Tier**: T3\n**Tier**: T1\n' '**Tier**: T3'; do
+    printf '%b' "$trusted_text" | trusted_edit "refs/remotes/origin/$DEFAULT" "$OTHER"
+    run bash "$CHECK" 001-greet
+    assert_eq 1 "$STATUS"
+    assert_contains "$OUTPUT" "The record at the trusted base (origin/$DEFAULT) names no readable tier"
+    assert_contains "$OUTPUT" "$OTHER"
+    git update-ref "refs/remotes/origin/$DEFAULT" "$MULTI_BASE"
+done
+
+it "the import base and the change's start also supply non-carrier floors"
+git update-ref "refs/remotes/origin/$DEFAULT" "$TRUSTED_TIP"
+git update-ref refs/remotes/origin/develop "$MULTI_BASE"
+run bash "$CHECK" --json --base origin/develop 001-greet
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "its floor is T3, from the base (origin/develop) ($OTHER)"
+git checkout -q --detach "$MULTI_BASE"
+git rm -q "$OTHER"; git commit -qm "the integration branch closes the other record"
+git update-ref refs/remotes/origin/develop HEAD
+run bash "$CHECK" --json --head "$OTHER_EDIT" --base origin/develop 001-greet
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "its floor is T3, from the change's start ${MULTI_BASE:0:12} ($OTHER)"
+git update-ref -d refs/remotes/origin/develop
+git checkout -q 001-greet; git branch -q -D multiple-records
+
 it "the closing commit deletes the record and appends the log; the last record still decides"
 record T1
 git rm -q specs/changes/001-greet.md; mkdir -p .prdkit/history/log; printf -- '- 2026-10-18 001-greet: warmer greeting — R-01 — #1\n' > .prdkit/history/log/001-greet.md
