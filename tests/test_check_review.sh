@@ -329,6 +329,19 @@ assert_contains "$OUTPUT" "its floor is T3, from the trusted base (origin/$DEFAU
 git reset -q --hard "$CARRIER_HEAD"
 git branch -q -D side-record-edit
 
+it "an imported history's root can be the only touch of a trusted record"
+# The imported root has no parent; its child and the merge both keep the same tree.
+IMPORT_TREE="$(git rev-parse 'HEAD^{tree}')" || exit 1
+IMPORT_ROOT="$(git commit-tree "$IMPORT_TREE" -m "initial imported snapshot")" || exit 1
+IMPORT_TIP="$(git commit-tree "$IMPORT_TREE" -p "$IMPORT_ROOT" -m "unchanged imported snapshot")" || exit 1
+git merge -qs ours --allow-unrelated-histories "$IMPORT_TIP" || exit 1
+assert_eq '' "$(git diff --name-only "$MULTI_BASE" HEAD -- "$OTHER")" "the record is absent from the net diff"
+run bash "$CHECK" --json 001-greet
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" '"tier":"T3"'
+assert_contains "$OUTPUT" "its floor is T3, from the trusted base (origin/$DEFAULT) ($OTHER)"
+git reset -q --hard "$CARRIER_HEAD"
+
 it "both sides of a non-carrier rename count"
 git mv "$OTHER" "$RENAMED"; git commit -qm "rename the other record"
 run bash "$CHECK" --json 001-greet

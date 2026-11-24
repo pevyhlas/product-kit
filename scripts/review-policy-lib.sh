@@ -155,7 +155,7 @@ review_touched_paths() ( # root start head work -> escaped paths, one per line
     ' "$work/tier-commits" "$work/tier-commits" > "$work/tier-parent-diffs" || return 1
     git -C "$root" diff-tree --no-commit-id --name-only --no-renames --ignore-submodules=none -r -z \
         "$start" "$head" -- specs/changes/ > "$work/tier-diff" &&
-        git -C "$root" diff-tree --stdin --no-commit-id --name-only --no-renames --ignore-submodules=none -c -r -z \
+        git -C "$root" diff-tree --stdin --root --no-commit-id --name-only --no-renames --ignore-submodules=none -c -r -z \
             -- specs/changes/ < "$work/tier-parent-diffs" >> "$work/tier-diff" || return 1
     review_encode_record_paths "$work/tier-diff" | awk '!seen[$0]++'
 )
