@@ -121,6 +121,51 @@ assert_eq 2 "$STATUS"
 assert_contains "$OUTPUT" 'sha256 mismatch'
 mv "$snapshot.saved" "$snapshot" || exit 1
 
+it "scaffold ignores an override after a shorter tilde run inside a longer fence"
+cp "$MAP" "$MAP.saved" || exit 1
+cat >> "$MAP" <<'EOF'
+
+~~~~markdown
+~~~
+| Scope | Harness | Model | Variant | Reason |
+|-------|---------|-------|---------|--------|
+| agent:example-review | opencode | test/hidden | | Fenced example only |
+~~~~
+EOF
+run scaffold example-review opencode
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" 'Model: test/override'
+assert_not_contains "$OUTPUT" 'test/hidden'
+mv "$MAP.saved" "$MAP" || exit 1
+
+it "scaffold only closes a fence with the same character and no info string"
+cp "$MAP" "$MAP.saved" || exit 1
+cat >> "$MAP" <<'EOF'
+
+~~~~markdown
+````
+| Scope | Harness | Model | Variant | Reason |
+|-------|---------|-------|---------|--------|
+| agent:example-review | opencode | test/wrong-char | | Fenced example only |
+~~~~text
+| Scope | Harness | Model | Variant | Reason |
+|-------|---------|-------|---------|--------|
+| agent:example-review | opencode | test/extra-info | | Fenced example only |
+EOF
+run scaffold example-review opencode
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" 'Model: test/override'
+{ printf '%s\n\n' '~~~~~  '; cat <<'EOF'
+| Scope | Harness | Model | Variant | Reason |
+|-------|---------|-------|---------|--------|
+| agent:example-review | opencode | test/after-fence | | A real override after the fence |
+EOF
+} >> "$MAP"
+run scaffold example-review opencode
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" 'Model: test/after-fence'
+mv "$MAP.saved" "$MAP" || exit 1
+
 it "strict lint checks every stamp against the original scaffold"
 { report; trailer PASS 0 0 0 0; } > "$INPUT"
 run lint --strict --scaffold "$ORIGINAL"
@@ -160,6 +205,45 @@ printf 'not a scaffold\n' > "$ORIGINAL.invalid"
 run lint --strict --scaffold "$ORIGINAL.invalid"
 assert_eq 2 "$STATUS"
 assert_contains "$OUTPUT" 'must be the original unedited scaffold output'
+
+it "lint requires the original title and blank lines around the stamp block"
+for line in 1 2 9; do
+    { report | awk -v n="$line" 'NR == n { $0 = $0 " " } { print }'; trailer PASS 0 0 0 0; } > "$INPUT"
+    run lint --strict --scaffold "$ORIGINAL"
+    assert_eq 1 "$STATUS" "extra byte in scaffold line $line"
+    assert_contains "$OUTPUT" "line $line: preserve the original scaffold title and blank lines"
+done
+
+it "lint refuses duplicate stamp declarations in ordinary Markdown"
+for decoration in '- Model: another' '1. **Model:** another' '2) Model: another' \
+    '### Model: another' '### Model ###' $'Model\n---\nanother' '__Model__: another' '*Model:* another' \
+    '> Model: another' '> 1. **Model:** another' '| Model: another |' \
+    '| Field | Value |'; do
+    {
+        head -n 9 "$ORIGINAL"
+        printf '%s\n' "$decoration"
+        if [ "$decoration" = '| Field | Value |' ]; then
+            printf '%s\n' '| --- | --- |' '| **Model** | another |'
+        fi
+        printf '\n## Findings\n'
+        trailer PASS 0 0 0 0
+    } > "$INPUT"
+    run lint --strict --scaffold "$ORIGINAL"
+    assert_eq 1 "$STATUS" "scaffolded: $decoration"
+    assert_contains "$OUTPUT" 'duplicate report header field: model'
+    run lint --strict
+    assert_eq 1 "$STATUS" "standalone: $decoration"
+    assert_contains "$OUTPUT" 'duplicate report header field: model'
+done
+{
+    head -n 9 "$ORIGINAL"
+    printf '%s\n' '~~~~markdown' '~~~' '1. **Model:** example' '~~~~' \
+        'The reviewer confirmed the model: no unexpected change.' '' '## Findings'
+    trailer PASS 0 0 0 0
+} > "$INPUT"
+run lint --strict --scaffold "$ORIGINAL"
+assert_eq 0 "$STATUS" "context and fenced examples are not stamp declarations"
+assert_eq '' "$OUTPUT"
 
 it "zero findings and valid nonblocking findings lint cleanly"
 { report; trailer PASS 0 0 0 0; } > "$INPUT"
@@ -311,6 +395,16 @@ normalize > "$INPUT.result" 2> "$INPUT.error" || rc=$?
 assert_eq 2 "$rc"
 assert_contains "$(cat "$INPUT.error")" 'exceeds the normalize limit'
 assert_eq 0 "$(wc -c < "$INPUT.result" | tr -d '[:space:]')" "no partial output"
+
+it "many short lines at the byte cap fit within a modest memory limit"
+if [ "$(uname -s)" = Linux ] && (ulimit -v 131072) 2>/dev/null; then
+    awk -v n="$((1048576 - body_bytes))" 'BEGIN { while (n-- > 0) print "" }' > "$INPUT" || exit 1
+    cat "$INPUT.body" >> "$INPUT"
+    rc=0
+    (ulimit -v 131072 && normalize) > "$INPUT.result" || rc=$?
+    assert_eq 0 "$rc"
+    if cmp -s "$INPUT" "$INPUT.result"; then _ok "short lines are reproduced exactly"; else _no "short lines are reproduced exactly"; fi
+fi
 
 it "delivery failures override otherwise successful output"
 if [ -c /dev/full ] && ! (printf 'x' > /dev/full) 2>/dev/null; then

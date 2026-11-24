@@ -32,8 +32,9 @@ blocks under full rigor. Supply trusted policy's --rigor, or lint uses the insta
 project's constitution. A PASS with medium findings needs known rigor.
 
 The coordinator keeps the original scaffold and passes it with --scaffold to
-check that the returned header is unchanged. Without a tier map, omit --scaffold;
-header fields are then optional, but must not be repeated.
+check that the returned header is unchanged, including its title and spacing.
+Keep additional context after that header. Without a tier map, omit --scaffold;
+header fields are then optional. Do not redeclare fields in Markdown formatting.
 
 normalize writes a copy to stdout, changing only the explicit Verdict: line
 immediately before the final Counts: line. It does not infer a verdict from counts.
@@ -66,17 +67,16 @@ source "$SCRIPT_DIR/spec-lib.sh" || die 'cannot load spec-lib.sh; reinstall the 
 source "$SCRIPT_DIR/review-policy-lib.sh" || die 'cannot load review-policy-lib.sh; reinstall the kit'
 export LC_ALL=C
 
-# Used only by the report helper, including its call to the existing registry
-# parser. A backtick opener cannot have a backtick in its info string.
-REPORT_SKIP_AWK='function spec_skip(line,    marker, ending, opener) {
+# Share fence handling between report, registry and tier-map reads without
+# changing the default parsers. Backtick info strings cannot contain backticks.
+REPORT_FENCE_AWK='function skip_fence(line,    marker, ending, opener) {
     marker = line; sub(/^ ? ? ?/, "", marker)
     if (report_fence != "") {
-        ending = marker; sub(/[ \t]+$/, "", ending)
+        ending = marker; sub(/ +$/, "", ending)
         if (length(ending) >= length(report_fence) && (ending ~ /^`+$/ || ending ~ /^~+$/) &&
             substr(ending, 1, 1) == substr(report_fence, 1, 1)) report_fence = ""
         return 1
     }
-    if (report_comment || line ~ /^[ \t]*<!--/) { report_comment = !index(line, "-->"); return 1 }
     if (match(marker, /^```+|^~~~+/)) {
         opener = substr(marker, 1, RLENGTH)
         if (substr(opener, 1, 1) == "~" || !index(substr(marker, RLENGTH + 1), "`")) {
@@ -84,6 +84,12 @@ REPORT_SKIP_AWK='function spec_skip(line,    marker, ending, opener) {
             return 1
         }
     }
+    return 0
+}'
+REPORT_SKIP_AWK="$REPORT_FENCE_AWK"'
+function spec_skip(line) {
+    if (!report_comment && skip_fence(line)) return 1
+    if (report_comment || line ~ /^[ \t]*<!--/) { report_comment = !index(line, "-->"); return 1 }
     return 0
 }'
 
@@ -137,7 +143,7 @@ scaffold() {
     if $AT_DH_SET; then
         case " $AT_DH_LIST " in *" $harness "*) ;; *) die "'$reviewer' does not target '$harness' in its neutral definition" ;; esac
     fi
-    at_load "$root" || die 'cannot load the configured tier map'
+    at_load "$root" "$REPORT_FENCE_AWK" || die 'cannot load the configured tier map'
     problems="$(at_lint_map)" || die 'cannot check the configured tier map'
     [ -z "$problems" ] || die "$problems"
     # shellcheck disable=SC2153 # Set by at_resolve in agent-tiers-lib.sh.
@@ -206,17 +212,21 @@ fi
 # Keep two lines in reserve for the trailer. Use awk status 3 for a completed
 # lint with findings or a normalization refusal. cat checks writes that some
 # awks fail to report (e.g. a full output device).
-REPORT_SCAFFOLD="$original" awk -v mode="$mode" -v rigor="$rigor" "$REPORT_SKIP_AWK"'
+# shellcheck disable=SC2094 # REPORT_COPY reopens the input read-only.
+REPORT_SCAFFOLD="$original" REPORT_COPY="$local_copy" awk -v mode="$mode" -v rigor="$rigor" "$REPORT_SKIP_AWK"'
     BEGIN {
         split("Critical High Medium Low", severities)
         for (i = 1; i <= 4; i++) rank[severities[i]] = i
         split("Reviewer Base Head Since Scope Model", labels)
+        for (i = 1; i <= 6; i++) stamp_key[tolower(labels[i])] = 1
         original = ENVIRON["REPORT_SCAFFOLD"]
         if (original != "" && !read_scaffold(original)) { invalid_scaffold = 1; exit 4 }
     }
     function read_scaffold(file,   line, i, prefix, extra) {
         if ((getline line < file) != 1 || line != "# Review report") return 0
+        stamp[1] = line
         if ((getline line < file) != 1 || line != "") return 0
+        stamp[2] = line
         for (i = 1; i <= 6; i++) {
             prefix = labels[i] ": "
             if ((getline line < file) != 1 || index(line, prefix) != 1 ||
@@ -224,23 +234,37 @@ REPORT_SCAFFOLD="$original" awk -v mode="$mode" -v rigor="$rigor" "$REPORT_SKIP_
             stamp[i + 2] = line
         }
         if ((getline line < file) != 1 || line != "") return 0
+        stamp[9] = line
         if ((getline line < file) != 1 || line != "## Findings") return 0
         extra = getline line < file
         close(file)
         return extra == 0
     }
     function problem(n, text) { printf "line %d: %s\n", n, text; bad = 1 }
-    function header(line, skip,   key, sep) {
-        if (skip) return
-        if (NR in stamp && line == stamp[NR]) matched[NR] = 1
-        sep = index(line, ":")
-        if (!sep) return
-        key = tolower(substr(line, 1, sep - 1))
-        gsub(/^[ \t]+|[ \t]+$/, "", key)
-        sub(/^[-*+][ \t]+/, "", key)
-        gsub(/\*\*|__|`/, "", key)
-        if (key ~ /^(reviewer|base|head|since|scope|model)$/ && seen[key]++)
+    function stamp_declaration(key) {
+        if (original != "" || seen[key]++)
             problem(NR, "duplicate report header field: " key)
+    }
+    # Match labels, not incidental mentions in prose. Peel nested Markdown
+    # containers before checking column cells and ATX headings.
+    function header(line, skip,   key, sep, heading, n, i, cells, previous) {
+        previous = bare_stamp; bare_stamp = ""
+        if (skip) return
+        if (NR in stamp && line == stamp[NR]) { matched[NR] = 1; return }
+        sub(/^[ \t]*/, "", line)
+        while (sub(/^(>[ \t]*|([-*+]|[0-9]+[.)])[ \t]+)[ \t]*/, "", line)) {}
+        if (previous != "" && line ~ /^(=+|-+)[ \t]*$/) stamp_declaration(previous)
+        heading = sub(/^#+[ \t]+/, "", line)
+        if (heading) sub(/[ \t]+#+[ \t]*$/, "", line)
+        n = split(line, cells, /\|/)
+        for (i = 1; i <= n; i++) {
+            sep = index(cells[i], ":")
+            key = tolower(sep ? substr(cells[i], 1, sep - 1) : cells[i])
+            gsub(/^[ \t*_`]+|[ \t*_`]+$/, "", key)
+            if (!(key in stamp_key)) continue
+            if (sep || heading || n > 1) stamp_declaration(key)
+            else bare_stamp = key
+        }
     }
     function finish_finding() {
         if (!start) return
@@ -292,8 +316,7 @@ REPORT_SCAFFOLD="$original" awk -v mode="$mode" -v rigor="$rigor" "$REPORT_SKIP_
     }
     {
         hidden = spec_skip($0)
-        if (mode == "normalize") lines[NR] = $0
-        else {
+        if (mode == "lint") {
             header($0, hidden)
             if (NR > 2) body(before, NR - 2, before_hidden)
         }
@@ -307,14 +330,22 @@ REPORT_SCAFFOLD="$original" awk -v mode="$mode" -v rigor="$rigor" "$REPORT_SKIP_
         if (mode == "normalize") {
             verdict = (verdict_line && counts_line ? normalized(before) : "")
             if (verdict == "") exit 3
-            for (i = 1; i <= NR - 2; i++) print lines[i]
+            # Replay the validated private copy only after the verdict is known.
+            copy = ENVIRON["REPORT_COPY"]
+            for (i = 1; i <= NR - 2; i++) {
+                if ((getline line < copy) != 1) exit 5
+                print line
+            }
             print "Verdict: " verdict
             print last
             exit
         }
         if (original != "")
-            for (i = 3; i <= 8; i++)
-                if (!matched[i]) problem(i, "preserve the original scaffold line for " labels[i - 2] ":")
+            for (i = 1; i <= 9; i++)
+                if (!matched[i]) {
+                    if (i >= 3 && i <= 8) problem(i, "preserve the original scaffold line for " labels[i - 2] ":")
+                    else problem(i, "preserve the original scaffold title and blank lines")
+                }
         if (NR >= 2 && !verdict_line) body(before, NR - 1, before_hidden)
         if (NR >= 1 && !counts_line) body(last, NR, last_hidden)
         finish_finding()
