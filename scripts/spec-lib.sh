@@ -8,7 +8,6 @@ SPEC_SEP="$(printf '\037')"
 if ! declare -F verify_lf_file >/dev/null; then
     source "$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 fi
-source "$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/spec-navigation-lib.sh"
 
 # Text carried in row fields must never introduce a field or record boundary.
 spec_field() { printf '%s' "$1" | tr '\037\t\r\n' '    '; }
@@ -27,6 +26,29 @@ SPEC_ID_AWK='function spec_ids(s, where,   pre, post, tok, w) {
         s = substr(s, RSTART + RLENGTH)
     }
 }'
+
+# The same definition prefix is used by spec_items and section lookup.
+SPEC_BULLET_ID_AWK='function spec_bullet_id(s) {
+    if (!sub(/^[[:space:]]*[-*][[:space:]]+\*\*/, "", s) ||
+        s !~ /^(P[0-9]+(\.[0-9]+)?\.[BI]|[JRQCDN])-[0-9]/) return ""
+    sub(/[[:space:]*].*/, "", s)
+    return s
+}'
+
+SPEC_HEADING_AWK='function spec_heading(line,   depth) {
+    sub(/^ ? ? ?/, "", line)
+    if (!match(line, /^#+/) || RLENGTH > 6 || substr(line, RLENGTH + 1) !~ /^([ \t]|$)/) return 0
+    depth = RLENGTH; heading_title = substr(line, depth + 1)
+    sub(/[ \t]+#+[ \t]*$/, "", heading_title)
+    gsub(/^[ \t]+|[ \t]+$/, "", heading_title)
+    return depth
+}'
+
+SPEC_RECORD_NAME_AWK='
+    function spec_record_type(type) { return type ~ /^(HOLD|WAIVER|ATTEST|DEPLOY)$/ }
+    function spec_record_name(name) { return name ~ /^[A-Za-z0-9][A-Za-z0-9._-]*$/ }'
+
+source "$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/spec-navigation-lib.sh"
 
 # Metadata readers ignore both kinds of Markdown fences, including shorter inner fences.
 SPEC_METADATA_SKIP_AWK='function metadata_skip(line,    marker, ending) {
@@ -841,7 +863,7 @@ spec_items() { # root [--skip-invalid-journey-ids] [file...]: the spec files whe
     for file in ${files[@]+"${files[@]}"}; do
         verify_lf_file "$root/$file" || { printf 'Invalid spec text: %s (expected non-empty LF-terminated text)\n' "$file" >&2; return 1; }
         expected="$(wc -l < "$root/$file")" || return 1
-        awk -v expected="$expected" -v file="$(spec_field "$file")" -v strict_journeys="$strict_journeys" "$SPEC_SKIP_AWK"'
+        awk -v expected="$expected" -v file="$(spec_field "$file")" -v strict_journeys="$strict_journeys" "$SPEC_SKIP_AWK $SPEC_BULLET_ID_AWK"'
             BEGIN { gsub(/[\037\r\n]/, " ", file) }
             function indent(s) { sub(/[^[:space:]].*/, "", s); return length(s) }
             function flags(line, id, block,   m, p, t, b, v, i, u) {
@@ -862,7 +884,7 @@ spec_items() { # root [--skip-invalid-journey-ids] [file...]: the spec files whe
             function flush() { if (pend != "") print pend_id "\037" pend_title "\037" flags(pend, pend_id, pend " " subs) "\037" file ":" pend_nr; pend = ""; subs = ""; insub = 0 }
             { gsub(/\037/, " "); if (spec_skip($0)) { flush(); next } }
             pend != "" && $0 !~ /^[[:space:]]*$/ && $0 !~ /^[[:space:]]*([-*+]|[0-9]+\.)[[:space:]]/ && $0 !~ /^(#|\|)/ { if (insub) subs = subs " " $0; else pend = pend " " $0; next }
-            pend != "" && /^[[:space:]]*([-*+]|[0-9]+\.)[[:space:]]/ && !/^[[:space:]]*[-*][[:space:]]+\*\*(P[0-9]+(\.[0-9]+)?\.[BI]|[JRQCDN])-[0-9]/ && indent($0) > pend_ind { insub = 1; subs = subs "\n" $0; next }
+            pend != "" && /^[[:space:]]*([-*+]|[0-9]+\.)[[:space:]]/ && !spec_bullet_id($0) && indent($0) > pend_ind { insub = 1; subs = subs "\n" $0; next }
             { flush() }
             /^#/ { retired_list = ($0 ~ /^#+[[:space:]]+Retired[[:space:]]*$/) }
             /^\|[[:space:]]*[Pp]art[[:space:]]*\|/ {
@@ -896,9 +918,8 @@ spec_items() { # root [--skip-invalid-journey-ids] [file...]: the spec files whe
                 id = $2; title = $0; sub(/^#[[:space:]]+J-[0-9]+[[:space:]]+/, "", title); sub(/[[:space:]]*\((hypothesis|validated|retired|planned)[^)]*\)[[:space:]]*$/, "", title)
                 print id "\037" title "\037" flags($0) "\037" file ":" NR; next
             }
-            /^[[:space:]]*[-*][[:space:]]+\*\*(P[0-9]+(\.[0-9]+)?\.[BI]|[JRQCDN])-[0-9]/ {
+            (id = spec_bullet_id($0)) != "" {
                 body = $0; sub(/^[[:space:]]*[-*][[:space:]]+\*\*/, "", body)
-                id = body; sub(/[[:space:]*].*/, "", id)
                 if (id ~ /^J-[0-9]$/) {
                     if (!strict_journeys) next
                     print "Unsupported journey ID at " file ":" NR ": use a journey ID with two or more digits, e.g. J-01." > "/dev/stderr"
@@ -1366,17 +1387,12 @@ spec_authority_ref() { # root anchor
     [ -f "$file" ] || { echo 'missing authority file specs/authority.md' >&2; return 1; }
     review_file_without_nul "$file" 2>/dev/null ||
         { echo 'cannot read specs/authority.md as LF text' >&2; return 1; }
-    if entry="$(LC_ALL=C awk -v anchor="$anchor" "$SPEC_METADATA_SKIP_AWK"'
+    if entry="$(LC_ALL=C awk -v anchor="$anchor" "$SPEC_METADATA_SKIP_AWK $SPEC_HEADING_AWK"'
         index($0, "\r") { problem = 12; exit }
         !metadata_skip($0) {
-            h = $0; sub(/^ ? ? ?/, "", h)
-            if (match(h, /^#+/) && RLENGTH <= 6 && substr(h, RLENGTH + 1) ~ /^([ \t]|$)/) {
-                depth = RLENGTH
+            if ((depth = spec_heading($0))) {
                 if (level && depth <= level) level = 0
-                h = substr(h, depth + 1)
-                sub(/[ \t]+#+[ \t]*$/, "", h)
-                gsub(/^[ \t]+|[ \t]+$/, "", h)
-                if ("x" h == "x" anchor) {
+                if ("x" heading_title == "x" anchor) {
                     if (++found > 1) { problem = 11; exit }
                     level = depth
                 }
@@ -1415,7 +1431,7 @@ spec_records() { # root
     [ -f "$file" ] || return 0
     verify_lf_file "$file" allow-empty || { echo 'Invalid text in specs/records.md' >&2; return 1; }
     expected="$(wc -l < "$file")" || return 1
-    rows="$(awk -v expected="$expected" "$SPEC_SKIP_AWK"'
+    rows="$(awk -v expected="$expected" "$SPEC_SKIP_AWK $SPEC_RECORD_NAME_AWK"'
         function isdate(s) { return s ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ }
         function bad(why) { print NR "\037INVALID\037\037\037\037\037\037\037\037\037" why; }
         { gsub(/\037/, " "); if (spec_skip($0)) next }
@@ -1438,8 +1454,8 @@ spec_records() { # root
                 if (index(f[i], "=")) { k = substr(f[i], 1, index(f[i], "=") - 1); kv[k] = substr(f[i], index(f[i], "=") + 1) }
                 else if (f[i] != "" && k != "") { if (!isdate(kv[k])) kv[k] = kv[k] " " f[i] }
                 else if (f[i] != "" && stray == "") stray = f[i]
-            if (type !~ /^(HOLD|WAIVER|ATTEST|DEPLOY)$/) { bad("not a HOLD, WAIVER, ATTEST or DEPLOY record"); next }
-            if (name == "" || index(name, "=") || name !~ /^[A-Za-z0-9][A-Za-z0-9._-]*$/) { bad(type " needs an id or app name first"); next }
+            if (!spec_record_type(type)) { bad("not a HOLD, WAIVER, ATTEST or DEPLOY record"); next }
+            if (!spec_record_name(name)) { bad(type " needs an id or app name first"); next }
             if ((type == "HOLD" || type == "WAIVER") && ("ref" in kv)) {
                 bad(type " " name ": put ref= after the reason separator ( — )"); next
             }

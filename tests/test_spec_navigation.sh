@@ -54,6 +54,140 @@ assert_eq 1 "$STATUS" "unknown target fails"
 bash "$READER" --raw "$FILE" > raw.md
 assert_eq "$before" "$(git hash-object raw.md)" "raw read is byte-for-byte"
 
+it "index and sections share the compact projection and line budget"
+run bash "$READER" --index "$FILE"
+assert_eq 0 "$STATUS"
+assert_eq '1: # Requirements (106 reading lines)' "${OUTPUT#*$'\n'}" "the index is a heading tree, not a source dump"
+run bash "$READER" --section rec-50 "$FILE"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" "content_blob=$before" "the source is the working-tree blob"
+assert_contains "$OUTPUT" '105:   Tracking: [REC-50][nav-rec-50]' "original numbering"
+assert_not_contains "$OUTPUT" 'projection=' "section has no stats preamble"
+assert_not_contains "$OUTPUT" 'https://tracker.example.test' "validated footer is not repeated"
+
+it "nested headings and item IDs identify exactly one original span"
+SECTIONS=specs/sections.md
+cat > "$SECTIONS" <<'MD'
+# Product
+Preface cites R-02.
+## Accounts ##
+- **R-01 Creation**: create accounts.
+Tracking: [REC-1][nav-a] [REC-2][nav-b]
+Tracking: [REC-1][nav-a]
+<!-- examples
+## Hidden comment
+- **R-90 Comment**
+-->
+````markdown
+## Hidden backticks
+```
+- **R-91 Code**
+````
+~~~
+## Hidden tildes
+~~~
+### Safety
+MD
+long_line="$(awk 'BEGIN { for (i=1;i<=101;i++) printf "é" }')"
+printf '%s\n' "$long_line" >> "$SECTIONS"
+cat >> "$SECTIONS" <<'MD'
+## Other
+- **R-02 Other**: unrelated.
+Tracking: [REC-2][nav-b]
+## Shared
+## Shared
+## H-07 Hold details
+## Path \name (literal?)
+<!-- prdkit:navigation:v1 begin -->
+[nav-a]: https://example.test/items/REC-1
+[nav-b]: https://example.test/items/REC-2
+<!-- prdkit:navigation:v1 end -->
+MD
+run bash "$READER" --index "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq "$(cat <<'INDEX'
+1: # Product (28 reading lines)
+3:   ## Accounts (19 reading lines)
+19:     ### Safety (3 reading lines)
+21:   ## Other (3 reading lines)
+24:   ## Shared (1 reading line)
+25:   ## Shared (1 reading line)
+26:   ## H-07 Hold details (1 reading line)
+27:   ## Path \name (literal?) (1 reading line)
+INDEX
+)" "${OUTPUT#*$'\n'}" "nested counts include descendants, long lines and literal source examples"
+for heading in ' Accounts ' r-01 rec-1; do
+    run bash "$READER" --section "$heading" "$SECTIONS"
+    assert_eq 0 "$STATUS" "$heading resolves"
+    assert_eq "$(awk 'NR >= 3 && NR <= 20 { print NR ": " $0 }' "$SECTIONS")" "${OUTPUT#*$'\n'}" \
+        "selection stops before the next sibling and retains literal examples"
+done
+run bash "$READER" --section R-02 "$SECTIONS"
+assert_eq 0 "$STATUS" "a prose reference in another section is not a definition"
+assert_eq "$(awk 'NR >= 21 && NR <= 23 { print NR ": " $0 }' "$SECTIONS")" "${OUTPUT#*$'\n'}"
+run bash "$READER" --section h-07 "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq '26: ## H-07 Hold details' "${OUTPUT#*$'\n'}"
+run bash "$READER" --section 'path   \name (literal?)' "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq '27: ## Path \name (literal?)' "${OUTPUT#*$'\n'}" "selector is literal and last section stops at EOF"
+
+it "ambiguous or missing selectors report candidate locations and no selected content"
+for heading in Shared REC-2; do
+    run bash "$READER" --section "$heading" "$SECTIONS"
+    assert_eq 2 "$STATUS"
+    assert_contains "$OUTPUT" 'Ambiguous section selector'
+    assert_contains "$OUTPUT" 'Available candidates:'
+    assert_not_contains "$OUTPUT" 'Source:' "no source header promises a selected section"
+    case "$heading" in
+        Shared) assert_contains "$OUTPUT" '24:   ## Shared'; assert_contains "$OUTPUT" '25:   ## Shared' ;;
+        REC-2) assert_contains "$OUTPUT" '3:   ## Accounts'; assert_contains "$OUTPUT" '21:   ## Other' ;;
+    esac
+done
+for heading in R-90 R-91 'Hidden backticks' 'Hidden tildes' 'Hidden comment' nav-a ''; do
+    run bash "$READER" --section "$heading" "$SECTIONS"
+    assert_eq 2 "$STATUS"
+    assert_contains "$OUTPUT" 'Available candidates:'
+    assert_contains "$OUTPUT" '3:   ## Accounts [IDs: R-01, REC-1, REC-2]'
+done
+bash "$READER" --section "$SECTIONS" > stdout 2> stderr
+assert_eq 2 "$?"
+assert_eq '' "$(cat stdout)" "selection errors go to stderr"
+assert_contains "$(cat stderr)" 'Missing section selector. Available candidates:'
+run bash "$READER" --section Accounts --index "$SECTIONS"
+assert_eq 2 "$STATUS" "modes are mutually exclusive"
+run bash "$READER" --help
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '--index'
+assert_contains "$OUTPUT" '--section'
+
+it "record rows select their enclosing heading, not where the ID is cited"
+printf '%s\n' '# Records' '## Paused' 'HOLD stop-01 owner=owner scope=all since=2026-01-01 until=lifted — Pause.' \
+    '## Notes' 'The owner discussed stop-01.' > "$SECTIONS"
+run bash "$READER" --section stop-01 "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq $'2: ## Paused\n3: HOLD stop-01 owner=owner scope=all since=2026-01-01 until=lifted — Pause.' "${OUTPUT#*$'\n'}"
+
+it "invalid navigation is still visible and does not hide a heading in authored content"
+printf '%s\n' '# Spec' 'Tracking: [REC-1][nav-a]' '<!-- prdkit:navigation:v1 begin -->' \
+    '[nav-a]: https://example.test/items/REC-1' '## Authored' 'Prose in a malformed footer.' \
+    '<!-- prdkit:navigation:v1 end -->' > "$SECTIONS"
+run bash "$READER" --index "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq $'1: # Spec (7 reading lines)\n5:   ## Authored (3 reading lines)' "${OUTPUT#*$'\n'}"
+run bash "$READER" --section Authored "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '6: Prose in a malformed footer.'
+assert_not_contains "$OUTPUT" 'https://' "content before the heading is not included"
+printf '%s\n' 'No headings in this file.' > "$SECTIONS"
+run bash "$READER" --index "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq 'No ATX headings.' "${OUTPUT#*$'\n'}"
+run bash "$READER" --section missing "$SECTIONS"
+assert_eq 2 "$STATUS"
+assert_contains "$OUTPUT" '(no ATX headings)'
+rm "$SECTIONS"
+
 it "doctor excludes valid navigation from reading-budget excess and counts invalid navigation"
 # Make 158 raw lines fit the 150-line observed budget after only generated navigation is omitted.
 cp "$FILE" specs/observed.md
@@ -112,6 +246,7 @@ small; sed '/^Tracking:/d' "$FILE" > edit.md; mv edit.md "$FILE"; retained 'unre
 small; sed 's/^Tracking:/Evidence:/' "$FILE" > edit.md; mv edit.md "$FILE"; retained 'authored citation'
 small; sed 's/^Tracking:.*$/Tracking: [A-1][nav-a] evidence/' "$FILE" > edit.md; mv edit.md "$FILE"; retained 'mixed tracking line'
 small; sed 's|items/A-1$|items/A-1 "Evidence"|' "$FILE" > edit.md; mv edit.md "$FILE"; retained 'definition title'
+small; sed 's|items/A-1$|items/A-1[detail]|' "$FILE" > edit.md; mv edit.md "$FILE"; retained 'brackets in URL'
 small; printf 'More evidence [nav-a].\n' | cat - "$FILE" > edit.md; mv edit.md "$FILE"; retained 'shortcut use'
 small; printf '<div>\n' | cat - "$FILE" > edit.md; mv edit.md "$FILE"; retained 'HTML context'
 small; cat "$FILE" "$FILE" > edit.md; mv edit.md "$FILE"; retained 'multiple blocks'

@@ -11,6 +11,10 @@ change by change.
 
 ## [Unreleased]
 
+### Added
+
+- `read-spec.sh --index` lists headings and reading-line counts; `--section` reads one section by heading or ID with its source blob and original line numbers.
+
 ### Changed
 
 - Versioning is documented as 3.x.y in the changelog, CONTRIBUTING and the kit's constitution:
