@@ -19,6 +19,9 @@ change by change.
 
 ### Changed
 
+- Upgrades remove retired kit files with unchanged content, list retired files kept for manual
+  follow-up, and warn about tracked references to removed files. Upgrades refuse if sparse
+  checkout excludes a retired tracked path.
 - Reviewers submit approvals or changes requested directly on GitHub under their own
   identities. After a local close, push the closing commit for its required reviews.
 

@@ -70,12 +70,20 @@ Customize policy and templates instead of forking operational instructions.
 The installer writes and deletes only inside the project. It refuses, before writing anything,
 when a directory it writes into (`.prdkit/` and its subdirectories, or a selected harness's
 `.claude/commands/` or `.opencode/commands/`) is a symlink or resolves outside the project, or when
-a directory sits where it installs a file. Replacing a kit-owned file with a custom symlink
-blocks an upgrade; the installer never writes through it. A plain upgrade keeps symlinked
+a directory sits where it installs a file. Replacing a kit-owned file that is still shipped with
+a custom symlink blocks an upgrade; the installer never writes through it. A plain upgrade keeps symlinked
 templates and memory files. `--upgrade --force` still has to pass the overwrite checks.
 `AGENTS.md` and `.gitignore` may link to a file inside the project (for example, `AGENTS.md`
 can link to `CLAUDE.md`). An upgrade refuses links to root files outside the project.
-An unsupported manifest entry blocks the upgrade; it is never deleted by the installer.
+When the kit no longer ships a manifest-listed file, `--check` reports it as retired drift. On
+`--upgrade`, a retired regular file is unedited if its content matches the manifest hash; file
+mode does not affect that decision. Installer-owned command symlinks are removed even if dangling.
+Content edits, foreign symlinks, directories, and retired memory files are kept and listed for
+manual follow-up. Retirement does not unlink an alias of a current install destination. If sparse
+checkout excludes any retired tracked paths, the upgrade refuses before writing. Include the
+listed paths with `git sparse-checkout add`, then retry. A successful upgrade drops all retired
+entries from the manifest. Tracked references to removed files are warnings, not blockers. A plain
+rerun with retired entries directs you to `--upgrade`.
 The manifest records version, harnesses, install mode, selected options and pristine file
 hashes. Upgrade from a clean, committed checkout. To deselect agent tiers, use
 `--without agent-tiers`; the installer removes its managed files only when the project no
@@ -97,6 +105,11 @@ customization. The manifest publishes last. An unfinished write phase leaves
 report it as incomplete. Keep the original source revision available and retry it with
 `init.sh --upgrade`, then check integrity. A marker can remain even after manifest publication;
 it still requires a coherent retry, not deletion to make the gate green.
+For a missing retired path, a retry verifies the committed file independently of the marker.
+It checks a regular file's raw committed bytes, or those same bytes with every LF changed
+to CRLF if the blob contains no CR. It does not apply checkout settings or run Git filters.
+For committed command symlinks, it checks the link target. If required Git objects are missing
+locally, the retry refuses rather than fetching them.
 
 The write phase uses an exclusive `.prdkit/.install-lock` file with PID/host. Concurrent writers
 are refused rather than waiting on stale ownership data. Normal failure/TERM releases the lock;

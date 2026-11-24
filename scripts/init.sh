@@ -19,7 +19,8 @@
 #                   auto-detected harnesses). On an existing install the list must keep
 #                   every recorded harness: dropping one is refused (see docs/harnesses.md)
 #   --upgrade       Refresh kit-owned files (commands + scripts, always), auto-update
-#                   unmodified templates/memory, add new files. Consumer edits to
+#                   unmodified templates/memory, add new files, remove unedited
+#                   retired files (except memory) and list kept ones. Consumer edits to
 #                   templates/memory are preserved and listed; edits to kit-owned
 #                   commands/scripts are reported by --check and refused on upgrade.
 #   --with NAME     Also install an optional subsystem (agent-tiers: render-agents.sh and the
@@ -139,7 +140,6 @@ if [ "$INITIAL_MANIFEST" != absent ] && ! install_manifest_format "$MANIFEST"; t
     echo 'Invalid .prdkit/.manifest: expected LF text with unique version, harnesses, mode (copy or symlink), options (none or agent-tiers), and SHA-256 entries for installed kit paths; nothing was written.' >&2
     exit 1
 fi
-
 # --- Resolve install harnesses -----------------------------------------------
 # Product-Kit's core is markdown + bash, so commands can be installed for more
 # than one agent CLI. Verified per-harness targets:
@@ -327,17 +327,39 @@ KIT_FILES="$(list_kit_files)" && [ -n "$KIT_FILES" ] || {
     echo 'Cannot enumerate kit files; nothing was written.' >&2
     exit 1
 }
+RETIRED_ENTRIES=""
+PREVIOUS_MANIFEST=""
+PREVIOUS_SYMLINK=false
+RESUMING_UPGRADE=false
 if [ "$INITIAL_MANIFEST" != absent ]; then
-    unsupported="$(LC_ALL=C awk -F '\t' -v optional="$REMOVE_OPTIONS_FILES" '
+    if $UPGRADE && ! $CHECK; then
+        spec_objects_local "$TARGET" || { echo 'Cannot check the installation without fetching missing objects; nothing was written.' >&2; exit 1; }
+        export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
+    fi
+    if $UPGRADE && ! $CHECK && [ -f "$PRDKIT_DIR/.install-state" ] && [ ! -L "$PRDKIT_DIR/.install-state" ]; then
+        # Publication may already have dropped the entries; recover against the committed manifest.
+        PREVIOUS_MANIFEST="$(upgrade_committed_manifest)" || {
+            echo 'Cannot read a valid committed install manifest for recovery; nothing was written.' >&2
+            exit 1
+        }
+        RESUMING_UPGRADE=true
+    else
+        PREVIOUS_MANIFEST="$(cat "$MANIFEST")" || exit 1
+    fi
+    if grep -qxF 'mode: symlink' <<< "$PREVIOUS_MANIFEST"; then PREVIOUS_SYMLINK=true; fi
+    RETIRED_ENTRIES="$(LC_ALL=C awk -F '\t' -v optional="$REMOVE_OPTIONS_FILES" '
         BEGIN { n=split(optional, paths, " "); for (i=1; i<=n; i++) current[paths[i]]=1 }
-        FILENAME=="-" { current[$2]=1; next }
+        !manifest && !NF { manifest=1; next }
+        !manifest { current[$2]=1; next }
         /^(version|harnesses|mode|options|agents-section): / || $0 ~ /^[[:space:]]*$/ { next }
-        { path=substr($0, 67); if (!(path in current)) print path }
-    ' - "$MANIFEST" <<< "$KIT_FILES")" || exit 1
-    if [ -n "$unsupported" ]; then
-        while IFS= read -r rel; do
-            printf 'Unsupported install manifest entry: %s is not in the current kit mapping. Reconcile the installation manually; nothing was written.\n' "$rel" >&2
-        done <<< "$unsupported"
+        { path=substr($0, 67); if (!(path in current)) { if (seen[path]++) bad=1; print } }
+        END { exit bad }
+    ' <<< "$KIT_FILES"$'\n\n'"$PREVIOUS_MANIFEST")" || {
+        echo 'Invalid .prdkit/.manifest: duplicate retired path or unreadable inventory; nothing was written.' >&2
+        exit 1
+    }
+    if [ -n "$RETIRED_ENTRIES" ] && ! $CHECK && ! $UPGRADE; then
+        echo 'The install manifest contains retired kit files. Review them with --check, then run with --upgrade from a clean checkout; nothing was written.' >&2
         exit 1
     fi
 fi
@@ -379,12 +401,56 @@ file_locally_edited() {
 # directory, in the absolute or relative form this script writes, dangling or not.
 is_kit_command_link() {
     local file="$1" target dir kitdir
-    target="$(readlink "$file")" || return 1
+    if [ "$#" -eq 2 ]; then target="$2"
+    else
+        target="$(readlink "$file" && printf x)" || return 1
+        target="${target%$'\nx'}"
+    fi
     case "$target" in /*) ;; *) target="$(dirname "$file")/$target" ;; esac
-    [ "$(basename "$target")" = "$(basename "$file")" ] || return 1
+    [ "${target##*/}" = "${file##*/}" ] || return 1
     dir="$(cd "$(dirname "$target")" 2>/dev/null && pwd -P)" || return 1
     kitdir="$(cd "$PK_ROOT/commands" 2>/dev/null && pwd -P)" || return 1
     [ "$dir" = "$kitdir" ]
+}
+
+is_retired_kit_link() { # relative path [committed link target]
+    case "$1" in
+        .claude/commands/*|.opencode/commands/*)
+            local file="$TARGET/$1"
+            shift
+            $PREVIOUS_SYMLINK && is_kit_command_link "$file" "$@"
+            return ;;
+    esac
+    return 1
+}
+
+# Only regular files and installer command links can be unedited; never hash through a symlink.
+retired_file_state() { # relative path, recorded hash
+    local rel="$1" rec="$2" file="$TARGET/$1" cur
+    if [ -L "$file" ]; then
+        if is_retired_kit_link "$rel"; then echo unedited; return 0; fi
+    elif [ ! -e "$file" ]; then echo absent; return 0
+    elif [ -f "$file" ] && [[ "$rel" != .prdkit/memory/* ]]; then
+        cur="$(hash_file "$file")" || return 1
+        if [ "$cur" = "$rec" ]; then echo unedited; return 0; fi
+    fi
+    echo kept
+}
+
+retired_overlaps_current() {
+    local dest="$TARGET/$1" src rel
+    while IFS=$'\t' read -r src rel; do
+        if [ "$dest" -ef "$TARGET/$rel" ]; then return 0; fi
+    done <<< "$KIT_FILES"
+    return 1
+}
+
+retired_recorded_hash() {
+    local entry
+    while IFS= read -r entry; do
+        if [ "${entry#*  }" = "$1" ]; then printf '%s\n' "${entry%%  *}"; return 0; fi
+    done <<< "$RETIRED_ENTRIES"
+    return 1
 }
 
 # --- Containment ---------------------------------------------------------------
@@ -418,6 +484,60 @@ managed_dir_problem() {
     case "$phys/" in "$TARGET"/*) return 1 ;; esac
     printf '%s resolves outside the target (%s)\n' "$1" "$phys"
     return 0
+}
+
+# Retired commands can belong to an unselected harness. Check all ancestors
+# before looking at a retired file, even when its directory isn't being installed.
+retired_parent_problem() {
+    local parent="${1%/*}"
+    if [[ "$parent" = */* ]] && retired_parent_problem "$parent"; then return 0; fi
+    managed_dir_problem "$parent"
+}
+
+# Plan from validated manifest rows. A missing tracked file counts as previous
+# installer work only if its committed checkout representation is pristine.
+plan_retirement() {
+    local entry rel rec state git_root index_entry
+    [ -n "$RETIRED_ENTRIES" ] || return 0
+    git_root="$(git -C "$TARGET" rev-parse --show-toplevel 2>/dev/null)" || git_root=""
+    if $CHECK && [ "$git_root" = "$TARGET" ]; then
+        # ls-files can expand a sparse index. Do not fetch objects to do that.
+        spec_objects_local "$TARGET" || {
+            echo 'Cannot inspect retired files in the index without fetching missing objects; nothing was written.' >&2
+            return 1
+        }
+    fi
+    while IFS= read -r entry; do
+        rel="${entry#*  }"; rec="${entry%%  *}"
+        if [ "$git_root" = "$TARGET" ]; then
+            index_entry="$(GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1 \
+                git -C "$TARGET" ls-files -t -- ":(top,literal)$rel")" || return 1
+            if [[ "$index_entry" = 'S '* ]]; then RETIRED_SPARSE+=("$rel"); continue; fi
+        fi
+        if $CHECK && retired_parent_problem "$rel" >/dev/null; then state=kept
+        else state="$(retired_file_state "$rel" "$rec")" || return 1; fi
+        case "$state" in
+            unedited)
+                if ! retired_overlaps_current "$rel"; then RETIRED_REMOVE+=("$rel"); fi ;;
+            kept) RETIRED_KEEP+=("$rel") ;;
+            absent)
+                if $RESUMING_UPGRADE; then
+                    state="$(upgrade_retired_head_state "$rel" "$rec")" || {
+                        printf 'Cannot read committed retired file %s from local Git objects; nothing was written.\n' "$rel" >&2
+                        return 1
+                    }
+                    if [ "$state" = unedited ]; then RETIRED_DELETED+=("$rel"); continue; fi
+                fi
+                RETIRED_ABSENT+=("$rel") ;;
+        esac
+    done <<< "$RETIRED_ENTRIES"
+}
+RETIRED_REMOVE=(); RETIRED_KEEP=(); RETIRED_ABSENT=(); RETIRED_DELETED=(); RETIRED_SPARSE=()
+
+list_sparse_retirements() {
+    echo 'Retired files excluded by sparse checkout:'
+    printf '  %s\n' "${RETIRED_SPARSE[@]}"
+    echo 'Include these paths (or their parent directories) with git sparse-checkout add, then retry --upgrade.'
 }
 
 # Where an in-place edit of a root file (AGENTS.md, .gitignore) lands: the file itself, or, for
@@ -532,6 +652,24 @@ if $CHECK; then
         for rel in "${CUSTOMIZED[@]}"; do echo "  $rel"; done
         echo
     fi
+    if [ -n "$RETIRED_ENTRIES" ]; then
+        drift=1
+        plan_retirement || exit 1
+        if [ ${#RETIRED_REMOVE[@]} -gt 0 ]; then
+            echo "RETIRED — unedited (--upgrade removes these):"
+            printf '  %s\n' "${RETIRED_REMOVE[@]}"
+        fi
+        if [ ${#RETIRED_KEEP[@]} -gt 0 ]; then
+            echo "RETIRED — kept (customized, symlinked, memory, or unsafe to inspect):"
+            printf '  %s\n' "${RETIRED_KEEP[@]}"
+        fi
+        if [ ${#RETIRED_ABSENT[@]} -gt 0 ]; then
+            echo "RETIRED — already absent (--upgrade drops these manifest entries):"
+            printf '  %s\n' "${RETIRED_ABSENT[@]}"
+        fi
+        if [ ${#RETIRED_SPARSE[@]} -gt 0 ]; then list_sparse_retirements; fi
+        echo
+    fi
 
     if [ "$drift" -eq 0 ]; then
         echo "Everything up to date — nothing to do."
@@ -546,10 +684,15 @@ fi
 # not a directory or resolves outside TARGET, or when a directory sits where the kit installs a
 # file. Directories that do not exist yet are created below as real directories.
 containment_problems() {
-    local rel src dirs=".prdkit .prdkit/scripts .prdkit/scripts/bash .prdkit/templates .prdkit/memory .prdkit/workflows .prdkit/agents"
+    local rel src entry dirs=".prdkit .prdkit/scripts .prdkit/scripts/bash .prdkit/templates .prdkit/memory .prdkit/workflows .prdkit/agents"
     if has_harness claude; then dirs="$dirs .claude .claude/commands"; fi
     if has_harness opencode; then dirs="$dirs .opencode .opencode/commands"; fi
     for rel in $dirs; do managed_dir_problem "$rel" || true; done
+    if [ -n "$RETIRED_ENTRIES" ]; then
+        while IFS= read -r entry; do
+            retired_parent_problem "${entry#*  }" || true
+        done <<< "$RETIRED_ENTRIES"
+    fi
     while IFS=$'\t' read -r src rel; do
         if [ -d "$TARGET/$rel" ] && [ ! -L "$TARGET/$rel" ]; then printf '%s is a directory where the kit installs a file\n' "$rel"; fi
     done <<< "$KIT_FILES"$'\nmanifest\t.prdkit/.manifest\nmanifest\t.prdkit/.manifest.tmp\nstate\t.prdkit/.install-state\nlock\t.prdkit/.install-lock'
@@ -561,7 +704,7 @@ containment_problems() {
         fi
     done
 }
-PROBLEMS="$(containment_problems)"
+PROBLEMS="$(containment_problems | LC_ALL=C sort -u)"
 if [ -n "$PROBLEMS" ]; then
     echo "Error: refusing to install into $TARGET; nothing was written:" >&2
     printf '%s\n' "$PROBLEMS" | sed 's/^/  /' >&2
@@ -569,21 +712,49 @@ if [ -n "$PROBLEMS" ]; then
     exit 1
 fi
 
+build_reference_paths() {
+    # Exclude exact installed paths, not directories: a consumer can keep a
+    # tracked wrapper alongside kit scripts. Use the pre-upgrade manifest.
+    local installed_paths rel
+    search_paths=(. ':(top,exclude,literal).prdkit/.manifest' ':(top,exclude,literal).product-kit')
+    installed_paths="$(LC_ALL=C awk 'length($1) == 64 && $1 ~ /^[0-9a-f]+$/ { print substr($0, 67) }' <<< "$PREVIOUS_MANIFEST")" || return 1
+    while IFS= read -r rel; do
+        [ -z "$rel" ] || search_paths+=(":(top,exclude,literal)$rel")
+    done <<< "$installed_paths"
+}
+
+warn_retired_references() {
+    local rel references patterns=()
+    if [ ${#RETIRED_REMOVE[@]} -gt 0 ]; then
+        for rel in "${RETIRED_REMOVE[@]}"; do patterns+=(-e "${rel##*/}"); done
+    fi
+    if [ ${#RETIRED_DELETED[@]} -gt 0 ]; then
+        for rel in "${RETIRED_DELETED[@]}"; do patterns+=(-e "${rel##*/}"); done
+    fi
+    [ ${#patterns[@]} -gt 0 ] || return 0
+    if references="$(git -C "$TARGET" grep --no-color --no-recurse-submodules --no-textconv -n -I -F \
+        "${patterns[@]}" -- "${search_paths[@]}")"; then
+        printf 'Warning: tracked project files still reference removed retired kit files:\n%s\n' "$references" >&2
+    elif [ "$?" -ne 1 ]; then
+        echo 'Warning: could not check tracked references to removed retired kit files.' >&2
+    fi
+}
+
 if $UPGRADE; then
     [ "$INITIAL_MANIFEST" != absent ] || { echo 'No install manifest; run init.sh without --upgrade to install.' >&2; exit 1; }
-    spec_objects_local "$TARGET" || { echo 'Cannot check the installation without fetching missing objects; nothing was written.' >&2; exit 1; }
-    export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
+    plan_retirement || exit 1
+    if [ ${#RETIRED_SPARSE[@]} -gt 0 ]; then
+        list_sparse_retirements >&2
+        echo 'Upgrade refused; nothing was written.' >&2
+        exit 1
+    fi
     upgrade_destinations_safe || exit 1
     upgrade_checkout_clean || exit 1
     upgrade_no_overwrite || exit 1
+    if [ -n "$REMOVE_OPTIONS_FILES" ] || [ ${#RETIRED_REMOVE[@]} -gt 0 ] || [ ${#RETIRED_DELETED[@]} -gt 0 ]; then
+        build_reference_paths || exit 1
+    fi
     if [ -n "$REMOVE_OPTIONS_FILES" ]; then
-        # Exclude the exact installed paths from the validated manifest, not their
-        # directories: a consumer can keep a tracked wrapper alongside kit scripts.
-        search_paths=(. ':(top,exclude,literal).prdkit/.manifest' ':(top,exclude,literal).product-kit')
-        installed_paths="$(LC_ALL=C awk 'length($1) == 64 && $1 ~ /^[0-9a-f]+$/ { print substr($0, 67) }' "$MANIFEST")" || exit 1
-        while IFS= read -r rel; do
-            [ -z "$rel" ] || search_paths+=(":(top,exclude,literal)$rel")
-        done <<< "$installed_paths"
         if references="$(git -C "$TARGET" grep --no-color -n -I -E -e 'render-agents\.sh|agent-definition-template\.md' \
             --and --not -e '^[[:space:]]*#' -- "${search_paths[@]}")"; then
             printf 'Error: --without agent-tiers would remove files still referenced by tracked project files. Update these references or keep the subsystem:\n%s\n' "$references" >&2
@@ -775,6 +946,24 @@ for rel in $REMOVE_OPTIONS_FILES; do
         echo "Removed optional file: $rel"
     fi
 done
+if [ ${#RETIRED_REMOVE[@]} -gt 0 ]; then
+    removed=()
+    for rel in "${RETIRED_REMOVE[@]}"; do
+        if retired_overlaps_current "$rel"; then continue; fi
+        rec="$(retired_recorded_hash "$rel")"
+        state="$(retired_file_state "$rel" "$rec")"
+        case "$state" in
+            kept) RETIRED_KEEP+=("$rel"); continue ;;
+            absent) continue ;;
+        esac
+        record_progress retired "$rel"
+        rm -f "$TARGET/$rel"
+        removed+=("$rel")
+        printf 'Removed retired kit file: %s\n' "$rel"
+    done
+    RETIRED_REMOVE=()
+    if [ ${#removed[@]} -gt 0 ]; then RETIRED_REMOVE=("${removed[@]}"); fi
+fi
 
 # --- AGENTS.md managed section -----------------------------------------------
 # For harnesses without a per-project slash-command mechanism (Codex CLI, any
@@ -957,6 +1146,11 @@ echo "✓ Manifest written to .prdkit/.manifest"
 if $UPGRADE; then
     echo
     echo "Upgrade complete (commands re-linked, scripts refreshed, unmodified templates/memory updated, modified templates/memory preserved)."
+    if [ ${#RETIRED_KEEP[@]} -gt 0 ]; then
+        echo 'Kept retired files (no longer managed; delete them or fold their content into project-owned files):'
+        printf '  %s\n' "${RETIRED_KEEP[@]}"
+    fi
+    warn_retired_references
     echo "Run 'bash .product-kit/scripts/init.sh --check' anytime to see install drift."
     echo "Run /prdkit-status for the current state."
     exit 0
