@@ -866,6 +866,49 @@ for state in working committed; do
 done
 git reset -q --hard "$before_sparse"
 
+it "doctor distinguishes a sparse checkout from a deleted allocation floor"
+floor_project="$(make_inited_project)"; track_tmp "$floor_project"
+cd "$floor_project" || exit 1
+mkdir -p specs
+printf '# Demo product\n' > specs/product.md
+printf '**Log condensed through**: 002\n**Allocated through**: 005\n' > specs/archive.md
+git add -A && git commit -qm 'archive with an allocation floor' &&
+    git commit -qm 'leave the floor unchanged' --allow-empty || exit 1
+floor_doctor=.prdkit/scripts/bash/doctor.sh
+run bash "$floor_doctor" --json
+assert_eq 0 "$STATUS" 'the materialized floor passes'
+
+mv specs/archive.md .git/saved-archive
+run bash "$floor_doctor" --json
+assert_eq 1 "$STATUS" 'an unstaged deletion still fails'
+assert_contains "$OUTPUT" 'Allocated through decreased from 5 to 0'
+git add -u -- specs/archive.md
+run bash "$floor_doctor" --json
+assert_eq 1 "$STATUS" 'a staged deletion still fails'
+assert_contains "$OUTPUT" 'Allocated through decreased from 5 to 0'
+mv .git/saved-archive specs/archive.md
+git add specs/archive.md &&
+    git sparse-checkout set --no-cone '/*' '!/specs/archive.md' || exit 1
+assert_eq absent "$([ -e specs/archive.md ] && echo present || echo absent)"
+assert_eq 'S specs/archive.md' "$(git ls-files -t -- specs/archive.md)"
+assert_eq '' "$(git status --porcelain)" 'sparse checkout is clean'
+run bash "$floor_doctor" --json
+assert_eq 0 "$STATUS" 'the unchanged floor still passes when sparse checkout omits its file'
+assert_not_contains "$OUTPUT" 'Allocated through decreased'
+
+floor_shim="$(mktemp -d)"; track_tmp "$floor_shim"
+cat > "$floor_shim/git" <<'SH'
+#!/usr/bin/env bash
+if [ "${3:-}" = show ] && [ "${4:-}" = :./specs/archive.md ]; then exit 1; fi
+exec "$REAL_FLOOR_GIT" "$@"
+SH
+chmod +x "$floor_shim/git"
+run env PATH="$floor_shim:$PATH" REAL_FLOOR_GIT="$(command -v git)" bash "$floor_doctor" --json
+assert_eq 1 "$STATUS" 'unavailable archive evidence is not a passing check'
+assert_contains "$OUTPUT" 'specs/archive.md: condensed log index unavailable from the Git index'
+assert_not_contains "$OUTPUT" 'Allocated through decreased'
+cd "$PROJ" || exit 1
+
 it "a renamed change record is not a closed one"
 mkdir -p specs/changes; printf '# 004-y\n\nIntent: export the weekly report as a file.\n' > specs/changes/004-y.md
 git add specs/changes; git commit -qm open >/dev/null

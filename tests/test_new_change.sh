@@ -475,7 +475,7 @@ for num in auto explicit; do
     if [ "$num" = auto ]; then run bash "$sparse_new" --no-branch "desc"
     else run bash "$sparse_new" --number 34 --no-branch "desc"; fi
     assert_eq 1 "$STATUS" "$num numbering cannot fall back to the cutoff"
-    assert_contains "$OUTPUT" 'specs/archive.md:2:' 'line-numbered error'
+    assert_contains "$OUTPUT" 'specs/archive.md:1:' 'line-numbered error'
 done
 cd "$PROJ2" || exit 1
 

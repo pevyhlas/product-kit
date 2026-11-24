@@ -207,7 +207,29 @@ spec_archive_log_index() { # root [diagnostic-path]
     row="$(spec_archive_log_details "$@")" || return 1
     printf '%s\n' "${row%%"$SPEC_SEP"*}"
 }
-spec_archive_log_details() { _spec_archive_log_file "$1/specs/archive.md" "${2:-specs/archive.md}"; }
+spec_archive_log_details() ( # root [diagnostic-path]
+    local path=specs/archive.md entries tmp diagnostic="${2:-specs/archive.md}"
+    if [ ! -e "$1/$path" ] && [ ! -L "$1/$path" ] &&
+        _spec_archive_git -C "$1" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        entries="$(verify_lines _spec_archive_git -C "$1" ls-files -t -- "$path")" || return 1
+        # An absent skip-worktree path is not a deletion. Read the index, not HEAD:
+        # a staged archive may differ even if Git leaves the file out of the checkout.
+        if [ "$entries" = "S $path" ]; then
+            if ! spec_objects_local "$1" || ! tmp="$(mktemp)"; then
+                printf '%s: condensed log index unavailable from the Git index\n' "$diagnostic" >&2
+                return 1
+            fi
+            trap 'rm -f "$tmp"' EXIT
+            if ! _spec_archive_git -C "$1" show ":./$path" > "$tmp" 2>/dev/null; then
+                printf '%s: condensed log index unavailable from the Git index\n' "$diagnostic" >&2
+                return 1
+            fi
+            _spec_archive_log_file "$tmp" "$diagnostic" " (in the Git index)"
+            return
+        fi
+    fi
+    _spec_archive_log_file "$1/$path" "$diagnostic"
+)
 
 _spec_archive_log_file() { # file diagnostic-path [diagnostic-context]
     local parsed expected end index pointer line floor floor_line context="${3:-}"
