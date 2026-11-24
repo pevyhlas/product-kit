@@ -48,8 +48,10 @@ procedures in L0–L2 or the change record are low (advisory); tag them `defer: 
 Critical and high findings block, medium blocks under `Rigor: full`, low is advisory. A failed
 tool run is not a product FAIL and an absent reviewer is not approval. Preserve each report
 verbatim on the PR; the change record will be deleted on close and the local cache is not its
-durable public home. End the review report with `Verdict: PASS|FAIL` and then
-`Counts: <n> critical, <n> high, <n> medium, <n> low`, exactly as the review prompt specifies.
+durable public home. When the reviewer is configured in the tier map, prepare the header with
+`.prdkit/scripts/bash/review-report.sh scaffold`. Send the format from `review-report.sh --help`
+with the prompt, and use `review-report.sh lint --strict` with the trusted policy's `--rigor` to
+check the returned report before publication. Report lint is formatting evidence, not approval.
 
 Submit a normal GitHub pull request review under the reviewer’s own identity. Approve the
 commit actually inspected, or request changes with the findings. When using the API, bind

@@ -29,6 +29,7 @@ test_check_review.sh
 test_review_gate.sh
 test_review_lenses.sh
 test_review_record_format.sh
+test_review_report.sh
 test_pr_review.sh
 test_review_package.sh
 test_review_package_rounds.sh

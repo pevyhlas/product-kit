@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+# Local scaffold provenance, report grammar, severity policy, and normalization.
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+PROJ="$(make_inited_project)" || exit 1
+track_tmp "$PROJ"
+HELPER="$PROJ/.prdkit/scripts/bash/review-report.sh"
+MAP="$PROJ/.prdkit/memory/agents.md"
+CONSTITUTION="$PROJ/.prdkit/memory/constitution.md"
+DEF="$PROJ/.prdkit/agents/example-review.md"
+INPUT="$PROJ/saved report.md"
+mkdir -p "$PROJ/.prdkit/agents" "$PROJ/.prdkit/agent-library" "$PROJ/.opencode/agents" || exit 1
+
+cat > "$MAP" <<'EOF'
+# Capabilities
+
+## Review registry
+
+<!--
+| Identity | Role |
+|----------|------|
+| commented | reviewer |
+-->
+| Identity | Role |
+|----------|------|
+| example-review | reviewer |
+| maker-review | reviewer |
+| maker-review | maker |
+
+## Tier map
+
+Tier baseline: agent-library tiers.json@1234567
+
+| Local tier | Library tier |
+|------------|--------------|
+| local-review | shared-review |
+
+| Scope | Harness | Model | Variant | Reason |
+|-------|---------|-------|---------|--------|
+| agent:example-review | opencode | test/override | | Fixture tests override precedence |
+EOF
+cat > "$DEF" <<'EOF'
+---
+name: example-review
+tier: local-review
+harnesses: [claude, opencode]
+---
+EOF
+printf -- '---\nmodel: ignored-projection\n---\n' > "$PROJ/.opencode/agents/example-review.md"
+snapshot="$PROJ/.prdkit/agent-library/tiers.json"
+printf '%s\n' '{"shared-review":{"opencode":{"model":"test/base"},"claude":{"model":"test/other"}}}' > "$snapshot"
+# Use the same cross-platform hash helpers as the vendored snapshot writer.
+source "$PROJ/.prdkit/scripts/bash/install-lib.sh"
+printf 'library-ref: 1234567\nsha256: %s\n' "$(install_hash_stream < "$snapshot")" > "$snapshot.ref"
+
+scaffold() {
+    "$BASH" "$HELPER" scaffold --reviewer "$1" --harness "$2" --base base-sha --head head-sha \
+        --scope 'Check two paths' "${@:3}"
+}
+lint() { "$BASH" "$HELPER" lint "$@" "$INPUT"; }
+normalize() { "$BASH" "$HELPER" normalize "$INPUT"; }
+trailer() { printf 'Verdict: %s\nCounts: %s critical, %s high, %s medium, %s low\n' "$@"; }
+finding() { printf '\n- %s: path with spaces/file.md:42\n  Scenario: Observable result.\n  Evidence: Replayed the check.\n' "$1"; }
+report() { if [ -n "$HEADER" ]; then printf '%s\n' "$HEADER"; fi; }
+
+it "scaffold stamps the installed registry, review range, scope and resolved model"
+run scaffold example-review opencode --since previous-sha
+assert_eq 0 "$STATUS"
+expected='# Review report
+
+Reviewer: example-review
+Base: base-sha
+Head: head-sha
+Since: previous-sha
+Scope: Check two paths
+Model: test/override
+
+## Findings'
+assert_eq "$expected" "$OUTPUT" "fixed header, override wins instead of projection or baseline"
+HEADER="$OUTPUT"
+run scaffold example-review claude
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" 'Since: initial'
+assert_contains "$OUTPUT" 'Model: test/other' "harness and mapped baseline tier select the model"
+assert_not_contains "$OUTPUT" 'Verdict:' "scaffold never chooses a verdict"
+
+it "scaffold refuses an unregistered, commented-out or maker identity"
+for name in not-listed commented maker-review; do
+    run scaffold "$name" opencode
+    assert_eq 2 "$STATUS"
+    assert_contains "$OUTPUT" 'expected one reviewer entry'
+done
+run scaffold example-review 'claude opencode'
+assert_eq 2 "$STATUS"
+assert_contains "$OUTPUT" '--harness must be one of:'
+run scaffold example-review opencode --model not-from-map
+assert_eq 2 "$STATUS"
+assert_contains "$OUTPUT" 'unknown scaffold option'
+run scaffold example-review opencode --since $'prior\nModel: injected'
+assert_eq 2 "$STATUS"
+assert_contains "$OUTPUT" 'single-line value'
+run scaffold example-review opencode --since x --since y
+assert_eq 2 "$STATUS"
+assert_contains "$OUTPUT" 'supply --since only once'
+cp "$snapshot" "$snapshot.saved" || exit 1
+printf ' ' >> "$snapshot"
+run scaffold example-review opencode
+assert_eq 2 "$STATUS"
+assert_contains "$OUTPUT" 'sha256 mismatch'
+mv "$snapshot.saved" "$snapshot" || exit 1
+
+it "zero findings and valid nonblocking findings lint cleanly"
+{ report; trailer PASS 0 0 0 0; } > "$INPUT"
+run lint --strict
+assert_eq 0 "$STATUS"
+assert_eq '' "$OUTPUT"
+{ report; finding Medium; finding Low; trailer PASS 0 0 1 1; } > "$INPUT"
+run lint --strict
+assert_eq 0 "$STATUS" "the seeded constitution is light"
+assert_eq '' "$OUTPUT"
+run lint --strict --rigor full
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'PASS is inconsistent with blocking findings'
+printf '%s\n' '- **Rigor**: full' > "$CONSTITUTION"
+run lint --strict
+assert_eq 1 "$STATUS" "the installed policy also controls medium findings"
+run lint --strict --rigor light
+assert_eq 0 "$STATUS" "caller can supply the trusted policy instead"
+printf '%s\n' '# Missing rigor' > "$CONSTITUTION"
+run lint --strict
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'supply --rigor from trusted policy'
+{ report; finding Low; trailer PASS 0 0 0 1; } > "$INPUT"
+run lint --strict --rigor full
+assert_eq 0 "$STATUS" "low remains advisory under full rigor"
+
+it "lint validates blocking severities without judging a valid FAIL"
+{ report; finding Critical; finding High; finding Medium; finding Low; trailer FAIL 1 1 1 1; } > "$INPUT"
+run lint --strict --rigor full
+assert_eq 0 "$STATUS" "FAIL is a product verdict, not a lint finding"
+assert_eq '' "$OUTPUT"
+for severity in Critical High; do
+    c=0 h=0
+    case "$severity" in Critical) c=1 ;; High) h=1 ;; esac
+    { report; finding "$severity"; trailer PASS "$c" "$h" 0 0; } > "$INPUT"
+    run lint --rigor light
+    assert_eq 0 "$STATUS" "default reports diagnostics but does not fail"
+    assert_contains "$OUTPUT" 'PASS is inconsistent with blocking findings'
+    run lint --strict --rigor light
+    assert_eq 1 "$STATUS"
+done
+
+it "lint diagnoses each malformed field and reconciles actual finding counts"
+{
+    report
+    cat <<'EOF'
+- Major: a.md:3
+  Scenario: Context.
+  Evidence: Actual output.
+- High: missing-line.md
+  Scenario:
+  Evidence: Actual output.
+- Low: a.md:0
+  Scenario: Context.
+  Evidence:
+EOF
+    trailer FAIL 1 0 0 0
+} > "$INPUT"
+run lint --strict
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'start a finding with - Critical:'
+assert_contains "$OUTPUT" 'file:line location with a positive line number'
+assert_contains "$OUTPUT" 'finding needs a nonblank Scenario:'
+assert_contains "$OUTPUT" 'finding needs a nonblank Evidence:'
+assert_contains "$OUTPUT" 'last line must match the findings: Counts: 0 critical, 1 high, 0 medium, 1 low'
+
+it "lint requires exact visible final lines with no trailing blank or prose"
+for bad in blank prose reversed whitespace extra-count; do
+    {
+        report
+        case "$bad" in
+            blank) trailer PASS 0 0 0 0; printf '\n' ;;
+            prose) trailer PASS 0 0 0 0; printf 'Done.\n' ;;
+            reversed) trailer PASS 0 0 0 0 | awk '{a[NR]=$0} END {print a[2]; print a[1]}' ;;
+            whitespace) printf 'Verdict: PASS \nCounts: 0 critical, 0 high, 0 medium, 0 low\n' ;;
+            extra-count) trailer PASS 00 0 0 0 ;;
+        esac
+    } > "$INPUT"
+    run lint --strict
+    assert_eq 1 "$STATUS" "$bad trailer refused"
+done
+{ report; printf '%s\n' '~~~'; trailer PASS 0 0 0 0; } > "$INPUT"
+run lint --strict
+assert_eq 1 "$STATUS" "a fenced trailer is not the verdict"
+run normalize
+assert_eq 2 "$STATUS"
+
+it "normalize changes only the explicit verdict, and never edits the file"
+for value in '  lGtM ' 'ACCEPTED' 'passed' 'APPROVED' 'FAIL' 'rejected' 'CHANGES_REQUESTED' 'Request Changes'; do
+    case "$value" in FAIL|rejected|CHANGES_REQUESTED|'Request Changes') canonical=FAIL ;; *) canonical=PASS ;; esac
+    { report; printf 'Verdict: %s\nCounts: keep this literal\n' "$value"; } > "$INPUT"
+    before="$(cat "$INPUT")"
+    run normalize
+    assert_eq 0 "$STATUS"
+    assert_eq "$(report; printf 'Verdict: %s\nCounts: keep this literal\n' "$canonical")" "$OUTPUT"
+    assert_eq "$before" "$(cat "$INPUT")" "normalization does not rewrite the input"
+done
+{ report; printf 'Verdict: approved\nCounts: 0 critical, 0 high, 0 medium, 0 low\n'; } > "$INPUT"
+normalize > "$INPUT.normalized" || exit 1
+run "$BASH" "$HELPER" lint --strict "$INPUT.normalized"
+assert_eq 0 "$STATUS" "normalization produces a report that can be linted"
+
+it "normalize refuses missing and unknown verdicts; unreadable input is not a lint finding"
+for verdict in '' 'Verdict: pending' 'Verdict: PASS (conditional)'; do
+    { report; printf '%s\nCounts: 0 critical, 0 high, 0 medium, 0 low\n' "$verdict"; } > "$INPUT"
+    run normalize
+    assert_eq 2 "$STATUS"
+    assert_contains "$OUTPUT" 'expected a recognized Verdict: value'
+done
+printf 'Verdict: PASS\nCounts: binary\000text\n' > "$INPUT"
+run lint --strict
+assert_eq 2 "$STATUS"
+assert_contains "$OUTPUT" 'LF-terminated text file'
+run "$BASH" "$HELPER" lint --strict "$INPUT.missing"
+assert_eq 2 "$STATUS"
+assert_contains "$OUTPUT" "$INPUT.missing"
+finish

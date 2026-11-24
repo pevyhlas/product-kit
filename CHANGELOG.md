@@ -11,6 +11,10 @@ change by change.
 
 ## [Unreleased]
 
+### Added
+
+- Scaffold, lint, and normalize local review reports with `review-report.sh` without changing the GitHub review gate.
+
 ### Changed
 
 - Versioning is documented as 3.x.y in the changelog, CONTRIBUTING and the kit's constitution:
