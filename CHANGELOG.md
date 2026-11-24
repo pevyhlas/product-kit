@@ -8,6 +8,8 @@ change by change.
 
 ## [Unreleased]
 
+## [3.0.0] — 2026-11-24 — native GitHub review gate and optional UI design summary
+
 ### Added
 
 - Projects with a UI can opt into `specs/design.md`, a short L1 summary for direction,
@@ -34,6 +36,22 @@ change by change.
   dismissed (#138).
 - Review policy requires a unique Configuration heading. Comments and fenced examples
   before or within that section are rejected.
+- Upgrading a 2.x install is one coordinated cutover; the 2.x and 3.0 gates accept no common
+  policy, so never merge the policy change on its own:
+  1. Pause merges. The 3.0 gate ignores 2.x receipts, so an unsettled receipt failure stops
+     blocking. Settle every one under the old gate first. To carry one over instead, an
+     account the 3.0 policy lists (`review-publishers`, `review-lenses` or `review-owner`),
+     other than the PR author, must request changes on each affected open PR, and the new
+     gate must report it as blocking before merges resume.
+  2. In one change on the trusted default branch, bump the kit pin, run `init.sh --upgrade`,
+     set `review-host`, `review-publishers` and `review-owner` as described in
+     `.prdkit/templates/config-template.md`, and drop `review-publisher-isolation`. Switch the
+     registered required workflow to the 3.0 launcher in the same cutover. The upgrade removes
+     the retired review scripts unless they were edited, and lists any it keeps.
+  3. Resume merges. GitHub does not rerun the required workflow when a review is submitted or
+     dismissed: request a full rerun after every review change and again just before each
+     merge, and do not use unattended auto-merge (`docs/ci-gates.md`, "Refresh the required
+     verdict").
 
 ### Removed (breaking)
 
