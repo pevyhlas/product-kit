@@ -148,6 +148,11 @@ text, and the upstream Spec Kit notice in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_N
 
 ## Releases
 
+Versions stay on 3.x.y. A release with a breaking change bumps the minor number (3.1.0) and
+records it under `Changed (breaking)` or `Removed (breaking)`; any other release bumps the patch
+(3.0.1). The major number moves only when the maintainer names a major reason, never for a
+routine breaking change. The release tooling only requires each `X.Y.Z` to increase.
+
 Releases are automatic and come only from main. The maintainer makes the release pull request;
 merging one that bumps `VERSION` is the release decision. Do not create release tags or GitHub
 releases by hand.
