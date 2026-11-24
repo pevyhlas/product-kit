@@ -355,8 +355,8 @@ if $json; then
         "$blocking" "$authority" "$(json_escape "$pr_url")" "$pr_head" "$head_is_pr_head" "$(json_array ${problems[@]+"${problems[@]}"})"
     if [ -n "$lenses" ]; then printf ',"areas":%s' "$areas"; fi
     if $diagnostics; then
-        printf ',"diagnostics":{"base_ref":"%s","base_at":"%s","policy_at":"%s","head":"%s"}' \
-            "$(json_escape "$base_canonical")" "$import_base" "$policy_at" "$head"
+        printf ',"diagnostics":{"base_ref":"%s","base_at":"%s","policy_ref":"%s","policy_at":"%s","head":"%s"}' \
+            "$(json_escape "$base_canonical")" "$import_base" "$(json_escape "$trusted_default")" "$policy_at" "$head"
     fi
     printf '}\n'
 elif [ "$result" = pass ]; then
