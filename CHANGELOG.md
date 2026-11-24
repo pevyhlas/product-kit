@@ -44,8 +44,37 @@ change by change.
   install manually; Product-Kit provides no migration tooling. Ordinary upgrades and consumer
   data-migration guidance remain.
 
+### Changed (breaking)
+
+- Closed changes and the archive now live in tracked `.prdkit/history/`, not in `specs/`.
+  From the project root, run the lines for the paths you have, then commit the move:
+
+  ```bash
+  mkdir -p .prdkit/history
+  git mv specs/log.md .prdkit/history/log.md
+  git mv specs/log .prdkit/history/log
+  git mv specs/archive.md .prdkit/history/archive.md
+  ```
+
+  If the destination `log/` already exists, move the remaining entry files individually;
+  do not nest the directory or overwrite entries. Update stale worktrees and integration
+  refs before allocating or closing changes. Keep `.prdkit/history/` tracked and ignore
+  `.prdkit/cache/`, not all of `.prdkit/`. The installer warns about blocking ignore
+  rules without rewriting them. Update the folded log header to match
+  `history-log-template.md`, and remove any links to history from the spec.
+  Preserve the archive's condensed numbers and allocation floor. If a sparse index points
+  to the old path, commit its referenced folded log at `.prdkit/history/log.md` on a durable
+  Git ref, and point the index to that snapshot. For a cutoff-only index, keep the bare
+  cutoff and move the old Git locator to a separate archive note. No old-path reader is provided.
+- Each close row is at most 200 characters, including its date, change ID and any tags:
+  `<intent> — <IDs and parts> — <disposition> — <PR>` after the prefix. Shorten existing
+  overlong live rows; leave task lists and acceptance evidence on the PR.
+
 ### Fixed
 
+- Opening a change in a partial clone reads the pinned template without fetching and
+  stops before creating a worktree if the template object is missing. Review still
+  recognizes integration branches configured in a locally available policy on older Git.
 - PR review launcher groups now have live guard leaders that signal only their own groups.
   The launcher checks for surviving members without waiting for a leader and confirms the
   groups are absent at the kernel level before deleting scratch. If it cannot verify shutdown

@@ -21,6 +21,7 @@ while [ "$#" -gt 0 ]; do
 done
 root="$(get_repo_root)"
 require_consumer_root "$root" status.sh
+spec_require_history_layout "$root" || exit 1
 spec_require_layout "$root" || exit 1
 today="$(spec_today)"
 layout="$(spec_layout "$root")"
@@ -383,7 +384,7 @@ esac
 [ -z "$mixed" ] || printf '\nTwo spec forms: specs/SPEC.md beside %s — keep one; the views below combine both.\n' "$mixed"
 if [ "$closed_since" -ge 10 ]; then
     printf '\nCompaction due: %s changes closed %s (.prdkit/workflows/compact.md, Compaction).\n' "$closed_since" \
-        "$(if [ -n "$last_pass" ]; then echo "since the last pass ($last_pass)"; else echo 'and no pass recorded in specs/log.md'; fi)"
+        "$(if [ -n "$last_pass" ]; then echo "since the last pass ($last_pass)"; else echo 'and no pass recorded in .prdkit/history/log.md'; fi)"
 fi
 
 printf '\nOutcome progress (recorded claims; evidence and allocation need review)\n'

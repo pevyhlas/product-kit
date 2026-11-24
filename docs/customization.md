@@ -121,7 +121,7 @@ switch. An install made before copies became the default keeps its symlinks unti
 ## Agent context budget
 
 Agent context files (`CLAUDE.md`, `AGENTS.md` and harness equivalents) hold stable orientation
-and pointers only; delivered truth goes to the spec, and history to `specs/log.md` and Git.
+and pointers only; delivered truth goes to the spec, and history to `.prdkit/history/log.md` and Git.
 `context-budget-bytes` (default 16384, 0 disables) in `.prdkit/memory/config.md` bounds them:
 doctor reports a file over it as an advisory, and `doctor.sh --strict` fails on it for an
 opt-in CI gate (see [CI gates](ci-gates.md)). The kit never writes these files beyond the

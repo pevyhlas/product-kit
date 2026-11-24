@@ -100,7 +100,7 @@ _review_anchored() { # old-blob-file diff-file
 # Return the blob ID of the log without that line, or fail to keep the original log delta.
 _review_shared_log_without_close() { # root id start rev old-mode old-id new-id oldtext newtext deletion-text
     local root="$1" id="$2" start="$3" rev="$4" oldmode="$5" last entry lines deletion_lines
-    local record="specs/changes/$id.md" own="specs/log/$id.md"
+    local record="specs/changes/$id.md" own=".prdkit/history/log/$id.md"
     is_change_id "$id" && spec_objects_local "$root" || return 1
     [ "$(git -C "$root" ls-tree "$rev" -- "$record" "$own" || echo unreadable)" = "" ] &&
         [ "$(git -C "$root" ls-tree "$start" -- "$own" || echo unreadable)" = "" ] || return 1
@@ -143,7 +143,7 @@ review_delta_stream() { # root id base rev [pathspec...]
     local normalized empty_blob
     shift 4
     [ "$#" -gt 0 ] || set -- . ":(top,literal,exclude)specs/changes/$id.md" \
-        ":(top,literal,exclude)specs/log/$id.md"
+        ":(top,literal,exclude).prdkit/history/log/$id.md"
     local GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
     export GIT_NO_REPLACE_OBJECTS GIT_NO_LAZY_FETCH
     review_merge_base "$root" "$base" "$rev" >/dev/null || return 1
@@ -161,7 +161,7 @@ review_delta_stream() { # root id base rev [pathspec...]
         [ -n "$meta" ] || continue
         meta="${meta#:}"
         read -r om nm oid nid st <<< "$meta"
-        if [ "$file" = specs/log.md ]; then
+        if [ "$file" = .prdkit/history/log.md ]; then
             case "$om:$nm" in
                 000000:100644|100644:100644)
                     if normalized="$(_review_shared_log_without_close "$root" "$id" "$REVIEW_MB" "$rev" "$om" "$oid" "$nid" "$oldtext" "$newtext" "$hunks")"; then

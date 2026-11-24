@@ -435,63 +435,64 @@ it "status is read-only"
 assert_eq "$before" "$(git status --porcelain; git show-ref; cat specs/*.md specs/changes/*.md)" "no file, index or ref changes"
 
 it "compaction is due after ten closed changes since the last pass, and only then"
-{ i=1; while [ "$i" -le 9 ]; do printf -- '- 2026-10-%02d %03d-c: done — R-01 — #%d\n' "$i" "$((i + 100))" "$i"; i=$((i + 1)); done; } > specs/log.md
+mkdir -p .prdkit/history
+{ i=1; while [ "$i" -le 9 ]; do printf -- '- 2026-10-%02d %03d-c: done — R-01 — #%d\n' "$i" "$((i + 100))" "$i"; i=$((i + 1)); done; } > .prdkit/history/log.md
 run bash "$STATUS_SH"
 assert_not_contains "$OUTPUT" "Compaction due" "nine closed changes are not yet due"
-printf -- '- 2026-10-10 110-c: done — R-01 — #10\n' >> specs/log.md
+printf -- '- 2026-10-10 110-c: done — R-01 — #10\n' >> .prdkit/history/log.md
 run bash "$STATUS_SH"
-assert_contains "$OUTPUT" "Compaction due: 10 changes closed and no pass recorded in specs/log.md" "ten with no pass on record"
-printf -- '- 2026-10-10 compaction: tightened P1\n' >> specs/log.md
+assert_contains "$OUTPUT" "Compaction due: 10 changes closed and no pass recorded in .prdkit/history/log.md" "ten with no pass on record"
+printf -- '- 2026-10-10 compaction: tightened P1\n' >> .prdkit/history/log.md
 run bash "$STATUS_SH"
 assert_not_contains "$OUTPUT" "Compaction due" "a pass resets the count"
-{ i=1; while [ "$i" -le 10 ]; do printf -- '- 2026-10-%d %03d-c: done — R-01 — #%d\n' "$((i < 2 ? 10 : i))" "$((i + 110))" "$i"; i=$((i + 1)); done; } >> specs/log.md
+{ i=1; while [ "$i" -le 10 ]; do printf -- '- 2026-10-%d %03d-c: done — R-01 — #%d\n' "$((i < 2 ? 10 : i))" "$((i + 110))" "$i"; i=$((i + 1)); done; } >> .prdkit/history/log.md
 run bash "$STATUS_SH"
 assert_contains "$OUTPUT" "Compaction due: 10 changes closed since the last pass (2026-10-10)" "entries after the pass count, by line order: same-day and unpadded dates too"
 run bash "$STATUS_SH" --json
 assert_contains "$OUTPUT" '"compaction":{"closed_since_last":10,"last":"2026-10-10","due":true}' "JSON carries it"
-printf -- '- 2026-10-11 compaction: split P2\n' >> specs/log.md
-{ i=1; while [ "$i" -le 9 ]; do printf -- '- 2026-10-11 %03d-c: done — R-01 — #%d\n' "$((i + 120))" "$i"; i=$((i + 1)); done; } >> specs/log.md
+printf -- '- 2026-10-11 compaction: split P2\n' >> .prdkit/history/log.md
+{ i=1; while [ "$i" -le 9 ]; do printf -- '- 2026-10-11 %03d-c: done — R-01 — #%d\n' "$((i + 120))" "$i"; i=$((i + 1)); done; } >> .prdkit/history/log.md
 run bash "$STATUS_SH" --json
 assert_contains "$OUTPUT" '"compaction":{"closed_since_last":9,"last":"2026-10-11","due":false}' "oldest first: the entries below the latest of several passes"
-rm specs/log.md
+rm .prdkit/history/log.md
 
 it "in a newest-first log, the changes above the latest compaction line count"
 newest_log() { # first change number, last, day of month: entries from the newest down
     i="$1"; while [ "$i" -ge "$2" ]; do printf -- '- 2026-10-%02d %03d-c: done — R-01 — #%d\n' "$3" "$i" "$i"; i=$((i - 1)); done
 }
-{ printf '# Closed changes\n\n'; newest_log 176 101 20; printf -- '- 2026-10-01 100-c: first — R-01 — #1\n'; } > specs/log.md
+{ printf '# Closed changes\n\n'; newest_log 176 101 20; printf -- '- 2026-10-01 100-c: first — R-01 — #1\n'; } > .prdkit/history/log.md
 run bash "$STATUS_SH"
-assert_contains "$OUTPUT" "Compaction due: 77 changes closed and no pass recorded in specs/log.md" "no pass: every entry counts"
-{ printf '# Closed changes\n\n- 2026-10-21 compaction: tightened P1\n'; sed -n '3,$p' specs/log.md; } > specs/log.next
-mv specs/log.next specs/log.md
+assert_contains "$OUTPUT" "Compaction due: 77 changes closed and no pass recorded in .prdkit/history/log.md" "no pass: every entry counts"
+{ printf '# Closed changes\n\n- 2026-10-21 compaction: tightened P1\n'; sed -n '3,$p' .prdkit/history/log.md; } > .prdkit/history/log.next
+mv .prdkit/history/log.next .prdkit/history/log.md
 run bash "$STATUS_SH" --json
 assert_contains "$OUTPUT" '"compaction":{"closed_since_last":0,"last":"2026-10-21","due":false}' "a pass on top counts nothing below it"
-{ printf '# Closed changes\n\n'; newest_log 186 177 22; printf -- '- 2026-10-22 compaction: split P2\n'; sed -n '3,$p' specs/log.md; } > specs/log.next
-mv specs/log.next specs/log.md
+{ printf '# Closed changes\n\n'; newest_log 186 177 22; printf -- '- 2026-10-22 compaction: split P2\n'; sed -n '3,$p' .prdkit/history/log.md; } > .prdkit/history/log.next
+mv .prdkit/history/log.next .prdkit/history/log.md
 run bash "$STATUS_SH"
 assert_contains "$OUTPUT" "Compaction due: 10 changes closed since the last pass (2026-10-22)" "only the entries above the latest of several passes, same-day ones too"
-{ printf '# Closed changes\n\n'; newest_log 187 187 23; sed -n '3,$p' specs/log.md; } > specs/log.next
-mv specs/log.next specs/log.md
+{ printf '# Closed changes\n\n'; newest_log 187 187 23; sed -n '3,$p' .prdkit/history/log.md; } > .prdkit/history/log.next
+mv .prdkit/history/log.next .prdkit/history/log.md
 run bash "$STATUS_SH" --json
 assert_contains "$OUTPUT" '"compaction":{"closed_since_last":11,"last":"2026-10-22","due":true}' "a new entry on top adds to the count"
-rm specs/log.md
+rm .prdkit/history/log.md
 
 it "an unreadable tracked folded log refuses status and produces a structured doctor finding"
-awk 'BEGIN { for (i = 101; i <= 110; i++) printf "- 2026-10-17 %d-c: done\n", i }' > specs/log.md
-git add -- specs/log.md
+awk 'BEGIN { for (i = 101; i <= 110; i++) printf "- 2026-10-17 %d-c: done\n", i }' > .prdkit/history/log.md
+git add -- .prdkit/history/log.md
 run bash "$STATUS_SH" --json
 assert_eq 0 "$STATUS" "status succeeds while the folded log is readable"
 assert_contains "$OUTPUT" '"compaction":{"closed_since_last":10,"last":null,"due":true}' "ten readable closes make compaction due"
-chmod 000 specs/log.md || exit 1
-if cat specs/log.md >/dev/null 2>&1; then
+chmod 000 .prdkit/history/log.md || exit 1
+if cat .prdkit/history/log.md >/dev/null 2>&1; then
     _ok "skipped unreadable-log checks: this user can read mode-000 files"
 else
-    run env LC_ALL=C awk 1 specs/log.md
+    run env LC_ALL=C awk 1 .prdkit/history/log.md
     log_read_status="$STATUS"
     run bash -c 'bash "$1" --json 2> status.stderr' _ "$STATUS_SH"
     assert_eq "$log_read_status" "$STATUS" "status preserves the native read failure"
     assert_eq '' "$OUTPUT" "status emits no JSON rather than due:false"
-    assert_contains "$(cat status.stderr)" "specs/log.md" "status names the unreadable log on stderr"
+    assert_contains "$(cat status.stderr)" ".prdkit/history/log.md" "status names the unreadable log on stderr"
     run bash -c 'bash "$1" --json 2> doctor.stderr' _ "$PROJ/.prdkit/scripts/bash/doctor.sh"
     assert_eq 1 "$STATUS" "doctor exits with a finding rather than the raw read error"
     assert_eq fail "$(jq -r '.result' <<< "$OUTPUT")" "doctor emits valid failure JSON"
@@ -499,8 +500,8 @@ else
     assert_not_contains "$OUTPUT" "Compaction due" "doctor does not infer a compaction count"
     rm status.stderr doctor.stderr
 fi
-chmod 600 specs/log.md
-git rm -fq -- specs/log.md
+chmod 600 .prdkit/history/log.md
+git rm -fq -- .prdkit/history/log.md
 
 it "unsupported spec layouts stop status"
 mkdir -p specs/targets/t1; : > specs/targets/t1/target.md
@@ -577,10 +578,11 @@ mv "$_SCRATCH_CWD/original-change" "$probe"
 rm specs/parts/p9-root.md .worktrees/001-greet/specs/parts/p8-child.md
 
 it "a change the root's log records as closed is not open, though an older worktree carries it"
-printf -- '- 2026-10-19 001-greet: warmer greeting — R-01 — #1\n' > specs/log.md
+mkdir -p .prdkit/history
+printf -- '- 2026-10-19 001-greet: warmer greeting — R-01 — #1\n' > .prdkit/history/log.md
 run bash "$P2/.prdkit/scripts/bash/status.sh"
 assert_not_contains "$OUTPUT" "001-greet — Warmer greeting" "closed on the default branch"
-rm -f specs/log.md
+rm -f .prdkit/history/log.md
 
 it "an item passed on its third attempt is not stalled"
 cat > .worktrees/001-greet/specs/changes/001-greet.md <<'MD'

@@ -10,7 +10,7 @@ DOCTOR="$PROJ/.prdkit/scripts/bash/doctor.sh"
 export PRDKIT_TODAY=2026-10-17
 cd "$PROJ" || exit 1
 
-mkdir -p specs/parts specs/decisions tests
+mkdir -p specs/parts specs/decisions tests .prdkit/history
 cat > specs/product.md <<'MD'
 # Demo — product
 
@@ -40,6 +40,108 @@ assert_eq 0 "$STATUS" "doctor passes"
 assert_contains "$OUTPUT" '"findings":[],"advisories":[],"trace":{"code-path":0,"planned-closed":0,"planned-unknown":0,"retired-cited":0,"unallocated":0,"part-need":0,"change-restates":0,"change-undefined":0}' "nothing to report; each trace check counted by its code"
 assert_contains "$OUTPUT" '"readiness":"not-evaluated"' "never a readiness claim"
 assert_eq 0 "$(printf '%s\n' "$OUTPUT" | jq '.budget_excess_reading_lines')" "no reading-budget excess"
+
+it "doctor refuses old paths with one actionable finding and no partial history report"
+for legacy in specs/log.md specs/log specs/archive.md; do
+    ln -s missing "$legacy"
+    run bash "$DOCTOR" --json
+    assert_eq 1 "$STATUS"
+    assert_eq 1 "$(jq '.findings | length' <<< "$OUTPUT")"
+    finding="$(jq -r '.findings[0]' <<< "$OUTPUT")"
+    assert_contains "$finding" 'git mv specs/log.md .prdkit/history/log.md'
+    assert_contains "$finding" 'git mv specs/log .prdkit/history/log'
+    assert_contains "$finding" 'git mv specs/archive.md .prdkit/history/archive.md'
+    rm "$legacy"
+done
+
+it "older Git checks local history in partial clones without contacting a promisor"
+partial="$(mktemp -d)" || exit 1
+track_tmp "$partial"
+git -C "$PROJ" config uploadpack.allowFilter true || exit 1
+if git clone -q --filter=blob:none "file://$PROJ" "$partial/clone" &&
+    [ "$(git -C "$partial/clone" config --bool --get remote.origin.promisor)" = true ]; then
+    mkdir "$partial/bin"
+    export PARTIAL_REAL_GIT PARTIAL_TRANSPORT
+    PARTIAL_REAL_GIT="$(command -v git)"; PARTIAL_TRANSPORT="$partial/transport"
+    cat > "$partial/bin/git" <<'SH'
+#!/bin/sh
+case "$1" in
+    version) echo 'git version 2.39.5'; exit 0 ;;
+    --git-dir=*)
+        if [ "${PARTIAL_TREE_UNAVAILABLE:-}" = yes ] && [ "$2" = ls-tree ]; then
+            echo 'fixture: local tree unavailable' >&2
+            exit 1
+        fi ;;
+esac
+exec "$PARTIAL_REAL_GIT" "$@"
+SH
+    cat > "$partial/sentinel" <<'SH'
+#!/bin/sh
+echo 'promisor transport attempted' >> "$PARTIAL_TRANSPORT"
+exit 1
+SH
+    chmod +x "$partial/bin/git" "$partial/sentinel"
+    git -C "$partial/clone" config remote.origin.uploadpack "$partial/sentinel"
+    partial_run() {
+        local script="$1"; shift
+        (cd "$partial/clone" && PATH="$partial/bin:$PATH" bash ".prdkit/scripts/bash/$script" "$@")
+    }
+    run partial_run doctor.sh --json
+    assert_eq 0 "$STATUS" "clean partial checkout still passes on older Git"
+    assert_eq '{}' "$(jq '.trace | with_entries(select(.value != 0))' <<< "$OUTPUT")"
+    run partial_run new-change.sh --json --no-branch --short-name partial "desc"
+    assert_eq 0 "$STATUS" "local committed history is sufficient to allocate"
+    assert_contains "$OUTPUT" '"CHANGE_ID":"001-partial"'
+    rm -f "$partial/clone/specs/changes/001-partial.md"
+    PARTIAL_TREE_UNAVAILABLE=yes run partial_run doctor.sh --json
+    assert_eq 0 "$STATUS" "unavailable legacy-tree evidence is advisory"
+    assert_contains "$OUTPUT" 'Legacy history layout unchecked at'
+    assert_eq 0 "$(jq '.findings | length' <<< "$OUTPUT")"
+    assert_eq 0 "$(jq '.trace["code-path"]' <<< "$OUTPUT")" "doctor still runs its trace checks"
+    PARTIAL_TREE_UNAVAILABLE=yes run partial_run new-change.sh --json --no-branch --short-name refused "desc"
+    assert_eq 1 "$STATUS" "missing committed evidence cannot free a number"
+    assert_not_contains "$OUTPUT" 'CHANGE_ID'
+    printf -- '- 2026-10-17 001-done: closed\n' > "$partial/clone/specs/log.md"
+    git -C "$partial/clone" add specs/log.md &&
+        git -C "$partial/clone" -c user.name=test -c user.email=t@example.com commit -qm 'legacy log' &&
+        git -C "$partial/clone" rm -q specs/log.md || exit 1
+    run partial_run doctor.sh --json
+    assert_eq 1 "$STATUS" "a staged deletion cannot hide a legacy path in a local tree"
+    assert_contains "$OUTPUT" 'git mv specs/log.md .prdkit/history/log.md'
+    assert_not_contains "$OUTPUT" 'Legacy history layout unchecked'
+    run test ! -e "$PARTIAL_TRANSPORT"
+    assert_eq 0 "$STATUS" "the promisor transport was never called"
+else
+    _ok "blob-filtered clones unavailable; skipped"
+fi
+
+it "canon cannot cite a pending close, the folded log or the archive"
+cat >> specs/product.md <<'MD'
+
+[Close](../.prdkit/history/log/031-x.md)
+[Folded log](/.prdkit/history/log.md#031-x)
+[Archive]: ../.prdkit/history/archive.md
+MD
+run bash "$DOCTOR" --json
+assert_eq 1 "$STATUS"
+assert_eq 3 "$(jq '[.findings[] | select(contains("spec links to history"))] | length' <<< "$OUTPUT")"
+git restore -- specs/product.md
+
+it "doctor flags close rows over 200 characters in both live log locations"
+mkdir -p .prdkit/history/log
+stem='- 2026-10-17 031-x: '
+intent="$(printf '%*s' "$((200 - ${#stem}))" '' | tr ' ' x)"
+printf '%s%s\n' "$stem" "$intent" > .prdkit/history/log/031-x.md
+run bash "$DOCTOR" --json
+assert_eq 0 "$STATUS" "200 characters pass"
+printf '%s%sé\n' "$stem" "$intent" > .prdkit/history/log/031-x.md
+printf '# History\n\n%s%sé\n' "${stem/031-/032-}" "$intent" > .prdkit/history/log.md
+run bash "$DOCTOR" --json
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" '.prdkit/history/log/031-x.md:1: close row is 201 characters, over 200'
+assert_contains "$OUTPUT" '.prdkit/history/log.md:3: close row is 201 characters, over 200'
+rm .prdkit/history/log/031-x.md .prdkit/history/log.md
+rmdir .prdkit/history/log
 
 it "doctor accepts a declared subpart and a task assigned to it"
 mkdir -p specs/changes
@@ -269,7 +371,7 @@ assert_contains "$OUTPUT" 'Expired WAIVER W-01'
 assert_not_contains "$OUTPUT" "$words" 'doctor reports the row, not the quote'
 
 it "the hold still blocks after compaction, and the new waiver does not extend the old row"
-printf '# Change log\n\n- 2026-10-16 compaction: folded changes and moved the protected quote\n' > specs/log.md
+printf '# Change log\n\n- 2026-10-16 compaction: folded changes and moved the protected quote\n' > .prdkit/history/log.md
 run bash "$STATUS_SH"
 assert_eq 0 "$STATUS"
 assert_contains "$OUTPUT" "HOLD H-07 on $scope by owner, until 2026-10-05 — DUE, still applies"
@@ -279,7 +381,7 @@ run bash "$STATUS_SH" --json
 assert_eq 0 "$STATUS"
 assert_eq "$scope" "$(jq -r '.holds[] | select(.id == "H-07") | .scope' <<< "$OUTPUT")"
 assert_eq '["W-02:active","W-01:expired"]' "$(jq -c '[.holds[] | select(.type == "WAIVER") | .id + ":" + .state]' <<< "$OUTPUT")"
-rm specs/log.md
+rm .prdkit/history/log.md
 
 it "both readers fail at the records line for broken authority references"
 printf '# Records\n\n%s — %s\n' "$hold_row" "$hold_ref" > specs/records.md
@@ -423,29 +525,29 @@ assert_eq 0 "$(printf '%s\n' "$OUTPUT" | jq '.budget_excess_reading_lines')" "UT
 git checkout -q -- specs/product.md
 
 it "compaction counts pending entry files without log.md, at the ten-close boundary"
-mkdir -p specs/log
+mkdir -p .prdkit/history/log
 i=1; while [ "$i" -le 9 ]; do
-    printf -- '- 2026-10-17 %03d-c: done\n' "$((i + 100))" > "specs/log/$((i + 100))-c.md"
+    printf -- '- 2026-10-17 %03d-c: done\n' "$((i + 100))" > ".prdkit/history/log/$((i + 100))-c.md"
     i=$((i + 1))
 done
 run bash "$DOCTOR" --json
 assert_eq 0 "$STATUS" "nine valid entry files pass: $OUTPUT"
 assert_not_contains "$OUTPUT" "Compaction due" "nine closes are current"
-printf -- '- 2026-10-17 110-c: done\n' > specs/log/110-c.md
+printf -- '- 2026-10-17 110-c: done\n' > .prdkit/history/log/110-c.md
 run bash "$DOCTOR"
 assert_eq 0 "$STATUS" "compaction due is advisory"
-assert_contains "$OUTPUT" "advisory: Compaction due: 10 changes closed and no pass recorded in specs/log.md" "pending files alone make compaction due"
+assert_contains "$OUTPUT" "advisory: Compaction due: 10 changes closed and no pass recorded in .prdkit/history/log.md" "pending files alone make compaction due"
 run bash "$DOCTOR" --json --strict
 assert_eq 1 "$STATUS" "strict fails overdue compaction"
 assert_eq 1 "$(printf '%s\n' "$OUTPUT" | jq '[.findings[] | select(startswith("Compaction due:"))] | length')" "strict promotes the compaction advisory"
-rm specs/log/110-c.md
+rm .prdkit/history/log/110-c.md
 # A symlink is not an entry, even when its target has a valid close line.
 printf -- '- 2026-10-17 110-c: done\n' > pending-close.txt
-ln -s ../../pending-close.txt specs/log/110-c.md
+ln -s ../../pending-close.txt .prdkit/history/log/110-c.md
 run bash "$DOCTOR" --json
 assert_not_contains "$OUTPUT" "Compaction due" "a symlink does not add a close"
-rm specs/log/110-c.md pending-close.txt
-rm specs/log/*.md; rmdir specs/log
+rm .prdkit/history/log/110-c.md pending-close.txt
+rm .prdkit/history/log/*.md; rmdir .prdkit/history/log
 
 it "compaction shares status's mixed-log accounting in both log orders"
 for order in newest oldest; do
@@ -456,31 +558,31 @@ for order in newest oldest; do
         else
             printf -- '- 2026-10-15 compaction: earlier\n- 2026-10-16 100-c: old\n- 2026-10-17 compaction: latest\n- 2026-10-17 101-c: new\n'
         fi
-    } > specs/log.md
-    mkdir -p specs/log
+    } > .prdkit/history/log.md
+    mkdir -p .prdkit/history/log
     i=102; while [ "$i" -le 109 ]; do
-        printf -- '- 2026-10-17 %03d-c: pending\n' "$i" > "specs/log/$i-c.md"; i=$((i + 1))
+        printf -- '- 2026-10-17 %03d-c: pending\n' "$i" > ".prdkit/history/log/$i-c.md"; i=$((i + 1))
     done
     run bash "$DOCTOR" --json
     assert_not_contains "$OUTPUT" "Compaction due" "$order: one new folded entry plus eight pending is current"
-    printf -- '- 2026-10-17 110-c: pending\n' > specs/log/110-c.md
+    printf -- '- 2026-10-17 110-c: pending\n' > .prdkit/history/log/110-c.md
     run bash "$DOCTOR" --json
     assert_eq 0 "$STATUS" "$order: compaction due stays advisory"
     assert_contains "$OUTPUT" "Compaction due: 10 changes closed since the last pass (2026-10-17)" "$order: only entries since the latest pass plus pending files count"
     assert_eq 1 "$(printf '%s\n' "$OUTPUT" | jq '[.advisories[] | select(startswith("Compaction due:"))] | length')" "$order: exactly one overdue advisory"
     run bash "$PROJ/.prdkit/scripts/bash/status.sh" --json
     assert_contains "$OUTPUT" '"compaction":{"closed_since_last":10,"last":"2026-10-17","due":true}' "$order: status and doctor agree"
-    rm specs/log/*.md; rmdir specs/log
+    rm .prdkit/history/log/*.md; rmdir .prdkit/history/log
     run bash "$DOCTOR" --json
     assert_not_contains "$OUTPUT" "Compaction due" "$order: folded history before the latest pass does not make compaction overdue"
 done
-rm specs/log.md
+rm .prdkit/history/log.md
 
 it "the log, inbox and records have budgets, each with its way out"
-{ i=0; while [ "$i" -lt 151 ]; do printf -- '- 2026-10-17 %03d-c: done — R-01 — #%d\n' "$((i + 100))" "$i"; i=$((i + 1)); done; } > specs/log.md
+{ i=0; while [ "$i" -lt 151 ]; do printf -- '- 2026-10-17 %03d-c: done — R-01 — #%d\n' "$((i + 100))" "$i"; i=$((i + 1)); done; } > .prdkit/history/log.md
 run bash "$DOCTOR"
-assert_contains "$OUTPUT" "advisory: Budget: specs/log.md has 151 lines, over its 150-line reading budget; condense its older entries into specs/archive.md" "the log condenses into the archive"
-rm specs/log.md
+assert_contains "$OUTPUT" "advisory: Budget: .prdkit/history/log.md has 151 lines, over its 150-line reading budget; condense its older entries into .prdkit/history/archive.md" "the log condenses into the archive"
+rm .prdkit/history/log.md
 { printf '# Owner inbox\n\n<!--\n'; i=0; while [ "$i" -lt 150 ]; do echo "note $i"; i=$((i + 1)); done; printf -- '-->\n\n## Waiting for you\n'; } > specs/inbox.md
 printf 'DEPLOY web env=test rev=abc1234 date=2026-10-17 by=https://example.invalid/run/1 — %s\n' "$(printf '%016000d' 0)" > specs/records.md
 run bash "$DOCTOR"
@@ -612,59 +714,59 @@ git rm -q specs/changes/003-x.md; git commit -qm close >/dev/null
 run bash "$DOCTOR"
 assert_eq 1 "$STATUS" "doctor fails"
 assert_contains "$OUTPUT" "Closed without a log entry: 003-x" "the unlogged change is named"
-printf -- '- 2026-10-17 003-x: done\n' > specs/log.md
+printf -- '- 2026-10-17 003-x: done\n' > .prdkit/history/log.md
 run bash "$DOCTOR"
 assert_not_contains "$OUTPUT" "Closed without" "its log line clears it"
-rm specs/log.md
-mkdir -p specs/log; printf -- '- 2026-10-17 003-x: done\n' > specs/log/003-x.md
+rm .prdkit/history/log.md
+mkdir -p .prdkit/history/log; printf -- '- 2026-10-17 003-x: done\n' > .prdkit/history/log/003-x.md
 run bash "$DOCTOR"
 assert_eq 0 "$STATUS" "an entry file is a log entry: $OUTPUT"
 assert_not_contains "$OUTPUT" "Closed without" "its entry file clears it"
 assert_not_contains "$OUTPUT" "Malformed log entry" "a well-formed entry file is quiet"
 for bad in '- 2026-10-17 004-y: names another change' '- 2026-10-17 003-x: done
 - 2026-10-17 003-x: twice' 'done, no date' '- 2026-10-17 003-x: '; do
-    printf '%s\n' "$bad" > specs/log/003-x.md
+    printf '%s\n' "$bad" > .prdkit/history/log/003-x.md
     run bash "$DOCTOR"
     assert_eq 1 "$STATUS" "a malformed entry fails doctor: $bad"
-    assert_contains "$OUTPUT" "Malformed log entry specs/log/003-x.md" "names the file: $bad"
+    assert_contains "$OUTPUT" "Malformed log entry .prdkit/history/log/003-x.md" "names the file: $bad"
 done
-printf -- '- 2026-10-17 003-x: done\n' > specs/log/003-x.md; printf 'x\n' > specs/log/notes.txt
+printf -- '- 2026-10-17 003-x: done\n' > .prdkit/history/log/003-x.md; printf 'x\n' > .prdkit/history/log/notes.txt
 run bash "$DOCTOR"
-assert_contains "$OUTPUT" "Malformed log entry specs/log/notes.txt" "only change entries belong in specs/log/"
-rm specs/log/notes.txt; printf 'x\n' > specs/log/.notes
+assert_contains "$OUTPUT" "Malformed log entry .prdkit/history/log/notes.txt" "only change entries belong in .prdkit/history/log/"
+rm .prdkit/history/log/notes.txt; printf 'x\n' > .prdkit/history/log/.notes
 run bash "$DOCTOR"
-assert_contains "$OUTPUT" "Malformed log entry specs/log/.notes" "a hidden file is seen too"
-rm specs/log/.notes; mv specs/log/003-x.md specs/log.entry; ln -s ../log.entry specs/log/003-x.md
+assert_contains "$OUTPUT" "Malformed log entry .prdkit/history/log/.notes" "a hidden file is seen too"
+rm .prdkit/history/log/.notes; mv .prdkit/history/log/003-x.md .prdkit/history/log.entry; ln -s ../log.entry .prdkit/history/log/003-x.md
 run bash "$DOCTOR"
-assert_contains "$OUTPUT" "Malformed log entry specs/log/003-x.md" "a symlink is no entry"
+assert_contains "$OUTPUT" "Malformed log entry .prdkit/history/log/003-x.md" "a symlink is no entry"
 assert_contains "$OUTPUT" "Closed without a log entry: 003-x" "and closes nothing"
-rm specs/log/003-x.md specs/log.entry; ln -s missing.md specs/log/003-x.md
+rm .prdkit/history/log/003-x.md .prdkit/history/log.entry; ln -s missing.md .prdkit/history/log/003-x.md
 run bash "$DOCTOR"
-assert_contains "$OUTPUT" "Malformed log entry specs/log/003-x.md" "a dangling symlink is seen too"
-rm -rf specs/log
+assert_contains "$OUTPUT" "Malformed log entry .prdkit/history/log/003-x.md" "a dangling symlink is seen too"
+rm -rf .prdkit/history/log
 # shellcheck disable=SC2016 # backticks are Markdown code spans, not command substitution
-printf '# Demo — archive\n\n**Log condensed through**: 003; those entries: `git show abc1234:specs/log.md`.\n' > specs/archive.md
+printf '# Demo — archive\n\n**Log condensed through**: 003; those entries: `git show abc1234:.prdkit/history/log.md`.\n' > .prdkit/history/archive.md
 run bash "$DOCTOR"
 assert_not_contains "$OUTPUT" "Closed without" "a log condensed into the archive keeps it closed"
 # shellcheck disable=SC2016 # backticks are Markdown code spans, not command substitution
-for value in '002 — entries at `git show 9f81234:specs/log.md`' '002 as of 2026-10-30' 'through 9'; do
-    printf '# Demo — archive\n\n**Log condensed through**: %s\n' "$value" > specs/archive.md
+for value in '002 — entries at `git show 9f81234:.prdkit/history/log.md`' '002 as of 2026-10-30' 'through 9'; do
+    printf '# Demo — archive\n\n**Log condensed through**: %s\n' "$value" > .prdkit/history/archive.md
     run bash "$DOCTOR"
     assert_contains "$OUTPUT" "Closed without a log entry: 003-x" "only a leading number counts: $value"
 done
-rm specs/archive.md; git reset -q --hard HEAD~2
+rm .prdkit/history/archive.md; git reset -q --hard HEAD~2
 
 it "legacy cutoff-only archives accept CRLF, no final LF, and trailing pointer prose"
 kit_bin="$PROJ/.prdkit/scripts/bash"
 mkdir -p specs/changes
 printf '# Open\n\n## State\n\nWaiting on: nothing\nNext: continue\n' > specs/changes/007-open.md
 # shellcheck disable=SC2016 # Markdown code span
-cutoff_line='**Log condensed through**: 005; those entries: `git show abc1234:specs/log.md`.'
+cutoff_line='**Log condensed through**: 005; those entries: `git show abc1234:.prdkit/history/log.md`.'
 legacy_capture() (
     bash "$kit_bin/status.sh" --json &&
         bash "$kit_bin/bounds.sh" 007-open
 )
-printf '%s\n' "$cutoff_line" > specs/archive.md
+printf '%s\n' "$cutoff_line" > .prdkit/history/archive.md
 run legacy_capture
 assert_eq 0 "$STATUS" 'canonical cutoff-only fixture'
 cutoff_output="$OUTPUT"
@@ -676,7 +778,7 @@ for encoding in crlf unterminated prose; do
         crlf) printf '%s\r\n' "$cutoff_line" ;;
         unterminated) printf '%s' "$cutoff_line" ;;
         prose) printf '%s; also see the migration notes\n' "${cutoff_line%.}" ;;
-    esac > specs/archive.md
+    esac > .prdkit/history/archive.md
     run legacy_capture
     assert_eq 0 "$STATUS" "$encoding: status and bounds succeed"
     assert_eq "$cutoff_output" "$OUTPUT" "$encoding: output is unchanged"
@@ -686,11 +788,11 @@ for encoding in crlf unterminated prose; do
         assert_eq "$cutoff_doctor" "$OUTPUT" 'doctor output is unchanged'
     else
         assert_eq 1 "$STATUS" "$encoding: doctor retains its general LF text check"
-        assert_eq '["Invalid spec text: specs/archive.md (expected LF-terminated text)"]' \
+        assert_eq '["Invalid spec text: .prdkit/history/archive.md (expected LF-terminated text)"]' \
             "$(jq -c .findings <<< "$OUTPUT")" 'the archive parser does not add a finding'
     fi
 done
-rm specs/archive.md specs/changes/007-open.md
+rm .prdkit/history/archive.md specs/changes/007-open.md
 
 it "sparse compaction preserves exact history past open and planned changes, in either log order"
 before_sparse="$(git rev-parse HEAD)"
@@ -704,21 +806,21 @@ stale="$(mktemp -d)"; track_tmp "$stale"
 git worktree add -q --detach "$stale" HEAD
 for id in 001-first 002-second 004-fourth 005-fifth 006-sixth 009-gap 010-tenth; do
     git rm -q "specs/changes/$id.md"
-    printf -- '- 2026-10-10 %s: historical evidence for %s\n' "$id" "$id" >> specs/log.md
+    printf -- '- 2026-10-10 %s: historical evidence for %s\n' "$id" "$id" >> .prdkit/history/log.md
 done
-git add specs/log.md; git commit -qm 'close changes and snapshot the folded log'
+git add .prdkit/history/log.md; git commit -qm 'close changes and snapshot the folded log'
 folded_sha="$(git rev-parse HEAD)"
 # shellcheck disable=SC2016 # Markdown code span
-printf '# Archive\n\n**Log condensed through**: 002; also 004-006, 010; those entries: `git show %s:specs/log.md`; also see the migration notes\n**Allocated through**: 010\n' "$folded_sha" > specs/archive.md
-archive_sha="$(sed -n 's/.*git show \([0-9a-f]*\):specs\/log.md.*/\1/p' specs/archive.md)"
-assert_contains "$(git show "$archive_sha:specs/log.md")" '005-fifth: historical evidence for 005-fifth' "a member in the middle of a range is retrievable by ID"
+printf '# Archive\n\n**Log condensed through**: 002; also 004-006, 010; those entries: `git show %s:.prdkit/history/log.md`; also see the migration notes\n**Allocated through**: 010\n' "$folded_sha" > .prdkit/history/archive.md
+archive_sha="$(sed -n 's/.*git show \([0-9a-f]*\):\.prdkit\/history\/log.md.*/\1/p' .prdkit/history/archive.md)"
+assert_contains "$(git show "$archive_sha:.prdkit/history/log.md")" '005-fifth: historical evidence for 005-fifth' "a member in the middle of a range is retrievable by ID"
 pass='- 2026-10-12 compaction: condensed older closes'
 # The live 009 is in a gap and must not be treated as archived. Ten later closes are due.
 before_pass='- 2026-10-10 009-gap: keep the entry in this gap'
 after_pass="$(i=20; while [ "$i" -lt 30 ]; do printf -- '- 2026-10-13 %03d-new: a later close\n' "$i"; i=$((i + 1)); done)"
 for order in oldest newest; do
     if [ "$order" = oldest ]; then printf '%s\n' "$before_pass" "$pass" "$after_pass"
-    else printf '%s\n' "$after_pass" "$pass" "$before_pass"; fi > specs/log.md
+    else printf '%s\n' "$after_pass" "$pass" "$before_pass"; fi > .prdkit/history/log.md
     run bash "$DOCTOR"
     assert_eq 0 "$STATUS" "$order: doctor accepts the sparse archive"
     assert_not_contains "$OUTPUT" "Planned for a closed change" "$order: planned gaps stay open"
@@ -728,19 +830,19 @@ for order in oldest newest; do
     assert_eq "003-outcome 008-planned" "$(jq -r '[.changes[].id] | sort | join(" ")' <<< "$OUTPUT")" "$order: neither cutoff nor sparse history is resurrected by a stale worktree"
     assert_eq 10 "$(jq '.compaction.closed_since_last' <<< "$OUTPUT")" "$order: status also counts only new closes"
 done
-sed -i.bak '/ 009-gap:/d' specs/log.md; rm specs/log.md.bak
+sed -i.bak '/ 009-gap:/d' .prdkit/history/log.md; rm .prdkit/history/log.md.bak
 run bash "$DOCTOR"
 assert_contains "$OUTPUT" 'Closed without a log entry: 009-gap;' "a missing ID in a gap is still a finding"
-printf '%s\n' "$before_pass" >> specs/log.md
+printf '%s\n' "$before_pass" >> .prdkit/history/log.md
 
 it "doctor rejects archived numbers still open, planned, or in either form of live log"
 printf '# Open again\n' > specs/changes/001-reused.md
 printf '# Open another\n' > specs/changes/005-reused.md
 printf -- '\n- **R-05 Old plan** (hypothesis, planned: 001): no longer planned.\n- **R-06 Sparse plan** (hypothesis, planned: 005-reused): also no longer planned.\n' >> specs/product.md
-printf -- '- 2026-10-10 004-fourth: historical evidence for 004-fourth\n' >> specs/log.md
-mkdir -p specs/log
-printf -- '- 2026-10-10 006-sixth: historical evidence for 006-sixth\n' > specs/log/006-sixth.md
-printf '%s\n' "$before_pass" > specs/log/009-gap.md
+printf -- '- 2026-10-10 004-fourth: historical evidence for 004-fourth\n' >> .prdkit/history/log.md
+mkdir -p .prdkit/history/log
+printf -- '- 2026-10-10 006-sixth: historical evidence for 006-sixth\n' > .prdkit/history/log/006-sixth.md
+printf '%s\n' "$before_pass" > .prdkit/history/log/009-gap.md
 run bash "$DOCTOR"
 assert_eq 1 "$STATUS" "archive conflicts fail without --strict"
 for id in 001-reused 005-reused; do
@@ -758,12 +860,12 @@ assert_eq 11 "$(jq '.compaction.closed_since_last' <<< "$OUTPUT")" 'only non-arc
 for order in oldest newest; do
     archived_copy='- 2026-10-14 004-fourth: stray folded copy'
     if [ "$order" = oldest ]; then printf '%s\n' "$before_pass" "$pass" "$after_pass" "$archived_copy"
-    else printf '%s\n' "$archived_copy" "$after_pass" "$pass" "$before_pass"; fi > specs/log.md
+    else printf '%s\n' "$archived_copy" "$after_pass" "$pass" "$before_pass"; fi > .prdkit/history/log.md
     run bash "$kit_bin/status.sh" --json
     assert_eq 11 "$(jq '.compaction.closed_since_last' <<< "$OUTPUT")" "$order: ignore archived entries on both live paths"
 done
 git worktree remove "$stale"
-rm -f specs/changes/{001,005}-reused.md specs/archive.md specs/log/{006-sixth,009-gap}.md
+rm -f specs/changes/{001,005}-reused.md .prdkit/history/archive.md .prdkit/history/log/{006-sixth,009-gap}.md
 git reset -q --hard "$before_sparse"
 
 it "malformed sparse archive fields fail at their line in doctor and status"
@@ -771,27 +873,27 @@ for value in '002; also 006-004; @' '002; also 004-006, 006-008; @' '002; also 0
              '002; also 001-004; @' '002; also four; @' '002; also 004-; @' '002; also -004; @' \
              '002; also 004,; @' '002; also ; @' '002; also 004' '002 also 004; @'; do
     # shellcheck disable=SC2016 # Markdown code span
-    value="${value//@/those entries: \`git show abc1234:specs/log.md\`.}"
-    printf '# Archive\n\n**Log condensed through**: %s\n' "$value" > specs/archive.md
+    value="${value//@/those entries: \`git show abc1234:.prdkit/history/log.md\`.}"
+    printf '# Archive\n\n**Log condensed through**: %s\n' "$value" > .prdkit/history/archive.md
     run bash "$DOCTOR" --json
     assert_eq 1 "$STATUS" "doctor rejects: $value"
-    assert_contains "$(jq -r '.findings[]' <<< "$OUTPUT")" 'specs/archive.md:3:' 'doctor reports the source line'
+    assert_contains "$(jq -r '.findings[]' <<< "$OUTPUT")" '.prdkit/history/archive.md:3:' 'doctor reports the source line'
     run bash .prdkit/scripts/bash/status.sh --json
     assert_eq 1 "$STATUS" "status rejects: $value"
-    assert_contains "$OUTPUT" 'specs/archive.md:3:' 'status reports the same line, not cutoff-only JSON'
+    assert_contains "$OUTPUT" '.prdkit/history/archive.md:3:' 'status reports the same line, not cutoff-only JSON'
     assert_not_contains "$OUTPUT" '"compaction":' 'status does not report partial state'
 done
 
 it "all archive readers reject misplaced, misspelled, or split sparse fields before proceeding"
 # shellcheck disable=SC2016 # Markdown code span
-pointer='those entries: `git show abc1234:specs/log.md`.'
+pointer='those entries: `git show abc1234:.prdkit/history/log.md`.'
 kit_index() ( source "$kit_bin/spec-lib.sh"; spec_archive_log_index "$PWD"; )
 for value in "002, also 005; $pointer" "002; als 005; $pointer" \
              "002;; also 005; $pointer" "002; also005; $pointer" \
              "002; also 005; $pointer; also 006" \
              $'002\n\n  also 005; '"$pointer" $'002;\n\n  also 005; '"$pointer" \
              $'002\n\n  also: 005; '"$pointer"; do
-    printf '**Log condensed through**: %s\n' "$value" > specs/archive.md
+    printf '**Log condensed through**: %s\n' "$value" > .prdkit/history/archive.md
     line=1
     case "$value" in $'002\n'*) line=3 ;; esac
     for reader in index doctor status bounds new-change close-change; do
@@ -803,44 +905,44 @@ for value in "002, also 005; $pointer" "002; als 005; $pointer" \
             close-change) run bash "$kit_bin/close-change.sh" --pr https://example.invalid/pull/1 005-probe 'Probe' ;;
         esac
         assert_eq 1 "$STATUS" "$reader rejects $value"
-        assert_contains "$OUTPUT" "specs/archive.md:$line:" "$reader names the malformed line"
+        assert_contains "$OUTPUT" ".prdkit/history/archive.md:$line:" "$reader names the malformed line"
         assert_eq absent "$([ -e specs/changes/005-probe.md ] && echo present || echo absent)" 'no change number reused'
         rm -f specs/changes/005-probe.md
     done
 done
-rm specs/archive.md
+rm .prdkit/history/archive.md
 
 it "doctor verifies every sparse number in the local snapshot, and distinguishes shallow history"
 # Use the real compaction snapshot; 007 is unused, and no live file can prove it.
 # shellcheck disable=SC2016 # Markdown code span
-printf '**Log condensed through**: 002; also 004-007, 010; those entries: `git show %s:specs/log.md`.\nAllocated through: 010\n' "$folded_sha" > specs/archive.md
+printf '**Log condensed through**: 002; also 004-007, 010; those entries: `git show %s:.prdkit/history/log.md`.\nAllocated through: 010\n' "$folded_sha" > .prdkit/history/archive.md
 run bash "$DOCTOR" --json
 assert_eq 1 "$STATUS" 'unused number inside the claimed range is a finding'
 assert_contains "$OUTPUT" 'is missing closed number(s) 007' 'reports the missing part of the range'
 # shellcheck disable=SC2016 # Markdown code span
-printf '**Log condensed through**: 002; also 004-999999999; those entries: `git show %s:specs/log.md`.\nAllocated through: 999999999\n' "$folded_sha" > specs/archive.md
+printf '**Log condensed through**: 002; also 004-999999999; those entries: `git show %s:.prdkit/history/log.md`.\nAllocated through: 999999999\n' "$folded_sha" > .prdkit/history/archive.md
 run bash "$DOCTOR" --json
 assert_contains "$OUTPUT" 'is missing closed number(s) 007-008' 'even a large range is compared as runs'
 # shellcheck disable=SC2016 # Markdown code span
-printf '**Log condensed through**: 002; also 005; those entries: `git show deadbeef:specs/log.md`.\nAllocated through: 005\n' > specs/archive.md
+printf '**Log condensed through**: 002; also 005; those entries: `git show deadbeef:.prdkit/history/log.md`.\nAllocated through: 005\n' > .prdkit/history/archive.md
 run bash "$DOCTOR" --json
 assert_eq 1 "$STATUS" 'unresolvable SHA fails in the full clone'
-assert_contains "$OUTPUT" 'specs/archive.md:1: cannot resolve sparse snapshot deadbeef to a commit'
+assert_contains "$OUTPUT" '.prdkit/history/archive.md:1: cannot resolve sparse snapshot deadbeef to a commit'
 # shellcheck disable=SC2016 # Markdown code span
-printf '**Log condensed through**: 002; also 005; those entries: `git show %s:specs/log.md`.\n' "$folded_sha" > specs/archive.md
+printf '**Log condensed through**: 002; also 005; those entries: `git show %s:.prdkit/history/log.md`.\n' "$folded_sha" > .prdkit/history/archive.md
 run bash "$DOCTOR" --json
 assert_eq 1 "$STATUS" 'a sparse index needs an allocation floor'
-assert_contains "$OUTPUT" 'specs/archive.md:1: a sparse index requires an Allocated through line'
-printf 'Allocated through: five\n' >> specs/archive.md
+assert_contains "$OUTPUT" '.prdkit/history/archive.md:1: a sparse index requires an Allocated through line'
+printf 'Allocated through: five\n' >> .prdkit/history/archive.md
 run bash "$DOCTOR" --json
 assert_eq 1 "$STATUS" 'a malformed allocation floor is refused'
-assert_contains "$OUTPUT" 'specs/archive.md:2: expected Allocated through: followed by one to nine decimal digits'
-sed -i.bak '$s/five/004/' specs/archive.md; rm specs/archive.md.bak
+assert_contains "$OUTPUT" '.prdkit/history/archive.md:2: expected Allocated through: followed by one to nine decimal digits'
+sed -i.bak '$s/five/004/' .prdkit/history/archive.md; rm .prdkit/history/archive.md.bak
 run bash "$DOCTOR" --json
 assert_eq 1 "$STATUS" 'the floor cannot be less than the largest indexed ID'
-assert_contains "$OUTPUT" 'specs/archive.md:2: Allocated through is below the highest indexed number 5'
-sed -i.bak '$s/004/006/' specs/archive.md; rm specs/archive.md.bak
-git add specs/archive.md; git commit -qm 'publish archive with older snapshot'
+assert_contains "$OUTPUT" '.prdkit/history/archive.md:2: Allocated through is below the highest indexed number 5'
+sed -i.bak '$s/004/006/' .prdkit/history/archive.md; rm .prdkit/history/archive.md.bak
+git add .prdkit/history/archive.md; git commit -qm 'publish archive with older snapshot'
 shallow="$(mktemp -d)"; track_tmp "$shallow"
 git clone -q --depth 1 "file://$PROJ" "$shallow" || exit 1
 assert_eq true "$(git -C "$shallow" rev-parse --is-shallow-repository)" 'the fixture really is shallow'
@@ -853,44 +955,44 @@ assert_contains "$(jq -r '.advisories[]' <<< "$OUTPUT")" "history unavailable in
 run bash "$shallow_bin/new-change.sh" --no-branch --number 005 --short-name probe Probe
 assert_eq 1 "$STATUS" 'shallow checkout still respects reservations'
 assert_contains "$OUTPUT" 'reserved by the condensed log index'
-printf '**Log condensed through**: 002\n\n  also: 005; %s\n' "$pointer" > "$shallow/specs/archive.md"
+printf '**Log condensed through**: 002\n\n  also: 005; %s\n' "$pointer" > "$shallow/.prdkit/history/archive.md"
 run shallow_doctor --json
 assert_eq 1 "$STATUS" 'a shallow clone never downgrades malformed syntax to missing history'
-assert_contains "$(jq -r '.findings[]' <<< "$OUTPUT")" 'specs/archive.md:3:'
-sed -i.bak '$s/006/005/' specs/archive.md; rm specs/archive.md.bak
+assert_contains "$(jq -r '.findings[]' <<< "$OUTPUT")" '.prdkit/history/archive.md:3:'
+sed -i.bak '$s/006/005/' .prdkit/history/archive.md; rm .prdkit/history/archive.md.bak
 for state in working committed; do
-    if [ "$state" = committed ]; then git add specs/archive.md && git commit -qm 'lower the floor' || exit 1; fi
+    if [ "$state" = committed ]; then git add .prdkit/history/archive.md && git commit -qm 'lower the floor' || exit 1; fi
     run bash "$DOCTOR" --json
     assert_eq 1 "$STATUS" "$state decrease is refused even though every indexed number is covered"
-    assert_contains "$OUTPUT" 'specs/archive.md:2: Allocated through decreased from 6 to 5'
+    assert_contains "$OUTPUT" '.prdkit/history/archive.md:2: Allocated through decreased from 6 to 5'
 done
 git reset -q --hard "$before_sparse"
 
 it "doctor distinguishes a sparse checkout from a deleted allocation floor"
 floor_project="$(make_inited_project)"; track_tmp "$floor_project"
 cd "$floor_project" || exit 1
-mkdir -p specs
+mkdir -p specs .prdkit/history
 printf '# Demo product\n' > specs/product.md
-printf '**Log condensed through**: 002\n**Allocated through**: 005\n' > specs/archive.md
+printf '**Log condensed through**: 002\n**Allocated through**: 005\n' > .prdkit/history/archive.md
 git add -A && git commit -qm 'archive with an allocation floor' &&
     git commit -qm 'leave the floor unchanged' --allow-empty || exit 1
 floor_doctor=.prdkit/scripts/bash/doctor.sh
 run bash "$floor_doctor" --json
 assert_eq 0 "$STATUS" 'the materialized floor passes'
 
-mv specs/archive.md .git/saved-archive
+mv .prdkit/history/archive.md .git/saved-archive
 run bash "$floor_doctor" --json
 assert_eq 1 "$STATUS" 'an unstaged deletion still fails'
 assert_contains "$OUTPUT" 'Allocated through decreased from 5 to 0'
-git add -u -- specs/archive.md
+git add -u -- .prdkit/history/archive.md
 run bash "$floor_doctor" --json
 assert_eq 1 "$STATUS" 'a staged deletion still fails'
 assert_contains "$OUTPUT" 'Allocated through decreased from 5 to 0'
-mv .git/saved-archive specs/archive.md
-git add specs/archive.md &&
-    git sparse-checkout set --no-cone '/*' '!/specs/archive.md' || exit 1
-assert_eq absent "$([ -e specs/archive.md ] && echo present || echo absent)"
-assert_eq 'S specs/archive.md' "$(git ls-files -t -- specs/archive.md)"
+mv .git/saved-archive .prdkit/history/archive.md
+git add .prdkit/history/archive.md &&
+    git sparse-checkout set --no-cone '/*' '!/.prdkit/history/archive.md' || exit 1
+assert_eq absent "$([ -e .prdkit/history/archive.md ] && echo present || echo absent)"
+assert_eq 'S .prdkit/history/archive.md' "$(git ls-files -t -- .prdkit/history/archive.md)"
 assert_eq '' "$(git status --porcelain)" 'sparse checkout is clean'
 run bash "$floor_doctor" --json
 assert_eq 0 "$STATUS" 'the unchanged floor still passes when sparse checkout omits its file'
@@ -899,13 +1001,13 @@ assert_not_contains "$OUTPUT" 'Allocated through decreased'
 floor_shim="$(mktemp -d)"; track_tmp "$floor_shim"
 cat > "$floor_shim/git" <<'SH'
 #!/usr/bin/env bash
-if [ "${3:-}" = show ] && [ "${4:-}" = :./specs/archive.md ]; then exit 1; fi
+if [ "${3:-}" = show ] && [ "${4:-}" = :./.prdkit/history/archive.md ]; then exit 1; fi
 exec "$REAL_FLOOR_GIT" "$@"
 SH
 chmod +x "$floor_shim/git"
 run env PATH="$floor_shim:$PATH" REAL_FLOOR_GIT="$(command -v git)" bash "$floor_doctor" --json
 assert_eq 1 "$STATUS" 'unavailable archive evidence is not a passing check'
-assert_contains "$OUTPUT" 'specs/archive.md: condensed log index unavailable from the Git index'
+assert_contains "$OUTPUT" '.prdkit/history/archive.md: condensed log index unavailable from the Git index'
 assert_not_contains "$OUTPUT" 'Allocated through decreased'
 cd "$PROJ" || exit 1
 
@@ -1028,7 +1130,7 @@ git checkout -q -- specs; rm -rf src
 
 it "trace: planned: names an open change, else a closed or an unknown one"
 mkdir -p specs/changes; printf '# Change: export\n## State\n**Waiting on**: nothing\n**Next**: build\n' > specs/changes/012-export.md
-printf -- '- 2026-10-10 010-import: imported.\n' > specs/log.md
+printf -- '- 2026-10-10 010-import: imported.\n' > .prdkit/history/log.md
 cat >> specs/product.md <<'MD'
 - **R-03 Export** (hypothesis, planned: 012-export): users export.
 - **R-04 Import** (hypothesis, planned: 010-import): users import.
@@ -1047,13 +1149,13 @@ cat >> specs/product.md <<'MD'
 | Zones | planned: both zones |
 MD
 run bash "$DOCTOR"
-assert_contains "$OUTPUT" "advisory: Planned for a closed change (1): 010-import at specs/product.md:7; specs/log.md closed it: remove the marker if it was built, or re-plan it to an open change" "a marker naming a closed change"
+assert_contains "$OUTPUT" "advisory: Planned for a closed change (1): 010-import at specs/product.md:7; .prdkit/history/log.md closed it: remove the marker if it was built, or re-plan it to an open change" "a marker naming a closed change"
 assert_contains "$OUTPUT" "advisory: Planned for no open change (5): 013 at specs/product.md:8, 2026-Q4 at specs/product.md:13, M1 at specs/product.md:11, 12 at specs/product.md:12, M3 at specs/product.md:16; point it at an open change record (new-change.sh opens one) or remove the marker" "a wrapped marker naming no change, and item markers naming no change number, emphasis stripped"
 assert_not_contains "$OUTPUT" "M2" "a retired item's old marker is not judged"
 assert_not_contains "$OUTPUT" "012" "an open change, with or without its slug"
 assert_not_contains "$OUTPUT" "acme/platform" "another repository's change is not judged"
 assert_not_contains "$OUTPUT" "both zones" "a table cell is not an item marker"
-git checkout -q -- specs; rm -rf specs/changes specs/log.md
+git checkout -q -- specs; rm -rf specs/changes .prdkit/history/log.md
 
 it "trace: a retired ID cited in spec text (advisory)"
 mkdir -p specs/architecture
@@ -1139,23 +1241,23 @@ git add specs/archive
 run bash "$DOCTOR"
 assert_eq 1 "$STATUS" "unsupported layout is a finding"
 assert_contains "$OUTPUT" "Unsupported specs/archive/ layout:" "the old path is named"
-assert_contains "$OUTPUT" "specs/archive.md history" "the current path is named"
+assert_contains "$OUTPUT" ".prdkit/history/archive.md history" "the current path is named"
 run bash "$DOCTOR" --strict
 assert_eq 1 "$STATUS" "--strict fails it"
 git rm -rqf specs/archive
 
-it "specs/archive.md: its links resolve, a git path is code, its budget grows into git"
+it ".prdkit/history/archive.md: its links resolve, a git path is code, its budget grows into git"
 # shellcheck disable=SC2016 # backticks are Markdown code spans, not command substitution
 { printf '# Demo — archive\n\n**Base**: `abc1234`. Details: `git show abc1234:specs/features/003-x/spec.md`, `[x](gone-in-code.md)`.\n\n'
-  printf 'See [the product](product.md) and [the old spec](features/003-x/spec.md).\n'
-  i=0; while [ "$i" -lt 150 ]; do echo "line $i"; i=$((i + 1)); done; } > specs/archive.md
+  printf 'See [the product](/specs/product.md) and [the old spec](/specs/features/003-x/spec.md).\n'
+  i=0; while [ "$i" -lt 150 ]; do echo "line $i"; i=$((i + 1)); done; } > .prdkit/history/archive.md
 run bash "$DOCTOR"
-assert_contains "$OUTPUT" "Link at specs/archive.md:5 points to specs/features/003-x/spec.md, which does not exist" "a link into a removed folder"
+assert_contains "$OUTPUT" "Link at .prdkit/history/archive.md:5 points to specs/features/003-x/spec.md, which does not exist" "a link into a removed folder"
 assert_not_contains "$OUTPUT" "points to specs/product.md" "a link to the live spec resolves"
 assert_not_contains "$OUTPUT" "gone-in-code" "a git path or a link in code is no link"
-assert_contains "$OUTPUT" "Budget: specs/archive.md has 155 lines that read as 156 at 100 characters a line, over its 150-line reading budget" "condensed past its budget"
+assert_contains "$OUTPUT" "Budget: .prdkit/history/archive.md has 155 lines that read as 156 at 100 characters a line, over its 150-line reading budget" "condensed past its budget"
 assert_not_contains "$OUTPUT" "Archive on main" "the condensed file is no raw archive"
-rm specs/archive.md
+rm .prdkit/history/archive.md
 
 it "installation drift in kit-owned files is a failing finding"
 echo "LOCAL EDIT" >> .prdkit/workflows/change.md

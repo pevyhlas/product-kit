@@ -121,7 +121,7 @@ _receipts_consistency() { # root change from to head since base base_at -> RC_ER
     if [ "$to" != none ]; then
         _receipt_matches_v3 "$root" "$change" "$base_at" "$head" "$to" || {
             if [ "$?" = 2 ]; then RC_ERROR='cannot fingerprint the receipt head against base_at'
-            else RC_ERROR="its to is not the content of its head ${head:0:12}; prdkit.review.v3 requires current fp1 provenance including changes to specs/log.md"; fi
+            else RC_ERROR="its to is not the content of its head ${head:0:12}; prdkit.review.v3 requires current fp1 provenance including changes to .prdkit/history/log.md"; fi
             return 1
         }
     fi

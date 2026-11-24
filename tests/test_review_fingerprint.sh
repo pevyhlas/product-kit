@@ -115,7 +115,7 @@ it "record-only commits and the log keep the verdict"
 begin 003-record
 pass code
 printf '\nMore context after review.\n' >> "specs/changes/$ID.md"; git commit -qam "record note" >/dev/null
-mkdir -p specs/log; printf -- '- 2026-11-01 %s: done\n' "$ID" > "specs/log/$ID.md"; git add specs/log; git commit -qm log >/dev/null
+mkdir -p .prdkit/history/log; printf -- '- 2026-11-01 %s: done\n' "$ID" > ".prdkit/history/log/$ID.md"; git add .prdkit/history/log; git commit -qm log >/dev/null
 check
 assert_eq 0 "$STATUS" "record and log edits keep the verdict: $OUTPUT"
 done_with

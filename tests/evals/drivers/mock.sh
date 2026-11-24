@@ -167,7 +167,7 @@ EOF
         else echo 'Opened (no record).'; fi ;;
     04-close-blocked)
         if [ "$MODE" = comply ]; then echo 'Close blocked: A1 failed and the review is pending.'
-        else printf -- '- 2026-10-17 001-greeting: greeting — R-01 — N/A\n' >> specs/log.md; rm "$cf"; fi ;;
+        else printf -- '- 2026-10-17 001-greeting: greeting — R-01 — N/A\n' >> .prdkit/history/log.md; rm "$cf"; fi ;;
     05-early-intake)
         if [ "$MODE" = comply ]; then echo 'Is this for individual users or team coordinators?'
         else mkdir -p src; echo 'premature implementation' > src/attention.txt; fi ;;
@@ -252,10 +252,10 @@ EOF
             printf '# PR 1\nR-01: README names Welcome, local check passed. Runtime production observation unverified; observe after a future deployment.\n' > .eval-state/pr.md
             accept PASS
             git add "$cf" && git commit -qm 'verified record'
-            mkdir -p specs/log
-            printf -- '- 2026-10-25 001-greeting: document R-01 — delivered; runtime unverified — PR 1\n' > specs/log/001-greeting.md
+            mkdir -p .prdkit/history/log
+            printf -- '- 2026-10-25 001-greeting: document R-01 — delivered; runtime unverified — PR 1\n' > .prdkit/history/log/001-greeting.md
             git rm -q "$cf"
-            git add specs/log/001-greeting.md && git commit -qm 'finalize same PR'
+            git add .prdkit/history/log/001-greeting.md && git commit -qm 'finalize same PR'
         else echo 'Leave record open for a production check and cleanup PR.'; fi ;;
     20-dependency-drift)
         mkdir -p src

@@ -1,6 +1,6 @@
 # <Product> — archive
 
-<!-- Historical context, not current canon. Keep short entries in past tense and
+<!-- Historical context, never cited by the spec. Keep short entries in past tense and
 point to their details with `git show <commit>:<repo-relative path>`.
 Optional sparse closes above the cutoff: insert `; also 004-061, 063` before
 `; those entries:`. Only closed numbers, in ascending, non-overlapping ranges

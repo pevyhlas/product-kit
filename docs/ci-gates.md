@@ -415,7 +415,8 @@ bash .prdkit/scripts/bash/doctor.sh --strict
 ```
 
 Doctor always fails on malformed or duplicate IDs, malformed records, installation drift,
-agent definition or tier-map findings, a malformed `specs/log/<id>.md`, and a change record
+agent definition or tier-map findings, old history paths, malformed or overlong close rows,
+spec links to history, and a change record
 deleted in history without its log entry (`check-review.sh` fails the same at close).
 It reports unsupported kit layouts and formats as findings. Advisories include spec files over their reading budgets,
 cited IDs that are undefined or retired (in spec files and tests), a reviewed change record
@@ -424,7 +425,7 @@ open (merged without closing, including T0 and records with no verdict), trace
 drift (`Code:` paths not in the repository, stale `planned:` markers, unallocated R/Q items and
 parts, change records restating or citing undefined IDs), past-due hold reminders and expired waivers,
 open inbox items and their age, retained resolved items, local machine paths in
-specs and agent context, links to missing files in the spec and `specs/archive.md`, spec files
+specs and agent context, links to missing files in the spec and `.prdkit/history/archive.md`, spec files
 that no chain of links from
 `product.md` or `architecture.md` reaches (1.1 layout; retired files exempt) and `observed.md`
 pieces it does not link, a lifecycle stage naming no environment that
@@ -441,7 +442,7 @@ the sum of each reading-budget file's excess, not its whole size or the advisory
 The total uses the same reading-line count as the advisories: validated generated
 navigation is excluded, and a reader failure makes the total incomplete and fails doctor.
 Byte-based agent context budgets are separate. Compaction due is an advisory at ten closes
-since the latest compaction line in either log order, including pending `specs/log/<id>.md`
+since the latest compaction line in either log order, including pending `.prdkit/history/log/<id>.md`
 files.
 
 The "Merged without closing" advisory needs the default-branch ref and its tree and blob

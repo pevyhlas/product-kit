@@ -107,17 +107,21 @@ generate_slug() {
     printf '%s\n' "$result"
 }
 
-# Every checkout whose specs/ can hold a claimed number: this one, worktrees under
+# Every checkout that can hold a claimed number: this one, worktrees under
 # .worktrees/, and every worktree git knows about. Paths may repeat or not exist.
 list_checkouts() {
-    local wt line worktrees
+    local wt line worktrees checkout="" bare=false
     echo "$REPO_ROOT"
     for wt in "$REPO_ROOT/.worktrees"/*; do [ -d "$wt" ] && echo "$wt"; done
     if [ "$HAS_GIT" = true ]; then
         worktrees="$(spec_worktrees "$REPO_ROOT")" || return 1
         while IFS= read -r line; do
-            case "$line" in "worktree "*) echo "${line#worktree }" ;; esac
-        done <<< "$worktrees"
+            case "$line" in
+                "worktree "*) checkout="${line#worktree }"; bare=false ;;
+                bare) bare=true ;;
+                "") if [ -n "$checkout" ] && ! $bare; then printf '%s\n' "$checkout"; fi ;;
+            esac
+        done <<< "$worktrees"$'\n'
     fi
     return 0
 }
@@ -154,7 +158,7 @@ list_archive_details() {
     local checkouts checkout
     checkouts="$(sort -u <<< "$CHECKOUTS")" || return 1
     while IFS= read -r checkout; do
-        spec_archive_log_details "$checkout" "$checkout/specs/archive.md" || return 1
+        spec_archive_log_details "$checkout" "$checkout/.prdkit/history/archive.md" || return 1
     done <<< "$checkouts"
     [ "$HAS_GIT" = true ] || return 0
     spec_archive_log_integration "$REPO_ROOT" "$INTEGRATION_TIPS" details
@@ -226,6 +230,7 @@ create_exclusive() { ( set -C; printf '%s %s\n' "$$" "$HOST_NAME" > "$1" ) 2>/de
 release_number_lock() { [ -z "$NUMBER_LOCK" ] || rm -f "$NUMBER_LOCK"; NUMBER_LOCK=""; }
 cleanup_open() {
     release_number_lock
+    spec_close_history_view
     if [ -n "$RECORD_TMP" ]; then
         rm -f "$RECORD_TMP"/{template,scaffold,record}
         rmdir "$RECORD_TMP"
@@ -280,9 +285,20 @@ AUTO_NUMBER=false
 # Both automatic and explicit allocation must see a complete, valid archive index from
 # every checkout. Keep the lock through record creation; a malformed index cannot be overridden.
 acquire_number_lock
-CHECKOUTS="$(list_checkouts)" || exit 1
+CHECKOUTS="$(list_checkouts | awk '!seen[$0]++')" || exit 1
+if [ "$HAS_GIT" = true ]; then
+    spec_open_history_view "$REPO_ROOT" ||
+        { echo "[prdkit] Error: could not set up local integration history reads" >&2; exit 1; }
+fi
+while IFS= read -r checkout; do
+    spec_require_history_layout "$checkout" --head || exit 1
+done <<< "$CHECKOUTS"
 INTEGRATION_TIPS=""
-if [ "$HAS_GIT" = true ]; then INTEGRATION_TIPS="$(spec_integration_tips "$REPO_ROOT")"; fi
+if [ "$HAS_GIT" = true ]; then
+    INTEGRATION_TIPS="$(spec_integration_tips "$REPO_ROOT")" ||
+        { echo "[prdkit] Error: could not identify local integration tips" >&2; exit 1; }
+    spec_require_history_tips "$REPO_ROOT" "$INTEGRATION_TIPS" || exit 1
+fi
 ARCHIVE_DETAILS="$(list_archive_details)"
 COMMITTED_CLAIMS="$(list_committed_claims)"
 CLAIMS="$(list_claimed)" || exit 1
@@ -317,9 +333,9 @@ if [ "$AUTO_NUMBER" = false ]; then
         spec_archive_log_covers "$index" "$NUM" || continue
         cutoff="${index%% *}"
         if [ "$((10#$NUM))" -le "$cutoff" ]; then
-            printf '[prdkit] Error: change number %s is reserved: specs/archive.md condenses the log through %03d; omit --number or use a number above %03d.\n' "$NUM" "$cutoff" "$HIGH_WATER" >&2
+            printf '[prdkit] Error: change number %s is reserved: .prdkit/history/archive.md condenses the log through %03d; omit --number or use a number above %03d.\n' "$NUM" "$cutoff" "$HIGH_WATER" >&2
         else
-            printf '[prdkit] Error: change number %s is reserved by the condensed log index in specs/archive.md; omit --number or use a number above %03d.\n' "$NUM" "$HIGH_WATER" >&2
+            printf '[prdkit] Error: change number %s is reserved by the condensed log index in .prdkit/history/archive.md; omit --number or use a number above %03d.\n' "$NUM" "$HIGH_WATER" >&2
         fi
         exit 1
     done <<< "$ARCHIVE_DETAILS"
@@ -351,15 +367,49 @@ POINTER='<!-- Outcome checkpoint format: .prdkit/scripts/bash/outcome-checkpoint
 TODAY="${PRDKIT_TODAY:-$(date +%Y-%m-%d)}"
 RECORD_TMP="$(mktemp -d)"
 RENDERED_RECORD="$RECORD_TMP/record"
+stage_record_input() { # project-relative path, temp path, pinned start commit
+    local path="$1" staged="$2" rev="$3" entry oid type parent rows meta name
+    local paths=("$path")
+    entry="$(_spec_history_git "$REPO_ROOT" cat-file --batch-check --follow-symlinks <<< "$rev:$path")" || return 1
+    read -r oid type _ <<< "$entry"
+    case "$oid" in
+        dangling|loop|notdir|symlink)
+            # A link that cannot be followed. In a partial clone any link or target
+            # along the chain may be an object that was never fetched, so only an
+            # ordinary clone keeps the built-in fallback.
+            ! partial_clone "$REPO_ROOT"
+            return ;;
+    esac
+    [ "$type" != blob ] || { _spec_history_git "$REPO_ROOT" cat-file blob "$oid" > "$staged"; return; }
+    [ "$type" = missing ] || return 0
+    # Batch mode reports both absent paths and missing objects as "missing". Keep the
+    # fallback only if the tree shows no entry for the path and no symlink on the path
+    # itself or one of its exact ancestors.
+    parent="$path"
+    while [[ "$parent" = */* ]]; do
+        parent="${parent%/*}"
+        paths+=("$parent")
+    done
+    rows="$(verify_lines _spec_history_git "$REPO_ROOT" ls-tree -t "$rev" -- "${paths[@]}")" || return 1
+    while IFS=$'\t' read -r meta name; do
+        [ "$name" != "$path" ] || return 1
+        [[ "$meta" = '120000 '* ]] || continue
+        for parent in "${paths[@]}"; do [ "$name" != "$parent" ] || return 1; done
+    done <<< "$rows"
+}
+partial_clone() { # root -> 0 when a promisor remote may hold objects not stored locally
+    git -C "$1" config --get extensions.partialclone >/dev/null 2>&1 && return 0
+    git -C "$1" config --name-only --get-regexp '^remote\..*\.partialclonefilter$' >/dev/null 2>&1 && return 0
+    git -C "$1" config --bool --get-regexp '^remote\..*\.promisor$' 2>/dev/null | grep ' true$' >/dev/null
+}
 record_input() { # project-relative path, temp path, optional pinned start commit
-    local path="$1" staged="$2" entry oid type
+    local path="$1" staged="$2"
     if [ -n "${3:-}" ]; then
-        entry="$(printf '%s\n' "$3:$path" | git cat-file --batch-check --follow-symlinks)" || return 1
-        read -r oid type _ <<< "$entry"
-        if [ "$type" = blob ]; then
-            git cat-file blob "$oid" > "$staged" || return 1
-            path="$staged"
+        if ! stage_record_input "$path" "$staged" "$3"; then
+            printf '[prdkit] Error: cannot read %s at %s from local Git objects; make the committed file available locally and retry.\n' "$path" "$3" >&2
+            return 1
         fi
+        [ ! -f "$staged" ] || path="$staged"
     fi
     printf '%s\n' "$path"
 }

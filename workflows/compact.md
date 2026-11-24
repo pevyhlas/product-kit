@@ -1,7 +1,7 @@
 # Compaction
 
 **Inputs**: current canon, code, constitution, agent memory and worklogs, owner direction.
-**Writes**: the spec files ([spec.md](spec.md), Layout), inbox, `specs/archive.md`.
+**Writes**: the spec files ([spec.md](spec.md), Layout), inbox and `.prdkit/history/`.
 **Result**: one current canon the owner reads quickly, plus owner questions.
 
 ## Compaction (on overflow, and every ten closed changes)
@@ -12,16 +12,20 @@ out of the rows by checked reference ([protocol.md](protocol.md)), never by shor
 Rewrite within the budgets, by tightening and splitting, never by dropping items. Keep current truth, decisions with their alternatives
 and revisit conditions, why-it-works assumptions, and retired IDs (one line each). Drop to git: history,
 amendment notes, superseded wording and resolved questions. Keep a rejected alternative that is
-still a plausible proposal; it prevents re-proposals. `specs/archive.md` grows into git
-instead: condense its older entries harder; their details stay at the referenced commits. First fold each
-`specs/log/<id>.md` into `specs/log.md` at its newest end (on top, unless the log lists the
+still a plausible proposal; it prevents re-proposals. `.prdkit/history/archive.md` grows into git
+instead: condense its older entries harder; their details stay at the referenced commits.
+Start a missing `.prdkit/history/log.md` from `history-log-template.md`. Fold each
+`.prdkit/history/log/<id>.md` into `.prdkit/history/log.md` at its newest end (on top, unless the log lists the
 oldest change first), ordered like the log by date, then change number, and delete the entry
-files. `specs/log.md` past its budget keeps its newest entries. Condense older entries under
+files. To find the original close commit and its PR locator after folding, run
+`git log --diff-filter=A -- .prdkit/history/log/<id>.md`; compaction may retain that commit SHA.
+For a renamed entry, `--follow` can trace the earlier path. Keep no task lists or acceptance tables.
+`.prdkit/history/log.md` past its budget keeps its newest entries. Condense older entries under
 a cutoff below every open or planned change and every retained live entry. Above that
 cutoff, condense any older closed entries as an exact sparse set. Keep archive summaries
 for notable outcomes and lessons. For example:
 
-> **Log condensed through**: 002; also 004-061, 063; those entries: `git show <sha>:specs/log.md`.
+> **Log condensed through**: 002; also 004-061, 063; those entries: `git show <sha>:.prdkit/history/log.md`.
 >
 > **Allocated through**: 065
 
@@ -51,7 +55,7 @@ allocation starts above that mark and accounts for planned and other reservation
 doctor, and the bounds CLI report against the current checkout's archive; update a stale
 checkout before using them to assess current integration history.
 
-Once indexed, remove the entry from both `specs/log.md` and `specs/log/`; doctor rejects
+Once indexed, remove the entry from both `.prdkit/history/log.md` and `.prdkit/history/log/`; doctor rejects
 duplicates in the resulting live log, even if the text is identical. A stale copy of
 an open record in another worktree does not reopen an archived change.
 
@@ -70,7 +74,7 @@ checks that every sparse number has an entry in the pointed folded log. A missin
 commit fails in a full clone; in a shallow clone it is reported as unavailable history,
 not as verified. Fetch the history and rerun doctor.
 
-A first `specs/archive.md` starts from `archive-template.md`. End each pass
+A first `.prdkit/history/archive.md` starts from `archive-template.md`. End each pass
 with `- <date> compaction: <what changed>` as the newest entry
-in `specs/log.md` (on top, unless the log lists the oldest change first). Archived entries are
+in `.prdkit/history/log.md` (on top, unless the log lists the oldest change first). Archived entries are
 from completed compactions; they do not count toward the next ten closes.

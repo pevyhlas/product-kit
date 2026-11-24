@@ -150,24 +150,77 @@ _spec_dir_used() {
 
 _spec_has_canon() { [ -f "$1/specs/product.md" ] || [ -f "$1/specs/architecture.md" ] || [ -f "$1/specs/SPEC.md" ]; }
 
+# Detection only: never use the old paths as inputs to history or numbering.
+_spec_history_move_required() {
+    printf '%s\n' "Old history paths remain ($1). Move any that exist, then commit the move (see CHANGELOG):" \
+        '  mkdir -p .prdkit/history' \
+        '  git mv specs/log.md .prdkit/history/log.md' \
+        '  git mv specs/log .prdkit/history/log' \
+        '  git mv specs/archive.md .prdkit/history/archive.md' >&2
+    return 1
+}
+spec_require_history_layout() { # root [--head] -> physical paths, index (including sparse entries), optionally HEAD
+    local path old head
+    for path in specs/log.md specs/log specs/archive.md; do
+        if [ -e "$1/$path" ] || [ -L "$1/$path" ]; then
+            _spec_history_move_required "$1"; return 1
+        fi
+    done
+    if [ "$(git -C "$1" rev-parse --is-inside-work-tree 2>/dev/null)" = true ]; then
+        old="$(verify_lines git -C "$1" ls-files -- ':(top)specs/log.md' ':(top)specs/log' ':(top)specs/archive.md')" ||
+            { echo "Cannot check the Git index for old history paths at $1" >&2; return 1; }
+        [ -z "$old" ] || { _spec_history_move_required "$1"; return 1; }
+        [ "${2:-}" = --head ] || return 0
+        # A staged deletion does not establish that the history has moved.
+        if head="$(_spec_archive_git -C "$1" rev-parse --verify --quiet HEAD)"; then
+            spec_require_history_head "$1" "$head" || return "$?"
+        elif [ "$?" -ne 1 ]; then
+            echo "Cannot identify HEAD for the history check at $1" >&2
+            return 1
+        fi
+    fi
+}
+spec_require_history_head() ( # root, frozen HEAD
+    if [ "${SPEC_HISTORY_VIEW_ROOT:-}" != "$1" ]; then
+        spec_open_history_view "$1" || return 1
+        trap spec_close_history_view EXIT
+    fi
+    spec_require_history_tips "$1" "$2" "HEAD of $1; restore any staged deletions before moving"
+)
+spec_require_history_tips() { # root, frozen tips [diagnostic context]
+    local rev old
+    while IFS= read -r rev; do
+        [ -n "$rev" ] || continue
+        if ! old="$(verify_lines _spec_history_git "$1" ls-tree --name-only "$rev" -- specs/log.md specs/log specs/archive.md)"; then
+            if [ "${SPEC_HISTORY_VIEW_ROOT:-}" = "$1" ] && [ -n "$SPEC_HISTORY_VIEW" ]; then
+                echo "Legacy history layout unchecked at $rev: the local object store could not supply the tree on this partial clone's older Git" >&2
+                return 2
+            fi
+            echo "Cannot check $rev for old history paths" >&2
+            return 1
+        fi
+        [ -z "$old" ] || { _spec_history_move_required "${3:-commit $rev; update stale branches and refs after moving}"; return 1; }
+    done <<< "$2"
+}
+
 spec_require_layout() { # root
     local name line nr=0
     for name in product-spec targets features archive; do
         if _spec_dir_used "$1/specs/$name"; then
-            printf 'Unsupported specs/%s/ layout: expected specs/SPEC.md or split specs/product.md and specs/architecture.md, specs/changes/<id>.md records and specs/archive.md history.\n' "$name" >&2
+            printf 'Unsupported specs/%s/ layout: expected specs/SPEC.md or split specs/product.md and specs/architecture.md, specs/changes/<id>.md records and .prdkit/history/archive.md history.\n' "$name" >&2
             return 1
         fi
     done
-    if [ -f "$1/specs/archive.md" ]; then
+    if [ -f "$1/.prdkit/history/archive.md" ]; then
         while IFS= read -r line || [ -n "$line" ]; do
             nr=$((nr + 1))
             _spec_trim "${line//[*_\`#|>]/}"
             case "$_spec_t" in
                 [Ll][Aa][Ss][Tt]' '0.[Xx]' '[Ff][Ee][Aa][Tt][Uu][Rr][Ee]*)
-                    printf 'Unsupported feature counter in specs/archive.md:%s: current archives reserve change numbers with **Log condensed through**: <number>.\n' "$nr" >&2
+                    printf 'Unsupported feature counter in .prdkit/history/archive.md:%s: current archives reserve change numbers with **Log condensed through**: <number>.\n' "$nr" >&2
                     return 1 ;;
             esac
-        done < "$1/specs/archive.md" || return 1
+        done < "$1/.prdkit/history/archive.md" || return 1
     fi
 }
 
@@ -208,7 +261,7 @@ spec_archive_log_index() { # root [diagnostic-path]
     printf '%s\n' "${row%%"$SPEC_SEP"*}"
 }
 spec_archive_log_details() ( # root [diagnostic-path]
-    local path=specs/archive.md entries tmp diagnostic="${2:-specs/archive.md}"
+    local path=.prdkit/history/archive.md entries tmp diagnostic="${2:-.prdkit/history/archive.md}"
     if [ ! -e "$1/$path" ] && [ ! -L "$1/$path" ] &&
         _spec_archive_git -C "$1" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         entries="$(verify_lines _spec_archive_git -C "$1" ls-files -t -- "$path")" || return 1
@@ -249,7 +302,7 @@ _spec_archive_log_file() { # file diagnostic-path [diagnostic-context]
         function fail(why) { print NR ": " why; bad = 1; exit 1 }
         # Parse only at the field boundary. Ordinary prose after the code span is not a set.
         function git_pointer(s,    sha, tail) {
-            if (!match(s, /^;[ \t]*those entries:[ \t]*`git show [0-9a-fA-F]+:specs\/log\.md`/)) return ""
+            if (!match(s, /^;[ \t]*those entries:[ \t]*`git show [0-9a-fA-F]+:\.prdkit\/history\/log\.md`/)) return ""
             tail = trim(substr(s, RLENGTH + 1))
             if (tail != "" && tail != "." && tail !~ /^[.;][ \t]+[^[:space:];,]/) return ""
             if (continuation(sub_tail(tail))) return ""
@@ -262,7 +315,7 @@ _spec_archive_log_file() { # file diagnostic-path [diagnostic-context]
             s = trim(s)
             # Older archives also used a bare value, an "as of" date, or a dash and
             # "entries at" annotation. Do not accept arbitrary text in the metadata lane.
-            if (s == "<NNN, or none>; those entries: `git show <sha>:specs/log.md`." || s ~ /^through [0-9]+$/) return
+            if (s == "<NNN, or none>; those entries: `git show <sha>:.prdkit/history/log.md`." || s ~ /^through [0-9]+$/) return
             raw = s; sub(/[ \t;].*$/, "", raw)
             rest = trim(substr(s, length(raw) + 1))
             lead = tolower(raw); gsub(/[*_`]/, "", lead)
@@ -275,12 +328,12 @@ _spec_archive_log_file() { # file diagnostic-path [diagnostic-context]
             cutoff = lead + 0; prev = cutoff
             if (rest == "" || rest == "." || rest == "|" || git_pointer(rest) != "" ||
                 rest ~ /^as of [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\.?$/ ||
-                rest ~ /^(—|–|-) entries at `git show [0-9a-fA-F]+:specs\/log\.md`\.?$/) return
-            if (!match(rest, /^;[ \t]*also[ \t]+/)) fail("expected ; also <IDs and ranges>; or ; those entries: `git show <sha>:specs/log.md`")
+                rest ~ /^(—|–|-) entries at `git show [0-9a-fA-F]+:\.prdkit\/history\/log\.md`\.?$/) return
+            if (!match(rest, /^;[ \t]*also[ \t]+/)) fail("expected ; also <IDs and ranges>; or ; those entries: `git show <sha>:.prdkit/history/log.md`")
             if (NR != label_line || lead == "n/a" || tolower(raw) != lead)
                 fail("keep the sparse field on the cutoff line and use a plain number or none")
             rest = substr(rest, RLENGTH + 1); semi = index(rest, ";")
-            if (!semi || (pointer = git_pointer(substr(rest, semi))) == "") fail("expected ; those entries: `git show <sha>:specs/log.md` after the sparse set")
+            if (!semi || (pointer = git_pointer(substr(rest, semi))) == "") fail("expected ; those entries: `git show <sha>:.prdkit/history/log.md` after the sparse set")
             list = trim(substr(rest, 1, semi - 1))
             if (list == "" || list ~ /,$/) fail("empty ID or range")
             n = split(list, fields, ",")
@@ -356,11 +409,56 @@ _spec_archive_git() {
     GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1 git "$@"
 }
 
+# Older Git has no no-lazy-fetch switch. Read frozen IDs through an empty repo
+# with the original object store as an alternate, but no promisor remotes.
+SPEC_HISTORY_VIEW=""; SPEC_HISTORY_VIEW_ROOT=""
+_spec_history_view_git() (
+    unset GIT_DIR GIT_COMMON_DIR GIT_WORK_TREE GIT_OBJECT_DIRECTORY GIT_CONFIG GIT_CONFIG_PARAMETERS
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=0 GIT_ALLOW_PROTOCOL='' _spec_archive_git "$@"
+)
+spec_open_history_view() { # root; caller owns the lifetime of the optional view
+    local objects format
+    SPEC_HISTORY_VIEW=""; SPEC_HISTORY_VIEW_ROOT=""
+    if spec_objects_local "$1"; then
+        SPEC_HISTORY_VIEW_ROOT="$1"
+        return 0
+    elif [ "$?" -ne 2 ]; then return 1; fi
+    objects="$(git -C "$1" rev-parse --path-format=absolute --git-path objects)" || return 1
+    format="$(git -C "$1" rev-parse --show-object-format)" || return 1
+    SPEC_HISTORY_VIEW="$(mktemp -d)" || return 1
+    if ! _spec_history_view_git init --quiet --bare --template= --object-format="$format" "$SPEC_HISTORY_VIEW" ||
+        ! printf '%s\n' "$objects" > "$SPEC_HISTORY_VIEW/objects/info/alternates"; then
+        spec_close_history_view
+        return 1
+    fi
+    SPEC_HISTORY_VIEW_ROOT="$1"
+}
+spec_close_history_view() {
+    [ -z "${SPEC_HISTORY_VIEW:-}" ] || rm -rf -- "$SPEC_HISTORY_VIEW"
+    SPEC_HISTORY_VIEW=""; SPEC_HISTORY_VIEW_ROOT=""
+}
+_spec_history_git() { # root command ...
+    local root="$1"; shift
+    if [ "${SPEC_HISTORY_VIEW_ROOT:-}" = "$root" ]; then
+        if [ -n "$SPEC_HISTORY_VIEW" ]; then
+            _spec_history_view_git --git-dir="$SPEC_HISTORY_VIEW" "$@"
+            return
+        fi
+    else
+        spec_objects_local "$root" || return 1
+    fi
+    _spec_archive_git -C "$root" "$@"
+}
+
 _spec_regular_blob_at() { # root rev path -> blob ID, empty when absent
     local path="$3" row meta
-    row="$(verify_lines _spec_archive_git -C "$1" ls-tree "$2" -- ":(literal)$path")" || return 1
+    row="$(verify_lines _spec_history_git "$1" ls-tree "$2" -- ":(literal)$path")" || return 1
     [ -n "$row" ] || return 0
     meta="${row%%$'\t'*}"
+    if [ "${4:-}" = --skip-symlink ] &&
+        [[ "${row#*$'\t'}" = "$path" && "$meta" =~ ^120000\ blob\ [0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+        return 0
+    fi
     if ! [[ "${row#*$'\t'}" = "$path" && "$meta" =~ ^100(644|755)\ blob\ [0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
         printf '%s at %s: expected a regular file\n' "$path" "$2" >&2
         return 1
@@ -369,13 +467,12 @@ _spec_regular_blob_at() { # root rev path -> blob ID, empty when absent
 }
 
 spec_archive_log_details_at() ( # root commit
-    local path=specs/archive.md blob tmp
-    spec_objects_local "$1" || { printf 'Cannot read %s at %s without risking a lazy fetch\n' "$path" "$2" >&2; return 1; }
+    local path=.prdkit/history/archive.md blob tmp
     blob="$(_spec_regular_blob_at "$1" "$2" "$path")" || return 1
     if [ -z "$blob" ]; then echo 0; return 0; fi
     tmp="$(mktemp)" || return 1
     trap 'rm -f "$tmp"' EXIT
-    _spec_archive_git -C "$1" cat-file blob "$blob" > "$tmp" || return 1
+    _spec_history_git "$1" cat-file blob "$blob" > "$tmp" || return 1
     _spec_archive_log_file "$tmp" "$path" " (at $2)"
 )
 
@@ -383,13 +480,13 @@ spec_archive_log_previous() { # root -> at most one earlier committed archive
     local rev=HEAD
     spec_objects_local "$1" || return 0
     # Compare working edits to HEAD, or a clean checkout to the first parent.
-    if _spec_archive_git -C "$1" diff --quiet HEAD -- specs/archive.md 2>/dev/null; then rev=HEAD^; fi
+    if _spec_archive_git -C "$1" diff --quiet HEAD -- .prdkit/history/archive.md 2>/dev/null; then rev=HEAD^; fi
     _spec_archive_git -C "$1" rev-parse --verify --quiet "$rev^{commit}" >/dev/null 2>&1 || return 0
     spec_archive_log_details_at "$1" "$rev" 2>/dev/null || return 0
 }
 
 spec_integration_tips() ( # root -> distinct local commit IDs, no fetch
-    local root="$1" target refs rev ref seen=" " candidates=()
+    local root="$1" target refs rev ref refname default="" configured seen=" " candidates=()
     target="$(_spec_archive_git -C "$root" symbolic-ref --quiet refs/remotes/origin/HEAD)" ||
         { [ "$?" -eq 1 ] || return 1; }
     case "$target" in
@@ -406,9 +503,28 @@ spec_integration_tips() ( # root -> distinct local commit IDs, no fetch
     fi
     while read -r rev ref; do
         case " ${candidates[*]} " in *" $ref "*) ;; *) continue ;; esac
+        if [ "$ref" = "$target" ]; then default="$rev"; fi
         case "$seen" in *" $rev "*) continue ;; esac
         seen="$seen$rev "; printf '%s\n' "$rev" || return 1
     done <<< "$refs"
+    # Use the same committed policy as review. Read it at the frozen origin/HEAD
+    # tip, never from the checkout or from a configured branch itself.
+    case "$target" in refs/remotes/*) ;; *) return 0 ;; esac
+    [ -n "$default" ] || return 0
+    configured="$(spec_trusted_refs "$root" --at "$target" "$default")" || return 1
+    while IFS= read -r ref; do
+        [ -n "$ref" ] || continue
+        # Do not re-read refs already frozen above.
+        case " ${candidates[*]} " in *" $ref "*) continue ;; esac
+        refs="$(verify_lines _spec_archive_git -C "$root" for-each-ref --format='%(objectname) %(refname)' "$ref")" || return 1
+        while read -r rev refname; do
+            # A configured ref can be absent; a match beneath it is not a match.
+            [ "$refname" = "$ref" ] || continue
+            rev="$(_spec_history_git "$root" rev-parse --verify "$rev^{commit}")" || return 1
+            case "$seen" in *" $rev "*) continue ;; esac
+            seen="$seen$rev "; printf '%s\n' "$rev" || return 1
+        done <<< "$refs"
+    done <<< "$configured"
     return 0
 )
 
@@ -425,18 +541,17 @@ spec_archive_log_integration() { # root [frozen tips [details]] -> distinct comm
 
 spec_number_claims_at() ( # root commit -> allocated log and record numbers, no fetch
     local paths blob
-    spec_objects_local "$1" || return 1
-    paths="$(verify_lines _spec_archive_git -C "$1" ls-tree "$2" -- specs/changes/ specs/log/)" || return 1
+    paths="$(verify_lines _spec_history_git "$1" ls-tree "$2" -- specs/changes/ .prdkit/history/log/)" || return 1
     LC_ALL=C awk '
         $1 ~ /^100(644|755)$/ && $2 == "blob" &&
-        $4 ~ /^specs\/(changes|log)\/[0-9][0-9][0-9][0-9]*-[a-z0-9-]+\.md$/ && NF == 4 {
-            split($4, path, "/"); sub(/\.md$/, "", path[3]); print "committed", path[2], path[3]
+        $4 ~ /^(specs\/changes|\.prdkit\/history\/log)\/[0-9][0-9][0-9][0-9]*-[a-z0-9-]+\.md$/ && NF == 4 {
+            n = split($4, path, "/"); sub(/\.md$/, "", path[n]); print "committed", path[n-1], path[n]
         }
     ' <<< "$paths" || return 1
-    blob="$(_spec_regular_blob_at "$1" "$2" specs/log.md)" || return 1
+    blob="$(_spec_regular_blob_at "$1" "$2" .prdkit/history/log.md)" || return 1
     [ -n "$blob" ] || return 0
     set -o pipefail
-    _spec_archive_git -C "$1" cat-file blob "$blob" |
+    _spec_history_git "$1" cat-file blob "$blob" |
         sed -n 's/^- [0-9-]* \([0-9][0-9][0-9]*-[a-z0-9-]*\):.*/committed log \1/p'
 )
 
@@ -473,12 +588,12 @@ spec_archive_log_proof() ( # root index pointer
         echo "sparse snapshot $pointer does not identify a unique commit"
         return 1
     fi
-    blob="$(_spec_regular_blob_at "$root" "$commit" specs/log.md 2>/dev/null)" &&
-        [ -n "$blob" ] || { echo "sparse snapshot $pointer has no readable regular specs/log.md"; return 1; }
+    blob="$(_spec_regular_blob_at "$root" "$commit" .prdkit/history/log.md 2>/dev/null)" &&
+        [ -n "$blob" ] || { echo "sparse snapshot $pointer has no readable regular .prdkit/history/log.md"; return 1; }
     tmp="$(mktemp)" || return 1
     trap 'rm -f "$tmp"' EXIT
     if ! _spec_archive_git -C "$root" cat-file blob "$blob" > "$tmp" || ! verify_lf_file "$tmp"; then
-        echo "cannot read complete LF text at $pointer:specs/log.md"
+        echo "cannot read complete LF text at $pointer:.prdkit/history/log.md"
         return 1
     fi
     expected="$(wc -l < "$tmp")" || return 1
@@ -490,7 +605,7 @@ spec_archive_log_proof() ( # root index pointer
             if (length(n) <= 9) print n + 0
         }
         END { if (NR != expected) exit 1 }
-    ' "$tmp" | LC_ALL=C sort -nu)" || { echo "incomplete read of $pointer:specs/log.md"; return 1; }
+    ' "$tmp" | LC_ALL=C sort -nu)" || { echo "incomplete read of $pointer:.prdkit/history/log.md"; return 1; }
     # Walk sorted evidence and interval endpoints; report the first missing run.
     missing="$(LC_ALL=C awk -v index_row="$index" '
         function advance(   endpoints) {
@@ -513,25 +628,25 @@ spec_archive_log_proof() ( # root index pointer
         END { if (!found && i <= n) gap(lo, hi) }
     ' <<< "$numbers")" || return 1
     if [ -n "$missing" ]; then
-        printf 'sparse snapshot %s:specs/log.md is missing closed number(s) %s\n' "$pointer" "$missing"
+        printf 'sparse snapshot %s:.prdkit/history/log.md is missing closed number(s) %s\n' "$pointer" "$missing"
         return 1
     fi
 )
 
-# The closed-change log: the lines of specs/log.md, then each entry file specs/log/<id>.md, one
+# The closed-change log: the lines of .prdkit/history/log.md, then each entry file .prdkit/history/log/<id>.md, one
 # "- <date> <id>: <text>" line that close-change.sh writes, so two branches that each close a
 # change touch different files and never conflict. Compaction folds the entry files into
-# specs/log.md (compact.md). Callers match the dated lines they need; awk ends every line.
+# .prdkit/history/log.md (compact.md). Callers match the dated lines they need; awk ends every line.
 spec_log_entries() { # root
-    if [ -f "$1/specs/log.md" ]; then
-        verify_lf_file "$1/specs/log.md" || { echo 'Invalid text in specs/log.md: expected LF-terminated Markdown' >&2; return 1; }
-        awk 1 "$1/specs/log.md" || return 1
+    if [ -f "$1/.prdkit/history/log.md" ]; then
+        verify_lf_file "$1/.prdkit/history/log.md" || { echo 'Invalid text in .prdkit/history/log.md: expected LF-terminated Markdown' >&2; return 1; }
+        awk 1 "$1/.prdkit/history/log.md" || return 1
     fi
     spec_log_files "$@"
 }
 spec_log_files() { # root -> the entry files' lines only
     local file id
-    for file in "$1"/specs/log/[0-9]*.md; do
+    for file in "$1"/.prdkit/history/log/[0-9]*.md; do
         [ -f "$file" ] && [ ! -L "$file" ] || continue
         id="${file##*/}"; id="${id%.md}"
         if ! spec_log_entry_valid "$file" "$id"; then
@@ -548,17 +663,23 @@ spec_log_entry_valid() { # file change-id
         lines="$(wc -l < "$1")" && [ "$lines" -eq 1 ] &&
         grep "^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] $2: [[:space:]]*[^[:space:]]" "$1" >/dev/null
 }
+
+SPEC_CLOSE_ROW_MAX=200
+# Under LC_ALL=C, dropping UTF-8 continuation bytes counts characters on BSD awk
+# and on mawk alike. Apply this to the entire dated row, including header tags.
+SPEC_CLOSE_LENGTH_AWK='function close_length(s) { gsub(/[\200-\277]/, "", s); return length(s) }'
+
 # The same at a commit, for a gate that reads a ref and never the checkout. Only regular files
-# count (a blob of mode 100644 or 100755): a tree, symlink or submodule at specs/log.md or
-# specs/log/<id>.md is no entry. Fails, reading nothing, where an object read could fetch from a
+# count (a blob of mode 100644 or 100755): a tree, symlink or submodule at .prdkit/history/log.md or
+# .prdkit/history/log/<id>.md is no entry. Fails, reading nothing, where an object read could fetch from a
 # promisor remote (spec_objects_local); a missing object reads as nothing.
 spec_log_entries_at() { # root rev
     local mode type sha path
     spec_objects_local "$1" || return 1
-    { GIT_NO_LAZY_FETCH=1 git -C "$1" ls-tree "$2" -- specs/log.md specs/log/ 2>/dev/null || true; } |
+    { GIT_NO_LAZY_FETCH=1 git -C "$1" ls-tree "$2" -- .prdkit/history/log.md .prdkit/history/log/ 2>/dev/null || true; } |
         while read -r mode type sha path; do
             case "$mode $type" in "100644 blob"|"100755 blob") ;; *) continue ;; esac
-            case "$path" in specs/log.md|specs/log/[0-9]*.md) ;; *) continue ;; esac
+            case "$path" in .prdkit/history/log.md|.prdkit/history/log/[0-9]*.md) ;; *) continue ;; esac
             GIT_NO_LAZY_FETCH=1 git -C "$1" cat-file blob "$sha" 2>/dev/null | awk 1 || true
         done
     return 0
@@ -591,7 +712,7 @@ SPEC_ARCHIVE_COUNT_AWK='
     }'
 spec_compaction() { # root, normalized archive index
     local root="$1" compaction='0 0' closed_since last_pass pending expected checked
-    if [ -f "$root/specs/log.md" ]; then
+    if [ -f "$root/.prdkit/history/log.md" ]; then
         # Read order and counts together. Equal first/last dates mean newest-first.
         compaction="$(LC_ALL=C awk -v archive_index="$2" "$SPEC_ARCHIVE_COUNT_AWK"'
             /^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] / {
@@ -604,11 +725,11 @@ spec_compaction() { # root, normalized archive index
                 if (!seen) print c + 0
                 else if (n && first_date >= last_date) print above + 0, top
                 else print c + 0, last
-            }' "$root/specs/log.md")" || return "$?"
-        verify_lf_file "$root/specs/log.md" || { echo 'Invalid text in specs/log.md' >&2; return 1; }
-        expected="$(wc -l < "$root/specs/log.md")" || return 1
+            }' "$root/.prdkit/history/log.md")" || return "$?"
+        verify_lf_file "$root/.prdkit/history/log.md" || { echo 'Invalid text in .prdkit/history/log.md' >&2; return 1; }
+        expected="$(wc -l < "$root/.prdkit/history/log.md")" || return 1
         if ! [ "${compaction%% *}" -eq "$expected" ]; then
-            printf 'Incomplete specs/log.md: expected %s lines, checked %s\n' "$expected" "${compaction%% *}" >&2
+            printf 'Incomplete .prdkit/history/log.md: expected %s lines, checked %s\n' "$expected" "${compaction%% *}" >&2
             return 1
         fi
     fi
@@ -1640,43 +1761,72 @@ spec_default_branch() { # root
     printf '%s\n' "$base"
 }
 
-# The trusted integration refs: origin/HEAD's target (a full refs/remotes/ name, always first),
-# then each ref named by `review-integration-branches` in the committed config at that target,
-# never the worktree's own. One full ref per line; blank when origin/HEAD does not resolve to a
-# commit, in which case nothing is trusted.
-spec_trusted_refs() { # root [--tips: include a frozen commit after each ref]
-    local root="$1" default sha policy configured candidate tip seen
-    default="$(git -C "$root" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
-    case "$default" in refs/remotes/*) ;; *) return 0 ;; esac
-    sha="$(git -C "$root" rev-parse --verify --quiet "$default^{commit}" || true)"
-    [ -n "$sha" ] || return 0
-    if [ "${2:-}" = --tips ]; then printf '%s\t%s\n' "$default" "$sha"; else printf '%s\n' "$default"; fi
-    seen="$default"
-    policy="$(git -C "$root" show "$sha:.prdkit/memory/config.md" 2>/dev/null || true)"
-    configured="$(printf '%s\n' "$policy" | awk "$SPEC_SKIP_AWK"'
+# Full remote-tracking names from one committed configuration; read by both review
+# and the local-only allocation/close preflight. Configuration is literal, not patterns.
+spec_configured_integration_refs() {
+    local configured candidate
+    configured="$(awk "$SPEC_SKIP_AWK"'
         { if (spec_skip($0)) next }
         /^## / { section = $0; next }
         section == "## Configuration" && /^- review-integration-branches:/ {
             n++; value = $0; sub(/^- review-integration-branches:[[:space:]]*/, "", value)
         }
-        END { if (n == 1) { gsub(/,/, " ", value); print value } }')"
-    # Configuration is a list of literal refs, never patterns.
+        END { if (n == 1) { gsub(/,/, " ", value); print value } }')" || return 1
     while IFS= read -r candidate; do
         [ -n "$candidate" ] || continue
         case "$candidate" in refs/remotes/*) ;; *) candidate="refs/remotes/$candidate" ;; esac
         git check-ref-format "$candidate" >/dev/null 2>&1 || continue
+        printf '%s\n' "$candidate" || return 1
+    done < <(printf '%s\n' "$configured" | tr ' \t\r' '\n')
+}
+
+# The trusted integration refs: origin/HEAD's target (a full refs/remotes/ name, always first),
+# then each ref named by `review-integration-branches` in the committed config at that target,
+# never the worktree's own. One full ref per line; blank when origin/HEAD does not resolve to a
+# commit, in which case nothing is trusted.
+spec_trusted_refs() { # root [--tips | --at <frozen-default-ref> <commit>]
+    local root="$1" default sha policy configured candidate tip seen
+    if [ "${2:-}" = --at ]; then
+        default="$3"; sha="$4"
+    else
+        default="$(git -C "$root" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
+        case "$default" in refs/remotes/*) ;; *) return 0 ;; esac
+        sha="$(git -C "$root" rev-parse --verify --quiet "$default^{commit}" || true)"
+        [ -n "$sha" ] || return 0
+    fi
+    if [ "${2:-}" = --tips ]; then printf '%s\t%s\n' "$default" "$sha"; else printf '%s\n' "$default"; fi
+    seen="$default"
+    if [ "${2:-}" = --at ]; then
+        policy="$(_spec_trusted_integration_policy "$root" "$sha")" || return 1
+    else
+        policy="$(_spec_trusted_integration_policy "$root" "$sha" 2>/dev/null)" || policy=""
+    fi
+    configured="$(spec_configured_integration_refs <<< "$policy")" || return 1
+    while IFS= read -r candidate; do
+        [ -n "$candidate" ] || continue
         if [ "${2:-}" = --tips ]; then
             case $'\n'"$seen"$'\n' in *$'\n'"$candidate"$'\n'*) continue ;; esac
             seen="$seen"$'\n'"$candidate"
             tip="$(git -C "$root" rev-parse --verify --quiet "$candidate^{commit}")" || continue
             printf '%s\t%s\n' "$candidate" "$tip"
         else printf '%s\n' "$candidate"; fi
-    done < <(printf '%s\n' "$configured" | tr ' \t\r' '\n')
+    done <<< "$configured"
 }
+
+_spec_trusted_integration_policy() ( # root frozen default commit
+    local blob
+    if [ "${SPEC_HISTORY_VIEW_ROOT:-}" != "$1" ]; then
+        spec_open_history_view "$1" || return 1
+        trap spec_close_history_view EXIT
+    fi
+    # A symlink is customization, not policy. Neither follow it nor parse the link target.
+    blob="$(_spec_regular_blob_at "$1" "$2" .prdkit/memory/config.md --skip-symlink)" || return 1
+    [ -z "$blob" ] || _spec_history_git "$1" cat-file blob "$blob"
+)
 
 # Reading an object a partial clone lacks would fetch it from the promisor remote. Git 2.45+
 # refuses under GIT_NO_LAZY_FETCH; with an older Git, callers skip object reads in a partial clone.
-spec_objects_local() { # root
+spec_objects_local() { # root -> 0 safe in place, 1 probe error, 2 old Git in a partial clone
     local value status entries partial=false version
     if value="$(git -C "$1" config --get extensions.partialclone 2>/dev/null)"; then
         [ -n "$value" ] || return 1
@@ -1700,7 +1850,7 @@ spec_objects_local() { # root
     $partial || return 0
     version="$(git version 2>/dev/null)" || return 1
     [[ "$version" =~ ^git[[:space:]]version[[:space:]]([0-9]+)\.([0-9]+) ]] || return 1
-    [ "$((10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]}))" -ge 2045 ]
+    [ "$((10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]}))" -ge 2045 ] || return 2
 }
 
 # Records committed at <rev> with no child or outcome checkpoint keeping them open.
