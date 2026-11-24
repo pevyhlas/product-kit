@@ -8,11 +8,43 @@ change by change.
 
 ## [Unreleased]
 
+### Added
+
+- Optional `review-lenses` maps registered reviewers to GitHub accounts. One App can cover
+  several areas; the gate reports the approving account and review per area. With lenses
+  configured, T3 needs a mapped `design` approval plus a separate owner approval (#161).
+
 ### Changed
 
 - Upgrades remove retired kit files with unchanged content, list retired files kept for manual
   follow-up, and warn about tracked references to removed files. Upgrades refuse if sparse
   checkout excludes a retired tracked path.
+- Reviewers submit approvals or changes requested directly on GitHub under their own
+  identities. After a local close, push the closing commit for its required reviews.
+
+### Changed (breaking)
+
+- The 3.0 gate checks native GitHub reviews on the exact PR head. T0 needs no approval;
+  T1–T3 need an independent publisher, and T3 also needs an owner. An ID in both roles
+  counts only as owner. The PR author counts for neither. Open objections block every tier
+  across pushes until the objector approves the current head or the objection itself is
+  dismissed (#138).
+- Review policy requires a unique Configuration heading. Comments and fenced examples
+  before or within that section are rejected.
+
+### Removed (breaking)
+
+- Removed receipt publication, replay, snapshots and cross-head approval inheritance.
+  The native gate rejects the retired `review-publisher-isolation` setting.
+
+### Fixed
+
+- Focused review packages require a trusted integration ref with a unique matching
+  merge base before allocating a round. An ambiguous ref cannot disqualify a valid one.
+- Review configuration uses ATX headings only. A visible heading underline refuses the
+  entire policy instead of letting an example open or end the configuration section.
+- The launcher refuses a pass when the native result does not match the checked head,
+  trusted target, or required review roles and areas.
 
 ## [2.2.0] — 2026-11-24 — tracked history, coverage check and checked owner quotes
 

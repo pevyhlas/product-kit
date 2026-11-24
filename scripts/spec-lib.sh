@@ -1761,14 +1761,96 @@ spec_default_branch() { # root
     printf '%s\n' "$base"
 }
 
+# Unicode White_Space in UTF-8; use in the C byte locale on BSD and older awk.
+SPEC_REVIEW_SPACES_AWK='function spaces(s) {
+    gsub(/[[:space:]]|\302[\205\240]|\341\232\200|\342\200[\200-\212\250\251\257]|\342\201\237|\343\200\200/, " ", s)
+    return s
+}'
+
+# Validate the whole raw config before emitting policy. Blank prefix lines preserve
+# assignment line numbers. An absent level-two Configuration heading emits no policy.
+spec_review_config_section() {
+    LC_ALL=C awk -v diagnostic="${1:-/dev/stderr}" "$SPEC_REVIEW_SPACES_AWK"'
+        # Only the underline check exempts examples. Raw ATX duplicate and marker
+        # checks below still see every line, including examples.
+        function underline_check(s,   tail,mark,at) {
+            if (fence != "") {
+                tail=s; sub(/[ \t]+$/, "", tail)
+                if (index(tail,fence)==1 && (tail ~ /^`+$/ || tail ~ /^~+$/)) fence=""
+                return
+            }
+            if (!comment && match(s,/^```+|^~~~+/)) {
+                mark=substr(s,1,RLENGTH); tail=substr(s,RLENGTH+1)
+                if (substr(mark,1,1)=="~" || !index(tail,"`")) { fence=mark; return }
+            }
+            if (!comment && !underline && nonblank && s ~ /^(=+|-+)[ \t]*$/) underline=NR
+            # Comments may open inline or close and reopen on the same line.
+            # A literal opener in indented code, an escape or a code span must
+            # not hide a later visible underline.
+            if (!comment && s ~ /^[ \t]/) return
+            while (length(s)) {
+                if (comment) {
+                    at=index(s,"-->"); if (!at) return
+                    comment=0; s=substr(s,at+3)
+                } else {
+                    if (!match(s,/<!--|\\.|`+/)) return
+                    mark=substr(s,RSTART,RLENGTH); s=substr(s,RSTART+RLENGTH)
+                    if (mark=="<!--") comment=1
+                    else if (substr(mark,1,1)=="`") {
+                        tail=s
+                        while (match(tail,/`+/)) {
+                            at=RLENGTH; tail=substr(tail,RSTART+RLENGTH)
+                            if (at==length(mark)) { s=tail; break }
+                        }
+                    }
+                }
+            }
+        }
+        function scan(raw,n,   s,title,level) {
+            s=raw; sub(/\r$/, "", s); sub(/^ ? ? ?/, "", s)
+            underline_check(s)
+            nonblank=(spaces(raw) ~ /[^[:space:]]/)
+            if (match(s,/^#+/) && RLENGTH<=6 && substr(s,RLENGTH+1) ~ /^([ \t]|$)/) {
+                level=RLENGTH; title=substr(s,level+1)
+            }
+            if (level) {
+                title=spaces(title)
+                sub(/[[:space:]]+$/, "", title); sub(/#+$/, "", title)
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", title)
+                if (tolower(title)=="configuration") {
+                    if (!first) first=n; else if (!duplicate) duplicate=n
+                    if (level==2 && !start) start=n
+                }
+                if (start && !stop && n>start && level<=2) stop=n
+            }
+            if (!stop && !marker) {
+                s=spaces(raw)
+                if (s ~ /<!--|-->/ || s ~ /^[[:space:]]*(```|~~~)/) marker=n
+            }
+            if (start && !stop && n>start) body[n]=raw
+        }
+        { scan($0,NR) }
+        END {
+            if (underline) {
+                print "config.md line " underline ": underlined headings are unsupported; use #/## headings" > diagnostic; exit 1
+            }
+            if (duplicate) {
+                print "Duplicate Configuration headings at config.md lines " first " and " duplicate > diagnostic; exit 1
+            }
+            if (!start) exit
+            if (marker) {
+                print "config.md line " marker ": comments and fenced blocks are not allowed before or within the policy section" > diagnostic; exit 1
+            }
+            for (i=1;i<(stop ? stop : NR+1);i++) print body[i]
+        }'
+}
+
 # Full remote-tracking names from one committed configuration; read by both review
 # and the local-only allocation/close preflight. Configuration is literal, not patterns.
 spec_configured_integration_refs() {
     local configured candidate
-    configured="$(awk "$SPEC_SKIP_AWK"'
-        { if (spec_skip($0)) next }
-        /^## / { section = $0; next }
-        section == "## Configuration" && /^- review-integration-branches:/ {
+    configured="$(awk '
+        /^- review-integration-branches:/ {
             n++; value = $0; sub(/^- review-integration-branches:[[:space:]]*/, "", value)
         }
         END { if (n == 1) { gsub(/,/, " ", value); print value } }')" || return 1
@@ -1784,8 +1866,9 @@ spec_configured_integration_refs() {
 # then each ref named by `review-integration-branches` in the committed config at that target,
 # never the worktree's own. One full ref per line; blank when origin/HEAD does not resolve to a
 # commit, in which case nothing is trusted.
-spec_trusted_refs() { # root [--tips | --at <frozen-default-ref> <commit>]
-    local root="$1" default sha policy configured candidate tip seen
+spec_trusted_refs() { # root [--tips | --policy-errors FILE | --at <frozen-default-ref> <commit>]
+    local root="$1" default sha policy configured candidate tip seen diagnostic=/dev/null
+    if [ "${2:-}" = --policy-errors ]; then diagnostic="$3"; fi
     if [ "${2:-}" = --at ]; then
         default="$3"; sha="$4"
     else
@@ -1800,6 +1883,9 @@ spec_trusted_refs() { # root [--tips | --at <frozen-default-ref> <commit>]
         policy="$(_spec_trusted_integration_policy "$root" "$sha")" || return 1
     else
         policy="$(_spec_trusted_integration_policy "$root" "$sha" 2>/dev/null)" || policy=""
+    fi
+    if ! policy="$(spec_review_config_section "$diagnostic" <<< "$policy")"; then
+        case "${2:-}" in --policy-errors|--at) return 1 ;; *) return 0 ;; esac
     fi
     configured="$(spec_configured_integration_refs <<< "$policy")" || return 1
     while IFS= read -r candidate; do
@@ -1854,7 +1940,7 @@ spec_objects_local() { # root -> 0 safe in place, 1 probe error, 2 old Git in a 
 }
 
 # Records committed at <rev> with no child or outcome checkpoint keeping them open.
-# Verdicts are host receipts, not record text: T0 and not-yet-reviewed records are listed too.
+# Reviews are native GitHub reviews, not record text: T0 and not-yet-reviewed records are listed too.
 # Committed objects only; prints change ids.
 spec_unclosed_changes() { # root rev
     local root="$1" rev="$2" path paths record_text

@@ -20,7 +20,7 @@ for kind in legacy earlier unbound empty unterminated malformed multiline nul; d
     mkdir -p "$ROOT/round-3"
     printf 'interrupted evidence\n' > "$ROOT/round-3/report.txt"
     prior="package3"$'\t'"$ID"$'\t'"$HEAD_SHA"$'\t'"$REF"$'\t'"$BASE"$'\t'"$BASE"$'\tknown\tfull'
-    binding="${prior/package3/package4}"$'\t'"$BASE"$'\t'"$(git hash-object --stdin </dev/null)"
+    binding="${prior/package3/package5}"$'\t'"$BASE"$'\t'"$(git hash-object --stdin </dev/null)"
     case "$kind" in
         legacy) printf '%s\n' "${prior/package3/package1}" > "$ROOT/round-3/completed.tsv" ;;
         earlier) printf '%s\n' "${prior%$'\t'full}" | sed 's/^package3/package2/' > "$ROOT/round-3/completed.tsv" ;;
@@ -38,7 +38,7 @@ for kind in legacy earlier unbound empty unterminated malformed multiline nul; d
     [ "$STATUS" = 0 ] || continue
     pkg="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
     assert_eq 4 "$(printf '%s' "$OUTPUT" | jq .ROUND)" 'incomplete numbering retained'
-    assert_contains "$(cat "$pkg/index.md")" 'Fingerprint comparison: unknown' 'unusable binding was not equal/changed evidence'
+    assert_contains "$(cat "$pkg/index.md")" 'Review commit:' 'unusable binding was not equal/changed evidence'
     assert_file "$pkg/completed.tsv" 'new usable binding published last'
     assert_eq absent "$([ -e "$pkg/completed.pending" ] && echo present || echo absent)" 'no partial publication after success'
     mkdir "$ROOT/round-8"; cp "$ROOT/round-3/completed.tsv" "$ROOT/round-8/completed.tsv"

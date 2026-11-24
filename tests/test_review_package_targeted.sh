@@ -1,17 +1,9 @@
 #!/usr/bin/env bash
-# Synthetic, explicitly NONAUTHORITATIVE host fixtures. No live approvals or publisher key.
-# Exercise the real native evaluator/publisher against gh-stub, never invented coverage edges.
 set -euo pipefail
 # shellcheck disable=SC2153 # STATUS/OUTPUT are assigned by the sourced fixture runner.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
-source "$TESTS_DIR/review-fixtures.sh"
-source "$TESTS_DIR/review-package-fixtures.sh"
 STATUS=0; OUTPUT=""
 P="$(make_inited_project)"; track_tmp "$P"; cd "$P"
-BUILD="$PK_ROOT/scripts/build-review-package.sh"; CHECK="$PK_ROOT/scripts/check-review.sh"
-PUBLISH="$PK_ROOT/scripts/publish-review.sh"
-printf '\n## Review registry\n| Identity | Role |\n|---|---|\n| code | reviewer |\n| security | reviewer |\n| maker | maker |\n' >> .prdkit/memory/agents.md
-receipt_policy "$P"
 mkdir -p src specs/parts specs/product specs/changes
 printf 'one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\n' > src/app.txt
 printf '# Product\n\nSynthetic product.\n' > specs/product.md
@@ -76,67 +68,11 @@ git add specs/changes/900-programme.md; git commit -qm 'baseline parent'
 BASE="$(git rev-parse HEAD)"; git update-ref "$REF" "$BASE"
 printf 'one\ntwo\nthree\nfour\nchanged\nsix\nseven\neight\nnine\n' > src/app.txt
 git add -A; git commit -qm 'initial synthetic change'
-F1="$(git rev-parse HEAD)"
-use_gh_stub
-host_head() { fx_pr 7 "$(git rev-parse HEAD)" "$(jq -cn --arg base "$MAIN" '{base:{ref:$base}}')"; }
-post() {
-    local who="$1" verdict="$2" at="$3" since="${4:-}" counts=0,0,0,0 args=()
-    [ "$verdict" != FAIL ] || counts=0,1,0,0
-    [ -z "$since" ] || args=(--since "$since")
-    host_head
-    receipt_raw_run bash "$PUBLISH" "$ID" --repo "$P" --pr https://github.com/owner/repo/pull/7 \
-        --reviewer "$who" --verdict "$verdict" --counts "$counts" --head "$at" --report https://example.invalid/report \
-        ${args[@]+"${args[@]}"}
-    assert_eq 0 "$STATUS" "synthetic publisher invocation: $OUTPUT"
-}
-post security PASS "$F1"
-post code FAIL "$F1"
-cp "$GH_STUB_DIR/reviews/7.json" "$GH_STUB_DIR/original.json"
-printf 'one\ntwo\nthree\nfour\nfixed\nsix\nseven\neight\nnine\n' > src/app.txt
-git commit -qam 'bounded fix'
-F2="$(git rev-parse HEAD)"; host_head
-write_plan() {
-    jq -n --arg head "$(git rev-parse HEAD)" --arg since "$F1" --arg at "$BASE" --arg base "$REF" \
-        --slurpfile reviews "$GH_STUB_DIR/original.json" '
-        {change:"001-targeted",pr:"https://github.com/owner/repo/pull/7",head:$head,since:$since,
-         base_ref:$base,base_at:$at,policy_at:$at,
-         reviewers:[
-            {id:"code",action:"review",reason:"inspect the whole fix and cross-boundary effects",
-             obligations:["P1.B-01"],references:[$reviews[0][1].url]},
-            {id:"security",action:"unaffected",reason:"lead judgment, not approval",
-             obligations:["P1.B-01"],references:[$reviews[0][0].url]}],
-         fixes:[{path:"src/app.txt",reviewers:["code"],obligations:["P1.B-01"],
-             receipt:$reviews[0][1].url,finding:"high-1"}],
-         context:[{path:"specs/parts/p1.md",selector:"Behavior",reason:"affected behavior"}]}' > .git/plan.json
-}
-package() {
-    write_plan
-    [ "${1:-}" = "" ] || { jq "$1" .git/plan.json > .git/next.json; mv .git/next.json .git/plan.json; }
-    receipt_raw_run bash "$BUILD" "$ID" "$BASE" --since "$F1" --pr https://github.com/owner/repo/pull/7 --review-plan .git/plan.json
-    assert_eq 0 "$STATUS" "package built: $OUTPUT"
-    PKG="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
-}
-advance() { printf '%s\n' "$1" >> src/app.txt; git add src/app.txt; git commit -qm "$1"; host_head; }
-parity() {
-    local plain status
-    receipt_raw_run bash "$CHECK" --repo "$P" --json --pr https://github.com/owner/repo/pull/7 "$ID"
-    plain="$OUTPUT"; status="$STATUS"
-    receipt_raw_run bash "$CHECK" --repo "$P" --json --diagnostics --pr https://github.com/owner/repo/pull/7 "$ID"
-    assert_eq "$status" "$STATUS" 'diagnostic exit parity'
-    assert_eq "$(printf '%s' "$plain" | jq -Sc .)" "$(printf '%s' "$OUTPUT" | jq -Sc 'del(.diagnostics)')" 'existing JSON parity'
-}
 
-it "F1 PASS/FAIL plus F2 fix names code only, security prospective, gate still FAIL"
+F2="$(git rev-parse HEAD)"; BUILD="$PK_ROOT/scripts/build-review-package.sh"
+package() { PKG="$(bash "$BUILD" "$ID" "$BASE" | jq -er .PACKAGE_DIR)"; }
+advance() { printf '%s\n' "$1" >> src/app.txt; git add src/app.txt; git commit -qm "$1"; }
 package
-j="$(cat "$PKG/dispatch.json")"
-assert_eq '["code"]' "$(printf '%s' "$j" | jq -c .review_now)" 'only failing affected reviewer now'
-assert_eq '["security"]' "$(printf '%s' "$j" | jq -c '[.prospective_carry[].reviewer]')" 'security is conditional, not retained'
-assert_eq '[]' "$(printf '%s' "$j" | jq -c .retained)" 'no pre-receipt retained approval'
-assert_eq fail "$(printf '%s' "$j" | jq -r .gate_result)" 'original native FAIL kept'
-assert_eq 1 "$(cat "$PKG/gate.status")" 'failing gate exit kept'
-assert_eq true "$(printf '%s' "$j" | jq -r .scope_valid)" 'complete advisory map accepted'
-assert_contains "$(printf '%s' "$j" | jq -r '.prospective_carry[0].condition')" 'actual clean native' 'forecast condition explicit'
-
 it "Child context has immutable provenance, complete bounds/items/checkpoint/row, not whole parent"
 assert_contains "$(cat "$PKG/context-manifest.tsv")" "$F2" 'head binding'
 assert_contains "$(cat "$PKG/context-manifest.tsv")" "$(git rev-parse "$F2:specs/changes/$ID.md")" 'actual child blob'
@@ -157,190 +93,15 @@ while IFS=$'\t' read -r file bytes oid source; do
     assert_eq "$oid" "$(git hash-object --no-filters "$PKG/$file")" "inventory exact: $file"
 done < "$PKG/manifest.tsv"
 
-it "Gate diagnostics do not change any existing JSON field, coverage or exits"
-parity
-
-it "An unsupported fingerprint cannot supply a prospective bridge"
-# Same source delta as F1, plus a log edit the former token did not bind.
-git checkout -q --detach "$F1"
-mkdir -p .prdkit/history
-printf -- '- 2026-01-02 002-other: complete\n' >> .prdkit/history/log.md
-git add .prdkit/history/log.md; git commit -qm 'historical reviewed log'
-old_head="$(git rev-parse HEAD)"
-git checkout -q "$ID"
-jq --arg old "$old_head" '.[1].body |= (split("\n") | .[1] |= (fromjson | .head=$old | tojson) | join("\n"))' \
-    "$GH_STUB_DIR/original.json" > "$GH_STUB_DIR/reviews/7.json"
-package
-assert_eq '[]' "$(jq -c .prospective_carry "$PKG/dispatch.json")" 'invalid receipt cannot support reduced dispatch'
-assert_eq 1 "$(jq -r '.blockers.invalid_receipts' "$PKG/dispatch.json")" 'unsupported fingerprint is an explicit refusal'
-assert_contains "$(cat "$PKG/dispatch.json")" 'requires current fp1 provenance'
-
-it "A FAIL with an unavailable head needs a full review, not a focused bridge"
-jq '.[1].body |= (split("\n") | .[1] |= (fromjson | .head="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" | tojson) | join("\n"))' \
-    "$GH_STUB_DIR/original.json" > "$GH_STUB_DIR/reviews/7.json"
-package
-assert_eq '[]' "$(jq -c .prospective_carry "$PKG/dispatch.json")" 'unbound blocker cannot supply the focused bridge'
-assert_eq true "$(jq -r '.blockers.scope[]|select(.reviewer=="code")|.full_required' "$PKG/dispatch.json")" 'dispatch names the required full re-review'
-cp "$GH_STUB_DIR/original.json" "$GH_STUB_DIR/reviews/7.json"
-
-it "An actual clean native narrow receipt, not a forecast, establishes carry"
-post code PASS "$F2" "$F1"
-receipt_raw_run bash "$CHECK" --repo "$P" --json --diagnostics --pr https://github.com/owner/repo/pull/7 "$ID"
-assert_eq 0 "$STATUS" "real evaluator accepts synthetic narrow receipt: $OUTPUT"
-assert_eq true "$(printf '%s' "$OUTPUT" | jq '.diagnostics.latest[] | select(.reviewer=="security") | .end_covered')" 'actual security retention'
-parity
-# A full request cannot reuse a package assembled with an earlier native evaluation and plan.
-receipt_raw_run bash "$BUILD" "$ID" "$BASE"
-assert_eq 0 "$STATUS" 'the same source can get a fresh package for different inputs'
-fresh="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
-assert_contains "$(cat "$fresh/index.md")" 'package context or bindings differ'
-assert_eq false "$([ -e "$fresh/gate.json" ] && echo true || echo false)" 'does not inherit the previous native evaluation'
-
-it "Full replacement PASS clears own FAIL but does not bridge another approval"
-cp "$GH_STUB_DIR/original.json" "$GH_STUB_DIR/reviews/7.json"
-post code PASS "$F2"
-receipt_raw_run bash "$CHECK" --repo "$P" --json --diagnostics --pr https://github.com/owner/repo/pull/7 "$ID"
-assert_eq 1 "$STATUS" 'security still uncovered'
-assert_eq false "$(printf '%s' "$OUTPUT" | jq '.diagnostics.latest[] | select(.reviewer=="security") | .end_covered')" 'no fictional narrow edge'
-post security PASS "$F2" "$F1"
-receipt_raw_run bash "$CHECK" --repo "$P" --json --diagnostics --pr https://github.com/owner/repo/pull/7 "$ID"
-assert_eq 0 "$STATUS" 'both actually covered now'
-cp "$GH_STUB_DIR/original.json" "$GH_STUB_DIR/reviews/7.json"
-post security PASS "$F2" "$F1"
-receipt_raw_run bash "$CHECK" --repo "$P" --json --diagnostics --pr https://github.com/owner/repo/pull/7 "$ID"
-assert_eq 1 "$STATUS" 'another reviewer cannot clear code FAIL'
-assert_eq '["code"]' "$(printf '%s' "$OUTPUT" | jq -c '[.diagnostics.standing[].reviewer]')" 'own FAIL retained'
-
-it "Actual retained clean coverage remains visible while another reviewer FAIL stands"
-advance retained-control
-post security PASS HEAD
-package
-assert_eq '["security"]' "$(jq -c '[.retained[].reviewer]' "$PKG/dispatch.json")" 'actual clean security retained beside code FAIL'
-assert_eq fail "$(jq -r .gate_result "$PKG/dispatch.json")" 'not whole-gate approval'
-cp "$GH_STUB_DIR/original.json" "$GH_STUB_DIR/reviews/7.json"
-
-it "Affected security must be reviewed; incomplete/forged/omitted mappings cannot reduce"
-advance security-affected
-package '.reviewers[1].action="review" | .fixes[0].reviewers=["code","security"]'
-assert_eq '["code","security"]' "$(jq -c .review_now "$PKG/dispatch.json")" 'security affected selected'
-assert_eq '[]' "$(jq -c .prospective_carry "$PKG/dispatch.json")" 'affected never prospective'
-advance omitted-blocker
-package '.reviewers |= map(select(.id!="code"))'
-assert_eq false "$(jq -r .scope_valid "$PKG/dispatch.json")" 'omitted code not valid'
-assert_eq '["code"]' "$(jq -c .review_now "$PKG/dispatch.json")" 'map cannot hide standing blocker'
-advance unmapped-delta
-package '.fixes[0].path="src/missing.txt"'
-assert_eq false "$(jq -r .scope_valid "$PKG/dispatch.json")" 'unmapped delta pending'
-advance forged-text
-package '.reviewers[1].references=["PASS security"]'
-assert_eq false "$(jq -r .scope_valid "$PKG/dispatch.json")" 'typed PASS is no native reference'
-advance missing-concern
-package '.reviewers += [{id:"maker",action:"unaffected",reason:"not eligible",obligations:["P1.B-01"],references:["new-change"]}]'
-assert_eq false "$(jq -r .scope_valid "$PKG/dispatch.json")" 'maker cannot fill concern'
-
-it "Stale plan refuses before allocation"
-advance stale-binding
-write_plan
-jq '.head="0000000000000000000000000000000000000000"' .git/plan.json > .git/next.json; mv .git/next.json .git/plan.json
-before="$(package_snapshot .prdkit/cache/evidence/001-targeted/reviews)"
-receipt_raw_run bash "$BUILD" "$ID" "$BASE" --since "$F1" --pr https://github.com/owner/repo/pull/7 --review-plan .git/plan.json
-assert_eq 1 "$STATUS" 'stale binding refused'
-assert_eq "$before" "$(package_snapshot .prdkit/cache/evidence/001-targeted/reviews)" 'no artifact mutation (path/mode/size/hash/directories)'
-
-it "Unpublished code, unavailable/partial host and snapshots cannot certify retention"
-advance unpublished
-# Deliberately leave the synthetic host at an older code head.
-fx_pr 7 "$F2" "$(jq -cn --arg base "$MAIN" '{base:{ref:$base}}')"
-package
-assert_eq unknown "$(jq -r .coverage "$PKG/dispatch.json")" 'unpublished changed code unbound'
-assert_eq 'null' "$(jq -c .retained "$PKG/dispatch.json")" 'unknown is not an authenticated empty list'
-advance partial-host
-export GH_STUB_FAIL=graphql:PrdkitReviews
-package
-assert_eq unknown "$(jq -r .coverage "$PKG/dispatch.json")" 'incomplete host unknown'
-unset GH_STUB_FAIL
-receipt_raw_run bash "$CHECK" --repo "$P" --json --diagnostics --pr https://github.com/owner/repo/pull/7 --save-receipts .git/snapshot "$ID"
-receipt_raw_run bash "$CHECK" --repo "$P" --json --diagnostics --receipts .git/snapshot "$ID"
-assert_eq snapshot "$(printf '%s' "$OUTPUT" | jq -r .authority)" 'snapshot remains nonauthoritative'
-assert_eq false "$(printf '%s' "$OUTPUT" | jq -r .diagnostics.host_content_bound)" 'snapshot never claims host binding'
-
-it "Invalid receipts require repair; new clean verdicts cannot suppress them"
-advance invalid-receipt
-fx_review 7 "$(jq -r '.[1].body' "$GH_STUB_DIR/original.json")" '{"lastEditedAt":"2026-01-03T00:00:00Z"}'
-post code PASS HEAD
-package
-assert_eq 1 "$(jq .blockers.invalid_receipts "$PKG/dispatch.json")" 'invalid receipt not repaired by new PASS'
-assert_eq fail "$(jq -r .gate_result "$PKG/dispatch.json")" 'invalid still blocks native gate'
-assert_eq pending "$(jq -r .dispatch "$PKG/dispatch.json")" 'no ready replacement panel'
-parity
-cp "$GH_STUB_DIR/original.json" "$GH_STUB_DIR/reviews/7.json"
-
-it "Foreign and carried FAILs remain explicit and grant no approval transfer"
-advance foreign-blocker
-payload="$(jq -r '.[1].body|split("\n")[1]|fromjson|
-    .id="cccccccccccccccccccccccccccccccc"|.change="002-foreign"|.to="none"|tojson' "$GH_STUB_DIR/original.json")"
-fx_review 7 "$(printf '<!-- prdkit-review\n%s\n-->' "$payload")"
-package
-assert_eq '["002-foreign"]' "$(jq -c '[.blockers.scope[]|select(.change=="002-foreign")|.change]' "$PKG/dispatch.json")" 'foreign FAIL survives map'
-assert_eq fail "$(jq -r .gate_result "$PKG/dispatch.json")" 'foreign FAIL blocks'
-parity
-cp "$GH_STUB_DIR/original.json" "$GH_STUB_DIR/reviews/7.json"
-advance carried-blocker
-fx_closed_pr 6 "$(git rev-parse HEAD)" "$(jq -cn --arg base "$MAIN" '{base:{ref:$base}}')"
-payload="$(printf '%s' "$payload" | jq -c '.pr=6|.change="001-targeted"')"
-fx_review 6 "$(printf '<!-- prdkit-review\n%s\n-->' "$payload")"
-package
-assert_eq 1 "$(jq .blockers.carried "$PKG/dispatch.json")" 'closed source blocker preserved'
-assert_eq '[]' "$(jq -c .retained "$PKG/dispatch.json")" 'no cross-PR PASS transfer'
-parity
-rm "$GH_STUB_DIR/pulls/6.json" "$GH_STUB_DIR/reviews/6.json"
-
-it "PR-wide owner barriers survive advisory planning beside actually retained coverage"
-for native_state in CHANGES_REQUESTED DISMISSED; do
-    advance "native-owner-$native_state"
-    post code PASS HEAD
-    post security PASS HEAD
-    fx_owner_review 7 "$native_state" "$(git rev-parse HEAD)"
-    package
-    assert_eq "$native_state" "$(jq -r '.blockers.owner.barriers[0].state' "$PKG/dispatch.json")" \
-        'advisory output retains the actual owner barrier'
-    assert_eq '["owner"]' "$(jq -c .blockers.problem_classes "$PKG/dispatch.json")" \
-        'the only failure is classified as owner, not an unrelated coverage failure'
-    assert_eq 1 "$(jq '.problems|length' "$PKG/gate.json")" 'one native owner barrier, no duplicate T3 error'
-    assert_eq '["code","security"]' "$(jq -c '[.retained[].reviewer]|sort' "$PKG/dispatch.json")" \
-        'actual independent coverage stays distinct from overall eligibility'
-    assert_eq fail "$(jq -r .gate_result "$PKG/dispatch.json")" 'owner barrier still blocks the native gate'
-    assert_eq pending "$(jq -r .dispatch "$PKG/dispatch.json")" 'an advisory map cannot waive the owner barrier'
-    parity
-done
-cp "$GH_STUB_DIR/original.json" "$GH_STUB_DIR/reviews/7.json"
-
-it "Owner requirements and tier floors are not waived by the map"
-sed 's/\*\*Tier\*\*: T2/**Tier**: T3/' "specs/changes/$ID.md" > .git/record
-cp .git/record "specs/changes/$ID.md"; git add "specs/changes/$ID.md"; git commit -qm 'synthetic T3 requirement'
-advance owner-required
-package
-assert_eq T3 "$(jq -r .tier "$PKG/gate.json")" 'T3 preserved'
-assert_eq true "$(jq '.blockers.problem_classes|index("owner")!=null' "$PKG/dispatch.json")" 'owner obligation explicit'
-parity
-sed 's/\*\*Tier\*\*: T3/**Tier**: T2/' "specs/changes/$ID.md" > .git/record
-cp .git/record "specs/changes/$ID.md"; git add "specs/changes/$ID.md"; git commit -qm 'synthetic lower tier claim'
-advance tier-floor
-package
-assert_eq T3 "$(jq -r .tier "$PKG/gate.json")" 'historical floor cannot be lowered'
-assert_eq fail "$(jq -r .gate_result "$PKG/dispatch.json")" 'tier and owner still block'
-parity
-
-it "Ambiguous selectors, symlink context and deleted child provenance stay explicit"
+it "Standalone changes, symlink context and deleted child provenance stay explicit"
 sed 's/Parent\*\*: 900-programme/Parent**: —/' "specs/changes/$ID.md" > .git/record
 cp .git/record "specs/changes/$ID.md"; git add "specs/changes/$ID.md"; git commit -qm 'standalone change'
 advance context-gaps
-package '.context=[{path:"specs/parts/p1.md",selector:"Missing heading",reason:"required"}]'
+package
 assert_not_contains "$(cat "$PKG/context-gaps.txt")" 'parent' 'standalone change does not request a parent for the Opened date'
-assert_contains "$(cat "$PKG/context-gaps.txt")" 'ambiguous/missing/unsupported section' 'unresolved selector gap'
 ln -s app.txt src/link.txt; git add src/link.txt
-git commit -qm 'synthetic link'; host_head
-receipt_raw_run bash "$BUILD" "$ID" "$BASE" --context src/link.txt
+git commit -qm 'synthetic link'
+run bash "$BUILD" "$ID" "$BASE" --context src/link.txt
 assert_eq 1 "$STATUS" 'symlink cannot masquerade as whole context'
 printf 'dirty worktree\n' > specs/parts/p1.md
 advance dirty-control
@@ -349,17 +110,9 @@ assert_not_contains "$(cat "$PKG"/context-sections/*.txt)" 'dirty worktree' 'com
 git rm -q "specs/changes/$ID.md"
 mkdir -p .prdkit/history/log; printf -- '- 2026-01-03 %s: closed\n' "$ID" > ".prdkit/history/log/$ID.md"
 git add .prdkit/history/log; git commit -qm 'synthetic close'
-# Closing metadata is equal, but a structural package must bind the historical record.
-receipt_raw_run bash "$BUILD" "$ID" "$BASE"
-assert_eq 0 "$STATUS" 'a closing head needs fresh context'
-PKG="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
-assert_contains "$(cat "$PKG/index.md")" 'package context or bindings differ'
-assert_contains "$(cat "$PKG/context-manifest.tsv")" "$(git rev-parse HEAD^)" 'historical child revision bound at close'
-# New source at the closing head keeps that historical record binding.
-advance closing-new-source
-receipt_raw_run bash "$BUILD" "$ID" "$BASE"
+run bash "$BUILD" "$ID" "$BASE"
 assert_eq 0 "$STATUS" "closing package: $OUTPUT"
 PKG="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
-assert_contains "$(cat "$PKG/context-manifest.tsv")" "$(git rev-parse HEAD~2)" 'historical child revision bound'
+assert_contains "$(cat "$PKG/context-manifest.tsv")" "$(git rev-parse HEAD^)" 'historical child revision bound'
 assert_contains "$(cat "$PKG/context-manifest.tsv")" 'historical when source_rev differs' 'not represented as an H blob'
 finish

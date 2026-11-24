@@ -210,12 +210,10 @@ bash .prdkit/scripts/bash/check-adoption.sh    # pinned kit version and install 
 bash .prdkit/scripts/bash/doctor.sh --strict   # spec integrity, reading budgets, agent context size
 ```
 
-`check-review.sh --pr <url>` verifies publisher-authored review receipts and blockers for the exact
-head being merged. T3 also needs the owner's native approval, confirmed against the activity log.
-Native owner changes requests and dismissals block even PRs exempt from review coverage.
-It checks evidence; it does not review. The online check needs `gh`, `jq`, configured GitHub
-publisher and owner identities, and complete host reads even for T0. Offline snapshots are
-previews (a would-pass exits 3), never merge authority. See [CI gates](docs/ci-gates.md).
+`check-review.sh --pr <url>` checks the exact PR head: no approval at T0, an independent
+publisher at T1–T3, and a separate owner approval at T3. The online gate requires `gh` and `jq` at every
+tier. Local structure is only a preview. See [CI gates](docs/ci-gates.md).
+The tier governs the review work in addition to this host check:
 
 | Tier | When                                           | Independent reviewers        |
 | ---- | ---------------------------------------------- | ---------------------------- |

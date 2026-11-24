@@ -304,7 +304,7 @@ def cleanup(root, scripts, features, token):
 
 
 def build_close(root, template, features, token):
-    # A reviewed change and its real fixture receipts come from the Bash suite.
+    # A reviewed change and its exact-head host fixture come from the Bash suite.
     repo = root / "repo"
     shutil.copytree(template, repo, symlinks=True)
     change = git(repo, "branch", "--show-current").decode().strip()

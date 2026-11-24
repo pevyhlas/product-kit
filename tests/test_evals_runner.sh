@@ -82,7 +82,8 @@ done
 # violate-commit commits its violation; the assertions still compare with the fixture commit.
 RES5="$(mktemp -d)"; track_tmp "$RES5"
 it "each named planted failure fires its own assertion"
-for planted in "24-successful-change-drift|violate-lanes|owner allocation or lane purposes lost" \
+for planted in "19-same-pr-finalization|violate-approval|closing approval must be pending on the exact head" \
+               "24-successful-change-drift|violate-lanes|owner allocation or lane purposes lost" \
                "24-successful-change-drift|violate-diverted|owner allocation or lane purposes lost" \
                "24-successful-change-drift|violate-unspent|consumed source increment not accounted for" \
                "24-successful-change-drift|violate-intent|intent, legacy path or check changed" \

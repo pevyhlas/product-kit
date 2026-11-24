@@ -5,16 +5,10 @@ fixture_project
 # The trusted integration base: check-review reads its policy there, and T0 holds only for paths
 # its config lists as docs only.
 printf '.prdkit/cache/\n.eval-state/\n' >> .gitignore
-awk '{ print } /^## Configuration$/ { print ""; print "- review-t0-paths: README.md" }' .prdkit/memory/config.md > .prdkit/memory/config.md.new
+awk '{ print } /^## Configuration$/ {
+    print "- review-t0-paths: README.md\n- review-host: github\n- review-publishers: bot:1001\n- review-owner: user:1003"
+}' .prdkit/memory/config.md > .prdkit/memory/config.md.new
 mv .prdkit/memory/config.md.new .prdkit/memory/config.md
-cat >> .prdkit/memory/config.md <<'EOF'
-
-## Configuration
-- review-host: github
-- review-publishers: bot:1001
-- review-owner: user:1003
-- review-publisher-isolation: required
-EOF
 git add -A && git commit -qm 'fixture: integration base lists README.md as docs only'
 default="$(git symbolic-ref --short HEAD)"
 git update-ref "refs/remotes/origin/$default" HEAD
@@ -26,7 +20,7 @@ printf '# PR 1\n\nDocumentation of existing R-01, no behavior change.\n' > .eval
 printf 'T001 Document existing greeting\n' > .prdkit/cache/implementation/001-greeting.md
 cat > "$CHANGE_FILE" <<'EOF'
 # Change: document greeting
-**Opened**: 2026-10-25 · **Parts**: P1 · **Tier**: T0 · **Parent**: none
+**Opened**: 2026-10-25 · **Parts**: P1 · **Tier**: T1 · **Parent**: none
 ## Intent
 Document existing R-01 in README. Spec impact: none — no product behavior changes.
 ## Tasks
