@@ -9,7 +9,7 @@
 #
 # Invariants:
 # Refuse to overwrite an existing change record. In Git, serialize number selection
-# and record creation across kit runs; an explicit number can override some reservations.
+# and record creation across kit runs; no explicit allocation at or below the allocated high-water mark.
 # Prefer an isolated worktree. Warn before automatic fallback and refuse if the status
 # check reports tracked or non-ignored untracked work. Never prune stale registrations.
 #
@@ -48,7 +48,7 @@ while [ "$#" -gt 0 ]; do
             usage
             echo "  --json              Output in JSON format"
             echo "  --short-name <name> Short name (2-4 words) for the change id and branch"
-            echo "  --number N          Change number (overrides auto-detection)"
+            echo "  --number N          Change number (must exceed the allocated high-water mark)"
             echo "  --programme         Include the outcome checkpoint scaffold for a programme or continuing queue"
             echo "  --no-worktree       Create and switch to the branch in the current checkout"
             echo "                      instead of an isolated worktree; existing edits carry over"
@@ -110,19 +110,20 @@ generate_slug() {
 # Every checkout whose specs/ can hold a claimed number: this one, worktrees under
 # .worktrees/, and every worktree git knows about. Paths may repeat or not exist.
 list_checkouts() {
-    local wt line registered
+    local wt line worktrees
     echo "$REPO_ROOT"
     for wt in "$REPO_ROOT/.worktrees"/*; do [ -d "$wt" ] && echo "$wt"; done
     if [ "$HAS_GIT" = true ]; then
-        registered="$(verify_lines git worktree list --porcelain)" || return 1
+        worktrees="$(spec_worktrees "$REPO_ROOT")" || return 1
         while IFS= read -r line; do
             case "$line" in "worktree "*) echo "${line#worktree }" ;; esac
-        done <<< "$registered"
+        done <<< "$worktrees"
     fi
     return 0
 }
 
-# Claims: open and closed records, the archive's log counter, planned markers and branches.
+# Claims: open and closed records, planned markers and branches. Archive indexes and
+# integration-tip records/logs are loaded separately under the lock.
 list_claimed() {
     list_spec_claims || return 1
     if [ "$HAS_GIT" = true ]; then
@@ -133,24 +134,38 @@ list_claimed() {
 }
 
 list_spec_claims() {
-    local checkout path name last entries planned
+    local checkout path name entries planned
     while IFS= read -r checkout; do
         spec_require_layout "$checkout" || return 1
         for path in "$checkout"/specs/changes/[0-9]*.md; do
             [ -f "$path" ] && { name="${path##*/}"; echo "change record ${name%.md}"; }
         done
         entries="$(spec_log_entries "$checkout")" || return 1
-        sed -n 's/^- [0-9-]* \([0-9][0-9][0-9]*-[a-z0-9-]*\):.*/closed change \1/p' <<< "$entries"
+        sed -n 's/^- [0-9-]* \([0-9][0-9][0-9]*-[a-z0-9-]*\):.*/closed change \1/p' <<< "$entries" || return 1
         planned="$(spec_planned_changes "$checkout")" || return 1
         while IFS= read -r name; do
             [ -z "$name" ] || printf 'planned in the spec %s\n' "$name"
         done <<< "$planned"
-        if [ -f "$checkout/specs/archive.md" ]; then
-            last="$(spec_archive_log_through "$checkout")" || return 1
-            case "$last" in ''|0) ;; *) printf 'specs/archive.md, closed changes through %03d-\n' "$last" ;; esac
-        fi
     done <<< "$CHECKOUTS"
     return 0
+}
+
+list_archive_details() {
+    local checkouts checkout
+    checkouts="$(sort -u <<< "$CHECKOUTS")" || return 1
+    while IFS= read -r checkout; do
+        spec_archive_log_details "$checkout" "$checkout/specs/archive.md" || return 1
+    done <<< "$checkouts"
+    [ "$HAS_GIT" = true ] || return 0
+    spec_archive_log_integration "$REPO_ROOT" "$INTEGRATION_TIPS" details
+}
+
+list_committed_claims() {
+    local rev
+    while IFS= read -r rev; do
+        [ -n "$rev" ] || continue
+        spec_number_claims_at "$REPO_ROOT" "$rev" || return 1
+    done <<< "$INTEGRATION_TIPS"
 }
 
 claimed_numbers() {
@@ -159,12 +174,31 @@ claimed_numbers() {
     done <<< "$CLAIMS"
 }
 
-next_number() {
-    local highest=0 line name number
+allocated_high_water() {
+    local highest=0 line name number index floor
+    while IFS="$SPEC_SEP" read -r index _ _ floor _; do
+        name="${index##* }"; number="${name##*-}"
+        [ "$number" -gt "$highest" ] && highest="$number"
+        if [ -n "$floor" ] && [ "$floor" != - ] && [ "$floor" -gt "$highest" ]; then highest="$floor"; fi
+    done <<< "$ARCHIVE_DETAILS"
     while IFS= read -r line; do
+        case "$line" in
+            "change record "*|"closed change "*|"committed "*) ;;
+            *) continue ;;
+        esac
         name="${line##* }"; number=$((10#${name%%-*}))
         [ "$number" -gt "$highest" ] && highest=$number
-    done < <(claimed_numbers)
+    done <<< "$CLAIMS"
+    echo "$highest"
+}
+
+next_number() {
+    local highest="$HIGH_WATER" line name number
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        name="${line##* }"; number=$((10#${name%%-*}))
+        [ "$number" -gt "$highest" ] && highest=$number
+    done <<< "$CLAIMS"
     echo $((highest + 1))
 }
 
@@ -243,10 +277,17 @@ SLUG="$(printf '%s' "$SLUG" | cut -c1-60 | sed 's/-$//')"
 if [ -z "$SLUG" ]; then echo "Error: could not derive a short name; pass --short-name" >&2; exit 1; fi
 
 AUTO_NUMBER=false
-# Both explicit and automatic creators must see a complete inventory under the lock.
+# Both automatic and explicit allocation must see a complete, valid archive index from
+# every checkout. Keep the lock through record creation; a malformed index cannot be overridden.
 acquire_number_lock
 CHECKOUTS="$(list_checkouts)" || exit 1
+INTEGRATION_TIPS=""
+if [ "$HAS_GIT" = true ]; then INTEGRATION_TIPS="$(spec_integration_tips "$REPO_ROOT")"; fi
+ARCHIVE_DETAILS="$(list_archive_details)"
+COMMITTED_CLAIMS="$(list_committed_claims)"
 CLAIMS="$(list_claimed)" || exit 1
+CLAIMS="$(claimed_numbers)${COMMITTED_CLAIMS:+$'\n'$COMMITTED_CLAIMS}"
+HIGH_WATER="$(allocated_high_water)"
 if [ -z "$CHANGE_NUMBER" ]; then
     CHANGE_NUMBER="$(next_number)"; AUTO_NUMBER=true
 fi
@@ -259,24 +300,6 @@ if [ "$AUTO_NUMBER" = true ]; then
         echo "[prdkit] Notice: change number $NUM taken by $OWNER, using $NEXT" >&2
         NUM="$NEXT"
     done
-else
-    # An explicit --number overrides every reservation; it names what else holds the number. Its
-    # own planned: marker does not count.
-    HOLDERS=""
-    while IFS= read -r held_line; do
-        held="${held_line##* }"
-        case "$held_line" in
-            "planned in the spec $NUM-$SLUG"|"planned in the spec $NUM-") continue ;;
-            "specs/archive.md, closed changes through "*)
-                [ "$((10#$NUM))" -le "$((10#${held%-}))" ] || continue
-                echo "[prdkit] Error: change number $NUM is reserved: specs/archive.md condenses the log through ${held%-}; pick a higher number." >&2
-                exit 1 ;;
-            *) [ "$((10#${held%%-*}))" -eq "$((10#$NUM))" ] || continue ;;
-        esac
-        case "; $HOLDERS; " in *"; $held_line; "*) continue ;; esac
-        HOLDERS="${HOLDERS:+$HOLDERS; }$held_line"
-    done < <(claimed_numbers)
-    [ -z "$HOLDERS" ] || echo "[prdkit] Notice: change number $NUM is also held by $HOLDERS; --number overrides it" >&2
 fi
 CHANGE_ID="$NUM-$SLUG"
 is_change_id "$CHANGE_ID" || { echo "Error: '$CHANGE_ID' is not a valid change id" >&2; exit 1; }
@@ -288,6 +311,37 @@ while IFS= read -r checkout; do
         exit 1
     fi
 done <<< "$CHECKOUTS"
+
+if [ "$AUTO_NUMBER" = false ]; then
+    while IFS="$SPEC_SEP" read -r index _; do
+        spec_archive_log_covers "$index" "$NUM" || continue
+        cutoff="${index%% *}"
+        if [ "$((10#$NUM))" -le "$cutoff" ]; then
+            printf '[prdkit] Error: change number %s is reserved: specs/archive.md condenses the log through %03d; omit --number or use a number above %03d.\n' "$NUM" "$cutoff" "$HIGH_WATER" >&2
+        else
+            printf '[prdkit] Error: change number %s is reserved by the condensed log index in specs/archive.md; omit --number or use a number above %03d.\n' "$NUM" "$HIGH_WATER" >&2
+        fi
+        exit 1
+    done <<< "$ARCHIVE_DETAILS"
+    if [ "$((10#$NUM))" -le "$HIGH_WATER" ]; then
+        printf '[prdkit] Error: change number %s is at or below the allocated high-water mark %03d; omit --number or use a number above %03d.\n' "$NUM" "$HIGH_WATER" "$HIGH_WATER" >&2
+        exit 1
+    fi
+    # Branch and planned reservations can still be overridden; name their holders.
+    # The new change's own planned marker does not count.
+    HOLDERS=""
+    while IFS= read -r held_line; do
+        [ -n "$held_line" ] || continue
+        held="${held_line##* }"
+        case "$held_line" in
+            "planned in the spec $NUM-$SLUG"|"planned in the spec $NUM-") continue ;;
+            *) [ "$((10#${held%%-*}))" -eq "$((10#$NUM))" ] || continue ;;
+        esac
+        case "; $HOLDERS; " in *"; $held_line; "*) continue ;; esac
+        HOLDERS="${HOLDERS:+$HOLDERS; }$held_line"
+    done <<< "$CLAIMS"
+    [ -z "$HOLDERS" ] || echo "[prdkit] Notice: change number $NUM is also held by $HOLDERS; --number overrides it" >&2
+fi
 
 WORKTREE_PATH="$REPO_ROOT"
 CREATED_WORKTREE=false

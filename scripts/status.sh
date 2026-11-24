@@ -26,7 +26,8 @@ today="$(spec_today)"
 layout="$(spec_layout "$root")"
 mixed="$(spec_mixed_forms "$root")"
 SEP="$SPEC_SEP"
-compaction="$(spec_compaction "$root")" || exit "$?"
+archive_index="$(spec_archive_log_index "$root")" || exit "$?"
+compaction="$(spec_compaction "$root" "$archive_index")" || exit "$?"
 read -r closed_since last_pass <<< "$compaction"
 
 age() { # date -> days since, or blank
@@ -50,7 +51,7 @@ later="$(if [ -n "$stage_now" ]; then
         !($2 in gone) && stage_rank($3) > stage_rank(now) { out = out (out ? ", " : "") $2 " (" $3 ")" }
         END { print out }'
 fi)"
-changes="$(verify_lines spec_open_changes "$root")"
+changes="$(verify_lines spec_open_changes "$root" "$archive_index")"
 inbox="$(verify_lines spec_inbox "$root")"
 records="$(verify_lines spec_records "$root")"
 

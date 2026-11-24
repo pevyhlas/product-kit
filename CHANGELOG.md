@@ -10,6 +10,12 @@ change by change.
 
 ### Added
 
+- Compaction can index closed changes even after an earlier change stays open. Add exact
+  closed-number ranges to the archive's **Log condensed through** line and retrieve the full
+  entries from Git. A separate **Allocated through** line preserves the allocation floor if
+  a sparse member is omitted. Explicit numbering must exceed that floor and the highest ID
+  visible in the checked archive indexes, logs and change records. Existing cutoff-only
+  archives in the supported format need no allocation-floor migration.
 - Pull request CI shows which changed test suites fail before the fix and pass on the PR head.
   With no changed suites the check passes, including for `fix` titles. Otherwise,
   conventional `fix` titles require at least one reproducing suite; other titles are advisory.

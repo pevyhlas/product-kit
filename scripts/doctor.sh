@@ -128,10 +128,39 @@ budget_fix 150 "remove lifted holds, expired waivers, and DEPLOY and ATTEST line
 # specs/authority.md is read on demand by the records checker and has no reading budget.
 
 # Share status's log-order and entry-file accounting; compaction is due at ten closes.
+archive_verified=true
+if archive_details="$(spec_archive_log_details "$root" 2>&1)"; then
+    IFS="$SPEC_SEP" read -r archive_index archive_pointer archive_line allocation_floor floor_line <<< "$archive_details"
+    archive_max="${archive_index##* }"; archive_max="${archive_max##*-}"
+    if [ "${allocation_floor:-"-"}" = - ]; then
+        if [ "$archive_index" != "${archive_index%% *}" ]; then
+            findings+=("specs/archive.md:$archive_line: a sparse index requires an Allocated through line")
+        fi
+        allocation_floor=0
+    elif [ "$allocation_floor" -lt "$archive_max" ]; then
+        findings+=("specs/archive.md:$floor_line: Allocated through is below the highest indexed number $archive_max")
+    fi
+    previous_archive="$(spec_archive_log_previous "$root")"
+    IFS="$SPEC_SEP" read -r _ _ _ previous_floor _ <<< "$previous_archive"
+    if [ -n "$previous_floor" ] && [ "$previous_floor" != - ] && [ "$allocation_floor" -lt "$previous_floor" ]; then
+        if [ "${floor_line:-0}" -eq 0 ]; then floor_line="${archive_line:-0}"; fi
+        findings+=("specs/archive.md:$((floor_line > 0 ? floor_line : 1)): Allocated through decreased from $previous_floor to $allocation_floor")
+    fi
+    if [ -n "$archive_pointer" ] && [ "$archive_pointer" != - ]; then
+        if archive_proof="$(spec_archive_log_proof "$root" "$archive_index" "$archive_pointer")"; then :
+        elif [ "$?" -eq 2 ]; then advisories+=("specs/archive.md:$archive_line: $archive_proof")
+        else findings+=("specs/archive.md:$archive_line: ${archive_proof:-cannot verify sparse snapshot $archive_pointer}")
+        fi
+    fi
+else
+    archive_verified=false
+    findings+=("$archive_details")
+    archive_index=0
+fi
 compaction_verified=true
-if compaction="$(spec_compaction "$root")"; then
+if compaction="$(spec_compaction "$root" "$archive_index")"; then
     read -r closed_since last_pass <<< "$compaction"
-    if [ "$closed_since" -ge 10 ]; then
+    if $archive_verified && [ "$closed_since" -ge 10 ]; then
         since="and no pass recorded in specs/log.md"
         [ -z "$last_pass" ] || since="since the last pass ($last_pass)"
         advisories+=("Compaction due: $closed_since changes closed $since (.prdkit/workflows/compact.md, Compaction)")
@@ -422,13 +451,13 @@ code_paths_missing() {
 rows="$(code_paths_missing)"
 trace code-path "Code path not in the repository" "name repo-relative paths that exist (spec.md, Writing)" "$rows"
 
-# planned: <change> names an open change record (here, or in a worktree unless the log closed
-# it), else a closed or unknown one. A live item's marker naming no change number (M1, 12) is
-# unknown too; org/repo#n names another repository's change.
-closed_ids=' '; open_changes=''
+# planned: <change> names an open change record (here, or in a worktree unless the log or archive
+# closed it), else a closed or unknown one. org/repo#n names another repository's change.
+closed_ids=' '; open_changes=''; entries=''
 if $compaction_verified; then
-    closed_ids=" $(spec_log_entries "$root" | sed -n 's/^- [0-9-]* \([^ :]*\):.*/\1/p' | tr '\n' ' ')"
-    open_changes="$(verify_lines spec_open_changes "$root")"
+    entries="$(spec_log_entries "$root")"
+    closed_ids=" $(sed -n 's/^- [0-9-]* \([^ :]*\):.*/\1/p' <<< "$entries" | tr '\n' ' ')"
+    if $archive_verified; then open_changes="$(verify_lines spec_open_changes "$root" "$archive_index")"; fi
 fi
 open_ids=" "
 checkouts="$(verify_lines spec_checkouts "$root")"
@@ -436,6 +465,10 @@ while IFS="$SEP" read -r path _ loc; do
     for file in "$path"/specs/changes/*.md; do
         [ -f "$file" ] || continue
         id="${file##*/}"; id="${id%.md}"
+        if $archive_verified && spec_archive_log_covers "$archive_index" "$id"; then
+            [ "$loc" != . ] || findings+=("specs/changes/$id.md is open but its number is condensed in specs/archive.md")
+            continue
+        fi
         [ "$loc" = . ] || case "$closed_ids" in *" $id "*) continue ;; esac
         open_ids="$open_ids$id "
     done
@@ -451,6 +484,11 @@ planned_closed=""; planned_unknown=""
 rows="$(verify_lines spec_planned_at "$root")"
 while IFS="$SEP" read -r id where; do
     [ -n "$id" ] || continue
+    $archive_verified || continue
+    if spec_archive_log_covers "$archive_index" "$id"; then
+        findings+=("Planned for a closed change: ${id%-} at $where is condensed in specs/archive.md; remove the marker or re-plan it to an open change")
+        continue
+    fi
     case "$open_ids" in *" ${id%%-*}-"*) continue ;; esac
     case "$closed_ids" in
         *" ${id%%-*}-"*) planned_closed+="${id%-} at $where"$'\n' ;;
@@ -692,15 +730,28 @@ for entry_file in "$root"/specs/log/* "$root"/specs/log/.[!.]* "$root"/specs/log
         spec_log_entry_valid "$entry_file" "$entry_id"; then continue; fi
     findings+=("Malformed log entry specs/log/${entry_file##*/}: a plain file <id>.md holding one line, '- <date> <id>: <what changed>', for the change its name gives (close-change.sh writes it)")
 done
+if $compaction_verified; then
+    live_close_ids="$(sed -n 's/^- [0-9-]* \([0-9][0-9][0-9]*-[a-z0-9-]*\):.*/\1/p' <<< "$entries" | sort)"
+    previous=""
+    while IFS= read -r id; do
+        [ -n "$id" ] || continue
+        if [ "$id" = "$previous" ]; then
+            findings+=("Duplicate live log entry for $id; keep only one in specs/log.md or specs/log/")
+        elif $archive_verified && spec_archive_log_covers "$archive_index" "$id"; then
+            findings+=("Live log entry for $id is also condensed in specs/archive.md; remove the duplicate from the live log")
+        fi
+        previous="$id"
+    done <<< "$live_close_ids"
+fi
 if $in_git; then
-    if $compaction_verified && $has_head; then
-        unlogged=""; through="$(spec_archive_log_through "$root")"; entries="$(spec_log_entries "$root")"
+    if $compaction_verified && $archive_verified && $has_head; then
+        unlogged=""
         history="$(verify_lines git -C "$root" log -M --diff-filter=D --name-only --format= -- 'specs/changes/*.md')"
         rows="$(printf '%s\n' "$history" | sed -n 's|^specs/changes/\(.*\)\.md$|\1|p' | sort -u)"
         while IFS= read -r id; do
             [ -n "$id" ] && [ ! -f "$root/specs/changes/$id.md" ] || continue
             # Entries condensed into specs/archive.md (compact.md) left the log on purpose.
-            case "${id%%-*}" in ''|*[!0-9]*) ;; *) [ "$((10#${id%%-*}))" -gt "${through:-0}" ] || continue ;; esac
+            if spec_archive_log_covers "$archive_index" "$id"; then continue; fi
             grep -q "^- [0-9-]* $id:" <<< "$entries" || unlogged="${unlogged:+$unlogged, }$id"
         done <<< "$rows"
         [ -z "$unlogged" ] || findings+=("Closed without a log entry: $unlogged; the change that deletes its record adds specs/log/<id>.md, '- <date> <id>: <what changed>' (close-change.sh)")

@@ -10,6 +10,13 @@ SCRIPT="$PROJ/.prdkit/scripts/bash/new-change.sh"
 MAIN_BRANCH="$(git -C "$PROJ" branch --show-current)"
 cd "$PROJ" || exit 1
 
+it "explicit numbering in an empty project emits no error diagnostic"
+run bash -c 'exec bash "$1" --json --no-branch --number 7 --short-name fresh-number desc 2>.git/fresh-number.err' _ "$SCRIPT"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '"CHANGE_ID":"007-fresh-number"'
+assert_eq "[prdkit] Continue all work for this change inside: $PROJ" "$(cat .git/fresh-number.err)" 'stderr only contains the normal location notice'
+rm -f specs/changes/007-fresh-number.md
+
 it "first change is numbered 001 and isolated in a worktree"
 run env PRDKIT_TODAY=2026-10-17 bash "$SCRIPT" --json --short-name "user-auth" "Add user authentication"
 assert_eq 0 "$STATUS" "script exits 0"
@@ -284,25 +291,25 @@ for opener in \
     '<!-- A programme or continuing follow-up queue (workflows/planning.md):' \
     '<!-- For a programme/continuing follow-up queue,'; do
     printf '%s\n' '## State' "$opener" '### Outcome checkpoint' '-->' > "$TEMPLATE"
-    run bash .prdkit/scripts/bash/new-change.sh --no-branch --number 2 --short-name obsolete "Check an unsupported template"
+    run bash .prdkit/scripts/bash/new-change.sh --no-branch --number 6 --short-name obsolete "Check an unsupported template"
     assert_eq 1 "$STATUS" 'unsupported stock scaffold rejected'
     assert_contains "$OUTPUT" 'current outcome checkpoint pointer'
-    assert_eq absent "$([ -e specs/changes/002-obsolete.md ] && echo present || echo absent)"
+    assert_eq absent "$([ -e specs/changes/006-obsolete.md ] && echo present || echo absent)"
 done
 printf '%s\n' '## State' '### Outcome checkpoint' '**Outcome**: The result' > "$TEMPLATE"
 
 it "--programme keeps a checkpoint already present in a custom change template"
-run bash .prdkit/scripts/bash/new-change.sh --programme --no-branch --number 4 --short-name existing "Keep the existing scaffold"
+run bash .prdkit/scripts/bash/new-change.sh --programme --no-branch --number 8 --short-name existing "Keep the existing scaffold"
 assert_eq 0 "$STATUS" "the custom template already has a checkpoint"
-run cmp -s "$TEMPLATE" specs/changes/004-existing.md
+run cmp -s "$TEMPLATE" specs/changes/008-existing.md
 assert_eq 0 "$STATUS" "no second scaffold or changes to the custom checkpoint"
 
 it "--programme ignores example headings and inserts before the next real section"
-N=6
+N=9
 for heading in '### Outcome checkpoint' '## Example output' '### Outcome checkpoint'; do
     case "$N" in
-        6|7) START='```markdown'; END='```' ;;
-        8) START='<!-- Example output'; END='-->' ;;
+        9|10) START='```markdown'; END='```' ;;
+        11) START='<!-- Example output'; END='-->' ;;
     esac
     {
         sed '/^## Notes/,$d' .git/custom-template
@@ -318,7 +325,7 @@ for heading in '### Outcome checkpoint' '## Example output' '### Outcome checkpo
     run env PRDKIT_TODAY=2026-10-17 bash .prdkit/scripts/bash/new-change.sh --programme --no-branch \
         --number "$N" --short-name example "Example headings"
     assert_eq 0 "$STATUS" "creation succeeds for $START / $heading"
-    run cmp -s .git/expected "specs/changes/00$N-example.md"
+    run cmp -s .git/expected "specs/changes/$(printf '%03d' "$N")-example.md"
     assert_eq 0 "$STATUS" "the scaffold is in State outside $START / $heading"
     N=$((N + 1))
 done
@@ -333,7 +340,7 @@ render_tagged_fixture() { # line ending; omit the final terminator
 }
 render_tagged_fixture $'\r\n' > "$TEMPLATE"
 run env PRDKIT_TODAY=2026-10-17 bash .prdkit/scripts/bash/new-change.sh --programme --no-branch \
-    --number 9 --short-name tagged "Tagged programme"
+    --number 12 --short-name tagged "Tagged programme"
 assert_eq 0 "$STATUS" "valid header tags are accepted; fenced example is ignored"
 {
     render_tagged_fixture $'\n'
@@ -344,15 +351,15 @@ assert_eq 0 "$STATUS" "valid header tags are accepted; fenced example is ignored
     $0 == pointer { while ((getline row < snippet) > 0) print row; next }
     { print }
 ' > .git/expected
-run cmp -s .git/expected specs/changes/009-tagged.md
+run cmp -s .git/expected specs/changes/012-tagged.md
 assert_eq 0 "$STATUS" "exact scaffold, fence, spacing and final LF are preserved"
 sed 's/release-notes/release\/notes/' "$TEMPLATE" > .git/invalid-tag-template
 cp .git/invalid-tag-template "$TEMPLATE"
-run bash .prdkit/scripts/bash/new-change.sh --programme --no-worktree --number 10 --short-name bad-tags "Invalid programme"
+run bash .prdkit/scripts/bash/new-change.sh --programme --no-worktree --number 13 --short-name bad-tags "Invalid programme"
 assert_eq 1 "$STATUS"
 assert_contains "$OUTPUT" 'Malformed Tags'
-assert_eq absent "$([ -e specs/changes/010-bad-tags.md ] && echo present || echo absent)"
-assert_not_contains "$(git branch --list)" '010-bad-tags'
+assert_eq absent "$([ -e specs/changes/013-bad-tags.md ] && echo present || echo absent)"
+assert_not_contains "$(git branch --list)" '013-bad-tags'
 
 # --- Numbering across every claimed identity -----------------------------------------------
 PROJ2="$(make_inited_project)"; track_tmp "$PROJ2"
@@ -402,14 +409,135 @@ run bash "$SCRIPT2" --json --no-worktree --number 35 --short-name "explicit-old"
 assert_eq 1 "$STATUS" "an explicit number at or below the mark is refused"
 assert_contains "$OUTPUT" 'change number 035 is reserved: specs/archive.md condenses the log through 040' "the refusal names the mark"
 assert_eq absent "$([ -e "$PROJ2/specs/changes/035-explicit-old.md" ] && echo present || echo absent)" "no record is created"
+run bash "$SCRIPT2" --no-branch --number 000 --short-name zero "desc"
+assert_eq 1 "$STATUS" '000 is refused under a positive cutoff'
+assert_contains "$OUTPUT" 'change number 000 is reserved: specs/archive.md condenses the log through 040'
+rm -f "$PROJ2/specs/changes/000-zero.md"
 # shellcheck disable=SC2016 # backticks are Markdown code spans, not command substitution
-for value in '040 — entries at `git show 9f81234:specs/log.md`' '040 as of 2026-10-30'; do
+for value in '040 — entries at `git show 9f81234:specs/log.md`' '040 as of 2026-10-30' \
+             '**040**; those entries: `git show abc1234:specs/log.md`.' '_040_' '`040`'; do
     printf '# Demo — archive\n\n**Log condensed through**: %s\n' "$value" > "$PROJ2/specs/archive.md"
     run bash "$SCRIPT2" --json --no-worktree --short-name "after-mark" "desc"
     assert_contains "$OUTPUT" '"CHANGE_ID":"041-after-mark"' "a sha or date after the number is no number: $value"
     git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; git -C "$PROJ2" branch -qD 041-after-mark; rm -rf "$PROJ2/specs/changes"
 done
 rm -f "$PROJ2/specs/archive.md"
+
+it "sparse archive bounds automatic numbering and forbids filling earlier gaps"
+sparse_project="$(make_inited_project)" || exit 1
+track_tmp "$sparse_project"
+cd "$sparse_project" || exit 1
+sparse_new="$sparse_project/.prdkit/scripts/bash/new-change.sh"
+mkdir -p specs
+# shellcheck disable=SC2016 # Markdown code span
+printf '**Log condensed through**: none; also 030-033, 035; those entries: `git show abc1234:specs/log.md`.\n**Allocated through**: 035\n' > specs/archive.md
+for num in 30 31 33 35; do
+    run bash "$sparse_new" --no-branch --number "$num" --short-name never-reuse "desc"
+    assert_eq 1 "$STATUS" "cannot reuse sparse number $num"
+    assert_contains "$OUTPUT" 'reserved by the condensed log index' 'the archive refusal is explicit'
+done
+run bash "$sparse_new" --json --no-branch --number 34 --short-name spare-gap "desc"
+assert_eq 1 "$STATUS" 'an unallocated gap below the sparse maximum cannot be filled'
+assert_contains "$OUTPUT" 'high-water mark 035; omit --number or use a number above 035'
+run bash "$sparse_new" --json --no-branch --short-name sparse-next "desc"
+assert_eq 0 "$STATUS" "valid sparse index without a cutoff"
+assert_contains "$OUTPUT" '"CHANGE_ID":"036-sparse-next"' "highest sparse member sets the next number"
+archive_ref=refs/remotes/origin/main
+git update-ref "$archive_ref" HEAD
+archive_text="$(cat specs/archive.md)"
+trusted_edit "$archive_ref" specs/archive.md <<< "$archive_text" || exit 1
+rm specs/archive.md
+run bash "$sparse_new" --no-branch --number 31 --short-name stale "desc"
+assert_eq 1 "$STATUS" "a stale branch honors fetched origin/main without a symbolic origin/HEAD"
+assert_contains "$OUTPUT" 'reserved by the condensed log index'
+rm -f specs/changes/031-stale.md
+custom_ref=refs/remotes/origin/integration
+git update-ref "$custom_ref" HEAD
+git symbolic-ref refs/remotes/origin/HEAD "$custom_ref"
+# shellcheck disable=SC2016 # Markdown code span
+trusted_edit "$custom_ref" specs/archive.md <<'MD' || exit 1
+**Log condensed through**: 020; also 050; those entries: `git show abc1234:specs/log.md`.
+**Allocated through**: 052
+MD
+for num in 20 31 50; do
+    run bash "$sparse_new" --no-branch --number "$num" --short-name union "desc"
+    assert_eq 1 "$STATUS" "the union of integration refs reserves $num"
+    rm -f "specs/changes/0$num-union.md"
+done
+run bash "$sparse_new" --json --no-branch --short-name union-next "desc"
+assert_eq 0 "$STATUS" 'automatic allocation works with different integration tips'
+assert_contains "$OUTPUT" '"CHANGE_ID":"053-union-next"' 'the persisted floor on another tip determines allocation'
+git symbolic-ref --delete refs/remotes/origin/HEAD
+git update-ref -d "$custom_ref"
+git update-ref -d "$archive_ref"
+printf '**Log condensed through**: 002; also 030-033, 032;\n' > specs/archive.md
+for num in auto explicit; do
+    if [ "$num" = auto ]; then run bash "$sparse_new" --no-branch "desc"
+    else run bash "$sparse_new" --number 34 --no-branch "desc"; fi
+    assert_eq 1 "$STATUS" "$num numbering cannot fall back to the cutoff"
+    assert_contains "$OUTPUT" 'specs/archive.md:1:' 'line-numbered error'
+done
+cd "$PROJ2" || exit 1
+
+it "committed log and record claims on a fetched integration ref raise the allocation floor"
+git update-ref refs/remotes/origin/main HEAD
+for claim in 'specs/log.md 070' 'specs/log/080-entry.md 080' 'specs/changes/090-record.md 090'; do
+    read -r path floor <<< "$claim"
+    case "$path" in
+        specs/log.md) printf -- '- 2026-10-01 070-folded: already closed\r\n' ;;
+        *) printf '\n' ;; # The filename reserves the number, independently of its contents.
+    esac | trusted_edit refs/remotes/origin/main "$path" || exit 1
+    run bash "$SCRIPT2" --no-branch --number 69 --short-name gap "desc"
+    assert_eq 1 "$STATUS" "a stale checkout refuses the gap below $path"
+    assert_contains "$OUTPUT" "high-water mark $floor"
+    rm -f specs/changes/069-gap.md # Keep the replay independent when the refusal is broken.
+done
+run bash "$SCRIPT2" --json --no-branch --short-name fetched-next "desc"
+assert_contains "$OUTPUT" '"CHANGE_ID":"091-fetched-next"' 'automatic numbering also sees committed claims'
+rm -f specs/changes/{091,014}-fetched-next.md
+git update-ref -d refs/remotes/origin/main
+
+it "successive compactions cannot reissue the highest allocated number, even in a shallow clone"
+pass_project="$(make_inited_project)" || exit 1
+track_tmp "$pass_project"
+cd "$pass_project" || exit 1
+pass_new=.prdkit/scripts/bash/new-change.sh
+mkdir -p specs
+printf -- '- 2026-10-01 005-first: original close\n' > specs/log.md
+git add -A && git commit -qm 'first folded snapshot' || exit 1
+snapshot="$(git rev-parse HEAD)"
+# shellcheck disable=SC2016 # Markdown code span
+printf '**Log condensed through**: 002; also 005; those entries: `git show %s:specs/log.md`.\n**Allocated through**: 005\n' "$snapshot" > specs/archive.md
+printf -- '- 2026-10-02 compaction: first pass\n' > specs/log.md
+git add specs && git commit -qm 'index first sparse close' || exit 1
+first_pass="$(git rev-parse HEAD)"
+run bash "$pass_new" --no-branch --number 005 --short-name reused "desc"
+assert_contains "$OUTPUT" 'reserved by the condensed log index'
+printf -- '- 2026-10-03 004-second: older change closes later\n' > specs/log.md
+git add specs/log.md && git commit -qm 'second folded snapshot' || exit 1
+snapshot="$(git rev-parse HEAD)"
+# A bad pass forgets to carry 005 forward in the index, but keeps the allocation floor.
+# shellcheck disable=SC2016 # Markdown code span
+printf '**Log condensed through**: 002; also 004; those entries: `git show %s:specs/log.md`.\n**Allocated through**: 005\n' "$snapshot" > specs/archive.md
+printf -- '- 2026-10-04 compaction: second pass\n' > specs/log.md
+git add specs && git commit -qm 'second pass omits first close' || exit 1
+shallow_pass="$(mktemp -d)"; track_tmp "$shallow_pass"
+git clone -q --depth 2 "file://$pass_project" "$shallow_pass" || exit 1
+assert_eq true "$(git -C "$shallow_pass" rev-parse --is-shallow-repository)"
+assert_eq commit "$(git -C "$shallow_pass" cat-file -t "$snapshot")" 'the latest snapshot is present'
+run git -C "$shallow_pass" cat-file -e "$first_pass"
+assert_eq 1 "$STATUS" 'the first index commit is not present'
+for checkout in "$pass_project" "$shallow_pass"; do
+    cd "$checkout" || exit 1
+    run bash "$pass_new" --no-branch --number 005 --short-name reused "desc"
+    assert_eq 1 "$STATUS" 'the omitted sparse member is below the current floor'
+    assert_contains "$OUTPUT" 'high-water mark 005'
+    assert_eq absent "$([ -e specs/changes/005-reused.md ] && echo present || echo absent)"
+    rm -f specs/changes/005-reused.md # Test the automatic path independently.
+    run bash "$pass_new" --json --no-branch --short-name after-pass "desc"
+    assert_contains "$OUTPUT" '"CHANGE_ID":"006-after-pass"' 'automatic allocation uses the persisted floor plus one'
+done
+cd "$PROJ2" || exit 1
 
 it "changes the spec's planned: markers name stay reserved; comments and code blocks do not count"
 mkdir -p "$PROJ2/specs/product" "$PROJ2/specs/parts"
@@ -455,7 +583,7 @@ assert_eq "033-wrapped" "$ID" "wrapped inside the code span"
 planned_next "$(printf -- '- **R-22 Sync** (hypothesis, planned: 025-sync): it syncs.\n\n<!-- Example: - **R-04 Title** (validated, planned:\n  090-example) -->\n\n```text\n- **R-05** (validated, planned:\n  091-in-a-code-block)\n```')"
 assert_eq "026-wrapped" "$ID" "a wrapped marker in a comment or a fence does not count"
 
-it "an explicit --number overrides a reservation with a notice naming its holder; its own planned marker is none"
+it "an explicit --number cannot fill allocated history but can open an unallocated planned change"
 mkdir -p "$PROJ2/specs/product"
 printf '%s\n' '- **R-04 Export** (validated, planned: 060-export): the owner exports.' > "$PROJ2/specs/product/requirements.md"
 run bash "$SCRIPT2" --json --no-worktree --number 60 --short-name export "desc"
@@ -463,13 +591,13 @@ assert_contains "$OUTPUT" '"CHANGE_ID":"060-export"' "the planned change opens u
 assert_not_contains "$OUTPUT" "Notice" "its own planned marker holds nothing against it"
 git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; rm -rf "$PROJ2/specs/changes"
 run bash "$SCRIPT2" --json --no-worktree --number 12 --short-name other "desc"
-assert_eq 0 "$STATUS" "the override proceeds"
-assert_contains "$OUTPUT" "Notice: change number 012 is also held by closed change 012-old-change; --number overrides it" "a closed change"
-assert_contains "$OUTPUT" '"CHANGE_ID":"012-other"' "on the asked number"
+assert_eq 1 "$STATUS" "a closed change cannot be overridden"
+assert_contains "$OUTPUT" "high-water mark 012"
 git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; rm -rf "$PROJ2/specs/changes"
 run bash "$SCRIPT2" --json --no-worktree --number 60 --short-name other "desc"
 assert_contains "$OUTPUT" "Notice: change number 060 is also held by planned in the spec 060-export" "another planned slug"
 git -C "$PROJ2" checkout -q "$MAIN_BRANCH"; rm -rf "$PROJ2/specs/changes"
+
 it "retired counters in bold, inline code and table cells all block allocation"
 # shellcheck disable=SC2016 # The backticks are literal Markdown.
 for counter in '**Last 0.x feature**: 036' '- **`Last 0.x feature`**: 036' '| Last 0.x feature | 036 |'; do
@@ -484,7 +612,7 @@ for counter in '**Last 0.x feature**: 036' '- **`Last 0.x feature`**: 036' '| La
     assert_eq 0 "$STATUS" 'no record allocated'
 done
 rm -rf "$PROJ2/specs/changes" "$PROJ2/specs/product" "$PROJ2/specs/archive.md"
-git -C "$PROJ2" branch -qD 060-export 012-other 060-other
+git -C "$PROJ2" branch -qD 060-export 060-other
 
 it "unsupported feature folders block numbering before a record is written"
 mkdir -p "$PROJ2/specs/features/020-previous"

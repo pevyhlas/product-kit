@@ -335,6 +335,45 @@ assert_eq 1 "$STATUS" "a line already in specs/log.md is refused"
 assert_contains "$OUTPUT" "the log already has an entry for 013-guard" "names the change"
 git checkout -q 013-guard; git branch -q -D 013-logged
 
+it "an archived number cannot close again, even from a branch missing the archive"
+git checkout -q -b 013-archived HEAD~1
+# shellcheck disable=SC2016 # Markdown code span
+printf '**Log condensed through**: 002; also 010-013; those entries: `git show abc1234:specs/log.md`.\nAllocated through: 013\n' > specs/archive.md
+run bash "$B/close-change.sh" 013-guard "again — R-01 — #6"
+assert_eq 1 "$STATUS" "the working archive refuses a second close"
+assert_contains "$OUTPUT" "013-guard is already closed"
+run bash "$B/bounds.sh" 013-guard
+assert_eq 2 "$STATUS" "bounds refuses to scope an archived change as open"
+assert_contains "$OUTPUT" "013-guard is closed"
+git add specs/archive.md; git commit -qm archive
+archived_head="$(git rev-parse HEAD)"
+rm specs/archive.md
+run bash "$B/close-change.sh" 013-guard "again — R-01 — #6"
+assert_eq 1 "$STATUS" "stripping the working copy does not hide HEAD's archive"
+assert_contains "$OUTPUT" "013-guard is already closed"
+assert_eq "$archived_head" "$(git rev-parse HEAD)" "no closing commit"
+assert_eq absent "$([ -e specs/log/013-guard.md ] && echo present || echo absent)" "no duplicate entry"
+git restore specs/archive.md
+git checkout -q 013-guard
+git checkout -q -b 013-stale HEAD~1
+archive_ref=refs/remotes/origin/"$DEFAULT"
+saved_integration="$(git rev-parse "$archive_ref")"
+git update-ref "$archive_ref" "$archived_head"
+run bash "$B/close-change.sh" 013-guard "again — R-01 — #6"
+assert_eq 1 "$STATUS" "a stale branch sees the default branch's archive"
+assert_contains "$OUTPUT" "013-guard is already closed"
+git update-ref "$archive_ref" "$saved_integration"
+git symbolic-ref --delete refs/remotes/origin/HEAD
+fetched_ref=refs/remotes/origin/master
+[ "$fetched_ref" != "$archive_ref" ] || fetched_ref=refs/remotes/origin/main
+git update-ref "$fetched_ref" "$archived_head"
+run bash "$B/close-change.sh" 013-guard "again — R-01 — #6"
+assert_eq 1 "$STATUS" "a fetched integration archive without origin/HEAD still refuses a close"
+assert_contains "$OUTPUT" "013-guard is already closed"
+git update-ref -d "$fetched_ref"
+git symbolic-ref refs/remotes/origin/HEAD "$archive_ref"
+git checkout -q 013-guard; git branch -q -D 013-stale 013-archived
+
 it "two branches that each close a change merge without a log conflict"
 git checkout -q "$DEFAULT"
 BASE_LOG="$(git rev-parse "$DEFAULT:specs/log.md")"

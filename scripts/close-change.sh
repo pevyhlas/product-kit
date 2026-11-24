@@ -76,6 +76,13 @@ check_paths() {
     done
 }
 check_paths
+working_index="$(spec_archive_log_index "$root")" || refuse "could not read the condensed log index"
+committed_indexes="$(spec_archive_log_integration "$root")" || refuse "could not read the condensed log index"
+while IFS= read -r index; do
+    if [ -n "$index" ] && spec_archive_log_covers "$index" "$id"; then
+        refuse "$id is already closed: its number is condensed in specs/archive.md"
+    fi
+done <<< "$working_index"$'\n'"$committed_indexes"
 git -C "$root" diff --quiet HEAD -- "$path" ||
     refuse "$path has uncommitted edits: commit the record edits first; the check reads committed state"
 verify_lf_file "$root/$path" || refuse "invalid record $path: expected non-empty LF-terminated text"

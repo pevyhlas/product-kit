@@ -10,8 +10,9 @@ vague request (and ask its consequential questions) first. Create it with
 `.prdkit/scripts/bash/new-change.sh --json --short-name <name> "<intent>"`: it numbers the change,
 renders `.prdkit/templates/change-template.md` and creates a worktree unless `--no-worktree` (a new
 branch in the current checkout; existing work carries over). It never hands out a number a
-`planned:` marker names; to open that planned change, pass its number and slug (`--number 12
---short-name export` for `planned: 012-export`). The worktree starts from committed HEAD: it lists
+`planned:` marker names. To open that planned change, pass its number and slug (`--number 12
+--short-name export` for `planned: 012-export`) if it exceeds the largest allocated number.
+Otherwise, open the change with a fresh number and update the marker. The worktree starts from committed HEAD: it lists
 uncommitted `specs/` paths left behind (`UNCARRIED_SPECS`); record the owner direction and spec
 context the change needs in the worktree. Use `--no-branch` for project-authorized
 existing-branch delivery: it creates only the numbered record in the current checkout. Pass the

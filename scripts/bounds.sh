@@ -173,5 +173,14 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     set -euo pipefail
     root="$(get_repo_root)"
     require_consumer_root "$root" bounds.sh
+    # The CLI scopes live changes. Review packaging calls bounds_for_root directly and
+    # can intentionally use a historical record to reconstruct its bounds.
+    if is_change_id "${1:-}"; then
+        archive_index="$(spec_archive_log_index "$root")" || exit "$?"
+        if spec_archive_log_covers "$archive_index" "$1"; then
+            printf '%s is closed: its number is condensed in specs/archive.md\n' "$1" >&2
+            exit 2
+        fi
+    fi
     bounds_for_root "$root" "$@"
 fi
