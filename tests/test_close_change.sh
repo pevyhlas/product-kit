@@ -70,6 +70,29 @@ assert_contains "$OUTPUT" "Note: specs/changes/001-greet.md is still at this hea
 run bash "$B/check-review.sh" --json 001-greet
 assert_contains "$OUTPUT" '"record_open":true' "JSON names the open record"
 
+it "a trusted non-default base without a checkout cannot retain legacy history at close"
+primary="refs/remotes/origin/$DEFAULT"
+secondary=refs/remotes/origin/develop
+saved_primary="$(git rev-parse "$primary")"
+git update-ref "$secondary" "$saved_primary" || exit 1
+{
+    git show "$saved_primary:.prdkit/memory/config.md"
+    printf '%s\n' '- review-integration-branches: origin/develop'
+} | trusted_edit "$primary" .prdkit/memory/config.md || exit 1
+printf -- '- 2026-10-17 021-done: closed\n' | trusted_edit "$secondary" specs/log.md || exit 1
+run bash "$B/check-review.sh" --base origin/develop 001-greet
+assert_eq 0 "$STATUS" 'the receipt gate accepts this configured base'
+receipt_raw_run env PRDKIT_CLOSE_CHECK_HISTORY=1 bash "$B/check-review.sh" \
+    --pr https://github.com/owner/repo/pull/7 --base origin/develop 001-greet
+assert_eq 1 "$STATUS" 'the close gate checks the resolved base commit'
+assert_contains "$OUTPUT" 'git mv specs/log.md .prdkit/history/log.md'
+run bash "$B/close-change.sh" --base origin/develop 001-greet "warmer greeting — R-01 — complete — #1"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'git mv specs/log.md .prdkit/history/log.md'
+assert_eq "$VERDICT" "$(git rev-parse HEAD)"
+assert_eq '' "$(git status --porcelain)"
+git update-ref "$primary" "$saved_primary" && git update-ref -d "$secondary" || exit 1
+
 it "close leaves the record and index untouched when any old path remains"
 for legacy in specs/log.md specs/log specs/archive.md; do
     if [ "$legacy" = specs/log ]; then mkdir "$legacy"; else : > "$legacy"; fi

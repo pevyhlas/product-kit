@@ -159,8 +159,8 @@ _spec_history_move_required() {
         '  git mv specs/archive.md .prdkit/history/archive.md' >&2
     return 1
 }
-spec_require_history_layout() { # root -> physical paths and index, including sparse entries
-    local path old
+spec_require_history_layout() { # root [--head] -> physical paths, index (including sparse entries), optionally HEAD
+    local path old head
     for path in specs/log.md specs/log specs/archive.md; do
         if [ -e "$1/$path" ] || [ -L "$1/$path" ]; then
             _spec_history_move_required "$1"; return 1
@@ -169,17 +169,25 @@ spec_require_history_layout() { # root -> physical paths and index, including sp
     if git -C "$1" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         old="$(verify_lines git -C "$1" ls-files -- ':(top)specs/log.md' ':(top)specs/log' ':(top)specs/archive.md')" ||
             { echo "Cannot check the Git index for old history paths at $1" >&2; return 1; }
-        [ -z "$old" ] || _spec_history_move_required "$1"
+        [ -z "$old" ] || { _spec_history_move_required "$1"; return 1; }
+        [ "${2:-}" = --head ] || return 0
+        # A staged deletion does not establish that the history has moved.
+        if head="$(_spec_archive_git -C "$1" rev-parse --verify --quiet HEAD)"; then
+            spec_require_history_tips "$1" "$head" "HEAD of $1; restore any staged deletions before moving" || return 1
+        elif [ "$?" -ne 1 ]; then
+            echo "Cannot identify HEAD for the history check at $1" >&2
+            return 1
+        fi
     fi
 }
-spec_require_history_tips() { # root, frozen integration tips
+spec_require_history_tips() { # root, frozen tips [diagnostic context]
     local rev old
     while IFS= read -r rev; do
         [ -n "$rev" ] || continue
         spec_objects_local "$1" || { echo "Cannot check $rev for old history paths without risking a lazy fetch" >&2; return 1; }
         old="$(verify_lines _spec_archive_git -C "$1" ls-tree --name-only "$rev" -- specs/log.md specs/log specs/archive.md)" ||
             { echo "Cannot check $rev for old history paths" >&2; return 1; }
-        [ -z "$old" ] || { _spec_history_move_required "commit $rev; update stale branches and refs after moving"; return 1; }
+        [ -z "$old" ] || { _spec_history_move_required "${3:-commit $rev; update stale branches and refs after moving}"; return 1; }
     done <<< "$2"
 }
 
@@ -422,7 +430,8 @@ spec_archive_log_previous() { # root -> at most one earlier committed archive
 }
 
 spec_integration_tips() ( # root -> distinct local commit IDs, no fetch
-    local root="$1" target refs rev ref seen=" " candidates=()
+    local root="$1" target refs rev ref refname default="" blob policy configured seen=" " candidates=()
+    spec_objects_local "$root" || return 1
     target="$(_spec_archive_git -C "$root" symbolic-ref --quiet refs/remotes/origin/HEAD)" ||
         { [ "$?" -eq 1 ] || return 1; }
     case "$target" in
@@ -439,9 +448,31 @@ spec_integration_tips() ( # root -> distinct local commit IDs, no fetch
     fi
     while read -r rev ref; do
         case " ${candidates[*]} " in *" $ref "*) ;; *) continue ;; esac
+        if [ "$ref" = "$target" ]; then default="$rev"; fi
         case "$seen" in *" $rev "*) continue ;; esac
         seen="$seen$rev "; printf '%s\n' "$rev" || return 1
     done <<< "$refs"
+    # Use the same committed policy as review. Read it at the frozen origin/HEAD
+    # tip, never from the checkout or from a configured branch itself.
+    case "$target" in refs/remotes/*) ;; *) return 0 ;; esac
+    [ -n "$default" ] || return 0
+    blob="$(_spec_regular_blob_at "$root" "$default" .prdkit/memory/config.md)" || return 1
+    [ -n "$blob" ] || return 0
+    policy="$(_spec_archive_git -C "$root" cat-file blob "$blob")" || return 1
+    configured="$(spec_configured_integration_refs <<< "$policy")" || return 1
+    while IFS= read -r ref; do
+        [ -n "$ref" ] || continue
+        # Do not re-read refs already frozen above.
+        case " ${candidates[*]} " in *" $ref "*) continue ;; esac
+        refs="$(verify_lines _spec_archive_git -C "$root" for-each-ref --format='%(objectname) %(refname)' "$ref")" || return 1
+        while read -r rev refname; do
+            # A configured ref can be absent; a match beneath it is not a match.
+            [ "$refname" = "$ref" ] || continue
+            rev="$(_spec_archive_git -C "$root" rev-parse --verify "$rev^{commit}")" || return 1
+            case "$seen" in *" $rev "*) continue ;; esac
+            seen="$seen$rev "; printf '%s\n' "$rev" || return 1
+        done <<< "$refs"
+    done <<< "$configured"
     return 0
 )
 
@@ -1679,6 +1710,25 @@ spec_default_branch() { # root
     printf '%s\n' "$base"
 }
 
+# Full remote-tracking names from one committed configuration; read by both review
+# and the local-only allocation/close preflight. Configuration is literal, not patterns.
+spec_configured_integration_refs() {
+    local configured candidate
+    configured="$(awk "$SPEC_SKIP_AWK"'
+        { if (spec_skip($0)) next }
+        /^## / { section = $0; next }
+        section == "## Configuration" && /^- review-integration-branches:/ {
+            n++; value = $0; sub(/^- review-integration-branches:[[:space:]]*/, "", value)
+        }
+        END { if (n == 1) { gsub(/,/, " ", value); print value } }')" || return 1
+    while IFS= read -r candidate; do
+        [ -n "$candidate" ] || continue
+        case "$candidate" in refs/remotes/*) ;; *) candidate="refs/remotes/$candidate" ;; esac
+        git check-ref-format "$candidate" >/dev/null 2>&1 || continue
+        printf '%s\n' "$candidate" || return 1
+    done < <(printf '%s\n' "$configured" | tr ' \t\r' '\n')
+}
+
 # The trusted integration refs: origin/HEAD's target (a full refs/remotes/ name, always first),
 # then each ref named by `review-integration-branches` in the committed config at that target,
 # never the worktree's own. One full ref per line; blank when origin/HEAD does not resolve to a
@@ -1692,25 +1742,16 @@ spec_trusted_refs() { # root [--tips: include a frozen commit after each ref]
     if [ "${2:-}" = --tips ]; then printf '%s\t%s\n' "$default" "$sha"; else printf '%s\n' "$default"; fi
     seen="$default"
     policy="$(git -C "$root" show "$sha:.prdkit/memory/config.md" 2>/dev/null || true)"
-    configured="$(printf '%s\n' "$policy" | awk "$SPEC_SKIP_AWK"'
-        { if (spec_skip($0)) next }
-        /^## / { section = $0; next }
-        section == "## Configuration" && /^- review-integration-branches:/ {
-            n++; value = $0; sub(/^- review-integration-branches:[[:space:]]*/, "", value)
-        }
-        END { if (n == 1) { gsub(/,/, " ", value); print value } }')"
-    # Configuration is a list of literal refs, never patterns.
+    configured="$(spec_configured_integration_refs <<< "$policy")" || return 1
     while IFS= read -r candidate; do
         [ -n "$candidate" ] || continue
-        case "$candidate" in refs/remotes/*) ;; *) candidate="refs/remotes/$candidate" ;; esac
-        git check-ref-format "$candidate" >/dev/null 2>&1 || continue
         if [ "${2:-}" = --tips ]; then
             case $'\n'"$seen"$'\n' in *$'\n'"$candidate"$'\n'*) continue ;; esac
             seen="$seen"$'\n'"$candidate"
             tip="$(git -C "$root" rev-parse --verify --quiet "$candidate^{commit}")" || continue
             printf '%s\t%s\n' "$candidate" "$tip"
         else printf '%s\n' "$candidate"; fi
-    done < <(printf '%s\n' "$configured" | tr ' \t\r' '\n')
+    done <<< "$configured"
 }
 
 # Reading an object a partial clone lacks would fetch it from the promisor remote. Git 2.45+

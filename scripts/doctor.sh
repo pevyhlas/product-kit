@@ -53,7 +53,7 @@ report() {
     [ "$result" = pass ]
 }
 trace_json=""; budget_excess_reading_lines=0; authority_records=()
-if ! history_problem="$(spec_require_history_layout "$root" 2>&1)"; then
+if ! history_problem="$(spec_require_history_layout "$root" --head 2>&1)"; then
     findings+=("$history_problem")
     report
     exit 1

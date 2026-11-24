@@ -282,11 +282,12 @@ AUTO_NUMBER=false
 acquire_number_lock
 CHECKOUTS="$(list_checkouts)" || exit 1
 while IFS= read -r checkout; do
-    spec_require_history_layout "$checkout" || exit 1
+    spec_require_history_layout "$checkout" --head || exit 1
 done <<< "$CHECKOUTS"
 INTEGRATION_TIPS=""
 if [ "$HAS_GIT" = true ]; then
-    INTEGRATION_TIPS="$(spec_integration_tips "$REPO_ROOT")"
+    INTEGRATION_TIPS="$(spec_integration_tips "$REPO_ROOT")" ||
+        { echo "[prdkit] Error: could not identify local integration tips" >&2; exit 1; }
     spec_require_history_tips "$REPO_ROOT" "$INTEGRATION_TIPS" || exit 1
 fi
 ARCHIVE_DETAILS="$(list_archive_details)"

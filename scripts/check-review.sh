@@ -72,6 +72,9 @@ base_canonical=""
 if [ -n "$base_canonical" ] && printf '%s\n' "$approved_refs" | grep -qxF -- "$base_canonical"; then
     import_base="$(git -C "$root" rev-parse "$base_ref^{commit}")"; base_trusted=true
 fi
+if [ "${PRDKIT_CLOSE_CHECK_HISTORY:-}" = 1 ] && $base_trusted; then
+    spec_require_history_tips "$root" "$import_base" || exit 1
+fi
 trusted_default="$(printf '%s\n' "$approved_refs" | sed -n 1p)"
 policy_at=""
 [ -z "$trusted_default" ] || policy_at="$(git -C "$root" rev-parse --verify --quiet "$trusted_default^{commit}" || true)"

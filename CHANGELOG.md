@@ -59,7 +59,8 @@ change by change.
   If the destination `log/` already exists, move the remaining entry files individually;
   do not nest the directory or overwrite entries. Update stale worktrees and integration
   refs before allocating or closing changes. Keep `.prdkit/history/` tracked and ignore
-  `.prdkit/cache/`, not all of `.prdkit/`. Update the folded log header to match
+  `.prdkit/cache/`, not all of `.prdkit/`. The installer warns about blocking ignore
+  rules without rewriting them. Update the folded log header to match
   `history-log-template.md`, and remove any links to history from the spec.
   Preserve the archive's condensed numbers and allocation floor. If a sparse index points
   to the old path, commit its referenced folded log at `.prdkit/history/log.md` on a durable

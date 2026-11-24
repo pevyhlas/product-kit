@@ -62,7 +62,7 @@ case "$text" in
 esac
 [[ "$text" =~ [^[:space:]] ]] || refuse "the log text must contain a description"
 root="$(git rev-parse --show-toplevel 2>/dev/null)" || refuse "not inside a Git checkout"
-spec_require_history_layout "$root" || exit 1
+spec_require_history_layout "$root" --head || exit 1
 spec_objects_local "$root" || refuse "local Git cannot guarantee reads without fetching missing objects"
 export GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1
 tips="$(spec_integration_tips "$root")" || refuse "could not identify integration tips"
@@ -149,12 +149,12 @@ if [ -n "$default" ]; then
     fi
 fi
 
-check() { bash "$SCRIPT_DIR/check-review.sh" --pr "$pr" --repo "$root" --head HEAD ${base_args[@]+"${base_args[@]}"} "$id" 2>&1; }
+# Check the actual resolved base inside the gate as well as the frozen preflight tips.
+check() { PRDKIT_CLOSE_CHECK_HISTORY=1 bash "$SCRIPT_DIR/check-review.sh" --pr "$pr" --repo "$root" --head HEAD ${base_args[@]+"${base_args[@]}"} "$id" 2>&1; }
 if ! out="$(verify_lines check)" || [ -z "$out" ]; then
     printf '%s\n' "$out" >&2
     refuse "check-review.sh does not pass at HEAD; publish the remaining verdicts first"
 fi
-
 check_paths
 # The process cwd pins a directory just like a directory descriptor. Verify
 # its physical identity *after* entering it, before any relative write.

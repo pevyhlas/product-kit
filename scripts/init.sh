@@ -907,6 +907,17 @@ if GITIGNORE="$(root_file_path .gitignore)"; then
 else
     echo "⚠ .gitignore is a symlink that leads outside the project; left untouched. Ignore these by hand: $IGNORE_ENTRIES"
 fi
+if git -C "$TARGET" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    # Check prospective adds even when existing history is already tracked.
+    for history_path in .prdkit/history/log.md .prdkit/history/log/001-example.md .prdkit/history/archive.md; do
+        if git -C "$TARGET" check-ignore --no-index -q -- "$history_path"; then
+            rule="$(git -C "$TARGET" check-ignore --no-index -v -- "$history_path")" || rule="$history_path"
+            printf 'Warning: Git ignores history: %s\n  Narrow this ignore rule to track .prdkit/history/; keep .prdkit/cache/ ignored.\n' "$rule" >&2
+        elif [ "$?" -ne 1 ]; then
+            printf 'Warning: could not check Git ignore rules for %s; make sure history is tracked and .prdkit/cache/ stays ignored.\n' "$history_path" >&2
+        fi
+    done
+fi
 
 # --- Write the install manifest ----------------------------------------------
 # Records the kit version, harnesses, and one "<sha256>  <path>"

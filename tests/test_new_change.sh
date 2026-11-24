@@ -398,6 +398,67 @@ assert_contains "$OUTPUT" 'git mv specs/archive.md .prdkit/history/archive.md'
 git update-ref -d refs/remotes/origin/main
 git branch -q -D history-old-tip
 
+it "an old close in a sibling HEAD is not hidden by staging its deletion"
+sibling="$PROJ2/.worktrees/maintenance"
+git worktree add -qb maintenance "$sibling" HEAD || exit 1
+mkdir -p "$sibling/specs"
+printf -- '- 2026-10-17 001-done: closed\n' > "$sibling/specs/log.md"
+git -C "$sibling" add specs/log.md && git -C "$sibling" commit -qm 'old close' &&
+    git -C "$sibling" rm -q specs/log.md || exit 1
+assert_eq 'D  specs/log.md' "$(git -C "$sibling" status --porcelain)"
+run bash "$SCRIPT2" --json --no-branch --short-name staged-delete "desc"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'git mv specs/log.md .prdkit/history/log.md'
+assert_not_contains "$OUTPUT" 'CHANGE_ID'
+run test ! -d specs/changes
+assert_eq 0 "$STATUS" 'no record allocated'
+run bash -c 'cd "$1" && bash .prdkit/scripts/bash/doctor.sh --json' _ "$sibling"
+assert_eq 1 "$STATUS"
+assert_eq 1 "$(jq '.findings | length' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" 'git mv specs/log.md .prdkit/history/log.md'
+assert_eq 'D  specs/log.md' "$(git -C "$sibling" status --porcelain)"
+git -C "$sibling" restore --source=HEAD --staged --worktree -- specs/log.md &&
+    git worktree remove "$sibling" && git branch -qD maintenance || exit 1
+
+it "only committed integration policy adds trusted un-checked-out tips to the history snapshot"
+primary=refs/remotes/origin/main
+secondary=refs/remotes/origin/develop
+git update-ref "$primary" HEAD && git update-ref "$secondary" HEAD &&
+    git symbolic-ref refs/remotes/origin/HEAD "$primary" || exit 1
+printf -- '- 2026-10-17 091-done: closed\n' | trusted_edit "$secondary" specs/log.md || exit 1
+# Neither an unconfigured remote ref nor a working config can affect numbering.
+printf '\n## Configuration\n- review-integration-branches: origin/develop\n' >> .prdkit/memory/config.md
+run bash "$SCRIPT2" --json --no-branch --short-name untrusted "desc"
+assert_eq 0 "$STATUS" 'a working config does not establish trust'
+assert_contains "$OUTPUT" '"CHANGE_ID":"001-untrusted"'
+rm -f specs/changes/001-untrusted.md
+trusted_edit "$primary" .prdkit/memory/config.md <<'MD' || exit 1
+## Configuration
+- review-integration-branches: origin/develop, origin/missing
+MD
+git restore -- .prdkit/memory/config.md
+assert_not_contains "$(git worktree list --porcelain)" 'develop'
+run bash "$SCRIPT2" --json --no-branch --short-name trusted-old "desc"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'git mv specs/log.md .prdkit/history/log.md'
+assert_not_contains "$OUTPUT" 'CHANGE_ID'
+assert_eq '' "$(find specs -type f -print)"
+git update-ref "$secondary" HEAD || exit 1
+printf '**Allocated through**: 089\n' | trusted_edit "$secondary" .prdkit/history/archive.md || exit 1
+run bash "$SCRIPT2" --json --no-branch --number 89 --short-name trusted-floor "desc"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'allocated high-water mark 089'
+printf -- '- 2026-10-17 091-done: closed\n' | trusted_edit "$secondary" .prdkit/history/log.md || exit 1
+run bash "$SCRIPT2" --json --no-branch --number 91 --short-name trusted-closed "desc"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'allocated high-water mark 091'
+run bash "$SCRIPT2" --json --no-branch --short-name trusted-next "desc"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '"CHANGE_ID":"092-trusted-next"'
+rm -f specs/changes/092-trusted-next.md
+git symbolic-ref --delete refs/remotes/origin/HEAD &&
+    git update-ref -d "$primary" && git update-ref -d "$secondary" || exit 1
+
 it "a stray numbered branch raises the next number"
 git -C "$PROJ2" branch 007-stray-branch
 run bash "$SCRIPT2" --json --no-worktree --short-name "first" "desc"
