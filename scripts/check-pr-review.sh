@@ -28,6 +28,7 @@ work=""; reader_out=""; reader_err=""
 guarded_pgids=()
 finishing=false; pending_signal=""; groups_verified=true
 native=null; native_exit=null; transport=refused; status=1; policy_error=""
+capture_error=""
 deadline=$((SECONDS+600))
 
 # All output is buffered until owned processes are gone and private scratch is deleted.
@@ -71,7 +72,9 @@ finish() {
     [ -z "$operation" ] || collect_operation 2>>"$root/guard.err" || groups_verified=false
     # Cancellation can arrive after the native gate produced complete JSON.
     # Keep that diagnostic after verified cleanup without inventing a native exit.
-    if $groups_verified && [ "$native" = null ] && [ -n "$root" ] && [ -f "$root/native.json" ]; then
+    if [ -n "$capture_error" ]; then
+        native=null; native_exit=null; transport=refused; status=1
+    elif $groups_verified && [ "$native" = null ] && [ -n "$root" ] && [ -f "$root/native.json" ]; then
         if one_object "$root/native.json"; then native="$(cat "$root/native.json")"; fi
     fi
     if ! $groups_verified || ! remove_scratch; then
@@ -157,25 +160,43 @@ cat > "$root/group-guard" <<'GUARD'
 set -eu
 set +m
 op=$1 role=$2; shift 2
-pgid="$(ps -o pgid= -p "$$")"
+step="pgid-lookup"
+trap 'printf "role=%s step=%s status=%s op=%s\n" "$role" "$step" "$?" "${op##*/}" >&2' EXIT
+pgid="$(exec 6<&- 9>&-; ps -o pgid= -p "$$")"
+step="pgid-check"
 [[ ${pgid//[[:space:]]/} == "$$" ]] || exit 1
 # The inherited duplex FD prevents either side blocking during open. Close it
 # after obtaining a read-only FD: only the launcher keeps the write side.
-exec 7<"$op/$role.control" 6<&-
+step="control-open"
+exec 7<"$op/$role.control"
+exec 6<&-
 
 record() {
     printf '%s\n' "$1" > "$op/$role.tmp" && mv "$op/$role.tmp" "$op/$role.status"
 }
+step="worker-launch"
 if [ "$role" = work ]; then
     (
+        exec 7<&-
         # Keep the status relay through TERM, without passing SIG_IGN to the
         # actual command. KILL may prevent a status from being recorded.
         trap ':' TERM
-        rc=0; "$@" || rc=$?
-        record "$rc"
-    ) >"$op/out.pipe" 2>"$op/err.pipe" 7<&- &
+        # Bash 3.2 can save an inline-closed FD on a new number across exec.
+        # Permanently close the failure writer in each child that must not own it.
+        rc=0; (exec 9>&-; exec "$@") || rc=$?
+        # Report a failed status write even if scratch cannot hold another
+        # file. Only this relay writes to the private failure FIFO.
+        if ! (exec 9>&-; record "$rc"); then
+            printf 'failed\n' >&9
+            # The marker wakes the normal fast poll; the FIFO remains the
+            # failure record if scratch cannot accept the marker.
+            : > "$op/work.failed"
+        fi
+    ) >"$op/out.pipe" 2>"$op/err.pipe" &
+    exec 9>&-
 else
     (
+        exec 7<&-
         rc=0
         head -c 4194304 < "$op/$role.pipe" > "$1" || rc=$?
         if [ "$rc" -eq 0 ]; then
@@ -183,10 +204,12 @@ else
             if [ "$rc" -eq 0 ] && [ "$size" -ge 4194304 ]; then : > "$op/overflow"; fi
         fi
         record "$rc"
-    ) 7<&- &
+    ) &
 fi
 trap '' TERM HUP INT USR1
+step="ready-write"
 : > "$op/$role.ready"
+trap - EXIT
 
 # This is the only group signaler. This fresh Bash is the actual, live group
 # leader; $$ is not a remembered child PID (nor a Bash subshell's inherited $$).
@@ -243,12 +266,14 @@ probe_group() { # pid timeout (whole seconds, supported by Bash 3.2)
     # using this channel; a delayed answer must not be read as a later snapshot.
     $probe_ok || return 1
     (
+        exec 3<&- 4<&- 5<&- 7<&- 9>&-
+        exec >&8 8>&-
         if state="$(group_view "$1")"; then
             printf '%s\n' "$state"
         else
             printf 'unconfirmed\n'
         fi
-    ) 3<&- 4<&- 5<&- >&8 &
+    ) &
     if IFS= read -r -t "$2" state <&8; then return 0; fi
     probe_ok=false
     return 1
@@ -315,33 +340,59 @@ guard_status() {
         [[ "$rc" =~ ^[0-9]{1,3}$ ]] && [ "$rc" -le 255 ] || return 1
     printf '%s\n' "$rc"
 }
+guard_exited_before_ready() { # role pid
+    local role="$1" pid="$2" diagnostic rc
+    [ ! -f "$operation/$role.ready" ] || return 1
+    if builtin kill -0 -- "$pid" 2>/dev/null; then return 1; fi
+    # Probe the child PID, not its group. EPERM is not proof of exit, and a
+    # readiness file may have appeared between the first check and the probe.
+    if diagnostic="$(builtin kill -0 -- "$pid" 2>&1)"; then return 1; else rc=$?; fi
+    [ "$rc" -eq 1 ] && [[ "$diagnostic" == *"kill: ($pid) - No such process" ]] &&
+        [ ! -f "$operation/$role.ready" ] || return 1
+    # Do not wait on a PID. The guard's EXIT trap records the actual status
+    # when possible; this line also covers exits before that trap was installed.
+    printf 'role=%s step=pre-ready-exit op=%s\n' "$role" "${operation##*/}" >>"$root/guard.err" || :
+    return 0
+}
 collect_operation() {
-    local i pgid failed=false out_status err_status probe_ok=true
+    local i pgid role shutdown_ok=true out_status err_status probe_ok=true notice
     for pgid in "$work" "$reader_out" "$reader_err"; do
         if [ -n "$pgid" ]; then guarded_pgids+=("$pgid"); fi
     done
-    stop_guard work "$work" 3 || failed=true
+    stop_guard work "$work" 3 || shutdown_ok=false
+    # A signal or deadline may have stopped the main loop before it saw the
+    # notice. Check again before classifying the result. EOF alone does not
+    # mean the relay attempted a write; supervised KILL can interrupt it.
+    # The sole writer closes on relay exit; the read normally returns data
+    # or EOF immediately. Bound it if work shutdown is unverified.
+    if [ -f "$operation/work.failed" ] ||
+        { [ -n "$work" ] && IFS= read -r -t 1 notice <&7 && [ "$notice" = failed ]; }; then
+        capture_error="${capture_error:-capture-failed}"
+    fi
     if [ -f "$operation/work.status" ]; then
-        bounded_exit="$(guard_status work)" || failed=true
+        bounded_exit="$(guard_status work)" || capture_error="${capture_error:-capture-failed}"
         if [ "$phase" = native ] && [ "$native_exit" = null ]; then native_exit="$bounded_exit"; fi
     fi
     # Writers are gone (or unverified). Let readers drain ordinary EOF, then
     # retire their own groups even when workload shutdown could not be proved.
-    if ! $failed; then
+    if $shutdown_ok && [ -z "$capture_error" ]; then
         for ((i=0; i<50; i++)); do
             if [ -f "$operation/out.status" ] && [ -f "$operation/err.status" ]; then break; fi
             sleep 0.1
         done
     fi
-    stop_guard out "$reader_out" 4 || failed=true
-    stop_guard err "$reader_err" 5 || failed=true
+    stop_guard out "$reader_out" 4 || shutdown_ok=false
+    stop_guard err "$reader_err" 5 || shutdown_ok=false
+    for role in work out err; do
+        if [ ! -f "$operation/$role.ready" ]; then capture_error="${capture_error:-guard-startup}"; fi
+    done
     out_status="$(guard_status out 2>/dev/null)" || out_status=missing
     err_status="$(guard_status err 2>/dev/null)" || err_status=missing
-    if [ "$out_status:$err_status" != 0:0 ]; then failed=true; fi
+    if [ "$out_status:$err_status" != 0:0 ]; then capture_error="${capture_error:-capture-failed}"; fi
     if [ -e "$operation/overflow" ]; then bounded_limit=overflow; fi
-    exec 3>&- 4>&- 5>&- 8>&-
+    exec 3>&- 4>&- 5>&- 7<&- 8>&- 9>&-
     operation=""; work=""; reader_out=""; reader_err=""
-    ! $failed
+    $shutdown_ok
 }
 
 # No inherited file-size limit constrains Git packs or native working files.
@@ -353,19 +404,25 @@ capture_file() { # destination command... (selector data, not Git object storage
 }
 start_guard() { # launched asynchronously; exec preserves the job's leader PID
     local control="$1"; shift
-    exec /bin/bash --noprofile "$root/group-guard" "$operation" "$@" \
-        </dev/null >/dev/null 2>>"$root/guard.err" 6<&"$control" 3<&- 4<&- 5<&- 8<&-
+    # Only the selected control FD and (for work) the failure writer cross exec.
+    exec 6<&"$control"
+    exec 3<&- 4<&- 5<&- 7<&- 8<&-
+    if [ "$1" != work ]; then exec 9>&-; fi
+    exec 2>>"$root/guard.err" </dev/null >/dev/null
+    exec /bin/bash --noprofile "$root/group-guard" "$operation" "$@"
 }
 bounded() { # seconds output error command...
-    local seconds="$1" out="$2" err="$3" end
+    local seconds="$1" out="$2" err="$3" end guards_ready=false
     shift 3
     check_signal
     bounded_exit=null; bounded_limit=""
     operation="$(mktemp -d "$root/op.XXXXXXXX")" || refuse cleanup cleanup-failed
     mkfifo "$operation/work.control" "$operation/out.control" "$operation/err.control" \
-        "$operation/out.pipe" "$operation/err.pipe" "$operation/inventory" || refuse cleanup cleanup-failed
+        "$operation/out.pipe" "$operation/err.pipe" "$operation/inventory" "$operation/work.failure" ||
+        refuse cleanup cleanup-failed
     exec 3<>"$operation/work.control" 4<>"$operation/out.control" 5<>"$operation/err.control" \
-        8<>"$operation/inventory"
+        8<>"$operation/inventory" 9<>"$operation/work.failure"
+    exec 7<"$operation/work.failure" # the duplex opener above holds the write end during setup
     # Traps only queue cancellation. They cannot retire partially registered groups.
     set -m # give each async guard its own PGID (also on Bash 3.2)
     start_guard 4 out "$out" &
@@ -374,18 +431,35 @@ bounded() { # seconds output error command...
     reader_err=$!
     start_guard 3 work "$@" &
     work=$!
+    exec 9>&-
     set +m
     end=$((SECONDS+seconds))
-    while [ ! -f "$operation/work.status" ]; do
+    while [ ! -f "$operation/work.status" ] || ! $guards_ready; do
+        if [ -f "$operation/work.failed" ]; then break; fi
         if [ -e "$operation/overflow" ]; then bounded_limit=overflow; break; fi
         if [ -n "$pending_signal" ] || [ "$SECONDS" -ge "$deadline" ]; then break; fi
+        if ! $guards_ready; then
+            if [ -f "$operation/work.ready" ] && [ -f "$operation/out.ready" ] && [ -f "$operation/err.ready" ]; then
+                guards_ready=true
+                [ ! -f "$operation/work.status" ] || break
+            elif guard_exited_before_ready work "$work" ||
+                guard_exited_before_ready out "$reader_out" ||
+                guard_exited_before_ready err "$reader_err"; then
+                capture_error=guard-startup
+                break
+            fi
+        fi
         if [ "$SECONDS" -ge "$end" ]; then bounded_limit=timeout; break; fi
         sleep 0.05
     done
     collect_operation 2>>"$root/guard.err" || { groups_verified=false; refuse cleanup cleanup-failed; }
+    [ -z "$capture_error" ] || refuse "$phase" "$capture_error"
     check_signal
     case "$bounded_limit" in overflow) return 125 ;; timeout) return 124 ;; esac
-    [ "$bounded_exit" != null ] || refuse cleanup cleanup-failed
+    if [ "$bounded_exit" = null ]; then
+        capture_error=capture-failed
+        refuse "$phase" "$capture_error"
+    fi
     return "$bounded_exit"
 }
 one_object() {

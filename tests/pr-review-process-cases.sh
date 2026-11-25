@@ -209,6 +209,176 @@ assert_eq '[null,17,true]' "$(jq -c .native.extension.keep "$FIX/stdout")"
 assert_other_bindings
 restore_control
 
+it 'native work guard exiting before readiness refuses promptly and cleans scratch'
+bindings "$HEAD_SHA" 999-absent
+awk -v dir="$FIX" '
+    /^pgid=/ {
+        print "if [ \"$role\" = work ] && [ -f \"$op/../selected\" ]; then ps() { return 42; }; fi"
+    }
+    /^phase=native$/ { print "native_started=$SECONDS" }
+    /^if bounded 180 / { sub(/180/, "25") }
+    /^    work=\$!/ {
+        print "    if [ \"$phase\" = native ]; then printf \"%s\\n\" \"$!\" \"$reader_out\" \"$reader_err\" > \"" dir "/startup-groups\"; fi"
+    }
+    /^    if ! \$groups_verified \|\| ! remove_scratch; then/ {
+        print "    printf \"%s\\n\" \"$((SECONDS-native_started))\" > \"" dir "/startup-elapsed\""
+        print "    cp \"$root/guard.err\" \"" dir "/startup-private\""
+    }
+    { print }
+' "$FIX/launcher" > "$FIX/injected"
+mv "$FIX/injected" "$FIX/launcher"
+STARTUP_SCRATCH_BEFORE="$(scratch_entries)"
+launch
+assert_eq 1 "$STATUS"
+assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
+assert_eq native "$(jq -r .error.stage "$FIX/stdout")" 'pre-ready exit is a native transport failure'
+assert_eq guard-startup "$(jq -r .error.code "$FIX/stdout")" 'verified shutdown is not cleanup-failed'
+assert_eq '[null,null]' "$(jq -c '[.native_exit,.native]' "$FIX/stdout")" 'no native result from a failed guard startup'
+run test "$(cat "$FIX/startup-elapsed")" -lt 20
+assert_eq 0 "$STATUS" 'pre-ready exit did not wait out the native operation budget'
+assert_contains "$(cat "$FIX/startup-private")" 'role=work step=pgid-lookup status=42' 'private diagnostic identifies guard role, step and status'
+assert_not_contains "$(cat "$FIX/stderr")" 'pgid-lookup' 'bootstrap details stay private'
+assert_eq 3 "$(wc -l < "$FIX/startup-groups" | tr -d '[:space:]')" 'all three native guard PIDs recorded'
+while IFS= read -r group; do
+    if [[ "$group" =~ ^[1-9][0-9]*$ ]]; then
+        assert_group_gone "$group" 'startup failure leaves no live guard group'
+    else _no 'startup fixture produced an invalid guard PID' "$group"; fi
+done < "$FIX/startup-groups"
+# Remove just the root(s) left by this fault on an unfixed launcher, for base replay.
+while IFS= read -r entry; do "$REAL_RM" -rf -- "$entry"; done < <(new_scratch "$STARTUP_SCRATCH_BEFORE")
+restore_control
+
+it 'a failed capture with complete native JSON refuses without exposing a native result'
+awk '
+    /^        record "\$rc"$/ {
+        print "        if [ \"$role\" = out ] && [ \"$1\" = \"${op%/*}/native.json\" ]; then rc=23; fi"
+    }
+    { print }
+' "$FIX/launcher" > "$FIX/injected"
+mv "$FIX/injected" "$FIX/launcher"
+CAPTURE_SCRATCH_BEFORE="$(scratch_entries)"
+launch
+assert_eq 1 "$STATUS"
+assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
+assert_eq native "$(jq -r .error.stage "$FIX/stdout")"
+assert_eq capture-failed "$(jq -r .error.code "$FIX/stdout")"
+assert_eq '[null,null]' "$(jq -c '[.native_exit,.native]' "$FIX/stdout")" 'failed capture cannot salvage otherwise valid native JSON or exit'
+while IFS= read -r entry; do "$REAL_RM" -rf -- "$entry"; done < <(new_scratch "$CAPTURE_SCRATCH_BEFORE")
+restore_control
+
+for relay_case in timeout cancellation fifo-timeout fifo-cancellation; do
+    relay_stop="${relay_case#fifo-}"
+    it "failed native status rename is a capture failure ($relay_case)"
+    rm -f "$FIX/work-rename-failed" "$FIX/relay-stop"
+    awk -v dir="$FIX" -v stop="$relay_stop" -v mode="$relay_case" '
+        /^record\(\) \{/ {
+            print "mv() {"
+            print "    if [ \"$role\" = work ] && [ \"$fixture_phase\" = native ] &&"
+            print "        [ \"$1\" = \"$op/work.tmp\" ] && [ \"$2\" = \"$op/work.status\" ]; then"
+            if (mode ~ /^fifo-/) print "        mkdir \"$op/work.failed\"" # Keep the marker from becoming a regular file.
+            print "        printf failed > \"" dir "/work-rename-failed\""
+            if (stop == "cancellation") print "        kill -TERM \"$launcher_pid\""
+            print "        return 23"
+            print "    fi"
+            print "    command mv \"$@\""
+            print "}"
+        }
+        /^start_guard\(\) \{/ {
+            print
+            print "    export launcher_pid=$$ fixture_phase=$phase"
+            next
+        }
+        /^    collect_operation 2>>/ {
+            print "    if [ \"$phase\" = native ]; then printf \"%s:%s\\n\" \"$bounded_limit\" \"$pending_signal\" > \"" dir "/relay-stop\"; fi"
+        }
+        { print }
+    ' "$FIX/launcher" > "$FIX/injected"
+    mv "$FIX/injected" "$FIX/launcher"
+    arm_fixture_deadline native.json work-rename-failed end
+    launch
+    assert_eq 1 "$STATUS"
+    assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
+    assert_eq native "$(jq -r .error.stage "$FIX/stdout")"
+    assert_eq capture-failed "$(jq -r .error.code "$FIX/stdout")"
+    assert_eq '[null,null]' "$(jq -c '[.native_exit,.native]' "$FIX/stdout")" \
+        'failed work-status rename cannot publish native JSON or exit'
+    assert_file "$FIX/work-rename-failed" 'the native relay attempted the targeted rename'
+    case "$relay_case" in
+        fifo-timeout) assert_eq timeout: "$(cat "$FIX/relay-stop")" 'deadline reached before collecting the FIFO notice' ;;
+        fifo-cancellation) assert_eq :interrupted "$(cat "$FIX/relay-stop")" 'cancellation queued before collecting the FIFO notice' ;;
+    esac
+    restore_control
+done
+
+it 'native workload and status helper do not inherit either end of the failure FIFO'
+FD_OBSERVER=''
+if [ -d /proc/self/fd ]; then
+    FD_OBSERVER=proc
+elif command -v lsof >/dev/null && mkfifo "$FIX/fd-observer"; then
+    # Check that lsof can actually match an open named pipe on this host.
+    if "$REAL_BASH" -c 'exec 7<>"$1"; lsof -w -a -p "$$" -d 7 -F f "$1"; exit "$?"' _ "$FIX/fd-observer" \
+        2>/dev/null | grep -qx f7; then FD_OBSERVER=lsof; fi
+    rm "$FIX/fd-observer"
+fi
+if [ -n "$FD_OBSERVER" ]; then
+    {
+        printf '#!/bin/bash\nresult_dir=%q\nobserver=%q\n' "$FIX" "$FD_OBSERVER"
+        cat <<'AUDIT'
+role="$1"; shift
+checked=false; result=clean
+# Inspect the FIFO inode, not a descriptor number: Bash can save a copy
+# on an otherwise unused FD when redirections are restored after a call.
+for pipe in "$HOME"/../op.*/work.failure; do
+    [ -p "$pipe" ] || continue
+    checked=true
+    case "$observer" in
+        proc)
+            for fd in /proc/self/fd/*; do
+                if [ "$fd" -ef "$pipe" ]; then
+                    if [ "$result" = clean ]; then result='inherited FDs:'; fi
+                    result="$result ${fd##*/}"
+                fi
+            done ;;
+        lsof)
+            matches="$(lsof -w -a -p "$$" -F f "$pipe" 2>&1)"; rc=$?
+            if [ "$rc" -eq 0 ]; then result="inherited descriptor: $matches"
+            elif [ "$rc" -ne 1 ] || [ -n "$matches" ]; then result="observer failed: $matches"; fi ;;
+    esac
+done
+if ! $checked; then result='failure FIFO not found'; fi
+printf '%s\n' "$result" > "$result_dir/fd-$role"
+exec "$@"
+AUDIT
+    } > "$FIX/fd-audit"
+    REAL_MV="$(command -v mv)"
+    {
+        printf '#!/bin/bash\n'
+        printf 'if [ "${fixture_phase:-}" = native ] && [[ "$1" == */work.tmp && "$2" == */work.status ]]; then\n'
+        printf '    exec %q status %q "$@"\nfi\n' "$FIX/fd-audit" "$REAL_MV"
+        printf 'exec %q "$@"\n' "$REAL_MV"
+    } > "$FIX/bin/mv"
+    chmod +x "$FIX/fd-audit" "$FIX/bin/mv"
+    awk -v dir="$FIX" '
+        /^start_guard\(\) \{/ {
+            print
+            print "    export fixture_phase=$phase"
+            next
+        }
+        /^if bounded 180 / { sub(/\/bin\/bash/, "\"" dir "/fd-audit\" native /bin/bash") }
+        { print }
+    ' "$FIX/launcher" > "$FIX/injected"
+    mv "$FIX/injected" "$FIX/launcher"
+    launch
+    assert_eq 0 "$STATUS" 'descriptor probe preserves the native pass'
+    assert_eq complete "$(jq -r .launcher "$FIX/stdout")"
+    assert_eq clean "$(cat "$FIX/fd-native")" 'native workload has no descriptor to work.failure'
+    assert_eq clean "$(cat "$FIX/fd-status")" 'status rename helper has no descriptor to work.failure'
+    rm "$FIX/bin/mv"
+    restore_control
+else
+    printf '%s\n' 'SKIP: descriptor identity requires /proc/self/fd or usable lsof'
+fi
+
 it 'a live member missed by ps prevents scratch deletion'
 rm -f "$FIX/group" "$FIX/hidden-member" "$FIX/remove-attempted"
 mkfifo "$FIX/member-release"
@@ -322,8 +492,10 @@ for shutdown in clean survivor threaded ambiguous; do
             'only the live native leader signals; nothing sends another signal after KILL'
     fi
     if [ "$shutdown" = clean ]; then
+        assert_eq native "$(jq -r .error.stage "$FIX/stdout")"
         assert_eq interrupted "$(jq -r .error.code "$FIX/stdout")"
         assert_eq null "$(jq -r .native_exit "$FIX/stdout")" 'KILL interrupted status relay; do not invent an exit'
+        assert_eq pass "$(jq -r .native.result "$FIX/stdout")" 'supervised KILL preserves an otherwise valid native diagnostic'
         assert_terminated "$STUBBORN" 'TERM-resistant descendant terminated'
         assert_group_gone "$GROUP" 'native group terminated and owned leader reaped'
         assert_file "$FIX/live-at-remove" 'native deletion snapshot exists'
