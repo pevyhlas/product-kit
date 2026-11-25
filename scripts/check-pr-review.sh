@@ -162,13 +162,14 @@ set +m
 op=$1 role=$2; shift 2
 step="pgid-lookup"
 trap 'printf "role=%s step=%s status=%s op=%s\n" "$role" "$step" "$?" "${op##*/}" >&2' EXIT
-pgid="$(ps -o pgid= -p "$$")"
+pgid="$(exec 6<&- 9>&-; ps -o pgid= -p "$$")"
 step="pgid-check"
 [[ ${pgid//[[:space:]]/} == "$$" ]] || exit 1
 # The inherited duplex FD prevents either side blocking during open. Close it
 # after obtaining a read-only FD: only the launcher keeps the write side.
 step="control-open"
-exec 7<"$op/$role.control" 6<&-
+exec 7<"$op/$role.control"
+exec 6<&-
 
 record() {
     printf '%s\n' "$1" > "$op/$role.tmp" && mv "$op/$role.tmp" "$op/$role.status"
@@ -176,22 +177,26 @@ record() {
 step="worker-launch"
 if [ "$role" = work ]; then
     (
+        exec 7<&-
         # Keep the status relay through TERM, without passing SIG_IGN to the
         # actual command. KILL may prevent a status from being recorded.
         trap ':' TERM
-        rc=0; "$@" 9>&- || rc=$?
+        # Bash 3.2 can save an inline-closed FD on a new number across exec.
+        # Permanently close the failure writer in each child that must not own it.
+        rc=0; (exec 9>&-; exec "$@") || rc=$?
         # Report a failed status write even if scratch cannot hold another
         # file. Only this relay writes to the private failure FIFO.
-        if ! record "$rc" 9>&-; then
+        if ! (exec 9>&-; record "$rc"); then
             printf 'failed\n' >&9
             # The marker wakes the normal fast poll; the FIFO remains the
             # failure record if scratch cannot accept the marker.
             : > "$op/work.failed"
         fi
-    ) >"$op/out.pipe" 2>"$op/err.pipe" 7<&- &
+    ) >"$op/out.pipe" 2>"$op/err.pipe" &
     exec 9>&-
 else
     (
+        exec 7<&-
         rc=0
         head -c 4194304 < "$op/$role.pipe" > "$1" || rc=$?
         if [ "$rc" -eq 0 ]; then
@@ -199,7 +204,7 @@ else
             if [ "$rc" -eq 0 ] && [ "$size" -ge 4194304 ]; then : > "$op/overflow"; fi
         fi
         record "$rc"
-    ) 7<&- &
+    ) &
 fi
 trap '' TERM HUP INT USR1
 step="ready-write"
@@ -261,12 +266,14 @@ probe_group() { # pid timeout (whole seconds, supported by Bash 3.2)
     # using this channel; a delayed answer must not be read as a later snapshot.
     $probe_ok || return 1
     (
+        exec 3<&- 4<&- 5<&- 7<&- 9>&-
+        exec >&8 8>&-
         if state="$(group_view "$1")"; then
             printf '%s\n' "$state"
         else
             printf 'unconfirmed\n'
         fi
-    ) 3<&- 4<&- 5<&- >&8 &
+    ) &
     if IFS= read -r -t "$2" state <&8; then return 0; fi
     probe_ok=false
     return 1
@@ -397,8 +404,12 @@ capture_file() { # destination command... (selector data, not Git object storage
 }
 start_guard() { # launched asynchronously; exec preserves the job's leader PID
     local control="$1"; shift
-    exec /bin/bash --noprofile "$root/group-guard" "$operation" "$@" \
-        </dev/null >/dev/null 2>>"$root/guard.err" 6<&"$control" 3<&- 4<&- 5<&- 7<&- 8<&-
+    # Only the selected control FD and (for work) the failure writer cross exec.
+    exec 6<&"$control"
+    exec 3<&- 4<&- 5<&- 7<&- 8<&-
+    if [ "$1" != work ]; then exec 9>&-; fi
+    exec 2>>"$root/guard.err" </dev/null >/dev/null
+    exec /bin/bash --noprofile "$root/group-guard" "$operation" "$@"
 }
 bounded() { # seconds output error command...
     local seconds="$1" out="$2" err="$3" end guards_ready=false
@@ -414,9 +425,9 @@ bounded() { # seconds output error command...
     exec 7<"$operation/work.failure" # the duplex opener above holds the write end during setup
     # Traps only queue cancellation. They cannot retire partially registered groups.
     set -m # give each async guard its own PGID (also on Bash 3.2)
-    start_guard 4 out "$out" 9>&- &
+    start_guard 4 out "$out" &
     reader_out=$!
-    start_guard 5 err "$err" 9>&- &
+    start_guard 5 err "$err" &
     reader_err=$!
     start_guard 3 work "$@" &
     work=$!
