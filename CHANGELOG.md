@@ -19,7 +19,7 @@ change by change.
 
 - Spec navigation recognizes valid footers on BusyBox awk and excludes them from reading budgets
   there. `--target` reads keys literally instead of decoding awk escapes outside the documented key
-  syntax.
+  syntax. On BusyBox, footers that remain invalid may now report a more specific reason.
 
 ## [3.1.0] — 2026-11-25 — pinned review policy branch and complete tier floor
 

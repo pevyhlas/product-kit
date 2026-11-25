@@ -27,7 +27,7 @@ SPEC_ID_AWK='function spec_ids(s, where,   pre, post, tok, w) {
     }
 }'
 
-# The same definition prefix is used by spec_items and section lookup.
+# Legacy definition prefix used by spec_items.
 SPEC_BULLET_ID_AWK='function spec_bullet_id(s) {
     if (!sub(/^[[:space:]]*[-*][[:space:]]+\*\*/, "", s) ||
         s !~ /^(P[0-9]+(\.[0-9]+)?\.[BI]|[JRQCDN])-[0-9]/) return ""

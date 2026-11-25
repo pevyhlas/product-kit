@@ -10,7 +10,7 @@ them to specs/product/users.md, linked. -->
 
 ## Problem
 
-<One sentence: who struggles with what today.>
+\<One sentence: who struggles with what today.>
 
 | Pain today | Evidence | Solved by |
 |------------|----------|-----------|
