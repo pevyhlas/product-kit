@@ -322,6 +322,15 @@ fd_lsof_matches() { # FIFO path, lsof field records; print matching f fields or 
         return 1
     fi
     FD_FIFO_PATH="$path" LC_ALL=C awk -v want_dev="${key%% *}" -v want_inode="${key#* }" '
+        BEGIN {
+            # Linux lsof 4.99.4: lib/print.c and lib/dialects/linux/{dnode,dsock}.c.
+            # Apple lsof: dialects/darwin/libproc/{dfile,dsock,dnetpolicy}.c.
+            types = "REG DIR CHR BLK LINK FIFO PIPE SOCK sock unix IPv4 IPv6"
+            types = types " KQUEUE FSEVENTS NPOLICY PSXSHM PSXSEM ATALK rte ndrv key systm ppp vsock vsockp"
+            types = types " a_inode PSXMQ ax25 inet ipx raw raw6 netlink pack icmp"
+            count = split(types, tokens, " ")
+            for (i = 1; i <= count; i++) known["t" tokens[i]] = 1
+        }
         function problem(message) {
             if (failure == "") failure = message
         }
@@ -333,27 +342,30 @@ fd_lsof_matches() { # FIFO path, lsof field records; print matching f fields or 
                 return
             }
             seen = 1
-            # Darwin can leave just f and an n error message if a vnode lookup fails.
-            if (type !~ /^t[[:alpha:]][[:alnum:]_.-]*$/ ||
-                tolower(type) ~ /^t(unknown|unkn?|un|none|nofd|vnon|vbad)$/) {
+            # A failed lookup can return no type or an unknown token (e.g. UNKNfd).
+            if (!(type in known)) {
                 problem("unclassified FD " fd)
                 return
             }
-            if (type != "tFIFO") return
+            if (type != "tFIFO" && type != "tPIPE") return
+            # Darwin anonymous PIPEs have an opaque nonzero handle in lowercase
+            # d, not a filesystem inode. Do not compare it with the target inode.
             # A bare NAME such as "pipe" or "no more information" is not a path.
-            if (name !~ /^n\/./ && inode !~ /^i[1-9][0-9]*$/) {
-                problem("unidentified FIFO " fd)
+            if (name !~ /^n\/./ && inode !~ /^i[1-9][0-9]*$/ &&
+                !(type == "tPIPE" && handle ~ /^d0x0*[1-9a-fA-F][[:xdigit:]]*$/)) {
+                problem("unidentified " substr(type, 2) " " fd)
                 return
             }
             if (name == ("n" ENVIRON["FD_FIFO_PATH"]) ||
                 (inode == want_inode && (dev == "" || dev == want_dev)))
                 matches = matches (matches == "" ? "" : " ") fd
         }
-        /^f/ { check_fd(); fd = $0; type = name = inode = dev = "" }
+        /^f/ { check_fd(); fd = $0; type = name = inode = dev = handle = "" }
         /^t/ { type = $0 }
         /^n/ { name = $0 }
         /^i/ { inode = $0 }
         /^D/ { dev = $0 }
+        /^d/ { handle = $0 }
         END {
             check_fd()
             if (!seen) problem("no numeric FD records")
@@ -366,7 +378,7 @@ fd_lsof_matches() { # FIFO path, lsof field records; print matching f fields or 
 fd_lsof_observe() { # FIFO path, pid, lsof binary
     local fields matches
     # Include every numeric FD, even ones Bash saves beyond its usual range.
-    if ! fields="$("$3" -w -a -p "$2" -d 0-2147483647 -F ftDin 2>/dev/null)"; then
+    if ! fields="$("$3" -w -a -p "$2" -d 0-2147483647 -F ftDdin 2>/dev/null)"; then
         printf '%s\n' 'observer failed: lsof command failed'
     elif ! matches="$(fd_lsof_matches "$1" "$fields")"; then
         printf 'observer failed: %s\n' "${matches:-invalid lsof listing}"
@@ -381,7 +393,7 @@ fd_lsof_probe() { # known FIFO path, lsof binary
     local fields matches
     if ! fields="$("$REAL_BASH" -c '
         exec 7<>"$1" || exit 1
-        "$2" -w -a -p "$$" -d 7 -F ftDin
+        "$2" -w -a -p "$$" -d 7 -F ftDdin
         exit "$?"
     ' _ "$1" "$2" 2>/dev/null)"; then
         printf '%s\n' 'lsof probe command failed'
@@ -420,24 +432,35 @@ printf '%s\n' p123 f6 tREG n/synthetic/private-file
 case "${FD_CONTROL_MODE:-}" in
     partial) printf '%s\n' f8 'nno more information' ;;
     unknown-type) printf '%s\n' f8 tUNKN n/synthetic/private-file ;;
+    unknown-fd-type) printf '%s\n' f8 tUNKNfd n/synthetic/private-file ;;
+    unexpected-type) printf '%s\n' f8 tUnexpectedTag n/synthetic/private-file ;;
     missing-identity) printf '%s\n' f8 tFIFO ;;
     invalid-identity) printf '%s\n' f8 tFIFO i0 'nno more information' ;;
+    missing-pipe-identity) printf '%s\n' f8 tPIPE 'nno more information' ;;
+    zero-pipe-handle) printf '%s\n' f8 tPIPE d0x00000000 ;;
+    darwin-pipe)
+        [[ "${!#}" == *d* ]] || exit 1
+        printf '%s\n' f8 tPIPE d0x000002ab ;;
     failure)
         printf '%s\n' 'synthetic private stderr' >&2
         exit 1 ;;
 esac
 SHIM
 chmod +x "$FD_CONTROL_LSOF"
-for fd_case in partial unknown-type missing-identity invalid-identity failure; do
+for fd_case in partial unknown-type unknown-fd-type unexpected-type missing-identity invalid-identity \
+    missing-pipe-identity zero-pipe-handle failure; do
     case "$fd_case" in
-        partial|unknown-type) expected='unclassified FD f8' ;;
+        partial|unknown-type|unknown-fd-type|unexpected-type) expected='unclassified FD f8' ;;
         missing-identity|invalid-identity) expected='unidentified FIFO f8' ;;
+        missing-pipe-identity|zero-pipe-handle) expected='unidentified PIPE f8' ;;
         failure) expected='lsof command failed' ;;
     esac
     # The mock leaves the open FIFO on f8 unclassifiable, while f6 remains classifiable.
     FD_CONTROL_MODE="$fd_case" run fd_lsof_observe "$FD_CONTROL_FIFO" "$$" "$FD_CONTROL_LSOF" 8<>"$FD_CONTROL_FIFO"
     assert_eq "observer failed: $expected" "$OUTPUT" "descriptor audit rejects and redacts the $fd_case listing"
 done
+FD_CONTROL_MODE=darwin-pipe run fd_lsof_observe "$FD_CONTROL_FIFO" "$$" "$FD_CONTROL_LSOF"
+assert_eq clean "$OUTPUT" 'a Darwin anonymous pipe with a handle is identifiable and is not the FIFO'
 FD_CONTROL_MODE=partial run fd_lsof_probe "$FD_CONTROL_FIFO" "$FD_CONTROL_LSOF"
 assert_eq 1 "$STATUS" 'partial listing cannot pass preflight'
 assert_eq 'unclassified FD f8' "$OUTPUT" 'preflight redacts names and the vnode error'
@@ -520,7 +543,7 @@ AUDIT
 else
     if [ -n "$FD_LSOF" ]; then
         fd_lsof_version "$FD_LSOF" >&2
-        printf 'lsof probe FD 7 (-F ftDin): %s\n' "$FD_PROBE_ERROR" >&2
+        printf 'lsof probe FD 7 (-F ftDdin): %s\n' "$FD_PROBE_ERROR" >&2
     else
         printf '%s\n' 'lsof not found on PATH' >&2
     fi
