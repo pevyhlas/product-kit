@@ -11,6 +11,8 @@ change by change.
 
 ## [Unreleased]
 
+## [3.1.1] — 2026-11-25 — focused spec retrieval
+
 ### Added
 
 - `read-spec.sh --index` lists headings and reading-line counts; `--section` reads one section by heading or ID with its source blob and original line numbers.
@@ -24,6 +26,8 @@ change by change.
 - Spec navigation recognizes valid footers on BusyBox awk and excludes them from reading budgets
   there. `--target` reads keys literally instead of decoding awk escapes outside the documented key
   syntax. On BusyBox, footers that remain invalid may now report a more specific reason.
+- Seven template placeholders that Markdown parsed as hidden HTML blocks now start with `\<`,
+  so they render as visible text.
 
 ## [3.1.0] — 2026-11-25 — pinned review policy branch and complete tier floor
 
