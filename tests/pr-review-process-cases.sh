@@ -266,6 +266,41 @@ assert_eq '[null,null]' "$(jq -c '[.native_exit,.native]' "$FIX/stdout")" 'faile
 while IFS= read -r entry; do "$REAL_RM" -rf -- "$entry"; done < <(new_scratch "$CAPTURE_SCRATCH_BEFORE")
 restore_control
 
+for relay_stop in timeout cancellation; do
+    it "failed native status rename is a capture failure, even with $relay_stop"
+    rm -f "$FIX/work-rename-failed"
+    awk -v dir="$FIX" -v stop="$relay_stop" '
+        /^record\(\) \{/ {
+            print "mv() {"
+            print "    if [ \"$role\" = work ] && [ \"$fixture_phase\" = native ] &&"
+            print "        [ \"$1\" = \"$op/work.tmp\" ] && [ \"$2\" = \"$op/work.status\" ]; then"
+            print "        printf failed > \"" dir "/work-rename-failed\""
+            if (stop == "cancellation") print "        kill -TERM \"$launcher_pid\""
+            print "        return 23"
+            print "    fi"
+            print "    command mv \"$@\""
+            print "}"
+        }
+        /^start_guard\(\) \{/ {
+            print
+            print "    export launcher_pid=$$ fixture_phase=$phase"
+            next
+        }
+        { print }
+    ' "$FIX/launcher" > "$FIX/injected"
+    mv "$FIX/injected" "$FIX/launcher"
+    arm_fixture_deadline native.json work-rename-failed end
+    launch
+    assert_eq 1 "$STATUS"
+    assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
+    assert_eq native "$(jq -r .error.stage "$FIX/stdout")"
+    assert_eq capture-failed "$(jq -r .error.code "$FIX/stdout")"
+    assert_eq '[null,null]' "$(jq -c '[.native_exit,.native]' "$FIX/stdout")" \
+        'failed work-status rename cannot publish native JSON or exit'
+    assert_file "$FIX/work-rename-failed" 'the native relay attempted the targeted rename'
+    restore_control
+done
+
 it 'a live member missed by ps prevents scratch deletion'
 rm -f "$FIX/group" "$FIX/hidden-member" "$FIX/remove-attempted"
 mkfifo "$FIX/member-release"
@@ -379,8 +414,10 @@ for shutdown in clean survivor threaded ambiguous; do
             'only the live native leader signals; nothing sends another signal after KILL'
     fi
     if [ "$shutdown" = clean ]; then
+        assert_eq native "$(jq -r .error.stage "$FIX/stdout")"
         assert_eq interrupted "$(jq -r .error.code "$FIX/stdout")"
         assert_eq null "$(jq -r .native_exit "$FIX/stdout")" 'KILL interrupted status relay; do not invent an exit'
+        assert_eq pass "$(jq -r .native.result "$FIX/stdout")" 'supervised KILL preserves an otherwise valid native diagnostic'
         assert_terminated "$STUBBORN" 'TERM-resistant descendant terminated'
         assert_group_gone "$GROUP" 'native group terminated and owned leader reaped'
         assert_file "$FIX/live-at-remove" 'native deletion snapshot exists'

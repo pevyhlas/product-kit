@@ -179,9 +179,17 @@ if [ "$role" = work ]; then
         # Keep the status relay through TERM, without passing SIG_IGN to the
         # actual command. KILL may prevent a status from being recorded.
         trap ':' TERM
-        rc=0; "$@" || rc=$?
-        record "$rc"
+        rc=0; "$@" 9>&- || rc=$?
+        # Report a failed status write even if scratch cannot hold another
+        # file. Only this relay writes to the private failure FIFO.
+        if ! record "$rc" 9>&-; then
+            printf 'failed\n' >&9
+            # The marker wakes the normal fast poll; the FIFO remains the
+            # failure record if scratch cannot accept the marker.
+            : > "$op/work.failed"
+        fi
     ) >"$op/out.pipe" 2>"$op/err.pipe" 7<&- &
+    exec 9>&-
 else
     (
         rc=0
@@ -340,11 +348,20 @@ guard_exited_before_ready() { # role pid
     return 0
 }
 collect_operation() {
-    local i pgid role shutdown_ok=true out_status err_status probe_ok=true
+    local i pgid role shutdown_ok=true out_status err_status probe_ok=true notice
     for pgid in "$work" "$reader_out" "$reader_err"; do
         if [ -n "$pgid" ]; then guarded_pgids+=("$pgid"); fi
     done
     stop_guard work "$work" 3 || shutdown_ok=false
+    # A signal or deadline may have stopped the main loop before it saw the
+    # notice. Check again before classifying the result. EOF alone does not
+    # mean the relay attempted a write; supervised KILL can interrupt it.
+    # The sole writer closes on relay exit; the read normally returns data
+    # or EOF immediately. Bound it if work shutdown is unverified.
+    if [ -f "$operation/work.failed" ] ||
+        { [ -n "$work" ] && IFS= read -r -t 1 notice <&7 && [ "$notice" = failed ]; }; then
+        capture_error="${capture_error:-capture-failed}"
+    fi
     if [ -f "$operation/work.status" ]; then
         bounded_exit="$(guard_status work)" || capture_error="${capture_error:-capture-failed}"
         if [ "$phase" = native ] && [ "$native_exit" = null ]; then native_exit="$bounded_exit"; fi
@@ -366,7 +383,7 @@ collect_operation() {
     err_status="$(guard_status err 2>/dev/null)" || err_status=missing
     if [ "$out_status:$err_status" != 0:0 ]; then capture_error="${capture_error:-capture-failed}"; fi
     if [ -e "$operation/overflow" ]; then bounded_limit=overflow; fi
-    exec 3>&- 4>&- 5>&- 8>&-
+    exec 3>&- 4>&- 5>&- 7<&- 8>&- 9>&-
     operation=""; work=""; reader_out=""; reader_err=""
     $shutdown_ok
 }
@@ -381,7 +398,7 @@ capture_file() { # destination command... (selector data, not Git object storage
 start_guard() { # launched asynchronously; exec preserves the job's leader PID
     local control="$1"; shift
     exec /bin/bash --noprofile "$root/group-guard" "$operation" "$@" \
-        </dev/null >/dev/null 2>>"$root/guard.err" 6<&"$control" 3<&- 4<&- 5<&- 8<&-
+        </dev/null >/dev/null 2>>"$root/guard.err" 6<&"$control" 3<&- 4<&- 5<&- 7<&- 8<&-
 }
 bounded() { # seconds output error command...
     local seconds="$1" out="$2" err="$3" end guards_ready=false
@@ -390,20 +407,24 @@ bounded() { # seconds output error command...
     bounded_exit=null; bounded_limit=""
     operation="$(mktemp -d "$root/op.XXXXXXXX")" || refuse cleanup cleanup-failed
     mkfifo "$operation/work.control" "$operation/out.control" "$operation/err.control" \
-        "$operation/out.pipe" "$operation/err.pipe" "$operation/inventory" || refuse cleanup cleanup-failed
+        "$operation/out.pipe" "$operation/err.pipe" "$operation/inventory" "$operation/work.failure" ||
+        refuse cleanup cleanup-failed
     exec 3<>"$operation/work.control" 4<>"$operation/out.control" 5<>"$operation/err.control" \
-        8<>"$operation/inventory"
+        8<>"$operation/inventory" 9<>"$operation/work.failure"
+    exec 7<"$operation/work.failure" # the duplex opener above holds the write end during setup
     # Traps only queue cancellation. They cannot retire partially registered groups.
     set -m # give each async guard its own PGID (also on Bash 3.2)
-    start_guard 4 out "$out" &
+    start_guard 4 out "$out" 9>&- &
     reader_out=$!
-    start_guard 5 err "$err" &
+    start_guard 5 err "$err" 9>&- &
     reader_err=$!
     start_guard 3 work "$@" &
     work=$!
+    exec 9>&-
     set +m
     end=$((SECONDS+seconds))
     while [ ! -f "$operation/work.status" ] || ! $guards_ready; do
+        if [ -f "$operation/work.failed" ]; then break; fi
         if [ -e "$operation/overflow" ]; then bounded_limit=overflow; break; fi
         if [ -n "$pending_signal" ] || [ "$SECONDS" -ge "$deadline" ]; then break; fi
         if ! $guards_ready; then

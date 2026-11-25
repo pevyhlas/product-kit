@@ -475,7 +475,8 @@ run kernel_probe 1 ''
 assert_eq 1 "$STATUS" 'an unrecognized failure is not proof of absence'
 run kernel_probe 2 'No such process'
 assert_eq 1 "$STATUS" 'the diagnostic alone is insufficient'
-run awk '
+check_guard_signals() {
+    awk '
     /cat .*group-guard.*GUARD/ {in_guard=1}
     /^GUARD$/ {in_guard=0}
     /^guard_exited_before_ready\(\)/ {in_startup=1}
@@ -484,11 +485,20 @@ run awk '
         if (!in_guard || $1 != "kill" || $4 != "\"-$$\"") bad=1
         signals++
     }
-    /builtin kill/ && $0 !~ /builtin kill -0 -- "-\$pgid"/ &&
-        !(in_startup && $0 ~ /builtin kill -0 -- "\$pid"/) {bad=1}
+    /builtin kill/ {
+        if ($0 == "        if diagnostic=\"$(builtin kill -0 -- \"-$pgid\" 2>&1)\"; then") next
+        if (in_startup && ($0 == "    if builtin kill -0 -- \"$pid\" 2>/dev/null; then return 1; fi" ||
+            $0 == "    if diagnostic=\"$(builtin kill -0 -- \"$pid\" 2>&1)\"; then return 1; else rc=$?; fi")) next
+        bad=1
+    }
     END {exit (bad || signals != 2)}
-' "$FIX/launcher"
+' "$1"
+}
+run check_guard_signals "$FIX/launcher"
 assert_eq 0 "$STATUS" 'only the executing group leader may signal; launcher never waits on a PID'
+unit_write "$FIX/unsafe-launcher" sed '/^    if builtin kill -0 -- "\$pid" /s/$/; builtin kill -TERM -- "$pid"/' "$FIX/launcher"
+run check_guard_signals "$FIX/unsafe-launcher"
+assert_eq 1 "$STATUS" 'an extra nonzero signal on a probe line is rejected (the mutant is never executed)'
 
 # Existing run() captures BOTH inherited public streams in memory, independently of the
 # inner fixture captures under test. It introduces no further pathname-based capture.
