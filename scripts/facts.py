@@ -12,13 +12,14 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, TemporaryDirectory, TemporaryFile
 
 
-VERSION = 1
+VERSION = 2
 SUMMARY_LIMIT = 60
 CONFIG = ".prdkit/memory/review-checks.json"
 CACHE = ".prdkit/cache/evidence"
@@ -66,26 +67,6 @@ def mode(path):
         return 0
 
 
-def file_stamp(path):
-    kind = mode(path)
-    if not kind:
-        return {"kind": "absent"}
-    link = stat.S_ISLNK(kind)
-    result = {"kind": "symlink", "link_sha256": digest(os.fsencode(os.readlink(path)))} if link else {"kind": "file"}
-    if link:
-        try:
-            kind = path.stat().st_mode
-        except (FileNotFoundError, NotADirectoryError):
-            return result
-    if stat.S_ISREG(kind):
-        with path.open("rb") as stream:
-            result["sha256"] = file_digest(stream, "sha256").hexdigest()
-        result["executable"] = bool(kind & 0o111)
-    else:
-        result["target_kind" if link else "kind"] = "directory" if stat.S_ISDIR(kind) else "special"
-    return result
-
-
 def glob_matches(pattern, path):
     # Match slash-separated components. Only an entire ** component crosses directories.
     names = path.split("/")
@@ -128,10 +109,10 @@ class Collector:
         for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
                      "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE",
                      "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE", "GIT_PREFIX", "GIT_CONFIG",
-                     "GIT_QUARANTINE_PATH", "BASH_ENV", "ENV"):
+                     "GIT_QUARANTINE_PATH", "GIT_ATTR_SOURCE", "BASH_ENV", "ENV", "CDPATH"):
             self.env.pop(name, None)
         self.env.update(GIT_NO_LAZY_FETCH="1", GIT_NO_REPLACE_OBJECTS="1", GIT_OPTIONAL_LOCKS="0",
-                        GIT_ATTR_NOSYSTEM="1",
+                         GIT_ATTR_NOSYSTEM="1", GIT_GRAFT_FILE=os.devnull,
                         GIT_ALLOW_PROTOCOL="", GIT_TERMINAL_PROMPT="0", LC_ALL="C", TZ="UTC",
                         PRDKIT_TODAY=self.env.get("PRDKIT_TODAY") or datetime.now(UTC).date().isoformat())
         self.root = self.scripts
@@ -151,121 +132,162 @@ class Collector:
     def rev(self, ref):
         return self.git("rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}").decode().strip()
 
-    def clean(self, head):
+    def check_head(self, head):
         require(self.rev("HEAD") == head, "checkout HEAD moved or does not match --head")
-        require(not self.git("-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-z",
-                             "--untracked-files=all", "--ignore-submodules=none"),
-                "exact-head facts require a clean checkout (including non-ignored untracked files and submodules)")
+
+    def normalize(self, text):
+        return text.replace(f"{self.root}/", "")
 
     def text(self, raw):
-        # The collector root is stable context, not a useful machine-specific diagnostic prefix.
-        return raw.decode("utf-8", "backslashreplace").replace(f"{self.root}/", "").rstrip("\n")
+        return self.normalize(raw.decode("utf-8", "backslashreplace")).rstrip("\n")
 
-    def stamp(self):
-        """Bind committed state and actual working inputs, including ignored kit policy and links."""
-        tracked = self.git("ls-files", "-v", "-z").split(b"\0")[:-1]
-        require(not any(entry[:1].islower() or entry.startswith(b"S ") for entry in tracked),
-                "exact-head facts cannot inspect skip-worktree or assume-unchanged entries")
-        files = {}
+    def git_path(self, name):
+        return self.root / os.fsdecode(self.git("rev-parse", "--git-path", name).removesuffix(b"\n"))
 
-        def add(path, label):
-            if label not in files:
-                files[label] = file_stamp(path)
-
-        def scan(path, label, *, skip=(), ancestors=()):
-            add(path, label)
-            if path.is_dir() and path.resolve() not in ancestors:
-                trail = (*ancestors, path.resolve())
-                for child in sorted(path.iterdir()):
-                    if child.name not in skip:
-                        scan(child, f"{label}/{child.name}", skip=skip, ancestors=trail)
-
-        # Committed objects (including non-doc code and assets) are bound by the
-        # trees. Doctor also directly reads tracked Markdown and can follow links.
-        for entry in tracked:
-            name = os.fsdecode(entry[2:])
-            if name.endswith((".md", ".gitattributes", ".gitignore")):
-                add(self.root / name, name)
-        for name in ("specs", ".prdkit", ".claude/commands", ".claude/agents",
-                     ".opencode/commands", ".opencode/agents", ".agents/skills"):
-            scan(self.root / name, name, skip=(".git", "cache") if name == ".prdkit" else (".git",))
-        for name in ("AGENTS.md", "CLAUDE.md", "GEMINI.md", "QWEN.md", "CODEBUDDY.md", "QODER.md", "SHAI.md"):
-            add(self.root / name, name)
-
-        # These existing readers can select live files outside the usual Kit
-        # directories. Parse their policy the same way as the collectors.
-        selected = self.run(("bash", "-c", r'''
-            source "$1/install-source-lib.sh"
-            source "$1/install-lib.sh"
-            source "$1/spec-lib.sh"
-            source "$1/agent-tiers-lib.sh"
-            config=.prdkit/memory/config.md
-            source_path=
-            if [ -f "$config" ]; then
-                source_path="$(install_config_value "$config" adoption-source)" || source_path=
-            fi
-            printf '%s\0' "$source_path"
-            at_load "$PWD" "$SPEC_SKIP_AWK" && printf '%s\0' "$AT_SNAPSHOT"
-        ''', "_", str(self.scripts)))
-        source, _, remaining = selected.stdout.partition(b"\0")
-        name = os.fsdecode(source)
-        name = name or ".product-kit"
-        if not name.startswith("/") and ".." not in name:
-            add(self.root / name / "VERSION", f"{name}/VERSION")
-            commands = self.root / name / "commands"
-            add(commands, f"{name}/commands")
-            if commands.is_dir():
-                for path in sorted(commands.glob("*.md")):
-                    add(path, f"{name}/commands/{path.name}")
-        if selected.returncode == 0 and remaining.rstrip(b"\0"):
-            snapshot = Path(os.fsdecode(remaining[:-1]))
-            if snapshot.is_relative_to(self.root):
-                for path in (snapshot, snapshot.with_suffix(snapshot.suffix + ".ref")):
-                    add(path, path.relative_to(self.root).as_posix())
-
-        config = self.git("config", "--null", "--list", "--includes")
-        config_home = Path(self.env.get("XDG_CONFIG_HOME") or Path.home() / ".config")
-        for key, default in (("attributesfile", "attributes"), ("excludesfile", "ignore")):
-            override = self.git("config", "--path", "--null", "--get", f"core.{key}", allowed=(0, 1))
-            path = Path(os.fsdecode(override[:-1])) if override else config_home / "git" / default
-            add(self.root / path, f"git:user/{default}")
-        for label in ("info/attributes", "info/exclude", "info/grafts", "shallow"):
-            path = Path(os.fsdecode(self.git("rev-parse", "--git-path", label).removesuffix(b"\n")))
-            add(self.root / path, f"git:{label}")
-        worktrees = self.git("worktree", "list", "--porcelain", "-z")
-        rows = worktrees.split(b"\0")
-        for i, row in enumerate(rows):
-            if not row.startswith(b"worktree "):
-                continue
-            other = Path(os.fsdecode(row[9:]))
-            if other == self.root:
-                rows[i] = b"worktree ."  # CI's checkout prefix need not be the producer's.
-            else:
-                scan(other / "specs/changes", f"worktree:{i}/specs/changes", skip=(".git",))
-
-        return {"files": files, "git_config_sha256": digest(config),
-                "git_refs_sha256": digest(self.git("for-each-ref", "--format=%(refname) %(objectname) %(symref)")),
-                "git_index_sha256": digest(self.git("ls-files", "--stage", "-z")),
-                "worktrees_sha256": digest(b"\0".join(rows)), "git_version_sha256": digest(self.git("--version")),
-                "head_ref_sha256": digest(self.git("symbolic-ref", "-q", "HEAD", allowed=(0, 1))),
-                "doctor_date_sha256": digest(self.env["PRDKIT_TODAY"].encode())}
+    def capture(self, command, *, argv=None, diagnostics=None):
+        diagnostics = diagnostics or self
+        try:
+            proc = self.run(argv or command)
+        except OSError as exc:
+            return {"command": command, "exit_status": None, "result": f"could not start: {exc.strerror}"}, None
+        return ({"command": command, "exit_status": proc.returncode, "result": f"exit {proc.returncode}",
+                 "stderr": self.normalize(diagnostics.text(proc.stderr))}, proc.stdout)
 
     def fact(self, command):
-        try:
-            proc = self.run(command)
-        except OSError as exc:
-            return {"command": command, "exit_status": None, "result": f"could not start: {exc.strerror}",
-                    "details": None}
-        return {"command": command, "exit_status": proc.returncode, "result": f"exit {proc.returncode}",
-                "details": self.text(proc.stdout), "stderr": self.text(proc.stderr)}
+        fact, raw = self.capture(command)
+        return {**fact, "details": self.text(raw) if raw is not None else None}
+
+
+class Snapshot(Collector):
+    """Private Git metadata and raw HEAD blobs; never register a consumer worktree."""
+
+    def __init__(self, source, directory, head):
+        self.root = directory / "head"
+        self.root.mkdir()
+        scratch = directory / "tmp"
+        scratch.mkdir()
+        self.env = {key: source.env[key] for key in (
+            "LC_ALL", "TZ", "PRDKIT_TODAY", "GIT_ALLOW_PROTOCOL", "GIT_TERMINAL_PROMPT",
+            "GIT_NO_LAZY_FETCH", "GIT_NO_REPLACE_OBJECTS", "GIT_OPTIONAL_LOCKS", "GIT_ATTR_NOSYSTEM",
+        )}
+        paths = source.env.get("PATH", os.defpath).split(os.pathsep)
+        self.env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, HOME=str(directory),
+                        PATH=os.pathsep.join(path for path in paths if os.path.isabs(path)) or os.defpath,
+                        TMPDIR=str(scratch))
+        object_format = source.git("rev-parse", "--show-object-format").decode().strip()
+        self.git("init", "--quiet", "--template=", f"--object-format={object_format}")
+        # No promisor remotes or live refs/config. Only read the shared object store.
+        objects = os.fsencode(source.git_path("objects").resolve())
+        require(b"\n" not in objects, "Git object store path contains a newline")
+        (self.root / ".git/objects/info/alternates").write_bytes(objects + b"\n")
+        self.shallow = read_optional(source.git_path("shallow"))
+        if self.shallow is not None:
+            (self.root / ".git/shallow").write_bytes(self.shallow)
+        (self.root / ".git/HEAD").write_text(f"{head}\n", encoding="ascii")
+        # Doctor walks history. Refuse missing objects instead of letting later
+        # hydration silently change findings under the same commit and shallow set.
+        self.git("rev-list", "--objects", "--missing=error", "--quiet", head)
+        self.git("read-tree", head)
+        self.materialize(head)
+
+    def normalize(self, text):
+        return super().normalize(text).replace(str(self.root), ".").replace(self.env["TMPDIR"], "<scratch>")
+
+    def inputs(self, base, head):
+        # These are the external utilities used by the shipped local collectors.
+        tools = {}
+        for name in ("awk", "basename", "bash", "cat", "cksum", "cmp", "cut", "date", "dd",
+                     "dirname", "find", "git", "grep", "head", "mktemp", "od", "readlink",
+                     "rm", "sed", "sha256sum", "shasum", "sort", "tail", "tr", "uniq", "wc"):
+            path = shutil.which(name, path=self.env.get("PATH"))
+            if path:
+                with open(path, "rb") as stream:
+                    tools[name] = file_digest(stream, "sha256").hexdigest()
+            else:
+                tools[name] = None
+        return {"base_tree": self.git("rev-parse", f"{base}^{{tree}}").decode().strip(),
+                "head_tree": self.git("rev-parse", f"{head}^{{tree}}").decode().strip(),
+                "collector_sha256": digest(Path(__file__).read_bytes()),
+                "shallow_sha256": digest(self.shallow) if self.shallow is not None else None,
+                "local_tools_sha256": digest(json_bytes(tools)),
+                "doctor_date_sha256": digest(self.env["PRDKIT_TODAY"].encode())}
 
     def script(self, name, *args):
         return self.fact(["bash", f"{SCRIPTS}/{name}.sh", *args])
 
+    def materialize(self, head):
+        blobs, links = [], []
+        for entry in self.git("ls-tree", "-rz", head).split(b"\0")[:-1]:
+            metadata, name = entry.split(b"\t", 1)
+            perms, kind, oid = metadata.split()
+            parts = os.fsdecode(name).split("/")
+            require(all(part.casefold() not in {"", ".", "..", ".git"} for part in parts),
+                    f"unsupported snapshot path: {name!r}")
+            path = self.root.joinpath(*parts)
+            if perms == b"160000" and kind == b"commit":
+                path.mkdir(parents=True)
+            else:
+                require(kind == b"blob" and perms in {b"100644", b"100755", b"120000"},
+                        f"unsupported snapshot entry: {name!r}")
+                blobs.append((path, perms, oid))
+        # Stream raw blobs rather than checkout filters, EOL conversion or archive attributes.
+        # Materialize symlinks last, so no blob write can follow one.
+        with TemporaryFile() as requests:
+            requests.writelines(oid + b"\n" for _, _, oid in blobs)
+            requests.seek(0)
+            with subprocess.Popen(["git", "cat-file", "--batch"], cwd=self.root, env=self.env,
+                                  stdin=requests, stdout=subprocess.PIPE) as proc:
+                try:
+                    stream = proc.stdout
+                    for path, perms, oid in blobs:
+                        header = stream.readline().split()
+                        require(len(header) == 3 and header[:2] == [oid, b"blob"] and header[2].isdigit(),
+                                f"snapshot blob unavailable: {oid.decode()}")
+                        size = int(header[2])
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        if perms == b"120000":
+                            require(0 < size < 4096, f"unsupported symlink: {path.relative_to(self.root)}")
+                            links.append((path, os.fsdecode(stream.read(size))))
+                        else:
+                            with path.open("xb") as output:
+                                while size:
+                                    chunk = stream.read(min(size, 1024 * 1024))
+                                    require(chunk, "incomplete snapshot blob")
+                                    output.write(chunk)
+                                    size -= len(chunk)
+                            path.chmod(0o755 if perms == b"100755" else 0o644)
+                        require(stream.read(1) == b"\n", "incomplete snapshot blob")
+                    require(proc.wait() == 0, "could not read snapshot blobs")
+                except BaseException:
+                    proc.kill()
+                    raise
+        for path, target in links:
+            level = len(path.parent.relative_to(self.root).parts)
+            require(not os.path.isabs(target), f"snapshot symlink leaves HEAD: {path.relative_to(self.root)}")
+            for part in target.split("/"):
+                level += -1 if part == ".." else int(part not in {"", "."})
+                require(level >= 0, f"snapshot symlink leaves HEAD: {path.relative_to(self.root)}")
+            path.symlink_to(target)
+        for path, _ in links:
+            try:
+                resolved = path.resolve()
+            except RuntimeError as exc:
+                raise Refusal(f"snapshot symlink cycle: {path.relative_to(self.root)}") from exc
+            require(resolved.is_relative_to(self.root) and not resolved.is_relative_to(self.root / ".git"),
+                    f"snapshot symlink leaves HEAD: {path.relative_to(self.root)}")
 
-def local_json(fact, *, doctor):
+
+def read_optional(path):
     try:
-        data = json.loads(fact["details"], object_pairs_hook=unique_object)
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def local_json(snapshot, command, *, doctor):
+    fact, raw = snapshot.capture(command)
+    try:
+        data = json.loads(raw, object_pairs_hook=unique_object)
         result = data["result"]
         findings = data["findings"]
         advisories = data["advisories"] if doctor else []
@@ -275,21 +297,24 @@ def local_json(fact, *, doctor):
                 "inconsistent collector result")
         # Check that the full payload is safe to serialize, not just the fields summarized.
         json_bytes(data)
+        for rows in (findings, advisories):
+            rows[:] = map(snapshot.normalize, rows)
         fact["details"] = data
         fact["result"] = f"{result}: {len(findings)} finding(s)"
         fact["result"] += f", {len(advisories)} advisory item(s)" if doctor else " (default installation checks)"
     except (ValueError, TypeError, AttributeError, KeyError, Refusal, RecursionError):
         fact["result"] += ": no valid collector report"
+        fact["details"] = snapshot.text(raw) if raw is not None else None
     return fact
 
 
-def ci_fact(collector, pr, head):
+def ci_fact(collector, snapshot, pr, head):
     command = ["bash", f"{SCRIPTS}/pr-state.sh", *([str(pr)] if pr else [])]
     if not pr or not shutil.which("gh", path=collector.env.get("PATH")):
         reason = "no --pr supplied" if not pr else "gh not available on PATH"
         return {"command": command, "exit_status": None, "result": f"not collected: {reason}", "details": None}
-    fact = collector.fact(command)
-    raw = fact.pop("details")
+    script = snapshot.root / command[1]
+    fact, raw = collector.capture(command, argv=["bash", str(script), *command[2:]], diagnostics=snapshot)
     fact["details"] = None
     if fact["exit_status"] != 0:
         reason = one_line(fact.get("stderr", "")) or fact["result"]
@@ -320,6 +345,31 @@ def ci_fact(collector, pr, head):
             reason = f"unusable pr-state report ({one_line(str(exc))})"
     fact["result"] = f"not collected: {reason}"
     return fact
+
+
+def collect(collector, snapshot, change_id, base, head, pr):
+    inputs = snapshot.inputs(base, head)
+    rules, config_stamp = load_map(snapshot.root)
+    span = f"{base}..{head}"
+    facts = {"doctor": local_json(snapshot, ["bash", f"{SCRIPTS}/doctor.sh", "--json"], doctor=True)}
+    bounds = snapshot.script("bounds", change_id)
+    if (bounds["exit_status"] == 0 and bounds["details"].startswith(f"Bounds for {change_id} ") and
+            bounds["details"].splitlines()[-1].startswith("Mark each in the record's Bounds:")):
+        bounds["result"] = "applicable bounds listed below and in index.json"
+    else:
+        bounds["result"] = f"bounds not collected ({bounds['result']})"
+    facts["bounds"] = bounds
+    diff = snapshot.fact([*DIFF, "--check", span, "--"])
+    diff["result"] = {0: "clean", 2: "whitespace or conflict-marker findings"}.get(
+        diff["exit_status"], f"diff check failed ({diff['result']})")
+    facts["diff_check"] = diff
+    facts["adoption"] = local_json(snapshot, ["bash", f"{SCRIPTS}/check-adoption.sh", "--json"], doctor=False)
+    facts["ci"] = ci_fact(collector, snapshot, pr, head)
+    facts["path_checks"] = map_paths(snapshot, span, rules, facts["ci"])
+    require(snapshot.inputs(base, head) == inputs, "runtime inputs changed while collecting facts; retry")
+    return {"change_id": change_id, "key": {"version": VERSION, "base": base, "head": head},
+            "inputs": {**inputs, "config": config_stamp, "ci_sha256": digest(json_bytes(facts["ci"]))},
+            "facts": facts}
 
 
 def map_paths(collector, span, rules, ci):
@@ -461,6 +511,10 @@ def write_pack(directory, output):
             path.unlink(missing_ok=True)
 
 
+def interrupted(signum, _frame):
+    raise Refusal(f"interrupted by signal {signum}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="facts.sh", allow_abbrev=False, description="Exact-head review facts; never a gate decision.",
@@ -483,7 +537,6 @@ def main():
         head = collector.rev("HEAD")
         if args.head is not None:
             require(collector.rev(args.head) == head, "checkout HEAD does not match --head")
-        collector.clean(head)
         record = f"specs/changes/{args.change_id}.md"
         require(collector.git("ls-tree", head, "--", record).startswith((b"100644 ", b"100755 ")),
                 f"unknown change id at HEAD: {record}")
@@ -499,50 +552,30 @@ def main():
             base = collector.rev(args.base)
             require(collector.run(("git", "merge-base", "--is-ancestor", base, head)).returncode == 0,
                     "--base must be an ancestor of HEAD")
-        for name in FILES:
-            require(collector.run(("git", "check-ignore", "-q", "--",
-                                   f"{CACHE}/{args.change_id}/facts/{name}")).returncode == 0,
-                    "facts cache must be gitignored and not tracked")
+        def check_cache():
+            collector.check_head(head)
+            for name in FILES:
+                require(collector.run(("git", "check-ignore", "-q", "--",
+                                       f"{CACHE}/{args.change_id}/facts/{name}")).returncode == 0,
+                        "facts cache must be gitignored and not tracked")
 
-        inputs = collector.stamp()
-        rules, config_stamp = load_map(collector.root)
-        config_before = inputs["files"].get(CONFIG, {"kind": "absent"})
-        require(all(config_before.get(key) == value for key, value in config_stamp.items()),
-                f"{CONFIG} changed while reading it")
-        span = f"{base}..{head}"
-        facts = {}
-        facts["doctor"] = local_json(collector.script("doctor", "--json"), doctor=True)
-        bounds = collector.script("bounds", args.change_id)
-        if (bounds["exit_status"] == 0 and bounds["details"].startswith(f"Bounds for {args.change_id} ") and
-                bounds["details"].splitlines()[-1].startswith("Mark each in the record's Bounds:")):
-            bounds["result"] = "applicable bounds listed below and in index.json"
-        else:
-            bounds["result"] = f"bounds not collected ({bounds['result']})"
-        facts["bounds"] = bounds
-        diff = collector.fact([*DIFF, "--check", span, "--"])
-        diff["result"] = {0: "clean", 2: "whitespace or conflict-marker findings"}.get(
-            diff["exit_status"], f"diff check failed ({diff['result']})")
-        facts["diff_check"] = diff
-        facts["adoption"] = local_json(collector.script("check-adoption", "--json"), doctor=False)
-        facts["ci"] = ci_fact(collector, int(args.pr) if args.pr else None, head)
-        facts["path_checks"] = map_paths(collector, span, rules, facts["ci"])
+        check_cache()
+        for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+            signal.signal(sig, interrupted)
+        with TemporaryDirectory(prefix="prdkit-facts-") as directory:
+            snapshot = Snapshot(collector, Path(directory).resolve(), head)
+            pack = collect(collector, snapshot, args.change_id, base, head, int(args.pr) if args.pr else None)
 
-        pack = {"change_id": args.change_id, "key": {"version": VERSION, "base": base, "head": head},
-                "inputs": {**inputs, "base_tree": collector.git("rev-parse", f"{base}^{{tree}}").decode().strip(),
-                           "head_tree": collector.git("rev-parse", f"{head}^{{tree}}").decode().strip(),
-                           "config": config_stamp, "ci_sha256": digest(json_bytes(facts["ci"]))}, "facts": facts}
         index = json_bytes(pack)
         output = {"index.json": index, "summary.md": summary(pack, index)}
         directory = cache_dir(collector, args.change_id, args.verify)
         if directory is None:
-            require(collector.stamp() == inputs, "local inputs changed while collecting facts; retry")
-            collector.clean(head)
+            check_cache()
             return compare(None, output, pack)
         fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             fcntl.flock(fd, fcntl.LOCK_SH if args.verify else fcntl.LOCK_EX)
-            require(collector.stamp() == inputs, "local inputs changed while collecting facts; retry")
-            collector.clean(head)
+            check_cache()
             for name in FILES:
                 kind = mode(directory / name)
                 require(not kind or stat.S_ISREG(kind), f"unsafe facts file: {name}")

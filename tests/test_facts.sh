@@ -65,7 +65,7 @@ assert_contains "$(cat "$SUMMARY")" 'Does not answer design fit, correctness, or
 assert_contains "$(cat "$SUMMARY")" 'not a gate decision'
 assert_contains "$(cat "$SUMMARY")" '[index.json](index.json)'
 assert_eq true "$(jq --arg base "$BASE" --arg head "$HEAD_SHA" '
-    .key == {base:$base, head:$head, version:1}
+    .key == {base:$base, head:$head, version:2}
     and (.facts.doctor.details.advisories | type == "array")
     and .facts.doctor.command[-1] == "--json"
     and .facts.adoption.details.source_verification == "not-requested"
@@ -104,7 +104,7 @@ for file in "$SUMMARY" "$INDEX"; do
     assert_eq 0 "$STATUS" "attached $file: $OUTPUT"
 done
 
-it 'invalid IDs, refs and dirty or hidden checkout edits refuse, including in verify mode'
+it 'invalid IDs and refs refuse; live worktree and index edits do not affect facts'
 for bad in '../001-facts' '111-absent'; do
     run bash "$BIN/facts.sh" "$bad"
     assert_eq 2 "$STATUS"
@@ -117,15 +117,12 @@ run bash "$BIN/facts.sh" "$ID" --verify --head "$BASE"
 assert_eq 2 "$STATUS"
 assert_contains "$OUTPUT" 'does not match --head'
 printf 'untracked\n' > outside.txt
-run bash "$BIN/facts.sh" --verify "$ID"
-assert_eq 2 "$STATUS"
-assert_contains "$OUTPUT" 'clean checkout'
-rm outside.txt
+git add outside.txt
 git update-index --assume-unchanged src/top.txt
 printf 'dirty\n' >> src/top.txt
-run bash "$BIN/facts.sh" "$ID"
-assert_eq 2 "$STATUS"
-assert_contains "$OUTPUT" 'assume-unchanged'
+run bash "$BIN/facts.sh" --verify "$ID"
+assert_eq 0 "$STATUS" "$OUTPUT"
+git rm -fq outside.txt
 git update-index --no-assume-unchanged src/top.txt
 git checkout -- src/top.txt
 run bash "$BIN/facts.sh" "$ID" --verify --pr '0'
@@ -136,7 +133,7 @@ assert_eq 0 "$STATUS" 'refusals leave prior index intact'
 it 'the head and config inputs change their stamps; overlong bounds spill into the index'
 cat > "$MAP" <<'EOF'
 {
-  "src/*.txt": ["Surface"],
+  "src/*.txt": ["Build", "Surface"],
   "src/**/*.txt": ["Verify", "Queue"],
   "src/nested/d?ep.[t]xt": ["Verify", "Optional"]
 }
@@ -158,8 +155,8 @@ assert_eq true "$(jq --arg head "$NEXT_SHA" --arg hash "$map_hash" '
     .key.head == $head and .inputs.config.sha256 == $hash
     and .facts.diff_check.exit_status != 0 and (.facts.diff_check.details | contains("trailing whitespace"))
     and (.facts.bounds.details | contains("C-85 Test limit 85"))
-    and (.facts.path_checks.paths["src/deleted.txt"] | map(.name)) == ["Queue","Surface","Verify"]
-    and (.facts.path_checks.paths["src/top.txt"] | map(.name)) == ["Queue","Surface","Verify"]
+    and (.facts.path_checks.paths["src/deleted.txt"] | map(.name)) == ["Build","Queue","Surface","Verify"]
+    and (.facts.path_checks.paths["src/top.txt"] | map(.name)) == ["Build","Queue","Surface","Verify"]
     and (.facts.path_checks.paths["src/nested/deep.txt"] | map(.name)) == ["Optional","Queue","Verify"]
     and (.facts.path_checks.paths["src/top.txt"] | all(.state == "not collected" and .status == null))
 ' "$INDEX")"
@@ -167,8 +164,29 @@ assert_eq 60 "$(awk 'END {print NR}' "$SUMMARY")"
 assert_contains "$(cat "$SUMMARY")" 'more detail line(s): see [index.json](index.json).'
 assert_not_contains "$(cat "$SUMMARY")" 'C-85 Test limit 85'
 
-it 'ignored local source inputs are stamped even when the commit does not change'
-printf '\n.product-kit/local-source/\n' >> .git/info/exclude
+it 'an ignored root .gitattributes cannot hide committed trailing whitespace'
+printf '\n/.gitattributes\n' >> .git/info/exclude
+printf 'src/*.txt whitespace=-blank-at-eol\n' > .gitattributes
+run git diff --check "$BASE..$NEXT_SHA" --
+assert_eq 0 "$STATUS" 'the live attribute rule suppresses the finding'
+run bash "$BIN/facts.sh" --verify "$ID"
+assert_eq 0 "$STATUS" "$OUTPUT"
+rm .gitattributes
+printf 'src/*.txt whitespace=-blank-at-eol\n' > .git/info/attributes
+run bash "$BIN/facts.sh" --verify "$ID"
+assert_eq 0 "$STATUS" "$OUTPUT"
+rm .git/info/attributes
+
+it 'a committed root .gitattributes does control the whitespace check'
+printf 'src/*.txt whitespace=-blank-at-eol\n' > .gitattributes
+git add -f .gitattributes && git commit -qm 'commit whitespace rule' || exit 1
+run bash "$BIN/facts.sh" "$ID"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq clean "$(jq -r '.facts.diff_check.result' "$INDEX")"
+git revert --no-edit HEAD >/dev/null || exit 1
+
+it 'the committed snapshot leaves ignored installation and generated files out'
+printf '\n/.product-kit/local-source/\n/.generated/\n' >> .git/info/exclude
 mkdir -p .product-kit/local-source
 printf 'one\n' > .product-kit/local-source/VERSION
 # Put the setting in the config section, not an example or later section.
@@ -176,24 +194,42 @@ sed '/^## Configuration/a\
 - adoption-source: .product-kit/local-source
 ' .prdkit/memory/config.md > "$saved/config"
 cp "$saved/config" .prdkit/memory/config.md
-git add .prdkit/memory/config.md && git commit -qm 'configure source for observation' || exit 1
+mkdir -p .generated tests
+printf '#!/usr/bin/env bash\n' > .generated/example.sh
+ln -s ../.generated/example.sh tests/test-example.sh
+printf '\n[Generated](../.generated/example.html)\n' >> specs/product.md
+git add .prdkit/memory/config.md specs/product.md tests/test-example.sh &&
+    git commit -qm 'add links to generated artifacts' || exit 1
 NEXT_SHA="$(git rev-parse HEAD)"
+worktrees="$(git worktree list --porcelain)"
 run bash "$BIN/facts.sh" "$ID"
 assert_eq 0 "$STATUS" "$OUTPUT"
-initial_hash="$(jq -r '.inputs.files[".product-kit/local-source/VERSION"].sha256' "$INDEX")"
-assert_eq 64 "${#initial_hash}"
-assert_eq 1 "$(jq -r '.facts.adoption.exit_status' "$INDEX")" 'collector failure is itself a fact'
+assert_eq "$worktrees" "$(git worktree list --porcelain)"
+assert_eq 0 "$(jq -r '.facts.adoption.exit_status' "$INDEX")" 'ignored kit source is absent from the snapshot'
+assert_contains "$(jq -r '.facts.doctor.details.advisories[]' "$INDEX")" '.generated/example.html, which does not exist'
+assert_contains "$(jq -r '.facts.doctor.details.advisories[]' "$INDEX")" 'test symlink target is absent; citations not checked'
+
+it 'editing the ignored target of a tracked test symlink cannot supply doctor citations'
+printf '# Verifies R-99\n' >> .generated/example.sh
+run bash "$BIN/doctor.sh" --json
+assert_contains "$OUTPUT" 'ID R-99 is cited at tests/test-example.sh'
+run bash "$BIN/facts.sh" --verify "$ID"
+assert_eq 0 "$STATUS" "$OUTPUT"
+
+it 'an ignored generated link target cannot suppress a committed missing-link advisory'
+printf 'generated\n' > .generated/example.html
+run bash "$BIN/doctor.sh" --json
+assert_not_contains "$OUTPUT" '.generated/example.html, which does not exist'
+run bash "$BIN/facts.sh" --verify "$ID"
+assert_eq 0 "$STATUS" "$OUTPUT"
+
+it 'doctor date changes are still explicit inputs; ignored adoption source edits are not'
 printf 'two\n' > .product-kit/local-source/VERSION
 run bash "$BIN/facts.sh" --verify "$ID"
+assert_eq 0 "$STATUS" "$OUTPUT"
+run env PRDKIT_TODAY=2026-01-03 bash "$BIN/facts.sh" --verify "$ID"
 assert_eq 1 "$STATUS"
 assert_contains "$OUTPUT" 'inputs changed'
-assert_contains "$OUTPUT" 'adoption:'
-assert_eq "$initial_hash" "$(jq -r '.inputs.files[".product-kit/local-source/VERSION"].sha256' "$INDEX")"
-run bash "$BIN/facts.sh" "$ID"
-assert_eq 0 "$STATUS" "$OUTPUT"
-assert_eq true "$(jq --arg head "$NEXT_SHA" --arg prior "$initial_hash" '
-    .key.head == $head and (.inputs.files[".product-kit/local-source/VERSION"].sha256 != $prior)
-' "$INDEX")"
 
 it 'no gh records no CI; local collectors do not invoke jq'
 local_bin="$saved/no-gh"
@@ -277,6 +313,31 @@ assert_contains "$(cat "$SUMMARY")" '1/4 required check(s) green'
 cp "$INDEX" "$saved/online.json"
 sleep 1
 run bash "$BIN/facts.sh" --verify "$ID" --pr 7
+assert_eq 0 "$STATUS" "$OUTPUT"
+
+it 'only a byte-exact check name matches the path map and the CI link stays verbatim'
+check_name="$(pwd -P)/Build"
+check_link="https://ci.example.invalid$(pwd -P)/Build"
+rules="$routes/rules_branches_main_per_page_100_page_1.json"
+checks="$routes/graphql_PrdkitCheckFacts.json"
+cp "$rules" "$saved/rules.json"
+cp "$checks" "$saved/pr-checks.json"
+jq --arg name "$check_name" '.[0].parameters.required_status_checks = [{context:$name}]' \
+    "$saved/rules.json" > "$rules"
+jq --arg name "$check_name" --arg link "$check_link" '
+    .data.repository.pullRequest.commits.nodes[0].commit.statusCheckRollup.contexts |=
+      (.totalCount = 1 | .nodes = [.nodes[2] | .name = $name | .detailsUrl = $link])
+' "$saved/pr-checks.json" > "$checks"
+run bash "$BIN/facts.sh" "$ID" --pr 7
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq true "$(jq --arg name "$check_name" --arg link "$check_link" '
+    .facts.ci.details.required_checks == [{name:$name,status:"COMPLETED",conclusion:"SUCCESS",link:$link}]
+    and (.facts.path_checks.paths["src/top.txt"][] | select(.name=="Build")) ==
+      {name:"Build",state:"not reported as required",status:null,conclusion:null}
+' "$INDEX")"
+cp "$saved/rules.json" "$rules"
+cp "$saved/pr-checks.json" "$checks"
+run bash "$BIN/facts.sh" "$ID" --pr 7
 assert_eq 0 "$STATUS" "$OUTPUT"
 
 it 'a PR for another head and a failed pr-state read never report green'

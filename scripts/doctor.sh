@@ -260,7 +260,15 @@ while IFS= read -r where; do [ -z "$where" ] || findings+=("Malformed ID at $whe
 
 cite_files=()
 test_files="$(verify_lines spec_test_files "$root")"
-while IFS= read -r file; do [ -z "$file" ] || cite_files+=("$file"); done <<< "$listed"$'\n'"$test_files"
+while IFS= read -r file; do [ -z "$file" ] || cite_files+=("$file"); done <<< "$listed"
+while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    if [ -L "$root/$file" ] && [ ! -e "$root/$file" ]; then
+        advisories+=("$file: test symlink target is absent; citations not checked")
+    else
+        cite_files+=("$file")
+    fi
+done <<< "$test_files"
 # Design cites canonical items but does not define them.
 [ ! -f "$root/$design" ] || cite_files+=("$design")
 if [ "${#cite_files[@]}" -gt 0 ]; then
