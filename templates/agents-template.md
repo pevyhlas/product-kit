@@ -44,3 +44,20 @@ Hand-owned agents: <projection names kept without a definition, comma-separated;
 ```
 
 Every override needs a Reason. Neutral definitions require a pinned shared baseline.
+
+To opt into extra projection settings, add a table like this outside the code fence:
+
+```text
+| Projection tier | Claude effort | OpenCode permissions | OpenCode preamble |
+|-----------------|---------------|----------------------|-------------------|
+| *               |               |                      | Use the project rubric. |
+| deep            | high          | read, glob, grep     | Start with the review rubric. |
+```
+
+Use one row per local tier. Blank or `-` leaves a setting undeclared. Claude effort accepts
+`low`, `medium`, `high`, `xhigh`, or `max`. OpenCode permissions opts the tier into V2: `deny`
+blocks all actions; a comma-separated list allows only those actions, for all resources.
+This replaces any existing permission block and writes the resolved variant as `model:
+provider/model#variant` instead of a separate `variant:`. A preamble is one Markdown line
+without pipes or HTML comments; the `*` row provides a preamble fallback only. Omit the
+table to keep the default render behavior.

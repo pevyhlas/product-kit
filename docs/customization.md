@@ -50,6 +50,44 @@ review the vendoring diff. `Baseline snapshot:` must be a relative path inside t
 repository. With a baseline, a `Hand-owned agents:` line names projections kept without a
 neutral definition; any other unowned projection is a finding.
 
+### Optional projection settings
+
+Add this table outside a code fence in `.prdkit/memory/agents.md`, separated from other
+tables by a blank line. Keep the four headings
+and use the **local** tier from the neutral definition, not its mapped library tier.
+
+```text
+| Projection tier | Claude effort | OpenCode permissions | OpenCode preamble |
+|-----------------|---------------|----------------------|-------------------|
+| *               |               |                      | Use the project rubric. |
+| deep            | high          | read, glob, grep     | Start with the review rubric. |
+| standard        |               | deny                 |                   |
+```
+
+- Omit the table for unchanged output. A blank cell or `-` does not opt into the setting;
+  each tier has at most one row, and each row must set something.
+- **Claude effort** owns `effort:` only for that tier. Choose `low`, `medium`, `high`, `xhigh`,
+  or `max`; check that the Claude Code version and chosen model support the level.
+- **OpenCode permissions** opts that tier into **OpenCode V2**. `deny` blocks all actions.
+  A comma-separated list adds allows for those exact action names, for **all** their resources.
+  Names use lowercase letters, digits and underscores and start with a letter. No wildcards.
+  For resource-specific rules, leave this cell blank and manage them in the projection.
+  A nonblank cell replaces the entire `permission:` or `permissions:` entry, not just its
+  defaults. It also writes `model: provider/model#variant` when a variant resolves, removing
+  any separate `variant:`. Keep the model ID and optional variant separate in the baseline and
+  overrides; `--resolve` still reports them separately and `Banned models:` uses the base ID.
+  See the [OpenCode V2 agent fields](https://opencode.ai/docs/agents#options). Review any
+  other legacy keys (such as `name:` or `tools:`) before opting in: existing unrelated fields
+  are preserved, but OpenCode V2 ignores legacy keys in files with native `permissions:`.
+- **OpenCode preamble** inserts one literal Markdown line before the neutral body, after
+  any generated-marker comments. The optional `*` row sets only a global preamble; a nonblank
+  local preamble takes precedence. Do not put `|` or HTML comments in the preamble cell.
+
+`render-agents.sh --check` reports drift on opted-in settings. Removing an effort or permissions
+setting hands that field back to the project; it does not delete it. Removing the permissions
+setting also restores separate `model` and `variant` fields. If rolling back to the legacy
+OpenCode format, restore the previous `permission:` block and remove `permissions:` by hand.
+
 ## Rigor and proportion
 
 Light and full share truthful evidence and relevant verification. Review follows the tiers in

@@ -55,7 +55,7 @@ cat > "$LIB/tiers.json" <<'EOF'
   "verydeep": { "claude": { "model": "lib-claude-vd" }, "opencode": { "model": "lib/oc-vd", "variant": "xhigh" } },
   "deep":     { "claude": { "model": "lib-claude-deep" }, "opencode": { "model": "lib/oc-deep", "variant": "xhigh" } },
   "standard": { "claude": { "model": "lib-claude-std" }, "opencode": { "model": "lib/oc-std", "variant": "high" } },
-  "light":    { "claude": { "model": "lib-claude-light" }, "opencode": { "model": "lib/oc-light", "variant": "medium" } }
+  "light":    { "claude": { "model": "lib-claude-light" }, "opencode": { "model": "lib/oc-light" } }
 }
 EOF
 git -C "$LIB" add tiers.json; git -C "$LIB" commit -qm tiers
@@ -468,6 +468,244 @@ assert_eq "$before" "$(cat .claude/agents/own-c.md .opencode/agents/own-c.md | c
 run bash "$R2" --check
 assert_eq 0 "$STATUS" "check is clean after creating from a block description"
 cd "$PROJ" || exit 1
+
+# --- optional projection fields -----------------------------------------------------------
+projection_table() {
+    printf '\n| Projection tier | Claude effort | OpenCode permissions | OpenCode preamble |\n|---|---|---|---|\n'
+    printf '%s\n' "$@"
+}
+same_bytes() {
+    if cmp -s "$1" "$2"; then _ok "$3"; else _no "$3" "$(diff -u "$1" "$2")"; fi
+}
+it "without projection settings, new renders match the legacy bytes and native fields stay untouched"
+cp "$MAP" "$PROJ/agents.before-extras"
+# Golden bytes from the legacy writer (including the generated comment and separate variant).
+cat > "$PROJ/legacy-oc" <<'EOF'
+---
+# Generated from .prdkit/agents/rev-a.md by render-agents.sh; model/variant resolve from .prdkit/memory/agents.md. Edit the neutral definition, then re-render.
+name: rev-a
+description: rev-a reviewer.
+mode: subagent
+model: lib/oc-next
+variant: max
+---
+
+# rev-a
+
+Review carefully.
+
+<!-- LOCAL OVERLAY -->
+Project rubric for rev-a.
+EOF
+sed -e '/^mode: subagent$/d' -e 's@^model: lib/oc-next$@model: lib-claude-vd@' \
+    -e '/^variant: max$/d' "$PROJ/legacy-oc" > "$PROJ/legacy-claude"
+rm -f .opencode/agents/rev-a.md .claude/agents/rev-a.md
+run bash "$RENDER"
+assert_eq 0 "$STATUS"
+same_bytes "$PROJ/legacy-oc" .opencode/agents/rev-a.md "legacy OpenCode creation is byte-identical"
+same_bytes "$PROJ/legacy-claude" .claude/agents/rev-a.md "legacy Claude creation is byte-identical"
+
+cat > .opencode/agents/rev-a.md <<'EOF'
+---
+name: rev-a
+description: rev-a reviewer.
+model: lib/oc-next
+variant: max
+# Native policies belong to the project unless it opts in.
+permission:
+  shell:
+    "*": deny
+    "status *": allow
+
+"permissions":
+- action: edit
+  resource: "*"
+  effect: deny
+# Keep this neighboring key and comment.
+mode: all
+---
+
+<!-- Generated locally -->
+
+# rev-a
+
+Review carefully.
+
+<!-- LOCAL OVERLAY -->
+Project rubric for rev-a.
+EOF
+awk '/^model:/ { print "effort: low  # project-owned" } { print }' "$PROJ/legacy-claude" > .claude/agents/rev-a.md
+cp .opencode/agents/rev-a.md "$PROJ/hand-oc"
+cp .claude/agents/rev-a.md "$PROJ/hand-claude"
+{
+    printf '\n```text\n'
+    projection_table '| deep | invalid-example | * | Example, not a setting |'
+    printf '```\n\n<!--\n'
+    projection_table '| deep | other-example | * | Also not a setting |'
+    printf '%s\n' '-->'
+} >> "$MAP"
+run bash "$RENDER" --check
+assert_eq 0 "$STATUS" "sample tables and undeclared native fields are ignored"
+run bash "$RENDER"
+assert_eq 0 "$STATUS"
+same_bytes "$PROJ/hand-oc" .opencode/agents/rev-a.md "both kinds of native permission block untouched when undeclared"
+same_bytes "$PROJ/hand-claude" .claude/agents/rev-a.md "native effort untouched when undeclared"
+
+it "an opted-in tier refreshes effort, native permissions, combined model and preamble"
+# Earlier write-failure coverage may have regenerated rev-b; give it explicit native policy.
+if ! grep -q '^permission:' .opencode/agents/rev-b.md; then
+    sed '/^variant: high$/a\
+permission:\
+  edit: deny
+' .opencode/agents/rev-b.md > "$PROJ/old-permission"
+    cp "$PROJ/old-permission" .opencode/agents/rev-b.md
+fi
+# shellcheck disable=SC2016 # Literal Markdown preamble, including backticks.
+projection_table \
+    '| * | | | Follow the shared rubric. |' \
+    '| deep | high | read, grep | First follow `local` guidance; keep \n literal. |' \
+    '| fast | | deny | |' >> "$MAP"
+cp "$MAP" "$PROJ/agents.extras"
+cp .claude/agents/rev-b.md "$PROJ/untouched-claude"
+rm -f .opencode/agents/rev-c.md
+run bash "$RENDER" --check --json
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "effort differs" "effort drift reported on its own"
+assert_contains "$OUTPUT" "model 'lib/oc-next' differs from resolved 'lib/oc-next#max'" "combined-model drift uses the resolved agent override"
+assert_contains "$OUTPUT" "permissions frontmatter or legacy variant" "permission drift reported"
+assert_contains "$OUTPUT" "prompt body differs" "preamble drift reported"
+run bash "$RENDER"
+assert_eq 0 "$STATUS"
+cat > "$PROJ/native-oc" <<'EOF'
+---
+name: rev-a
+description: rev-a reviewer.
+model: lib/oc-next#max
+# Native policies belong to the project unless it opts in.
+permissions:
+  - action: "*"
+    resource: "*"
+    effect: deny
+  - action: "read"
+    resource: "*"
+    effect: allow
+  - action: "grep"
+    resource: "*"
+    effect: allow
+
+# Keep this neighboring key and comment.
+mode: all
+---
+
+<!-- Generated locally -->
+
+First follow `local` guidance; keep \n literal.
+
+# rev-a
+
+Review carefully.
+
+<!-- LOCAL OVERLAY -->
+Project rubric for rev-a.
+EOF
+same_bytes "$PROJ/native-oc" .opencode/agents/rev-a.md "replace both owned blocks whole and retain neighboring fields and marker"
+assert_contains "$(cat .claude/agents/rev-a.md)" "effort: high" "Claude effort is rendered"
+same_bytes "$PROJ/untouched-claude" .claude/agents/rev-b.md "the other Claude tier is untouched"
+oc_b="$(cat .opencode/agents/rev-b.md)"
+assert_contains "$oc_b" "Follow the shared rubric." "global preamble reaches unconfigured tier"
+assert_contains "$oc_b" "variant: high" "preamble alone does not migrate the tier to native V2"
+assert_contains "$oc_b" "  edit: deny" "preamble alone does not adopt permissions"
+oc_c="$(cat .opencode/agents/rev-c.md)"
+assert_contains "$oc_c" "model: lib/oc-std#high" "local tier gets mapped baseline variant"
+assert_contains "$oc_c" "effect: deny" "deny-only policy is supported on creation"
+assert_not_contains "$oc_c" "effect: allow" "deny-only policy has no exception"
+assert_not_contains "$oc_c" "name:" "fresh V2 projection uses an ID derived from its path"
+run bash "$RENDER" --resolve --json
+assert_contains "$OUTPUT" '"model":"lib/oc-next","variant":"max"' "resolution output remains logical, with separate model and variant"
+run bash "$RENDER" --check
+assert_eq 0 "$STATUS" "check is clean after projection"
+run bash "$RENDER"
+assert_contains "$OUTPUT" "0 created, 0 updated, 6 unchanged" "render is idempotent"
+
+it "check notices independent edits to managed effort, permission rules and preamble"
+sed 's/^effort: high$/effort: low/' .claude/agents/rev-a.md > "$PROJ/drift"
+cp "$PROJ/drift" .claude/agents/rev-a.md
+sed 's/^    effect: deny$/    effect: allow/' "$PROJ/native-oc" > .opencode/agents/rev-a.md
+sed '/^Follow the shared rubric\.$/d' .opencode/agents/rev-c.md > "$PROJ/drift"
+cp "$PROJ/drift" .opencode/agents/rev-c.md
+run bash "$RENDER" --check
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" ".claude/agents/rev-a.md effort differs"
+assert_contains "$OUTPUT" ".opencode/agents/rev-a.md native model/permissions frontmatter"
+assert_contains "$OUTPUT" ".opencode/agents/rev-c.md prompt body differs"
+run bash "$RENDER"
+assert_eq 0 "$STATUS"
+same_bytes "$PROJ/native-oc" .opencode/agents/rev-a.md "edited permission policy is repaired"
+run bash "$RENDER" --check
+assert_eq 0 "$STATUS"
+
+it "invalid projection settings are findings and block all writes"
+sed 's/^effort: high$/effort: low/' .claude/agents/rev-a.md > "$PROJ/drift"
+cp "$PROJ/drift" .claude/agents/rev-a.md
+for bad_row in \
+    '| deep | too-high | | |' \
+    '| deep | low | read, * | |' \
+    '| deep | low | | preamble | extra cell |' \
+    '| * | high | | |' \
+    '| deep | | | |' \
+    '| unidentified | high | | |'; do
+    cp "$PROJ/agents.before-extras" "$MAP"
+    projection_table "$bad_row" >> "$MAP"
+    run bash "$RENDER" --check --json
+    assert_eq 1 "$STATUS" "invalid row: $bad_row"
+    assert_contains "$OUTPUT" "Tier map line" "line-numbered finding"
+    run bash "$RENDER"
+    assert_eq 1 "$STATUS"
+    assert_contains "$OUTPUT" "nothing written"
+    same_bytes "$PROJ/drift" .claude/agents/rev-a.md "would-be update remains unwritten"
+done
+cp "$PROJ/agents.extras" "$MAP"
+printf '%s\n' '| deep | low | | Duplicate |' >> "$MAP"
+run bash "$RENDER" --check
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "duplicate Projection tier deep"
+run bash "$SCRIPTS/doctor.sh" --json
+assert_contains "$OUTPUT" "duplicate Projection tier deep" "doctor shares the projection settings lint"
+
+it "the opt-in cannot hide a banned base model id behind a variant suffix"
+cp "$PROJ/agents.extras" "$MAP"
+printf '\nBanned models: lib/oc-blocked\n' >> "$MAP"
+sed 's@model: lib/oc-next#max@model: lib/oc-blocked#high@' "$PROJ/native-oc" > .opencode/agents/rev-a.md
+run bash "$RENDER" --check
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "uses banned model 'lib/oc-blocked'"
+run bash "$RENDER"
+assert_eq 0 "$STATUS"
+
+it "a native OpenCode projection works without a variant; prejoined model overrides are findings"
+cp "$PROJ/agents.extras" "$MAP"
+cat > .prdkit/agents/rev-light.md <<'EOF'
+---
+name: rev-light
+tier: light
+harnesses: [opencode]
+description: Light review.
+---
+
+Review carefully.
+EOF
+printf '%s\n' '| light | | deny | |' >> "$MAP"
+run bash "$RENDER"
+assert_eq 0 "$STATUS"
+assert_eq 'model: lib/oc-light' "$(grep '^model:' .opencode/agents/rev-light.md)"
+assert_not_contains "$(cat .opencode/agents/rev-light.md)" "variant:"
+printf '\n| Scope | Harness | Model | Variant | Reason |\n|---|---|---|---|---|\n| tier:light | opencode | lib/oc-light#high | | Example |\n' >> "$MAP"
+run bash "$RENDER" --check
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "requires a provider/model id and an optional separate variant token"
+run bash "$RENDER"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "nothing written"
 
 it "a kit-source run refuses instead of treating the kit checkout as the project"
 KIT="$(mktemp -d)"; track_tmp "$KIT"

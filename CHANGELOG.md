@@ -11,6 +11,10 @@ change by change.
 
 ## [Unreleased]
 
+### Added
+
+- Agent tier maps can opt in to Claude effort, deny-by-default OpenCode V2 permissions and `model#variant` syntax, and an OpenCode prompt preamble. Undeclared settings keep existing render behavior.
+
 ## [3.1.2] — 2026-11-25 — exact-head review facts
 
 ### Added
