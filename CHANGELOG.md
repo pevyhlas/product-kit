@@ -32,9 +32,8 @@ change by change.
 ### Fixed
 
 - Spec navigation recognizes valid footers on BusyBox awk and excludes them from reading budgets
-  there. Fence and comment recognition rejects split fence closers and over-indented delimiters,
-  and skips the contents of multiline comments that mention navigation. `--target` reads keys
-  literally instead of decoding awk escapes outside the documented key syntax.
+  there. `--target` reads keys literally instead of decoding awk escapes outside the documented key
+  syntax.
 
 ## [3.0.0] — 2026-11-24 — native GitHub review gate and optional UI design summary
 

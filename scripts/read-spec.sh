@@ -11,7 +11,7 @@ Usage: read-spec.sh [--raw | --stats | --target <nav-key> | --index | --section 
   --index                  List ATX headings with source lines and reading-line counts.
   --section <heading-or-id> Print one section with its source blob and original line numbers.
                            Quote multiword headings; no match or ambiguity exits 2 and lists candidates.
-                           Both focused modes require ATX headings; use --raw for Setext headings.
+                           Both focused modes require supported spec Markdown; use --raw otherwise.
   --target <nav-key>       Resolve one validated navigation key.
   --stats                  Show reading-budget and navigation statistics.
   --raw                    Print exact source bytes.
@@ -67,7 +67,8 @@ source_header() {
     printf 'Source: %s head=%s content_blob=%s (working-tree bytes; not a committed-snapshot claim)\n' "$path" "$head" "$blob"
 }
 if [ "$mode" = index ] || [ "$mode" = section ]; then
-    if view="$(spec_navigation "$snapshot" "$mode" "$selector" "$expected_lines" "$expected_bytes")"; then
+    source "$SCRIPT_DIR/spec-focused-lib.sh"
+    if view="$(spec_focused "$snapshot" "$mode" "$selector" "$expected_lines" "$expected_bytes")"; then
         source_header
         printf '%s\n' "$view"
     elif [ "$?" -eq 10 ] && [ -n "$view" ]; then

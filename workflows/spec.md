@@ -103,24 +103,27 @@ identifies the bytes read.
 - `--stats` shows accounting; `--target nav-key` resolves one validated target; `--raw` returns exact
   source bytes. All modes are mutually exclusive; use `--help` for syntax.
 
-**Supported spec grammar for `--section` and `--index`** (not a full Markdown parser):
+**Supported spec grammar for `--section` and `--index`:**
 
-- ATX headings, backtick or tilde fences, and standalone `<!--` comments use zero to three leading
-  spaces. A fence closer uses the same character, at least the opener's run length, and no trailing
-  text. Fenced or commented content never supplies headings or IDs. An ID indented four or more
-  spaces counts only in a list: the previous nonblank line must be a list item or its continuation.
-- Parts and record tables start with a pipe-led header and an immediately following delimiter row
-  (e.g. `|---|---|`). A Parts table has `Part` as its first column; for record IDs the first cell
-  must contain a well-formed row. Plain rows in `specs/records.md` still work for status and doctor,
-  but do not supply focused lookup IDs.
-- Both modes refuse a Setext underline (`=` or `-` runs immediately after a paragraph) with exit 2
-  and the underline's source line. Blank lines, delimited table rows, list items and link reference
-  definitions do not start such headings. Use `--raw` to inspect or convert the headings to ATX.
+- Top-level ATX headings, paragraphs (including indented continuations), list items and their
+  continuations, thematic breaks at block boundaries, link reference definitions, and the
+  navigation footer.
+- Standalone HTML comments and backtick or tilde fences open with fewer than four spaces relative
+  to their block. Fences can also open at a list item's content column; closers use the same
+  character, at least the opening run length, and no trailing text. An open comment ends at `-->`,
+  including on an indented line. Literal examples never supply headings or IDs.
+- GFM tables use a header and matching delimiter row. Outer pipes are optional; `\|` is part of a
+  cell. `Part` in the first header cell enables part IDs, and well-formed records in first cells
+  supply record IDs. Plain `specs/records.md` rows still work for status and doctor.
 
-Section output keeps the original line numbers and, like the compact view, omits only validated
-navigation within the selected range. Raw Git diffs/blobs remain the integrity and review artifacts;
-use them for link changes, source review and revision evidence. A projection is neither a
-replacement specification nor a hash/review input.
+Both views check the whole file first. They refuse Setext underlines after a paragraph (including
+indented continuations), indented code blocks, headings inside lists, block quotes, and other HTML
+blocks. Unsupported constructs exit 2 at the first offending source line; use `--raw` instead.
+
+Section output keeps the original line numbers and omits a footer only when legacy navigation
+validates it and the focused scanner sees it outside literal examples. Raw Git diffs/blobs remain
+the integrity and review artifacts; use them for link changes, source review and revision evidence.
+A projection is neither a replacement specification nor a hash/review input.
 
 ## Levels
 
