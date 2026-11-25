@@ -20,18 +20,15 @@ spec_focused() { # snapshot index|section selector expected-lines expected-bytes
                 ids[section] = ids[section] (ids[section] == "" ? "" : ", ") id
             }
         }
-        function item_id(s,   id,before) {
-            if (!sub(/^[-+*] +\*\*/, "", s) ||
-                !match(s, /^((P[0-9]+(\.[0-9]+)?\.[BI]|[JRQCDN])-[0-9]+|P[0-9]+(\.[0-9]+)?)/)) return ""
-            id = substr(s, 1, RLENGTH)
-            if (substr(s, RLENGTH+1) !~ /^([ \t]|\*\*)/) return ""
-            while (match(s, /\*\*+/)) {
-                before = substr(s, 1, RSTART-1); s = substr(s, RSTART+RLENGTH)
-                if (index(before, "`")) return ""
-                if (before != "" && before !~ /[ \t]$/ &&
-                    (!match(before, /\\+$/) || RLENGTH % 2 == 0)) return id
-            }
-            return ""
+        function item_id(s,   span,id) {
+            if (!sub(/^[-+*] \*\*/, "", s) || !match(s, /\*\*/)) return ""
+            span = substr(s, 1, RSTART-1)
+            if (span ~ /[][<>*`\\]|[[:space:]]$/ ||
+                substr(s, RSTART+RLENGTH) !~ /^([ :.,;(]|$)/) return ""
+            if (!match(span, /^((P[0-9]+(\.[0-9]+)?\.[BI]|[JRQCDN])-[0-9]+|P[0-9]+(\.[0-9]+)?)([ \t]|$)/)) return ""
+            id = substr(span, 1, RLENGTH)
+            sub(/[ \t]$/, "", id)
+            return id
         }
         # GFM protects pipes (also in inline code) with a preceding backslash.
         # Outer pipes are optional and not counted as cells.
@@ -202,12 +199,12 @@ spec_focused() { # snapshot index|section selector expected-lines expected-bytes
             if (short_spaces && html_block(t)) {
                 fail("HTML blocks other than comments are not supported."); return
             }
+            if (short_spaces && thematic(t)) { previous = "break"; paragraph = table = 0; return }
             if (indent) {
                 if (short_spaces) paragraph = 1
                 previous = "opaque"; table = 0; return
             }
             if (depth) { heading(depth); previous = "heading"; paragraph = table = 0; return }
-            if (thematic(t)) { previous = "break"; paragraph = table = 0; return }
             if (t ~ /^([-+*]|[0-9]+[.)])([ \t]|$)/) {
                 id = item_id(t); alias(id)
                 previous = "list"; paragraph = table = 0; return

@@ -106,10 +106,13 @@ identifies the bytes read.
 **Supported spec grammar for `--section` and `--index`:**
 
 Column zero means the line starts without a space or tab. Only column-zero headings (`#` through
-`######` followed by a space or end of line) start sections. A `- `, `* `, or `+ ` bullet at column
-zero defines an item ID only if its text begins with a bold span starting with the ID and that span
-closes on the same line. The bold ID span contains no code (no backticks); code after it is fine.
-Indented or nested bullets and unclosed bold text never define IDs.
+`######` followed by a space or end of line) start sections. A `-`, `*`, or `+` bullet at column
+zero defines an item ID only with exactly one space after the marker, then `**`, the ID, and an
+optional plain text title separated by a space or tab. The first following `**` must be on the same
+line. There are no links, code, emphasis or HTML inside the bold ID: the span allows none of `*`,
+a backtick, `[`, `]`, `<`, `>` or `\`, and cannot end with whitespace. After the closing `**`, only
+end of line, a space, or `:` `.` `,` `;` `(` is allowed as the next character. Other bullets are
+opaque; indented and nested bullets never define IDs.
 
 A column-zero table header must be at the start of the file or immediately after a heading or blank
 line, with its matching delimiter on the next line. A header/delimiter pair elsewhere is refused.
@@ -130,6 +133,8 @@ tabs, Setext underlines after paragraphs, block quotes, and CommonMark HTML bloc
 comments (with zero to three leading spaces), even directly after paragraph text. Put inline HTML
 inside a sentence, not alone on a line. Angle-bracket prose that does not start an HTML block is
 allowed. Refusals exit 2 at the first offending source line with a `--raw` hint.
+Thematic breaks with zero to three leading spaces end paragraphs without defining a heading or ID.
+A break uses at least three identical `-`, `*`, or `_` markers, optionally separated by spaces or tabs.
 
 Section output keeps the original line numbers and omits a footer only when legacy navigation
 validates it and the focused scanner sees it outside literal examples. Raw Git diffs/blobs remain

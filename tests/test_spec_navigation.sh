@@ -473,6 +473,58 @@ run bash "$READER" --section R-12 "$SECTIONS"
 assert_eq 0 "$STATUS"
 assert_eq $'6: ## Actual\n7: - **R-12 Actual**: use `**` here.' "${OUTPUT#*$'\n'}"
 
+it "only a plain title and the first closing pair count for a bold item ID"
+for bullet in '- **R-01 Title**: text' '- **R-01 Title** (state)' '- **R-01**' \
+    '- **R-01 Title (Café) - phase-two**.' '- **R-01 Title**, text' \
+    '- **R-01 Title**; text' '- **R-01 Title**(state)'; do
+    printf '%s\n' '# Spec' '## Actual' "$bullet" > "$SECTIONS"
+    run bash "$READER" --section R-01 "$SECTIONS"
+    assert_eq 0 "$STATUS" "$bullet defines an ID"
+    assert_eq "$(printf '2: ## Actual\n3: %s' "$bullet")" "${OUTPUT#*$'\n'}"
+done
+while IFS= read -r bullet; do
+    printf '%s\n' '# Spec' '## Example' "$bullet" > "$SECTIONS"
+    run bash "$READER" --section R-11 "$SECTIONS"
+    assert_eq 2 "$STATUS" "$bullet is opaque"
+    assert_contains "$OUTPUT" 'No match for section selector'
+done <<'BULLETS'
+- **R-11 is just a citation [sample](https://example.test/**) without a closer.
+- **R-11 is an example, not **a definition**.
+- **R-11 embedded * star**
+- **R-11 embedded ` backtick**
+- **R-11 embedded [ bracket**
+- **R-11 embedded ] bracket**
+- **R-11 embedded < angle**
+- **R-11 embedded > angle**
+- **R-11 embedded \ backslash**
+- **R-11 trailing space **
+- **R-11 closing triple***
+- **R-11 title**suffix**.
+- **R-11 title**) text
+-  **R-11 extra marker space**
+BULLETS
+for bullet in $'-\t**R-11 tab after marker**' $'- **R-11 trailing tab\t**' $'- **R-11 title**\ttext'; do
+    printf '%s\n' '# Spec' '## Example' "$bullet" > "$SECTIONS"
+    run bash "$READER" --section R-11 "$SECTIONS"
+    assert_eq 2 "$STATUS" "$bullet is opaque"
+    assert_contains "$OUTPUT" 'No match for section selector'
+done
+
+it "shallow thematic breaks end paragraph state without defining a section"
+for marker in '  ***' '***' $'   *\t* *' $' -\t- -' $'  _\t_ _'; do
+    printf '%s\n' '# Spec' '## Intro' "$marker" '---' '## Other' > "$SECTIONS"
+    run bash "$READER" --index "$SECTIONS"
+    assert_eq 0 "$STATUS"
+    assert_eq $'1: # Spec (5 reading lines)\n2:   ## Intro (3 reading lines)\n5:   ## Other (1 reading line)' "${OUTPUT#*$'\n'}"
+    run bash "$READER" --section Intro "$SECTIONS"
+    assert_eq 0 "$STATUS"
+    assert_eq "$(printf '2: ## Intro\n3: %s\n4: ---' "$marker")" "${OUTPUT#*$'\n'}"
+done
+printf '%s\n' '# Spec' '## Intro' '  Paragraph.' '---' '## Other' > "$SECTIONS"
+refuses_focused '4: Setext'
+printf '%s\n' '# Spec' '## Intro' 'Paragraph.' '  ---' '## Other' > "$SECTIONS"
+refuses_focused '4: Setext'
+
 it "indented fences refuse column-zero structure until a matching closer at any indentation"
 for structural in '## Heading' '- **R-90 Example**' '| Part | State |' 'P1 | yes' '~~~' '<!-- comment -->'; do
     printf '%s\n' '# Spec' '## Intro' 'Read this section.' '## Example' '  ````markdown' \
