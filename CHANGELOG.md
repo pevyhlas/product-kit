@@ -15,6 +15,7 @@ change by change.
 
 - Agent tier maps can opt in to Claude effort, deny-by-default OpenCode V2 permissions and `model#variant` syntax, and an OpenCode prompt preamble. Undeclared settings keep existing render behavior.
 - Opt-in rendering reports actual YAML anchor/alias syntax and invalid option cells before writing without mistaking scalar text for references. OpenCode model bans check the base ID in managed and hand-owned projections with simple top-level inline or single-token block scalars; unsupported model forms are reported rather than skipped.
+- Neutral agents can opt in to vendored skills: project plugin-qualified Claude references and OpenCode V2 skill permissions, with evidence notes for skills that need an unavailable shell. Agents without a skill declaration keep their existing render behavior.
 
 ### Fixed
 

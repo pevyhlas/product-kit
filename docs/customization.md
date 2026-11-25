@@ -113,6 +113,71 @@ setting hands that field back to the project; it does not delete it. Removing th
 setting also restores separate `model` and `variant` fields. If rolling back to the legacy
 OpenCode format, restore the previous `permission:` block and remove `permissions:` by hand.
 
+### Optional skill projection
+
+Declare `skills: [example-skill, another-skill]` in a neutral agent's frontmatter. Use a
+nonempty, single-line bracketed list (not a block list) of distinct lowercase IDs, each at
+most 64 characters, with digits and single hyphens between segments. Omit the key to leave
+native skill configuration untouched.
+
+In `.prdkit/memory/agents.md`, add the applicable settings outside code fences and HTML
+comments. `Skill roots:` is optional and replaces both default search locations:
+`.claude/skills/<plugin>/skills/<id>/` (any plugin) and `.agents/skills/<id>/`. Give it
+comma-separated repository-relative directories that directly contain the ID directories.
+Use plain paths without spaces, wildcards or `.`/`..` segments. Set `Claude skill prefix:`
+to the actual plugin name if any declaring agent targets Claude Code.
+
+```text
+## Skills
+
+Claude skill prefix: example-plugin
+Skill roots: .claude/skills/example-plugin/skills, .agents/skills
+```
+
+Each ID needs a regular `SKILL.md` inside the repository. If more than one copy is found,
+all copies must declare the same needs. Under `metadata` in the skill's frontmatter, the
+optional `prdkit/needs` key takes a single-line, whitespace-separated string. For example:
+
+```yaml
+---
+name: example-skill
+description: Collect example evidence.
+metadata:
+  prdkit/needs: "bash python3"
+---
+```
+
+A single-line flow map (`metadata: { prdkit/needs: "bash python3" }`) also works. Use simple
+keys and single-line scalar values, not aliases, nested collections, escapes or folded
+values. Absent or empty `prdkit/needs` means no shell is needed; any of `bash`, `python3`,
+`git`, `gh`, `dotnet` and `network` requires shell access. These tokens do not check that
+individual commands or network access are available. Unknown tokens, missing files and
+unreadable declarations are line-numbered findings in render and `--check`; render writes
+no projections until they are fixed.
+
+For a declaring agent:
+
+- **OpenCode:** Set its local tier's **OpenCode permissions** cell to take ownership of
+  V2 permissions, or exclude OpenCode from that agent's `harnesses:` list. The renderer
+  refuses to infer shell access from hand-owned or legacy permissions. A rendered `shell`
+  allow is required to allow shell-dependent skills. After the tier's rules, the renderer
+  denies all skills and then allows only the declared runnable IDs. For each blocked skill,
+  the prompt points to `<id>.json` or `<id>.md` supplied by the maker. Pass those completed
+  files with `build-review-package.sh --evidence <repo-relative-path>`; the package keeps
+  them under `evidence/<repo-relative-path>` and lists them in its inventory. Without
+  evidence the reviewer should report the facts as unverified.
+- **Claude Code:** The renderer owns `skills:` and writes all declared IDs as
+  `<plugin>:<id>`. It preserves the native tool restriction, adding `Skill` if needed.
+  Use a comma-separated value, a single-line bracketed list or a block list of tool names. Without
+  `tools:`, the agent inherits all tools; with a list it has shell access only if `Bash`
+  is listed. Skill projection does not grant `Bash`.
+
+Removing the neutral `skills:` key hands Claude's native `skills:` and `tools:` back to the
+project; remove old references or the added `Skill` tool by hand. OpenCode still regenerates
+the tier's permission rules if that tier remains opted in. The renderer does not install,
+copy or run skill files; make them discoverable in each target harness and validate with
+its native loader.
+
 ## Rigor and proportion
 
 Light and full share truthful evidence and relevant verification. Review follows the tiers in
