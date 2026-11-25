@@ -14,6 +14,7 @@ change by change.
 ### Added
 
 - `pr-state.sh` snapshots GitHub PR facts and `ci-wait.sh` waits for required checks on an exact head, with optional signature-based job reruns.
+- `facts.sh` collects and verifies exact-head review facts, with an optional consumer-owned map of changed paths to required checks.
 
 ## [3.1.1] — 2026-11-25 — focused spec retrieval
 

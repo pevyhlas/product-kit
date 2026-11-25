@@ -32,6 +32,9 @@
 #   --context PATH    Snapshot a repo-relative tracked file at HEAD (repeatable)
 #   --evidence PATH   Copy a completed repo-relative evidence file (repeatable)
 #
+# Attach a facts.sh pack (set id, base and head to the values in the pack):
+#   bash .prdkit/scripts/bash/build-review-package.sh "$id" "$base" "$head" --evidence ".prdkit/cache/evidence/$id/facts/summary.md" --evidence ".prdkit/cache/evidence/$id/facts/index.json"
+#
 # ARGUMENTS:
 #   CHANGE_ID     Change id (e.g. 004-export-csv)
 #   BASE_SHA      Revision the change started from (recorded before implementing)

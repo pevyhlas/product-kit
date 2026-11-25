@@ -877,7 +877,7 @@ else
 fi
 while IFS= read -r -d '' file; do scripts+=("$file"); done < <(
     cd "$PK_ROOT" && find scripts -type f ! -path scripts/agents-section.md ! -path scripts/outcome-checkpoint.md \
-        ! -path scripts/pr-facts.py -print0)
+        ! -path scripts/pr-facts.py ! -path scripts/facts.py -print0)
 assert_eq "" "$(cd "$PK_ROOT" && runtime_check "${scripts[@]}")" "every script beneath scripts/ stays within the runtime allowlist"
 
 it "status, doctor and bounds read arrows, dashes and accents beside IDs, links and names"

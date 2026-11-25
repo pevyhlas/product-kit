@@ -45,3 +45,62 @@ hard-linked private claim establish ownership; a leaf type precheck alone does n
 is unarmed until claim confirmation and verifies the owned inode before release. Interrupted
 or unsupported claims can remain stale for explicit reconciliation; no automatic lock repair,
 new runtime dependency or implicit host operation is attempted.
+
+## Exact-head facts pack
+
+Collect once for the review round, from a clean Git checkout at the intended head (including
+staged, unstaged, untracked and submodule state; ordinary ignored files don't make it dirty):
+
+```bash
+bash .prdkit/scripts/bash/facts.sh "$id" --base "$base" --head "$head" # optionally add --pr "$pr"
+bash .prdkit/scripts/bash/build-review-package.sh "$id" "$base" "$head" --evidence ".prdkit/cache/evidence/$id/facts/summary.md" --evidence ".prdkit/cache/evidence/$id/facts/index.json"
+```
+
+Without `--head`, the current `HEAD` is used. Pass `--base` to use the same base as the package
+builder; otherwise the helper uses the unique merge base with the locally available `origin/HEAD`.
+It never fetches. The change record must exist at `HEAD`. Python 3.11+ (stdlib only) is needed;
+`jq` isn't. Only `--pr` with `gh` available triggers a host read through `pr-state.sh`. A missing,
+failed or mismatched PR snapshot is **not collected**, never green. The PR's base tip in the
+snapshot can differ from the local diff's merge base.
+
+The cache contains a `summary.md` of at most 60 lines and the full `index.json`; excess detail
+is linked from the summary. The key is facts script version, base SHA, and head SHA. The index
+records commands, exit statuses and results, base/head tree IDs, file SHA-256s (including link
+text and readable target bytes), and hashes of relevant Git state and the normalized CI
+observation. Doctor is a local diagnosis: its UTC evaluation date, effective config, and local
+worktree context are inputs too. Unchanged inputs produce byte-identical output; no collection
+timestamp is stored. The summary contains the index hash so readers can detect a mixed pair.
+Attach both files after collection completes; the package builder copies them as ordinary
+`--evidence` and does not validate their binding or make a review decision.
+
+Use the summary for the captured collector answers; do not rerun collectors or reread the spec
+to derive them. The bounds collector lists constraints, non-goals and qualities: deciding
+whether the diff respects them, fits the spec and design, and is correct stays with the reviewer.
+Collector failures are recorded in a successfully written pack. Exit 2 is a refusal (such as
+bad inputs, head mismatch, dirty checkout, changed inputs during collection or unsafe cache).
+
+Use `facts.sh --verify "$id"` with the original options to recompute and compare without writing.
+It exits 0 if both files match, 1 on drift (including a missing pack), or 2 on refusal. CI may
+run it with a restored pack; it is advisory unless the consumer makes it a required check.
+Local state or a pending check moving to completion can legitimately cause drift.
+
+### Path-to-check map
+
+Optionally commit `.prdkit/memory/review-checks.json` (a UTF-8 JSON object). The kit doesn't
+install a default map or name any checks. Example with consumer-defined check names:
+
+```json
+{
+  "docs/**": ["Documentation"],
+  "src/**/*.py": ["Unit tests"],
+  "src/public/*": ["Interface compatibility"]
+}
+```
+
+Globs are case-sensitive, repository-relative and match the entire path. `*`, `?` and `[abc]`
+match within one component; a whole `**` component matches zero or more components. Check
+names are exact, nonempty strings. Matching rules are combined with duplicates removed.
+Deleted paths count; a rename contributes both its old and new paths. Each changed path is
+listed in the index even if no rule matches. A configured check absent from the PR's required
+inventory is marked **not reported as required**, with no inferred result. With no map the
+pack explicitly reports that it is absent.

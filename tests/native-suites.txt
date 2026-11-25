@@ -32,6 +32,7 @@ test_review_record_format.sh
 test_review_report.sh
 test_pr_review.sh
 test_pr_state.sh
+test_facts.sh
 test_review_package.sh
 test_review_package_rounds.sh
 test_review_package_targeted.sh

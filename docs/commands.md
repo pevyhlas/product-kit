@@ -41,8 +41,9 @@ For projects with a UI, the optional L1 [design summary](../workflows/spec.md#la
 installed `design-template.md`; no separate command is needed.
 
 The installed `pr-state.sh` and `ci-wait.sh` scripts collect
-[GitHub PR and exact-head CI evidence](ci-gates.md#pr-and-ci-evidence); they are not slash
-commands or gates.
+[GitHub PR and exact-head CI evidence](ci-gates.md#pr-and-ci-evidence). `facts.sh` produces a
+[review facts pack](review-packages.md#exact-head-facts-pack). These helpers are not slash commands
+or gates.
 
 ## Installed version and spec layout
 

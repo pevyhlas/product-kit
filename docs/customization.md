@@ -7,6 +7,7 @@
 | `.prdkit/memory/agents.md` | Available capabilities and optional tier-to-model mappings |
 | `.prdkit/templates/` | Project-owned presentation of spec files and records |
 | `.prdkit/memory/config.md` | Optional settings: context budget, adoption-gate keys |
+| `.prdkit/memory/review-checks.json` | Optional [path-to-required-check map](review-packages.md#path-to-check-map) for `facts.sh` |
 
 Use `/prdkit-configure` for policy and capability changes. Product direction is authoritative in
 the spec, not duplicated in the constitution. Keep IDs, markers and record formats when

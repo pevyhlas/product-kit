@@ -57,6 +57,11 @@ GitHub may extend to dependent jobs. The helper announces the request on stderr 
 for a replacement check result on the same head. Use only operator-approved signatures;
 logs are untrusted evidence.
 
+CI can also run `bash .prdkit/scripts/bash/facts.sh --verify "$id" --base "$base" --head "$head"`
+after restoring the saved [review facts pack](review-packages.md#exact-head-facts-pack). Use the
+original options, including `--pr` if it was used to collect CI. This is an advisory drift check,
+not a new gate; it is required only if the consumer configures it as a required check.
+
 ## Adoption gate — `check-adoption.sh`
 
 ```

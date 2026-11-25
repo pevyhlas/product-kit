@@ -36,7 +36,7 @@ assert_file "$PROJ/.prdkit/scripts/bash/check-pr-review.sh"
 assert_contains "$(cat "$PROJ/.prdkit/.manifest")" '.prdkit/scripts/bash/check-pr-review.sh' 'trusted launcher participates in installation integrity'
 assert_file "$PROJ/.prdkit/scripts/bash/review-report.sh"
 assert_contains "$(cat "$PROJ/.prdkit/.manifest")" '.prdkit/scripts/bash/review-report.sh' 'review report helper is mapped and hashed'
-for file in pr-state.sh ci-wait.sh pr-facts-runtime.sh pr-facts.py; do
+for file in pr-state.sh ci-wait.sh pr-facts-runtime.sh pr-facts.py facts.sh facts.py; do
     assert_file "$PROJ/.prdkit/scripts/bash/$file"
     assert_contains "$(cat "$PROJ/.prdkit/.manifest")" ".prdkit/scripts/bash/$file" 'PR evidence helper participates in installation integrity'
 done
@@ -137,7 +137,8 @@ it "manifest covers every installed file and includes workflow hashes"
 assert_contains "$(cat "$PROJ/.prdkit/.manifest")" "version: $(cat "$PK_ROOT/VERSION")" "version recorded"
 expected=0
 for file in "$PROJ"/.product-kit/commands/*.md "$PROJ"/.product-kit/workflows/*.md "$PROJ"/.product-kit/templates/*.md \
-    "$PROJ"/.product-kit/scripts/*.sh "$PROJ"/.product-kit/scripts/pr-facts.py "$PROJ"/.product-kit/scripts/{agents-section,outcome-checkpoint}.md; do
+    "$PROJ"/.product-kit/scripts/*.sh "$PROJ"/.product-kit/scripts/{pr-facts,facts}.py \
+    "$PROJ"/.product-kit/scripts/{agents-section,outcome-checkpoint}.md; do
     case "$(basename "$file")" in
         init.sh|render-agents.sh|agent-definition-template.md) ;;   # bootstrap; optional agent tiers
         *) expected=$((expected + 1)) ;;
