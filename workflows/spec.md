@@ -110,9 +110,9 @@ Column zero means the line starts without a space or tab. Only column-zero headi
 zero defines an item ID only with exactly one space after the marker, then `**`, the ID, and an
 optional plain text title separated by a space or tab. The first following `**` must be on the same
 line. There are no links, code, emphasis or HTML inside the bold ID: the span allows none of `*`,
-a backtick, `[`, `]`, `<`, `>` or `\`, and cannot end with whitespace. After the closing `**`, only
-end of line, a space, or `:` `.` `,` `;` `(` is allowed as the next character. Other bullets are
-opaque; indented and nested bullets never define IDs.
+a backtick, `[`, `]`, `<`, `>` or `\`, and does not end in whitespace, including Unicode spaces.
+After the closing `**`, only end of line, a space, or `:` `.` `,` `;` `(` is allowed as the next
+character. Other bullets are opaque; indented and nested bullets never define IDs.
 
 A column-zero table header must be at the start of the file or immediately after a heading or blank
 line, with its matching delimiter on the next line. A header/delimiter pair elsewhere is refused.

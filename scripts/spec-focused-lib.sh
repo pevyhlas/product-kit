@@ -20,10 +20,14 @@ spec_focused() { # snapshot index|section selector expected-lines expected-bytes
                 ids[section] = ids[section] (ids[section] == "" ? "" : ", ") id
             }
         }
+        # In LC_ALL=C, match ASCII whitespace and the UTF-8 byte suffixes for Unicode Zs.
+        function trailing_space(s) {
+            return s ~ /([[:space:]]|\302\240|\341\232\200|\342\200[\200-\212\257]|\342\201\237|\343\200\200)$/
+        }
         function item_id(s,   span,id) {
             if (!sub(/^[-+*] \*\*/, "", s) || !match(s, /\*\*/)) return ""
             span = substr(s, 1, RSTART-1)
-            if (span ~ /[][<>*`\\]|[[:space:]]$/ ||
+            if (span ~ /[][<>*`\\]/ || trailing_space(span) ||
                 substr(s, RSTART+RLENGTH) !~ /^([ :.,;(]|$)/) return ""
             if (!match(span, /^((P[0-9]+(\.[0-9]+)?\.[BI]|[JRQCDN])-[0-9]+|P[0-9]+(\.[0-9]+)?)([ \t]|$)/)) return ""
             id = substr(span, 1, RLENGTH)

@@ -510,6 +510,34 @@ for bullet in $'-\t**R-11 tab after marker**' $'- **R-11 trailing tab\t**' $'- *
     assert_contains "$OUTPUT" 'No match for section selector'
 done
 
+it "Unicode space at the end of a bold ID span leaves the bullet opaque"
+# U+00A0, U+1680, U+2000–U+200A, U+202F, U+205F, U+3000 (UTF-8).
+for space in $'\302\240' $'\341\232\200' \
+    $'\342\200\200' $'\342\200\201' $'\342\200\202' $'\342\200\203' $'\342\200\204' \
+    $'\342\200\205' $'\342\200\206' $'\342\200\207' $'\342\200\210' $'\342\200\211' $'\342\200\212' \
+    $'\342\200\257' $'\342\201\237' $'\343\200\200'; do
+    printf '%s\n' '# Spec' '## Example' "- **R-11 Quoted title${space}**" \
+        '## Actual' '- **R-12 Real title**' > "$SECTIONS"
+    run bash "$READER" --section R-11 "$SECTIONS"
+    assert_eq 2 "$STATUS"
+    assert_contains "$OUTPUT" 'No match for section selector'
+    run bash "$READER" --index "$SECTIONS"
+    assert_eq 0 "$STATUS" "an opaque bullet does not cause refusal"
+done
+printf '%s\n' '# Spec' '## Example' $'- **R-11 Quoted title\302\240**' \
+    '## Actual' '- **R-11 Real title**' > "$SECTIONS"
+run bash "$READER" --section R-11 "$SECTIONS"
+assert_eq 0 "$STATUS" "an opaque bullet does not make the actual ID ambiguous"
+assert_eq $'4: ## Actual\n5: - **R-11 Real title**' "${OUTPUT#*$'\n'}"
+
+it "internal Unicode space and final non-Zs multibyte characters still allow bold IDs"
+for title in $'Quoted\302\240title' 'Café' '雪' $'Title\342\200\213'; do
+    printf '%s\n' '# Spec' '## Actual' "- **R-11 ${title}**" > "$SECTIONS"
+    run bash "$READER" --section R-11 "$SECTIONS"
+    assert_eq 0 "$STATUS"
+    assert_eq "$(printf '2: ## Actual\n3: - **R-11 %s**' "$title")" "${OUTPUT#*$'\n'}"
+done
+
 it "shallow thematic breaks end paragraph state without defining a section"
 for marker in '  ***' '***' $'   *\t* *' $' -\t- -' $'  _\t_ _'; do
     printf '%s\n' '# Spec' '## Intro' "$marker" '---' '## Other' > "$SECTIONS"
