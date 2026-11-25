@@ -35,6 +35,8 @@ Stamps are authoritative only in the opening scaffold header block; later
 reviewer content is not a source of stamps. The coordinator saves the original
 and passes --scaffold to require an exact match; without it, a report may omit
 the block, but an opening "# Review report" must start a complete header.
+Neither an optional standalone header nor a lint pass without --scaffold verifies
+stamp values; only --scaffold against the coordinator's saved original does.
 
 normalize writes a copy to stdout, changing only the explicit Verdict: line
 immediately before the final Counts: line. It does not infer a verdict from counts.

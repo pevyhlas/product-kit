@@ -74,6 +74,13 @@ trailer() { printf 'Verdict: %s\nCounts: %s critical, %s high, %s medium, %s low
 finding() { printf '\n- %s: path with spaces/file.md:42\n  Scenario: Observable result.\n  Evidence: Replayed the check.\n' "$1"; }
 report() { if [ -n "$HEADER" ]; then printf '%s\n' "$HEADER"; fi; }
 
+it "lint help distinguishes stamp verification from standalone lint"
+run "$BASH" "$HELPER" lint --help
+assert_eq 0 "$STATUS"
+help_text="$(printf '%s' "$OUTPUT" | tr '\n' ' ' | tr -s ' ')"
+assert_contains "$help_text" 'Neither an optional standalone header nor a lint pass without --scaffold verifies stamp values'
+assert_contains "$help_text" "only --scaffold against the coordinator's saved original does"
+
 it "scaffold stamps the installed registry, review range, scope and resolved model"
 run scaffold example-review opencode --since previous-sha
 assert_eq 0 "$STATUS"

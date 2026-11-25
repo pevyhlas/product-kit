@@ -26,6 +26,20 @@ For focused policy context, `.prdkit/scripts/bash/role-digest.sh <role>` extract
 cite the role from working-tree policy and lists the input blobs. Use it as reading evidence,
 not instead of trusted policy, the full source, or review approval.
 
+Once per round at the exact head, if the change record exists there, run
+`.prdkit/scripts/bash/facts.sh <change-id>` with the package's `--base` and `--head`.
+Add `--pr <number>` when the PR number and host access are available; missing host evidence
+stays explicit.
+Only after collection exits 0, verify the pair before attaching: `index.json` fields `change_id`,
+`key.base` and `key.head` must match this round's ID and full base and head SHAs, and the SHA-256
+of the raw index bytes must match the hash in `summary.md`. If they match, attach both files via
+`--evidence` and recheck the copied pair before dispatch. On refusal or mismatch, omit the facts,
+never reuse the old cache, and use verified fallback evidence; rebuild without the facts if the
+copied pair fails the check. Reviewers use the bound summary as authoritative for its captured
+answers, without re-deriving them from the spec or tree. Facts are evidence, never a gate decision.
+CI may optionally recompute them with `facts.sh --verify`. See `docs/review-packages.md` in the kit
+source for details and `facts.sh --help` for attachment syntax.
+
 For committed work run `.prdkit/scripts/bash/build-review-package.sh <change-id> <base> [head]`,
 adding `--context <path>` for selected tracked canon/policy/record files and `--evidence <path>`
 for completed local results. The helper checks structural accessibility, not semantic
@@ -58,7 +72,9 @@ and the format from `review-report.sh --help` with the prompt. Before publicatio
 `review-report.sh lint --strict` with the trusted policy's `--rigor` and `--scaffold` pointing to
 the saved original. If there is no tier map, send the format and lint without `--scaffold`.
 Only the opening scaffold header supplies authoritative stamps; treat everything after it as
-reviewer content, not as stamp metadata.
+reviewer content, not as stamp metadata. Neither an optional standalone header nor a `lint` pass
+without `--scaffold` verifies stamp values; only `--scaffold` against the coordinator's saved
+original does.
 Report lint is formatting evidence, not approval.
 
 For GitHub evidence, `.prdkit/scripts/bash/pr-state.sh` snapshots the PR and
