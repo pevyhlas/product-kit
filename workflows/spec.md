@@ -86,13 +86,60 @@ Visible IDs, mappings and all substantive text still count. Auto-loaded instruct
 remain raw. An exemption alone saves no model input.
 
 For routine spec context use `bash .prdkit/scripts/bash/read-spec.sh specs/<file>.md` before
-loading text into the agent context. Its read-only projection keeps original line numbers and
-reports its version, source path, observed HEAD, actual content blob, raw size and omitted size.
-The working-tree snapshot may differ from HEAD; the content blob identifies the bytes read.
-Use `--stats` for accounting, `--target nav-key` for one validated target, and `--raw` for exact
-source bytes. Malformed navigation stays in the projection. Raw Git diffs/blobs remain the
-integrity and review artifacts; use them for link changes, source review and revision evidence.
-The compact view is neither a replacement specification nor a hash/review input.
+loading text into the agent context. The compact view keeps original line numbers. It and `--stats`
+report the projection version and raw and omitted sizes. All projected views report the source
+path, observed HEAD and content blob. The working-tree snapshot may differ from HEAD; the blob
+identifies the bytes read.
+
+- `--index` lists column-zero ATX headings as a tree, with original line numbers and reading-line
+  counts. A heading's count includes its own line and its subsections, at one line per 100 characters
+  (rounded up, at least one per physical line), excluding only validated navigation.
+- `--section 'Heading text'` returns one section, from its heading through the line before the next
+  heading of equal or higher level (or EOF). Quote multiword headings. A leading heading ID (e.g.
+  `D-01` or `P1`), a defined item ID (e.g. `R-01` in a bold requirement bullet or `P1` in a Parts
+  table), or a record ID in a table selects its nearest enclosing heading. `Tracking:` links and
+  other citations do not select sections. Matching ignores ASCII case and collapses whitespace.
+  Zero or multiple matches exit 2 and list candidates with their source lines.
+- `--stats` shows accounting; `--target nav-key` resolves one validated target; `--raw` returns exact
+  source bytes. All modes are mutually exclusive; use `--help` for syntax.
+
+**Supported spec grammar for `--section` and `--index`:**
+
+Column zero means the line starts without a space or tab. Only column-zero headings (`#` through
+`######` followed by a space or end of line) start sections. A `-`, `*`, or `+` bullet at column
+zero defines an item ID only with exactly one space after the marker, then `**`, the ID, and an
+optional plain text title separated by a space or tab. The first following `**` must be on the same
+line. There are no links, code, emphasis or HTML inside the bold ID: the span allows none of `*`,
+a backtick, `[`, `]`, `<`, `>` or `\`, and does not end in whitespace, including Unicode spaces.
+After the closing `**`, only end of line, a space, or `:` `.` `,` `;` `(` is allowed as the next
+character. Other bullets are opaque; indented and nested bullets never define IDs.
+
+A column-zero table header must be at the start of the file or immediately after a heading or blank
+line, with its matching delimiter on the next line. A header/delimiter pair elsewhere is refused.
+While a table is open, all its rows are body rows, even rows that look like delimiters.
+Outer pipes are optional and `\|` stays in its cell. `Part` in the first header cell enables part
+IDs; well-formed records in first cells supply record IDs. Other text is opaque to section lookup,
+including indented code and list continuations. Plain record rows still work for status and doctor.
+
+Column-zero backtick or tilde fences and HTML comments opened with zero to three spaces are literal:
+they supply no headings or IDs. A fence closer uses the same character, at least as many markers,
+and no trailing text. For column-zero openers the closer can have up to three leading spaces;
+comments end at `-->`, even on an indented line. An indented fence is treated as possibly literal
+until a matching closer at any indentation. A column-zero heading, ID bullet, table row, fence, or
+comment opener inside it is refused, except for the matching closer.
+
+Both views check the entire file first. They also refuse ATX headings after one to three spaces or
+tabs, Setext underlines after paragraphs, block quotes, and CommonMark HTML block openers other than
+comments (with zero to three leading spaces), even directly after paragraph text. Put inline HTML
+inside a sentence, not alone on a line. Angle-bracket prose that does not start an HTML block is
+allowed. Refusals exit 2 at the first offending source line with a `--raw` hint.
+Thematic breaks with zero to three leading spaces end paragraphs without defining a heading or ID.
+A break uses at least three identical `-`, `*`, or `_` markers, optionally separated by spaces or tabs.
+
+Section output keeps the original line numbers and omits a footer only when legacy navigation
+validates it and the focused scanner sees it outside literal examples. Raw Git diffs/blobs remain
+the integrity and review artifacts; use them for link changes, source review and revision evidence.
+A projection is neither a replacement specification nor a hash/review input.
 
 ## Levels
 

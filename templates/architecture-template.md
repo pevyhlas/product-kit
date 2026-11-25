@@ -2,7 +2,7 @@
 
 **Inherits**: <platform document (`org/repo`, path) and the rules used> or none
 
-<One sentence: the shape of the system and why it fits the core loop.>
+\<One sentence: the shape of the system and why it fits the core loop.>
 
 <!-- The overview, read at a glance: one screen. Detail lives in specs/architecture/<topic>.md
 (architecture-topics-template.md) and specs/parts/. A topic with little to say stays a short
@@ -17,7 +17,7 @@ flowchart LR
   P2 --> X[(<external system>)]
 ```
 
-<A few lines: where data lives and where the trust boundaries are.>
+\<A few lines: where data lives and where the trust boundaries are.>
 
 ## Parts
 

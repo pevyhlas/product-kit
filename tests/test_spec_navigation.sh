@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Real installed reader and budget behavior; raw Markdown remains the source artifact.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
-PROJ="$(make_inited_project)"; track_tmp "$PROJ"
+PROJ="$(make_inited_project --with agent-tiers)"; track_tmp "$PROJ"
 cd "$PROJ" || exit 1
 READER="$PROJ/.prdkit/scripts/bash/read-spec.sh"
 source "$PROJ/.prdkit/scripts/bash/spec-lib.sh"
@@ -51,8 +51,591 @@ assert_eq 0 "$STATUS" "individual target lookup succeeds"
 assert_contains "$OUTPUT" '108: [nav-rec-1]: https://tracker.example.test/items/REC-1' "lookup keeps raw location"
 run bash "$READER" --target nav-missing "$FILE"
 assert_eq 1 "$STATUS" "unknown target fails"
+run bash "$READER" --target '\156av-rec-1' "$FILE"
+assert_eq 1 "$STATUS" "a target selector is literal, not an awk escape"
 bash "$READER" --raw "$FILE" > raw.md
 assert_eq "$before" "$(git hash-object raw.md)" "raw read is byte-for-byte"
+
+it "focused views use the legacy validated footer and reading-line weights"
+run bash "$READER" --index "$FILE"
+assert_eq 0 "$STATUS"
+assert_eq '1: # Requirements (106 reading lines)' "${OUTPUT#*$'\n'}" "the index is a heading tree, not a source dump"
+run bash "$READER" --section r-50 "$FILE"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" "content_blob=$before" "the source is the working-tree blob"
+assert_contains "$OUTPUT" '105:   Tracking: [REC-50][nav-rec-50]' "original numbering"
+assert_not_contains "$OUTPUT" 'projection=' "section has no stats preamble"
+assert_not_contains "$OUTPUT" 'https://tracker.example.test' "validated footer is not repeated"
+
+it "nested headings and item IDs identify exactly one original span"
+SECTIONS=specs/sections.md
+cat > "$SECTIONS" <<'MD'
+# Product
+Preface cites R-02.
+## Accounts ##
+- **R-01 Creation**: create accounts.
+Tracking: [REC-1][nav-a] [REC-2][nav-b]
+Tracking: [REC-1][nav-a]
+<!-- examples
+## Hidden comment
+- **R-90 Comment**
+-->
+````markdown
+## Hidden backticks
+```
+- **R-91 Code**
+````
+~~~
+## Hidden tildes
+~~~
+### Safety
+MD
+long_line="$(awk 'BEGIN { for (i=1;i<=101;i++) printf "é" }')"
+printf '%s\n' "$long_line" >> "$SECTIONS"
+cat >> "$SECTIONS" <<'MD'
+## Other
+- **R-02 Other**: unrelated.
+Tracking: [REC-2][nav-b]
+## Shared
+## Shared
+## H-07 Hold details
+## Path \name (literal?)
+<!-- prdkit:navigation:v1 begin -->
+[nav-a]: https://example.test/items/REC-1
+[nav-b]: https://example.test/items/REC-2
+<!-- prdkit:navigation:v1 end -->
+MD
+run bash "$READER" --index "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq "$(cat <<'INDEX'
+1: # Product (28 reading lines)
+3:   ## Accounts (19 reading lines)
+19:     ### Safety (3 reading lines)
+21:   ## Other (3 reading lines)
+24:   ## Shared (1 reading line)
+25:   ## Shared (1 reading line)
+26:   ## H-07 Hold details (1 reading line)
+27:   ## Path \name (literal?) (1 reading line)
+INDEX
+)" "${OUTPUT#*$'\n'}" "nested counts include descendants, long lines and literal source examples"
+for heading in ' Accounts ' r-01; do
+    run bash "$READER" --section "$heading" "$SECTIONS"
+    assert_eq 0 "$STATUS" "$heading resolves"
+    assert_eq "$(awk 'NR >= 3 && NR <= 20 { print NR ": " $0 }' "$SECTIONS")" "${OUTPUT#*$'\n'}" \
+        "selection stops before the next sibling and retains literal examples"
+done
+run bash "$READER" --section R-02 "$SECTIONS"
+assert_eq 0 "$STATUS" "a prose reference in another section is not a definition"
+assert_eq "$(awk 'NR >= 21 && NR <= 23 { print NR ": " $0 }' "$SECTIONS")" "${OUTPUT#*$'\n'}"
+run bash "$READER" --section h-07 "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq '26: ## H-07 Hold details' "${OUTPUT#*$'\n'}"
+run bash "$READER" --section 'path   \name (literal?)' "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq '27: ## Path \name (literal?)' "${OUTPUT#*$'\n'}" "selector is literal and last section stops at EOF"
+
+it "ambiguous or missing selectors report candidate locations and no selected content"
+run bash "$READER" --section Shared "$SECTIONS"
+assert_eq 2 "$STATUS"
+assert_contains "$OUTPUT" 'Ambiguous section selector'
+assert_contains "$OUTPUT" 'Available candidates:'
+assert_not_contains "$OUTPUT" 'Source:' "no source header promises a selected section"
+assert_contains "$OUTPUT" '24:   ## Shared'
+assert_contains "$OUTPUT" '25:   ## Shared'
+for heading in R-90 R-91 'Hidden backticks' 'Hidden tildes' 'Hidden comment' REC-1 REC-2 nav-a ''; do
+    run bash "$READER" --section "$heading" "$SECTIONS"
+    assert_eq 2 "$STATUS"
+    assert_contains "$OUTPUT" 'Available candidates:'
+    assert_contains "$OUTPUT" '3:   ## Accounts [IDs: R-01]'
+done
+bash "$READER" --section "$SECTIONS" > stdout 2> stderr
+assert_eq 2 "$?"
+assert_eq '' "$(cat stdout)" "selection errors go to stderr"
+assert_contains "$(cat stderr)" 'Missing section selector. Available candidates:'
+run bash "$READER" --section Accounts --index "$SECTIONS"
+assert_eq 2 "$STATUS" "modes are mutually exclusive"
+run bash "$READER" --help
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '--index'
+assert_contains "$OUTPUT" '--section'
+
+it "record IDs register only from well-formed rows inside a delimited table"
+printf '%s\n' '# Records' '## Paused' '| Record |' '|---|' \
+    '| HOLD stop-01 owner=owner scope=all since=2026-01-01 until=lifted — Pause. |' \
+    '| HOLD prose-01 is a note. |' \
+    '| HOLD wrong-date owner=owner scope=all since=yesterday until=lifted |' \
+    '| WAIVER missing-field owner=owner check=A1 expires=2026-01-01 |' \
+    '| HOLD broken-ref owner=owner scope=all since=2026-01-01 until=lifted — ref=specs/authority.md#H-01@short |' \
+    '## Notes' 'HOLD stop-01 owner=owner scope=all since=2026-01-01 until=lifted' \
+    'HOLD plain-01 owner=owner scope=all since=2026-01-01 until=lifted' \
+    '| Record |' '| HOLD no-table owner=owner scope=all since=2026-01-01 until=lifted |' > "$SECTIONS"
+run bash "$READER" --section stop-01 "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq "$(awk 'NR >= 2 && NR <= 9 { print NR ": " $0 }' "$SECTIONS")" "${OUTPUT#*$'\n'}"
+for id in prose-01 wrong-date missing-field broken-ref plain-01 no-table; do
+    run bash "$READER" --section "$id" "$SECTIONS"
+    assert_eq 2 "$STATUS" "$id is not defined"
+    assert_contains "$OUTPUT" 'No match for section selector'
+done
+
+it "part definitions in a Parts table or a part heading resolve, but citations do not"
+cp "$PK_ROOT/examples/request-service/specs/architecture.md" "$SECTIONS"
+printf '\n## Citations\n\n| Reference | Note |\n|---|---|\n| P1 citation | P2 is also cited. |\n' >> "$SECTIONS"
+printf '\n## Discussion\n\n| Part | Note |\n| P1 is referenced here | This is just an example. |\n| P9 not a part | Also an example. |\n' >> "$SECTIONS"
+run bash "$READER" --section p1 "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq "$(awk 'NR >= 19 && NR <= 25 { print NR ": " $0 }' "$SECTIONS")" "${OUTPUT#*$'\n'}"
+run bash "$READER" --section P9 "$SECTIONS"
+assert_eq 2 "$STATUS"
+assert_contains "$OUTPUT" 'No match for section selector'
+printf '%s\n' '# P1.2 Storage' '## Why it exists' 'P1.2 keeps records.' \
+    '## Retired' '- P3 Older component: retired: moved elsewhere' > "$SECTIONS"
+run bash "$READER" --section P1.2 "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq "$(awk '{ print NR ": " $0 }' "$SECTIONS")" "${OUTPUT#*$'\n'}"
+run bash "$READER" --section P3 "$SECTIONS"
+assert_eq 2 "$STATUS"
+assert_contains "$OUTPUT" 'No match for section selector' "plain retired items are not focused definitions"
+
+it "focused views refuse Setext boundaries without changing raw or compact accounting"
+for underline in '---' '===='; do
+    printf '%s\n' '# Spec' '## Scope' 'In scope.' '' 'Exceptions' "$underline" '- **R-08 Separate item**' '## Following' > "$SECTIONS"
+    for mode in index section; do
+        args=(--index)
+        if [ "$mode" = section ]; then args=(--section Scope); fi
+        bash "$READER" "${args[@]}" "$SECTIONS" > stdout 2> stderr
+        assert_eq 2 "$?" "$mode refuses $underline"
+        assert_eq '' "$(cat stdout)"
+        assert_contains "$(cat stderr)" "$SECTIONS: 6: Setext"
+        assert_contains "$(cat stderr)" 'use --raw'
+    done
+    run bash "$READER" --stats "$SECTIONS"
+    assert_eq 0 "$STATUS"
+    assert_contains "$OUTPUT" 'raw_reading_lines=8 prose_reading_lines=8'
+    bash "$READER" --raw "$SECTIONS" > raw.md
+    run cmp -s "$SECTIONS" raw.md
+    assert_eq 0 "$STATUS"
+done
+printf '%s\n' '# Spec' 'Body.' '' '---' '```md' 'Fenced example' '===' '```' \
+    '<!-- example' 'Commented example' '---' '-->' '## Next' > "$SECTIONS"
+run bash "$READER" --index "$SECTIONS"
+assert_eq 0 "$STATUS" "a thematic break after a blank and literal examples are not headings"
+assert_eq $'1: # Spec (13 reading lines)\n13:   ## Next (1 reading line)' "${OUTPUT#*$'\n'}"
+run bash "$READER" --section Next "$SECTIONS"
+assert_eq 0 "$STATUS"
+
+it "Setext refusal distinguishes paragraphs from delimited tables and references"
+printf '%s\n' '# Scope' '' '| Exceptions' '----------' '- **R-08 Separate subsection**' '' '## Following' > "$SECTIONS"
+run bash "$READER" --index "$SECTIONS"
+assert_eq 2 "$STATUS"
+assert_contains "$OUTPUT" "$SECTIONS: 4: Setext"
+run bash "$READER" --section R-08 "$SECTIONS"
+assert_eq 2 "$STATUS"
+assert_contains "$OUTPUT" "$SECTIONS: 4: Setext"
+printf '%s\n' '# Scope' '' '[ref]: https://example.test' '---' '' \
+    '| Item | Note |' '|:---|---:|' '| Example | Note |' '---' '' '- A list item' '---' '## Following' > "$SECTIONS"
+run bash "$READER" --index "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq $'1: # Scope (13 reading lines)\n13:   ## Following (1 reading line)' "${OUTPUT#*$'\n'}"
+
+it "only contiguous, correctly indented, matching fence runs can close a column-zero example"
+for fence in '```' '~~~'; do
+    printf '%s\n' '# Spec' "$fence${fence:0:1}md" "$fence $fence" "    $fence$fence" \
+        "$fence$fence trailing text" "$fence" '## Fake' '- **R-02 Fenced example**' \
+        "   $fence$fence   " '## Real' 'A paragraph starts here.' '    Code.' '### Still visible' '- **R-03 Real item**' > "$SECTIONS"
+    run bash "$READER" --index "$SECTIONS"
+    assert_eq 0 "$STATUS"
+    assert_eq $'1: # Spec (14 reading lines)\n10:   ## Real (5 reading lines)\n13:     ### Still visible (2 reading lines)' "${OUTPUT#*$'\n'}"
+    run bash "$READER" --section R-02 "$SECTIONS"
+    assert_eq 2 "$STATUS"
+    assert_not_contains "$OUTPUT" 'Fake'
+    run bash "$READER" --section R-03 "$SECTIONS"
+    assert_eq 0 "$STATUS"
+    assert_eq $'13: ### Still visible\n14: - **R-03 Real item**' "${OUTPUT#*$'\n'}"
+done
+printf '%s\n' '# Spec' '<!-- Notes on the prdkit:navigation: format' '## Hidden' \
+    '- **R-50 Commented example**' '-->' '## After' > "$SECTIONS"
+run bash "$READER" --index "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq $'1: # Spec (6 reading lines)\n6:   ## After (1 reading line)' "${OUTPUT#*$'\n'}"
+run bash "$READER" --section R-50 "$SECTIONS"
+assert_eq 2 "$STATUS"
+assert_not_contains "$OUTPUT" 'Hidden'
+run bash "$READER" --stats "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" 'state=retained-invalid'
+assert_contains "$OUTPUT" 'omitted_bytes=0 omitted_lines=0'
+printf '%s\n' '# Spec' '' '    ```md' '' '## Real' 'Tracking: [A-1][nav-a]' \
+    '<!-- prdkit:navigation:v1 begin -->' '[nav-a]: https://example.test/items/A-1' \
+    '<!-- prdkit:navigation:v1 end -->' > "$SECTIONS"
+run spec_reading_lines "$SECTIONS"
+assert_eq '9 9' "$OUTPUT" "legacy budgets still interpret over-indented fence openers as on main"
+
+it "indented code, continued prose and nested list items remain opaque"
+printf '%s\n' '# Scope' '' '## First' 'Paragraph.' \
+    '    ## Not a heading' '    - **R-77 Literal, not a bullet**' '' '## Second' \
+    '- **R-77 Actual requirement**' '    An indented continuation.' '' '    - **R-78 Nested requirement**' \
+    '' 'Outside the list.' '    - **R-79 Literal after the list**' > "$SECTIONS"
+run bash "$READER" --index "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq $'1: # Scope (15 reading lines)\n3:   ## First (5 reading lines)\n8:   ## Second (8 reading lines)' "${OUTPUT#*$'\n'}"
+run bash "$READER" --section R-77 "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '8: ## Second'
+assert_not_contains "$OUTPUT" 'Literal, not a bullet'
+for id in R-78 R-79; do
+    run bash "$READER" --section "$id" "$SECTIONS"
+    assert_eq 2 "$STATUS"
+    assert_contains "$OUTPUT" 'No match for section selector'
+done
+
+it "an indented comment closer preserves main's legacy footer and ends the focused literal"
+printf '%s\n' '# Spec' '<!-- Note' '    -->' '## Real' 'Tracking: [REC-1][nav-a]' \
+    '<!-- prdkit:navigation:v1 begin -->' '[nav-a]: https://example.test/items/REC-1' \
+    '<!-- prdkit:navigation:v1 end -->' > "$SECTIONS"
+run spec_reading_lines "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq '5 8' "$OUTPUT"
+run bash "$READER" --target nav-a "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '7: [nav-a]: https://example.test/items/REC-1'
+run bash "$READER" --index "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq $'1: # Spec (5 reading lines)\n4:   ## Real (2 reading lines)' "${OUTPUT#*$'\n'}"
+run bash "$READER" --section Real "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq $'4: ## Real\n5: Tracking: [REC-1][nav-a]' "${OUTPUT#*$'\n'}"
+
+it "paragraph continuations cannot hide Setext boundaries; references cannot interrupt prose"
+for underline in '---' '==='; do
+    printf '%s\n' '## Context' '' 'Some heading text' '    continued on another line' "$underline" \
+        '- **R-22 Actual**' '## After' > "$SECTIONS"
+    run bash "$READER" --index "$SECTIONS"
+    assert_eq 2 "$STATUS"
+    assert_contains "$OUTPUT" "$SECTIONS: 5: Setext"
+    run bash "$READER" --section R-22 "$SECTIONS"
+    assert_eq 2 "$STATUS"
+    assert_contains "$OUTPUT" "$SECTIONS: 5: Setext"
+done
+printf '%s\n' '## Context' 'Some heading text' '[ref]: https://example.test' '---' > "$SECTIONS"
+run bash "$READER" --index "$SECTIONS"
+assert_eq 2 "$STATUS"
+assert_contains "$OUTPUT" "$SECTIONS: 4: Setext"
+printf '%s\n' '## Context' '[ref]:' '    https://example.test' '    "a title"' '---' \
+    '' '[unresolved]:' '#' > "$SECTIONS"
+run bash "$READER" --index "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '8: # (untitled) (1 reading line)' "a reference must not consume a heading"
+
+it "nested fences hide their example IDs but other HTML blocks and quotes refuse"
+for fence in '```' '~~~'; do
+    printf '%s\n' '# Spec' '## Example' '- An item.' "    $fence" '    - **R-28 Literal example**' \
+        "    $fence" '    - **R-29 Nested item**' '## Later' > "$SECTIONS"
+    run bash "$READER" --index "$SECTIONS"
+    assert_eq 0 "$STATUS"
+    assert_eq $'1: # Spec (8 reading lines)\n2:   ## Example (6 reading lines)\n8:   ## Later (1 reading line)' "${OUTPUT#*$'\n'}"
+    run bash "$READER" --section R-28 "$SECTIONS"
+    assert_eq 2 "$STATUS"
+    assert_contains "$OUTPUT" 'No match for section selector'
+    assert_not_contains "$OUTPUT" '[IDs: R-28'
+    run bash "$READER" --section R-29 "$SECTIONS"
+    assert_eq 2 "$STATUS"
+    assert_contains "$OUTPUT" 'No match for section selector'
+done
+printf '%s\n' '# Spec' '- First item' '2. Another list' '    ```' '    - **R-28 Literal**' '    ```' \
+    '## Later' '- **R-28 Actual item**' > "$SECTIONS"
+run bash "$READER" --section R-28 "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq $'7: ## Later\n8: - **R-28 Actual item**' "${OUTPUT#*$'\n'}"
+for context in '<div>' '> quoted context'; do
+    printf '%s\n' '# Spec' '## First' 'Actual prose.' "$context" '## Fake' '</div>' '## Later' > "$SECTIONS"
+    run bash "$READER" --index "$SECTIONS"
+    assert_eq 2 "$STATUS"
+    assert_contains "$OUTPUT" "$SECTIONS: 4:"
+    assert_contains "$OUTPUT" 'use --raw'
+    run bash "$READER" --section First "$SECTIONS"
+    assert_eq 2 "$STATUS" "all content is validated before returning even an earlier section"
+    assert_contains "$OUTPUT" "$SECTIONS: 4:"
+    assert_not_contains "$OUTPUT" 'Source:'
+done
+
+it "GFM cells determine part definitions independent of outer and escaped pipes"
+for variant in one escaped bare; do
+    case "$variant" in
+        one) header='| Part'; delimiter='|---|'; row='| P1 Real definition |' ;;
+        escaped) header='| Part | State \| Detail |'; delimiter='|---|---|'; row='| P1 Café \| 雪 | test |' ;;
+        bare) header='Part | State'; delimiter='--- | ---'; row='P1 Real definition | test' ;;
+    esac
+    printf '%s\n' '# Spec' '## Parts' "$header" "$delimiter" "$row" \
+        '## Tracking' 'Tracking: [P1][nav-p1]' > "$SECTIONS"
+    run bash "$READER" --section P1 "$SECTIONS"
+    assert_eq 0 "$STATUS" "$variant table defines P1, Tracking does not"
+    assert_contains "$OUTPUT" '2: ## Parts'
+    assert_contains "$OUTPUT" "5: $row"
+    assert_not_contains "$OUTPUT" '## Tracking'
+done
+
+refuses_focused() { # expected line and diagnostic prefix; fixture has an Intro heading
+    local mode args
+    for mode in index section; do
+        args=(--index)
+        if [ "$mode" = section ]; then args=(--section Intro); fi
+        bash "$READER" "${args[@]}" "$SECTIONS" > stdout 2> stderr
+        assert_eq 2 "$?" "$mode refuses $1"
+        assert_eq '' "$(cat stdout)" "no partial projection"
+        assert_contains "$(cat stderr)" "$SECTIONS: $1"
+        assert_contains "$(cat stderr)" 'use --raw'
+    done
+}
+
+it "an empty bullet cannot make a shallow heading or indented code structural"
+for spacing in ' ' '  ' '   ' $'\t' $' \t '; do
+    printf '%s\n' '# Spec' '## Intro' '-' '' "${spacing}## Next" 'Some content.' > "$SECTIONS"
+    refuses_focused '5: Indented ATX heading'
+done
+printf '%s\n' '# Spec' '## Intro' '-' '' '    - **R-01 Literal**' '## Next' 'Some content.' > "$SECTIONS"
+run bash "$READER" --index "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq $'1: # Spec (7 reading lines)\n2:   ## Intro (4 reading lines)\n6:   ## Next (2 reading lines)' "${OUTPUT#*$'\n'}"
+run bash "$READER" --section R-01 "$SECTIONS"
+assert_eq 2 "$STATUS"
+assert_contains "$OUTPUT" 'No match for section selector'
+
+it "a column-zero table must start the file or follow a heading or blank"
+printf '%s\n' '# Spec' '## Tasks' '- Parent' 'Part | State' '--- | ---' 'P1 Actual | yes' '## Real' > "$SECTIONS"
+run bash "$READER" --section P1 "$SECTIONS"
+assert_eq 2 "$STATUS"
+assert_contains "$OUTPUT" "$SECTIONS: 4: A table header"
+for preceding in '- Parent' 'A paragraph.'; do
+    printf '%s\n' '# Spec' '## Intro' 'Read this section.' '## Tasks' "$preceding" \
+        'Part | State' '--- | ---' 'P1 Actual | yes' '## Real' > "$SECTIONS"
+    refuses_focused '6: A table header'
+    run bash "$READER" --section P1 "$SECTIONS"
+    assert_eq 2 "$STATUS"
+    assert_contains "$OUTPUT" "$SECTIONS: 6: A table header"
+done
+printf '%s\n' '# Spec' '## Intro' '- Parent' '' 'Part | State' '--- | ---' 'P1 Actual | yes' '## Real' > "$SECTIONS"
+run bash "$READER" --section P1 "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '7: P1 Actual | yes'
+printf '%s\n' 'Part | State' '--- | ---' 'P1 Actual | yes' '## Real' > "$SECTIONS"
+run bash "$READER" --index "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq '4: ## Real (1 reading line)' "${OUTPUT#*$'\n'}"
+
+it "a delimiter-shaped body row does not start a second Parts table"
+printf '%s\n' '# Spec' '## Parts' '| Part | Status |' '|---|---|' '| P1 Actual | yes |' \
+    '| --- | --- |' '| P2 Actual | yes |' '' '## Next' > "$SECTIONS"
+run bash "$READER" --index "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq $'1: # Spec (9 reading lines)\n2:   ## Parts (7 reading lines)\n9:   ## Next (1 reading line)' "${OUTPUT#*$'\n'}"
+run bash "$READER" --section P2 "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq "$(awk 'NR >= 2 && NR <= 8 { print NR ": " $0 }' "$SECTIONS")" "${OUTPUT#*$'\n'}"
+
+it "only column-zero bullets with a same-line bold span define item IDs"
+printf '%s\n' '# Spec' '## Mention' '- **R-77 is referenced here but not defined' \
+    '- **R-76 Escaped \**' ' - **R-75 Indented**' '1. **R-74 Ordered**' \
+    '## Actual' '- **R-88** actual requirement' '* **R-89 With title**' '+ **P2 A part**' > "$SECTIONS"
+for id in R-77 R-76 R-75 R-74; do
+    run bash "$READER" --section "$id" "$SECTIONS"
+    assert_eq 2 "$STATUS"
+    assert_contains "$OUTPUT" 'No match for section selector'
+done
+for id in R-88 R-89 P2; do
+    run bash "$READER" --section "$id" "$SECTIONS"
+    assert_eq 0 "$STATUS"
+    assert_contains "$OUTPUT" '7: ## Actual'
+done
+printf '%s\n' '## A' '- **R-88**' '## B' '+ **R-88**' > "$SECTIONS"
+run bash "$READER" --section R-88 "$SECTIONS"
+assert_eq 2 "$STATUS"
+assert_contains "$OUTPUT" 'Ambiguous section selector'
+assert_contains "$OUTPUT" '1: ## A [IDs: R-88]'
+assert_contains "$OUTPUT" '3: ## B [IDs: R-88]'
+
+it "a bold ID span cannot contain a backtick, but code after the closer is fine"
+cat > "$SECTIONS" <<'MD'
+# Spec
+## Quotes
+- **R-11 shows `**` here as an example.
+- **R-13 A `code` span inside bold**
+- **R-14 An escaped \` backtick inside bold**
+## Actual
+- **R-12 Actual**: use `**` here.
+MD
+for id in R-11 R-13 R-14; do
+    run bash "$READER" --section "$id" "$SECTIONS"
+    assert_eq 2 "$STATUS"
+    assert_contains "$OUTPUT" 'No match for section selector'
+done
+run bash "$READER" --section R-12 "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq $'6: ## Actual\n7: - **R-12 Actual**: use `**` here.' "${OUTPUT#*$'\n'}"
+
+it "only a plain title and the first closing pair count for a bold item ID"
+for bullet in '- **R-01 Title**: text' '- **R-01 Title** (state)' '- **R-01**' \
+    '- **R-01 Title (Café) - phase-two**.' '- **R-01 Title**, text' \
+    '- **R-01 Title**; text' '- **R-01 Title**(state)'; do
+    printf '%s\n' '# Spec' '## Actual' "$bullet" > "$SECTIONS"
+    run bash "$READER" --section R-01 "$SECTIONS"
+    assert_eq 0 "$STATUS" "$bullet defines an ID"
+    assert_eq "$(printf '2: ## Actual\n3: %s' "$bullet")" "${OUTPUT#*$'\n'}"
+done
+while IFS= read -r bullet; do
+    printf '%s\n' '# Spec' '## Example' "$bullet" > "$SECTIONS"
+    run bash "$READER" --section R-11 "$SECTIONS"
+    assert_eq 2 "$STATUS" "$bullet is opaque"
+    assert_contains "$OUTPUT" 'No match for section selector'
+done <<'BULLETS'
+- **R-11 is just a citation [sample](https://example.test/**) without a closer.
+- **R-11 is an example, not **a definition**.
+- **R-11 embedded * star**
+- **R-11 embedded ` backtick**
+- **R-11 embedded [ bracket**
+- **R-11 embedded ] bracket**
+- **R-11 embedded < angle**
+- **R-11 embedded > angle**
+- **R-11 embedded \ backslash**
+- **R-11 trailing space **
+- **R-11 closing triple***
+- **R-11 title**suffix**.
+- **R-11 title**) text
+-  **R-11 extra marker space**
+BULLETS
+for bullet in $'-\t**R-11 tab after marker**' $'- **R-11 trailing tab\t**' $'- **R-11 title**\ttext'; do
+    printf '%s\n' '# Spec' '## Example' "$bullet" > "$SECTIONS"
+    run bash "$READER" --section R-11 "$SECTIONS"
+    assert_eq 2 "$STATUS" "$bullet is opaque"
+    assert_contains "$OUTPUT" 'No match for section selector'
+done
+
+it "Unicode space at the end of a bold ID span leaves the bullet opaque"
+# U+00A0, U+1680, U+2000–U+200A, U+202F, U+205F, U+3000 (UTF-8).
+for space in $'\302\240' $'\341\232\200' \
+    $'\342\200\200' $'\342\200\201' $'\342\200\202' $'\342\200\203' $'\342\200\204' \
+    $'\342\200\205' $'\342\200\206' $'\342\200\207' $'\342\200\210' $'\342\200\211' $'\342\200\212' \
+    $'\342\200\257' $'\342\201\237' $'\343\200\200'; do
+    printf '%s\n' '# Spec' '## Example' "- **R-11 Quoted title${space}**" \
+        '## Actual' '- **R-12 Real title**' > "$SECTIONS"
+    run bash "$READER" --section R-11 "$SECTIONS"
+    assert_eq 2 "$STATUS"
+    assert_contains "$OUTPUT" 'No match for section selector'
+    run bash "$READER" --index "$SECTIONS"
+    assert_eq 0 "$STATUS" "an opaque bullet does not cause refusal"
+done
+printf '%s\n' '# Spec' '## Example' $'- **R-11 Quoted title\302\240**' \
+    '## Actual' '- **R-11 Real title**' > "$SECTIONS"
+run bash "$READER" --section R-11 "$SECTIONS"
+assert_eq 0 "$STATUS" "an opaque bullet does not make the actual ID ambiguous"
+assert_eq $'4: ## Actual\n5: - **R-11 Real title**' "${OUTPUT#*$'\n'}"
+
+it "internal Unicode space and final non-Zs multibyte characters still allow bold IDs"
+for title in $'Quoted\302\240title' 'Café' '雪' $'Title\342\200\213'; do
+    printf '%s\n' '# Spec' '## Actual' "- **R-11 ${title}**" > "$SECTIONS"
+    run bash "$READER" --section R-11 "$SECTIONS"
+    assert_eq 0 "$STATUS"
+    assert_eq "$(printf '2: ## Actual\n3: - **R-11 %s**' "$title")" "${OUTPUT#*$'\n'}"
+done
+
+it "shallow thematic breaks end paragraph state without defining a section"
+for marker in '  ***' '***' $'   *\t* *' $' -\t- -' $'  _\t_ _'; do
+    printf '%s\n' '# Spec' '## Intro' "$marker" '---' '## Other' > "$SECTIONS"
+    run bash "$READER" --index "$SECTIONS"
+    assert_eq 0 "$STATUS"
+    assert_eq $'1: # Spec (5 reading lines)\n2:   ## Intro (3 reading lines)\n5:   ## Other (1 reading line)' "${OUTPUT#*$'\n'}"
+    run bash "$READER" --section Intro "$SECTIONS"
+    assert_eq 0 "$STATUS"
+    assert_eq "$(printf '2: ## Intro\n3: %s\n4: ---' "$marker")" "${OUTPUT#*$'\n'}"
+done
+printf '%s\n' '# Spec' '## Intro' '  Paragraph.' '---' '## Other' > "$SECTIONS"
+refuses_focused '4: Setext'
+printf '%s\n' '# Spec' '## Intro' 'Paragraph.' '  ---' '## Other' > "$SECTIONS"
+refuses_focused '4: Setext'
+
+it "indented fences refuse column-zero structure until a matching closer at any indentation"
+for structural in '## Heading' '- **R-90 Example**' '| Part | State |' 'P1 | yes' '~~~' '<!-- comment -->'; do
+    printf '%s\n' '# Spec' '## Intro' 'Read this section.' '## Example' '  ````markdown' \
+        '    ```' '    ````` trailing text' "$structural" ' ````' '## Later' > "$SECTIONS"
+    refuses_focused '8: Column-zero structure'
+done
+printf '%s\n' '# Spec' '## Intro' $'\t~~~' '- **R-90 not closed' '    ## Example' \
+    'some ordinary text' 'escaped \| pipe' $'\t    ~~~~  ' '## Later' > "$SECTIONS"
+run bash "$READER" --index "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '9:   ## Later (1 reading line)'
+printf '%s\n' '# Spec' '## Intro' '  ```' '```' '## Later' > "$SECTIONS"
+run bash "$READER" --index "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '5:   ## Later (1 reading line)'
+printf '%s\n' '# Spec' '## Intro' $'##\tNot a heading' '####### Not a heading' '## Later' > "$SECTIONS"
+run bash "$READER" --index "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq $'1: # Spec (5 reading lines)\n2:   ## Intro (3 reading lines)\n5:   ## Later (1 reading line)' "${OUTPUT#*$'\n'}"
+
+it "only CommonMark HTML-block openers refuse, not angle-bracket prose"
+for opener in '<script' '<?instruction' '<!doctype html>' '<![CDATA[' '  <DiV class=x' \
+    '</tbody>' '<hr/>' '<custom-tag bool _a="two words" :v=plain f.g='"'"'single quote'"'"' />' '</em >'; do
+    printf '%s\n' '# Spec' '## Intro' 'Read this section.' '' "$opener" '## Later' > "$SECTIONS"
+    refuses_focused '5: HTML blocks other than comments'
+done
+for prose in '<em>Important</em> context.' '<What it does for the journeys, R and Q its architecture parts-table row cites.>' \
+    '<custom foo="missing end>' '<custom attr=unquoted=value>' '<-not-a-tag>' '<https://example.test>' \
+    '<script/>' '    <div>'; do
+    printf '%s\n' '# Spec' '## Intro' '' "$prose" '' '## Later' > "$SECTIONS"
+    run bash "$READER" --index "$SECTIONS"
+    assert_eq 0 "$STATUS" "$prose is opaque or paragraph text: $OUTPUT"
+    assert_contains "$OUTPUT" '6:   ## Later (1 reading line)'
+done
+for previous in '  ***' 'Paragraph.'; do
+    printf '%s\n' '# Spec' '## Intro' "$previous" '<em>' '## Fake' '' '## Real' > "$SECTIONS"
+    refuses_focused '4: HTML blocks other than comments'
+    run bash "$READER" --section Fake "$SECTIONS"
+    assert_eq 2 "$STATUS"
+    assert_contains "$OUTPUT" "$SECTIONS: 4: HTML blocks other than comments"
+    assert_not_contains "$OUTPUT" 'Source:'
+done
+
+it "the installed reader indexes every shipped template from a spec location"
+mkdir -p specs/template-fixtures
+for shipped in "$PK_ROOT"/templates/*.md; do
+    template="${shipped##*/}"
+    copy="specs/template-fixtures/$template"
+    cp ".prdkit/templates/$template" "$copy" || exit 1
+    run bash "$READER" --index "$copy"
+    assert_eq 0 "$STATUS" "$template: $OUTPUT"
+    rm "$copy"
+done
+rmdir specs/template-fixtures
+
+it "invalid navigation is still visible and does not hide a heading in authored content"
+printf '%s\n' '# Scope' '## First' 'Text.' '## About prdkit:navigation: v2' 'Separate text.' '## Next' > "$SECTIONS"
+run bash "$READER" --index "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '4:   ## About prdkit:navigation: v2 (2 reading lines)'
+run bash "$READER" --section First "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq $'2: ## First\n3: Text.' "${OUTPUT#*$'\n'}"
+run spec_navigation "$SECTIONS" diagnostics
+assert_contains "$OUTPUT" 'Generated navigation retained: unknown or malformed navigation marker'
+printf '%s\n' '# Spec' 'Tracking: [REC-1][nav-a]' '<!-- prdkit:navigation:v1 begin -->' \
+    '[nav-a]: https://example.test/items/REC-1' '## Authored' 'Prose in a malformed footer.' \
+    '<!-- prdkit:navigation:v1 end -->' > "$SECTIONS"
+run bash "$READER" --index "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq $'1: # Spec (7 reading lines)\n5:   ## Authored (3 reading lines)' "${OUTPUT#*$'\n'}"
+run bash "$READER" --section Authored "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '6: Prose in a malformed footer.'
+assert_not_contains "$OUTPUT" 'https://' "content before the heading is not included"
+printf '%s\n' 'No headings in this file.' > "$SECTIONS"
+run bash "$READER" --index "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq 'No ATX headings.' "${OUTPUT#*$'\n'}"
+run bash "$READER" --section missing "$SECTIONS"
+assert_eq 2 "$STATUS"
+assert_contains "$OUTPUT" '(no ATX headings)'
+rm "$SECTIONS"
 
 it "doctor excludes valid navigation from reading-budget excess and counts invalid navigation"
 # Make 158 raw lines fit the 150-line observed budget after only generated navigation is omitted.
@@ -112,8 +695,21 @@ small; sed '/^Tracking:/d' "$FILE" > edit.md; mv edit.md "$FILE"; retained 'unre
 small; sed 's/^Tracking:/Evidence:/' "$FILE" > edit.md; mv edit.md "$FILE"; retained 'authored citation'
 small; sed 's/^Tracking:.*$/Tracking: [A-1][nav-a] evidence/' "$FILE" > edit.md; mv edit.md "$FILE"; retained 'mixed tracking line'
 small; sed 's|items/A-1$|items/A-1 "Evidence"|' "$FILE" > edit.md; mv edit.md "$FILE"; retained 'definition title'
+small; sed 's|items/A-1$|items/A-1[detail]|' "$FILE" > edit.md; mv edit.md "$FILE"; retained 'brackets in URL'
 small; printf 'More evidence [nav-a].\n' | cat - "$FILE" > edit.md; mv edit.md "$FILE"; retained 'shortcut use'
 small; printf '<div>\n' | cat - "$FILE" > edit.md; mv edit.md "$FILE"; retained 'HTML context'
+small
+sed '/^<!-- .* begin -->/i\
+[nav-a]: https://other.example.test/item/42
+' "$FILE" > edit.md; mv edit.md "$FILE"; retained 'authored definition conflict'
+run bash "$READER" --stats "$FILE"
+assert_contains "$OUTPUT" 'navigation label conflicts with an authored definition'
+small
+sed '/^<!-- .* begin -->/i\
+<div>Authored HTML</div>
+' "$FILE" > edit.md; mv edit.md "$FILE"; retained 'authored HTML'
+run bash "$READER" --stats "$FILE"
+assert_contains "$OUTPUT" 'unsupported HTML context; navigation retained'
 small; cat "$FILE" "$FILE" > edit.md; mv edit.md "$FILE"; retained 'multiple blocks'
 small; sed '/^\[nav-a\]:/a\
 <!-- prdkit:navigation:v1 begin -->

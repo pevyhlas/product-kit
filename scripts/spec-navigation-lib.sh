@@ -2,12 +2,12 @@
 # One conservative recognizer for prose budgets and routine context. Raw source stays canonical.
 # Bash 3.2 / POSIX awk; no network, tracker, jq or generated source writes.
 
-spec_navigation() { # file budget|stats|compact|diagnostics|target [reference key] [expected lines and bytes]
+spec_navigation() { # file budget|stats|compact|diagnostics|target|range [reference key] [expected lines and bytes]
     local terminated=1 last
     [ -f "$1" ] || { printf 'No source file: %s\n' "$1" >&2; return 2; }
     last="$(tail -c 1 "$1" && printf x)" || return 1
     case "$last" in x|$'\nx') ;; *) terminated=0 ;; esac
-    LC_ALL=C awk -v mode="$2" -v target="${3:-}" -v terminated="$terminated" \
+    LC_ALL=C PRDKIT_NAV_TARGET="${3:-}" awk -v mode="$2" -v terminated="$terminated" \
         -v expected_lines="${4:-}" -v expected_bytes="${5:-}" '
         function norm(s) {
             gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); gsub(/[[:space:]]+/, " ", s)
@@ -61,7 +61,7 @@ spec_navigation() { # file budget|stats|compact|diagnostics|target [reference ke
             }
             if (in_block) {
                 # No blanks, prose, titles or general-purpose references inside the envelope.
-                if (line !~ /^\[[Nn][Aa][Vv]-[A-Za-z0-9_-]+\]: https?:\/\/[^[:space:]<>()"\047\[\]]+$/) {
+                if (line !~ /^\[[Nn][Aa][Vv]-[A-Za-z0-9_-]+\]: https?:\/\/[^][[:space:]<>()"\047]+$/) {
                     bad("navigation block contains an unsupported definition or other content"); next
                 }
                 key = line; sub(/^\[/, "", key); sub(/\].*/, "", key); key = norm(key)
@@ -116,10 +116,11 @@ spec_navigation() { # file budget|stats|compact|diagnostics|target [reference ke
             else if (mode == "stats")
                 printf "projection=prdkit-navigation-v1 state=%s raw_bytes=%d raw_lines=%d raw_reading_lines=%d prose_reading_lines=%d omitted_bytes=%d omitted_lines=%d definitions=%d\n", state, raw_bytes, NR, raw_reading, prose, omitted_bytes, omitted_lines, (valid ? definitions : 0)
             else if (mode == "diagnostics") { if (candidate && invalid) print "Generated navigation retained: " reason }
+            else if (mode == "range") { if (valid) print start, end }
             else if (mode == "compact") {
                 for (i = 1; i <= NR; i++) if (!valid || i < start || i > end) printf "%d: %s\n", i, raw[i]
             } else if (mode == "target") {
-                key = norm(target)
+                key = norm(ENVIRON["PRDKIT_NAV_TARGET"])
                 if (!valid || !(key in urls)) exit 1
                 printf "%d: [%s]: %s\n", locations[key], key, urls[key]
             }

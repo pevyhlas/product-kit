@@ -256,9 +256,12 @@ for format in empty crlf eof truncated; do
     for verifier in status doctor; do
         run bash "$B/$verifier.sh" --json; failed "$verifier: $format"
     done
-    for view in --stats compact; do
+    for view in --stats compact --index --section; do
         args=()
-        case "$view" in --stats) args=(--stats) ;; esac
+        case "$view" in
+            --section) args=(--section Example) ;;
+            --*) args=("$view") ;;
+        esac
         run bash "$B/read-spec.sh" ${args[@]+"${args[@]}"} specs/SPEC.md
         failed "reader $view: $format"
         assert_contains "$OUTPUT" 'Invalid spec text'

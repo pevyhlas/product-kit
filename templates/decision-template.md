@@ -14,7 +14,7 @@ Design detail lives in the part or topic it shapes. -->
 
 ## Decision
 
-<The choice and its evidence.>
+\<The choice and its evidence.>
 
 ## Alternatives
 
@@ -22,4 +22,4 @@ Design detail lives in the part or topic it shapes. -->
 
 ## Revisit when
 
-<Conditions that reopen it.>
+\<Conditions that reopen it.>

@@ -7,6 +7,7 @@ Keep what explains the system; leave what explains the work to git, PRs and CI.
 For routine `specs/` context, read through
 `bash .prdkit/scripts/bash/read-spec.sh specs/<file>.md` (spec.md, Generated tracking navigation).
 It preserves source IDs and line numbers while omitting only validated generated navigation.
+Use `--index` to find headings and `--section '<heading-or-id>'` to read just one section.
 Use raw source/Git diffs for review, integrity, link maintenance and exact-revision evidence.
 
 ## Authority

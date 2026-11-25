@@ -16,7 +16,7 @@ numbering. Past the budget, move a component to parts/p<n>-<slug>/<component>.md
 
 ### <component>
 
-<What it does for the part.>
+\<What it does for the part.>
 
 - **P<n>.B-01 <title>**: <observable behavior>. Test: <name or unenforced>.
 - **P<n>.I-01 <title>**: <always true>. Enforced by: <test, analyzer, metric or unenforced>.
