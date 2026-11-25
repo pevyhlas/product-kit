@@ -19,6 +19,7 @@ change by change.
 ### Fixed
 
 - The PR review launcher refuses promptly if a guard exits before readiness and removes scratch after a capture failure when process shutdown is verified.
+- macOS CI now runs the PR review launcher’s failure FIFO descriptor regression instead of silently skipping it.
 
 ## [3.1.1] — 2026-11-25 — focused spec retrieval
 

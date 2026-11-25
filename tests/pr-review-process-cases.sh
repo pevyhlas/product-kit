@@ -310,19 +310,54 @@ for relay_case in timeout cancellation fifo-timeout fifo-cancellation; do
     restore_control
 done
 
+fd_lsof_matches() { # FIFO path, lsof field records; print matching f fields
+    local path key
+    path="$(cd -P -- "${1%/*}" && printf '%s/%s' "$PWD" "${1##*/}")" || return 1
+    # Apple libproc lsof can report a vnode path (n) and inode (i) for a
+    # named FIFO, but omits its device (D). Check the inode against the
+    # known FIFO, using the device too when lsof supplies it.
+    key="$(stat -Lc 'D0x%D i%i' "$path" 2>/dev/null || stat -Lf 'D0x%Xd i%i' "$path")" || return 1
+    [[ "$key" =~ ^D0x[[:xdigit:]]+\ i[0-9]+$ ]] || return 1
+    FD_FIFO_PATH="$path" awk -v want_dev="${key%% *}" -v want_inode="${key#* }" '
+        function check_fd() {
+            # Older lsof versions abbreviate FDs above 9999 as *nnn.
+            if (fd !~ /^f([0-9]+|\*[0-9][0-9][0-9])$/) return
+            seen = 1
+            if (type == "tFIFO" && (name == ("n" ENVIRON["FD_FIFO_PATH"]) ||
+                (inode == want_inode && (dev == "" || dev == want_dev)))) print fd
+        }
+        /^f/ { check_fd(); fd = $0; type = name = inode = dev = "" }
+        /^t/ { type = $0 }
+        /^n/ { name = $0 }
+        /^i/ { inode = $0 }
+        /^D/ { dev = $0 }
+        END { check_fd(); if (!seen) exit 1 }
+    ' <<< "$2"
+}
+
 it 'native workload and status helper do not inherit either end of the failure FIFO'
 FD_OBSERVER=''
-if [ -d /proc/self/fd ]; then
+FD_LSOF=''
+FD_PROBE_RAW='(probe not run)'
+if [ "${PRDKIT_TEST_FORCE_LSOF:-0}" != 1 ] && [ -d /proc/self/fd ]; then
     FD_OBSERVER=proc
-elif command -v lsof >/dev/null && mkfifo "$FIX/fd-observer"; then
-    # Check that lsof can actually match an open named pipe on this host.
-    if "$REAL_BASH" -c 'exec 7<>"$1"; lsof -w -a -p "$$" -d 7 -F f "$1"; exit "$?"' _ "$FIX/fd-observer" \
-        2>/dev/null | grep -qx f7; then FD_OBSERVER=lsof; fi
+elif FD_LSOF="$(type -P lsof)" && mkfifo "$FIX/fd-observer"; then
+    # Confirm that the same identity matcher used by the audit finds a known open FIFO.
+    if FD_PROBE_RAW="$("$REAL_BASH" -c '
+            exec 7<>"$1" || exit 1
+            "$2" -w -a -p "$$" -d 7 -F ftDin
+            exit "$?"
+        ' _ "$FIX/fd-observer" "$FD_LSOF" 2>&1)" &&
+        [ "$(fd_lsof_matches "$FIX/fd-observer" "$FD_PROBE_RAW")" = f7 ]; then
+        FD_OBSERVER=lsof
+    fi
     rm "$FIX/fd-observer"
 fi
 if [ -n "$FD_OBSERVER" ]; then
+    _ok "descriptor observer: $FD_OBSERVER"
     {
-        printf '#!/bin/bash\nresult_dir=%q\nobserver=%q\n' "$FIX" "$FD_OBSERVER"
+        printf '#!/bin/bash\nresult_dir=%q\nobserver=%q\nlsof_bin=%q\n' "$FIX" "$FD_OBSERVER" "$FD_LSOF"
+        declare -f fd_lsof_matches
         cat <<'AUDIT'
 role="$1"; shift
 checked=false; result=clean
@@ -340,9 +375,15 @@ for pipe in "$HOME"/../op.*/work.failure; do
                 fi
             done ;;
         lsof)
-            matches="$(lsof -w -a -p "$$" -F f "$pipe" 2>&1)"; rc=$?
-            if [ "$rc" -eq 0 ]; then result="inherited descriptor: $matches"
-            elif [ "$rc" -ne 1 ] || [ -n "$matches" ]; then result="observer failed: $matches"; fi ;;
+            # Include every numeric FD, even ones Bash saves beyond its usual range.
+            if ! fields="$("$lsof_bin" -w -a -p "$$" -d 0-2147483647 -F ftDin 2>&1)" ||
+                ! matches="$(fd_lsof_matches "$pipe" "$fields")"; then
+                result="observer failed: $fields"
+                break
+            elif [ -n "$matches" ]; then
+                result="inherited descriptor: $matches"
+                break
+            fi ;;
     esac
 done
 if ! $checked; then result='failure FIFO not found'; fi
@@ -376,7 +417,17 @@ AUDIT
     rm "$FIX/bin/mv"
     restore_control
 else
-    printf '%s\n' 'SKIP: descriptor identity requires /proc/self/fd or usable lsof'
+    if [ -n "$FD_LSOF" ]; then
+        "$FD_LSOF" -v 2>&1 | head -n 2 >&2
+        printf 'lsof probe FD 7 (-F ftDin):\n%s\n' "${FD_PROBE_RAW:-<no output>}" >&2
+    else
+        printf '%s\n' 'lsof not found on PATH' >&2
+    fi
+    if [ "${GITHUB_ACTIONS:-}" = true ]; then
+        _no 'descriptor identity requires /proc/self/fd or usable lsof' || :
+    else
+        printf '%s\n' 'SKIP: descriptor identity requires /proc/self/fd or usable lsof'
+    fi
 fi
 
 it 'a live member missed by ps prevents scratch deletion'
