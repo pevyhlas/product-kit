@@ -318,6 +318,16 @@ while IFS= read -r f; do [ -z "$f" ] || FINDINGS+=("$f"); done < <(at_lint_map; 
 if [ -n "$AT_BASELINE" ] && [ -z "$AT_SNAP" ] && [ "${#FINDINGS[@]}" -eq 0 ]; then
     FINDINGS+=("Tier map: baseline snapshot $AT_SNAPSHOT_REL is unusable")
 fi
+# An unverifiable model is not the same as known drift: refuse before any write.
+if [ "$mode" = write ]; then
+    if blockers="$(at_lint_projection_bans --unverifiable-only)"; then
+        while IFS= read -r f; do [ -z "$f" ] || FINDINGS+=("$f"); done <<EOF
+$blockers
+EOF
+    else
+        FINDINGS+=("Could not verify projection model references")
+    fi
+fi
 plan=()
 for def in "$root"/.prdkit/agents/*.md; do
     [ -f "$def" ] || continue
@@ -397,7 +407,13 @@ EOF
     esac
 done
 banned=()
-while IFS= read -r f; do [ -z "$f" ] || banned+=("$f"); done < <(at_lint_projection_bans)
+if ! model_findings="$(at_lint_projection_bans)"; then
+    echo 'render-agents.sh: could not finish checking projection model references' >&2
+    exit 1
+fi
+while IFS= read -r f; do [ -z "$f" ] || banned+=("$f"); done <<EOF
+$model_findings
+EOF
 if [ "${#banned[@]}" -gt 0 ]; then
     echo "  Agent projections: $created created, $updated updated, $unchanged unchanged"
     emit_findings "$json" "${banned[@]}" >&2

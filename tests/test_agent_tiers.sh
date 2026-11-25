@@ -738,9 +738,40 @@ assert_eq 1 "$STATUS"
 assert_contains "$OUTPUT" "nothing written"
 same_bytes "$PROJ/with-alias" .opencode/agents/rev-a.md "both the anchor and its alias survive"
 assert_eq "$before" "$(proj_state)" "YAML blocker prevents changes to any projection"
+for node in 'request: {<<: *defaults}' 'request: {label: !!str &label review}' \
+    'request: [*defaults]' '<<: *defaults'; do
+    # Keep the tested token as the only reference (an unresolved alias is also unsafe).
+    printf '%s\n' '---' 'model: lib/oc-next#max' "$node" '---' '' 'Review only.' > "$PROJ/merge"
+    cp "$PROJ/merge" .opencode/agents/rev-a.md
+    run bash "$RENDER" --check
+    assert_contains "$OUTPUT" "YAML anchors or aliases" "$node is not a scalar literal"
+    run bash "$RENDER"
+    assert_eq 1 "$STATUS"
+    same_bytes "$PROJ/merge" .opencode/agents/rev-a.md "flow/reference fixture unchanged"
+done
 cp "$PROJ/native-oc" .opencode/agents/rev-a.md
 run bash "$RENDER"
 assert_eq 0 "$STATUS" "a plain opt-in file still renders"
+
+it "node scanning ignores quoted and plain text, globs, and block-scalar descriptions"
+for fixture in glob ampersand markdown plain; do
+    {
+        printf '%s\n' '---' 'mode: subagent' 'model: lib/oc-next#max'
+        case "$fixture" in
+            glob) printf '%s\n' 'permissions:' '  - action: read' '    resource: "notes *draft*.md"' '    effect: allow' ;;
+            ampersand) printf '%s\n' 'request:' "  headers: {x-label: \"review &follow-up\", note: 'a ''quoted'' *word'}" ;;
+            markdown) printf '%s\n' 'description: >-' '  Keep *short notes* in the report.' '  *literal paragraph*' ;;
+            plain) printf '%s\n' 'request:' '  headers:' '    x-label: review &follow-up' '      *continued plain text*' ;;
+        esac
+        printf '%s\n' '---' '' 'Review only.'
+    } > .opencode/agents/rev-a.md
+    run bash "$RENDER" --check
+    assert_not_contains "$OUTPUT" "YAML anchors or aliases" "$fixture is scalar text"
+    run bash "$RENDER"
+    assert_eq 0 "$STATUS" "$fixture permits replacement"
+    run bash "$RENDER" --check
+    assert_eq 0 "$STATUS" "$fixture checks clean after replacement"
+done
 
 it "the opt-in cannot hide a banned base model id behind a variant suffix"
 cp "$PROJ/agents.extras" "$MAP"
@@ -778,6 +809,37 @@ sed 's@^model: .*@"model" : "lib/oc-blocked#high" # native model@' "$PROJ/hand-n
 run bash "$RENDER" --check --json
 assert_eq 1 "$STATUS"
 assert_contains "$OUTPUT" ".opencode/agents/hand-native.md uses banned model 'lib/oc-blocked'" "quoted native references are also checked"
+for style in '>-' '>' '|'; do
+    awk -v style="$style" '/^model:/ { print "model: " style " # native model"; print "  " $2; next } { print }' \
+        "$PROJ/hand-native" > .opencode/agents/hand-native.md
+    for command in check write; do
+        if [ "$command" = check ]; then run bash "$RENDER" --check --json; else run bash "$RENDER"; fi
+        assert_eq 1 "$STATUS" "$command rejects banned $style block scalar"
+        assert_contains "$OUTPUT" ".opencode/agents/hand-native.md uses banned model 'lib/oc-blocked'"
+    done
+done
+
+it "unsupported model forms fail closed before writes when model bans are configured"
+for form in indented flow merge escaped multiline duplicate; do
+    case "$form" in
+        indented) sed '2,7s/^/  /' "$PROJ/hand-native" ;;
+        flow) printf '%s\n' '---' '{model: "lib/oc-blocked#high"}' '---' ;;
+        merge) printf '%s\n' '---' 'defaults: &base {model: "lib/oc-blocked#high"}' '<<: *base' '---' ;;
+        escaped) printf '%s\n' '---' '"mo\u0064el": "lib/oc-blocked#high"' '---' ;;
+        multiline) printf '%s\n' '---' 'model: >-' '  lib/oc-blocked' '  #high' '---' ;;
+        duplicate) printf '%s\n' '---' 'model: lib/oc-next' 'model: lib/oc-blocked#high' '---' ;;
+    esac > .opencode/agents/hand-native.md
+    cp .opencode/agents/hand-native.md "$PROJ/unverifiable"
+    before="$(proj_state)"
+    for command in check write; do
+        if [ "$command" = check ]; then run bash "$RENDER" --check --json; else run bash "$RENDER"; fi
+        assert_eq 1 "$STATUS" "$command refuses $form"
+        assert_contains "$OUTPUT" ".opencode/agents/hand-native.md line " "$form finding names file and line"
+        assert_contains "$OUTPUT" "model reference could not be verified"
+    done
+    same_bytes "$PROJ/unverifiable" .opencode/agents/hand-native.md "$form stays unchanged"
+    assert_eq "$before" "$(proj_state)" "$form blocks all writes"
+done
 rm -f .opencode/agents/hand-native.md
 # Recreate the migrated fast-tier file without the legacy name emitted by the opt-out.
 rm -f .opencode/agents/rev-c.md

@@ -257,17 +257,12 @@ at_tiers_json_records() {
 at_hash_file() { install_hash_stream < "$1"; }
 
 # Frontmatter value of a top-level key (quotes and trailing comments removed).
-at_fm_value() { # file key [native-model]
-    awk -v key="$2" -v native="${3:-}" '
-        native != "" { sub(/\r$/, "") }
+at_fm_value() { # file key
+    awk -v key="$2" '
         NR == 1 { if ($0 != "---") exit; next }
         $0 == "---" { exit }
-        index($0, key ":") == 1 || (native != "" &&
-                $0 ~ "^(" key "|\"" key "\"|\047" key "\047)[ \t]*:") {
-            v = $0; sub(/^[^:]+:[ \t]*/, "", v); sub(/[ \t\r]+$/, "", v)
-            if (native != "" && match(v, /^("[^"]*"|\047[^\047]*\047)[ \t]+#/))
-                v = substr(v, 1, RLENGTH - 1)
-            sub(/[ \t]+$/, "", v)
+        index($0, key ":") == 1 {
+            v = substr($0, length(key) + 2); sub(/^[ \t]+/, "", v); sub(/[ \t\r]+$/, "", v)
             if (v ~ /^".*"$/ || v ~ /^\047.*\047$/) v = substr(v, 2, length(v) - 2)
             else sub(/[ \t]+#.*$/, "", v)
             print v; exit
@@ -432,20 +427,78 @@ at_frontmatter() { # file, including delimiters (requires a complete header)
          END { if (!closed) exit 1 }' "$1"
 }
 
+# A lexical scan, not YAML evaluation. Track node starts, flow collections and
+# quoted/block scalar continuations; never interpret the contents of a scalar.
+AT_YAML_SCAN_AWK='
+    function indent(s) { match(s, /^ */); return RLENGTH }
+    function scan_yaml(s,   n,i,c,nextc,prev,r,owner,start) {
+        n = indent(s)
+        if (quote == "" && !flow) {
+            if (s ~ /^[ \t]*(#|$)/ || (block && n > block_indent)) return
+            block = 0
+            if (plain && n > plain_indent) return
+            plain = 0; node = 1; done = 0
+        }
+        owner = n; start = n + 1
+        for (i = start; i <= length(s); i++) {
+            c = substr(s,i,1); nextc = substr(s,i+1,1); prev = substr(s,i-1,1)
+            if (quote != "") {
+                if ((quote == "\"" && c == "\\") || (quote == "\047" && c == quote && nextc == quote)) i++
+                else if (c == quote) { quote = ""; done = 1 }
+                continue
+            }
+            if (c == "#" && (node || i == start || prev ~ /[ \t]/)) break
+            if (c ~ /[ \t]/) continue
+            if (flow && (c == "," || c == "]" || c == "}")) {
+                node = (c == ","); done = !node; plain = 0
+                if (!node) flow--
+                continue
+            }
+            if (c == ":" && (nextc == "" || nextc ~ /[ \t]/ ||
+                    (flow && (done || nextc ~ /[][{},]/)))) {
+                owner = key_indent; node = 1; done = plain = 0; continue
+            }
+            if (!node) continue
+            r = substr(s,i)
+            if (c == "!") {
+                if (match(r, /^!<[^>]*>/) || match(r, /^![^][{}, \t]*/)) i += RLENGTH - 1
+                continue
+            }
+            if (c ~ /[&*]/ && nextc != "" && nextc !~ /[][{}, \t]/) {
+                references = 1
+                match(r, /^[^][{}, \t]+/); i += RLENGTH - 1
+                if (c == "*") { node = 0; done = 1 }
+                continue
+            }
+            key_indent = i - 1
+            if ((c == "?" || (!flow && c == "-")) && (nextc == "" || nextc ~ /[ \t]/)) {
+                owner = key_indent; continue
+            }
+            if (!flow && match(r, /^[|>]([1-9][+-]?|[+-][1-9]?)?([ \t]+#.*|[ \t]*)$/)) {
+                block = 1; block_indent = owner; return
+            }
+            if (c == "[" || c == "{") { flow++; done = plain = 0; continue }
+            node = done = 0
+            if (c == "\"" || c == "\047") quote = c
+            else { plain = 1; plain_indent = owner }
+        }
+    }
+'
+
 # The line-oriented rewriter cannot migrate project-owned V1 fields or preserve YAML
 # references across replaced entries. Report blockers in preflight, not during writes.
 at_native_projection_findings() { # existing file permissions
     local proj="$1" findings
-    if ! findings="$(awk -v opencode="$2" '
+    if ! findings="$(awk -v opencode="$2" "$AT_YAML_SCAN_AWK"'
         NR == 1 {
             if ($0 == "---\r") { unsupported = 1; exit }
             if ($0 != "---") exit
             header = 1; next
         }
         $0 == "---" { closed = 1; exit }
-        /^[ \t]*(#|$)/ { next }
+        !quote && !flow && /^[ \t]*(#|$)/ { next }
         {
-            if ($0 ~ /(^|[[:space:]]|[][{},:?])[&*][^][{},"\047[:space:]]/) references = 1
+            scan_yaml($0)
             if ((!content && /^[ \t]/) || /^[{?!%]/ || /^\[/ || /^["\047][^:]*\\/) unsupported = 1
             content = 1
             if (opencode != "" && match($0, /^([A-Za-z_]+|"[A-Za-z_]+"|\047[A-Za-z_]+\047)[ \t]*:/)) {
@@ -469,6 +522,64 @@ at_native_projection_findings() { # existing file permissions
     done <<EOF
 $findings
 EOF
+}
+
+# Read just a model reference from a simple, unindented frontmatter mapping.
+# Output a token, nothing (no model), or !<line> (the model cannot be verified).
+at_opencode_model() { # projection
+    LC_ALL=C awk "$AT_YAML_SCAN_AWK"'
+        function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+        function invalid(ln) { bad = ln; exit }
+        function finish_model() {
+            if (model_line && model !~ /^[A-Za-z0-9_.+:\/@~%-]+(#[A-Za-z0-9_.+~-]+)?$/)
+                invalid(model_line)
+        }
+        { sub(/\r$/, "") }
+        NR == 1 {
+            if ($0 != "---") {
+                if ($0 ~ /^(\357\273\277)?[ \t]*---[ \t]*$/) invalid(NR)
+                exit
+            }
+            header = 1; next
+        }
+        $0 == "---" { closed = 1; finish_model(); exit }
+        /^[ \t]*$/ { if (model_block && model == "") leading_blank = 1; next }
+        model_block && /^ / {
+            if (model != "" && indent($0) < model_indent && /^[ ]+#/) next
+            # Two nonempty content lines cannot fold to a single model token.
+            if (model != "" || leading_blank) invalid(model_line)
+            model = trim($0); model_indent = indent($0); next
+        }
+        !quote && !flow && /^[ \t]*#/ { next }
+        /^[ \t]|^-[ \t]/ {
+            if (!mapping) invalid(NR)
+            if (!model_block && model_line == key_line) invalid(model_line)
+            scan_yaml($0); next
+        }
+        {
+            if (quote || flow) invalid(NR)
+            if (!match($0, /^([A-Za-z0-9_.-]+|"[A-Za-z0-9_.-]+"|\047[A-Za-z0-9_.-]+\047)[ \t]*:([ \t]|$)/))
+                invalid(NR)
+            key = substr($0,1,RLENGTH); value = trim(substr($0,RLENGTH+1))
+            gsub(/["\047: \t]/, "", key)
+            mapping = 1; key_line = NR; model_block = 0
+            if (key != "model") { scan_yaml($0); next }
+            if (model_line) invalid(NR)
+            model_line = NR
+            if (value ~ /^[|>]([+-])?([ \t]+#.*|[ \t]*)$/) { model_block = 1; next }
+            if (value ~ /^["\047]/) {
+                if (!match(value, /^("[^"\\]*"|\047[^\047]*\047)([ \t]+#.*|[ \t]*)$/)) invalid(NR)
+                sub(/[ \t]+#.*$/, "", value)
+                model = substr(value,2,length(value)-2)
+            } else { sub(/[ \t]+#.*$/, "", value); model = value }
+            finish_model()
+        }
+        END {
+            if (bad) print "!" bad
+            else if (header && !closed) print "!" NR
+            else if (model != "") print model
+        }
+    ' "$1"
 }
 
 # Filter only opted-in keys before the normal update. Remove the entire value, including
@@ -713,20 +824,26 @@ at_ownership_findings() {
 # Projections whose current model is banned. Kept apart from at_lint_map: render-agents.sh
 # repairs these (it rewrites the model) once the map itself is clean, so they must not block
 # the render that would fix them; --check, doctor and the adoption gate still report them.
-at_lint_projection_bans() {
-    local proj model base
+at_lint_projection_bans() { # [--unverifiable-only]
+    local proj model base only="${1:-}"
     printf '%s\n' "$AT_MAP" | awk -F '\037' '$1 == "banned" { f = 1 } END { exit !f }' || return 0
     for proj in "$AT_ROOT"/.claude/agents/*.md "$AT_ROOT"/.opencode/agents/*.md; do
         [ -f "$proj" ] || continue
         # Native V2 embeds the variant; a banned base id still applies to every variant.
         case "$proj" in
             "$AT_ROOT"/.opencode/agents/*.md)
-                model="$(at_fm_value "$proj" model native-model)" || return 1
+                model="$(at_opencode_model "$proj")" || return 1
+                if [[ "$model" == '!'* ]]; then
+                    printf 'Agent projection %s line %s: model reference could not be verified; use a simple top-level model scalar\n' \
+                        "${proj#"$AT_ROOT"/}" "${model#!}"
+                    continue
+                fi
                 base="${model%%#*}"
                 if [ "$base" != "$model" ] && at_is_banned "$base"; then model="$base"; fi ;;
-            *) model="$(at_fm_value "$proj" model)" || return 1 ;;
+            *) [ -z "$only" ] || continue
+               model="$(at_fm_value "$proj" model)" || return 1 ;;
         esac
-        ! at_is_banned "$model" || printf "Agent projection %s uses banned model '%s'\n" "${proj#"$AT_ROOT"/}" "$model"
+        [ -n "$only" ] || ! at_is_banned "$model" || printf "Agent projection %s uses banned model '%s'\n" "${proj#"$AT_ROOT"/}" "$model"
     done
 }
 

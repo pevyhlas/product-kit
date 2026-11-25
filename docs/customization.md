@@ -44,6 +44,17 @@ optional `Banned models:` line lists ids that must never project. Matching is ex
 string: banning `claude-opus-5` does not ban its OpenCode form `anthropic/claude-opus-5`, so
 list each harness's form separately. The snapshot is project-owned: refresh it with
 `render-agents.sh --refresh-baseline` rather than editing it.
+
+When `Banned models:` is set, the kit checks `model:` in `.opencode/agents/*.md`, including
+hand-owned files. Use an unindented top-level key with an inline plain or quoted model
+token (optional trailing comment), or a folded (`>`/`>-`) or literal (`|`) block with one
+model token on one content line. A `#variant` does not exempt the base ID from a ban.
+The kit does not evaluate general YAML: indented root mappings, flow mappings at the
+root, aliases or merges that supply the model, and other unsupported model forms get a
+file-and-line finding in both render and `--check`. Rewrite the model as a plain
+`model: provider/model#variant` scalar to make it verifiable. This is a check of kit
+projection files, not of OpenCode's full configuration or inherited models.
+
 The `.ref` file (library commit + sha256) lets doctor detect hand edits to the snapshot and a
 mismatch with the `Tier baseline:` commit; it does not prove the snapshot came from that upstream commit, so
 review the vendoring diff. `Baseline snapshot:` must be a relative path inside the
@@ -87,8 +98,9 @@ and use the **local** tier from the neutral definition, not its mapped library t
   local preamble takes precedence. Do not put `|` in the preamble or HTML comments in the row.
 
 When opting into effort or permissions, use a simple YAML block mapping and replace any
-frontmatter anchors or aliases with explicit values before rendering. The renderer refuses
-these constructs rather than breaking references in project-owned metadata.
+frontmatter anchors, aliases and alias-based merges with explicit values before rendering.
+The guard looks for YAML references at the start of a node, not `*` or `&` in ordinary
+text such as quoted permission patterns or block-scalar descriptions.
 `render-agents.sh --check` reports those blockers as well as drift. Removing an effort or permissions
 setting hands that field back to the project; it does not delete it. Removing the permissions
 setting also restores separate `model` and `variant` fields. If rolling back to the legacy
