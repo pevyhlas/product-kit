@@ -779,14 +779,60 @@ steps: 2
             if [ "$mode" = write ]; then run bash "$RENDER"; else run bash "$RENDER" "$mode" --json; fi
             assert_eq 1 "$STATUS" "$settings/$delimiter $mode refuses the projection"
             assert_contains "$OUTPUT" ".opencode/agents/rev-a.md line 1: unsupported frontmatter delimiter"
+            if [ "$delimiter" = crlf ]; then
+                assert_contains "$OUTPUT" "convert the whole file to LF line endings"
+            fi
         done
         same_bytes "$PROJ/unsupported-opening" .opencode/agents/rev-a.md "$settings/$delimiter preserves project-owned bytes"
         assert_eq "$before" "$(proj_state)" "$settings/$delimiter prevents all projection updates"
     done
 done
+it "fixing just the opening delimiter of a CRLF file cannot append a second prompt"
+cp "$PROJ/agents.before-extras" "$MAP"
+for form in mixed trailing-close body-crlf; do
+    case "$form" in
+        mixed) awk 'NR == 1 { print; next } { printf "%s\r\n", $0 }' "$PROJ/with-alias"
+            line="$(awk 'NR > 1 && $0 == "---" { print NR; exit }' "$PROJ/with-alias")"
+            message="line $line: unsupported frontmatter delimiter" ;;
+        trailing-close) sed -e '1b' -e 's/^---$/---  /' "$PROJ/with-alias"
+            message="line $line: unsupported frontmatter delimiter" ;;
+        body-crlf) awk 'body { printf "%s\r\n", $0; next } { print } NR > 1 && $0 == "---" { body = 1 }' "$PROJ/with-alias"
+            message="line $((line + 1)): CRLF line endings in projection" ;;
+    esac > "$PROJ/crlf-remediation"
+    cp "$PROJ/crlf-remediation" .opencode/agents/rev-a.md
+    before="$(proj_state)"
+    for mode in --check write; do
+        if [ "$mode" = write ]; then run bash "$RENDER"; else run bash "$RENDER" "$mode" --json; fi
+        assert_eq 1 "$STATUS" "$form $mode refuses the projection"
+        assert_contains "$OUTPUT" ".opencode/agents/rev-a.md $message"
+        if [ "$form" != trailing-close ]; then
+            assert_contains "$OUTPUT" "convert the whole file to LF line endings"
+        fi
+    done
+    for checker in doctor check-adoption; do
+        run bash "$SCRIPTS/$checker.sh" --json
+        assert_eq 1 "$STATUS" "$checker $form still checks a managed projection with a baseline"
+        assert_contains "$OUTPUT" ".opencode/agents/rev-a.md $message"
+    done
+    same_bytes "$PROJ/crlf-remediation" .opencode/agents/rev-a.md "$form projection remains intact"
+    assert_eq "$before" "$(proj_state)" "$form prevents all projection updates"
+done
+# Normalizing the entire fixture (unlike normalizing line 1 alone) lets the legacy
+# renderer refresh it while keeping the project-owned request and permissions.
+awk '{ sub(/\r$/, ""); print }' "$PROJ/crlf-remediation" > .opencode/agents/rev-a.md
+run bash "$RENDER"
+assert_eq 0 "$STATUS" "render succeeds after whole-file conversion"
+assert_contains "$(cat .opencode/agents/rev-a.md)" 'x-review-scope: *scope'
+run bash "$RENDER" --check
+assert_eq 0 "$STATUS" "converted projection checks clean"
+
 cp "$PROJ/agents.before-extras" "$MAP"
 printf '\nHand-owned agents: local-delimiter\n' >> "$MAP"
 cp "$PROJ/unsupported-opening" .claude/agents/local-delimiter.md
+for checker in doctor check-adoption; do
+    run bash "$SCRIPTS/$checker.sh" --json
+    assert_eq 0 "$STATUS" "$checker with baseline does not inspect an untouched hand-owned file"
+done
 for mode in --check write; do
     if [ "$mode" = write ]; then run bash "$RENDER"; else run bash "$RENDER" "$mode"; fi
     assert_eq 1 "$STATUS" "$mode checks hand-owned Claude projections too"
@@ -805,7 +851,7 @@ for fixture in glob ampersand markdown plain unicode; do
         case "$fixture" in
             glob) printf '%s\n' 'permissions:' '  - action: read' '    resource: "notes *draft*.md"' '    effect: allow' ;;
             ampersand) printf '%s\n' 'request:' "  headers: {x-label: \"review &follow-up\", note: 'a ''quoted'' *word'}" ;;
-            markdown) printf '%s\n' 'description: >-' '  Keep *short notes* in the report.' '  *literal paragraph*' ;;
+            markdown) printf '%s\n' 'description: >-' '  Keep *short notes* in the report.' '  ---' '  *literal paragraph*' ;;
             plain) printf '%s\n' 'request:' '  headers:' '    x-label: review &follow-up' '      *continued plain text*' ;;
             unicode) printf '%s\n' 'request: {headers: {x-label: café &suivi, x-note: "révision *brouillon*"}}' ;;
         esac
@@ -931,5 +977,40 @@ done
 run bash "$KIT/scripts/render-agents.sh" --refresh-baseline "$LIB"
 assert_eq 2 "$STATUS" "refresh-baseline refuses before writing"
 assert_eq "" "$(find "$KIT" -path '*/.prdkit*' -print)" "nothing written into the kit checkout"
+
+it "a default install does not check hand-owned agent delimiters unless explicitly requested"
+P3="$(make_inited_project --harness claude,opencode)"; track_tmp "$P3"
+cd "$P3" || exit 1
+assert_eq "" "$(find .prdkit/agents -name '*.md' -print)" "no neutral definitions"
+[ ! -f .prdkit/scripts/bash/render-agents.sh ] || _no "default install does not install the renderer"
+cp .prdkit/memory/agents.md "$P3/default-map"
+mkdir -p .opencode/agents
+for form in trailing-space crlf; do
+    file=.opencode/agents/docs-reviewer.md
+    if [ "$form" = crlf ]; then
+        printf '%s\r\n' '---' 'description: A hand-owned doc reviewer.' 'mode: subagent' '---' '' 'Review documentation only.'
+    else
+        printf '%s\n' '---   ' 'description: A hand-owned doc reviewer.' 'mode: subagent' '---' '' 'Review documentation only.'
+    fi > "$file"
+    cp "$file" "$P3/original"
+    cp "$P3/default-map" .prdkit/memory/agents.md
+    for checker in doctor check-adoption; do
+        run bash ".prdkit/scripts/bash/$checker.sh" --json
+        assert_eq 0 "$STATUS" "default $checker ignores hand-owned $form agent"
+        assert_eq 'pass:0' "$(jq -r '[.result, (.findings | length)] | join(":")' <<< "$OUTPUT")"
+    done
+    for mode in --check write; do
+        if [ "$mode" = write ]; then run bash .product-kit/scripts/render-agents.sh; else run bash .product-kit/scripts/render-agents.sh "$mode"; fi
+        assert_eq 1 "$STATUS" "explicit render $mode still refuses $form"
+        assert_contains "$OUTPUT" "$file line 1: unsupported frontmatter delimiter"
+    done
+    printf '\nBanned models: example/retired\n' >> .prdkit/memory/agents.md
+    for checker in doctor check-adoption; do
+        run bash ".prdkit/scripts/bash/$checker.sh" --json
+        assert_eq 1 "$STATUS" "$checker checks $form when bans are configured without a baseline"
+        assert_contains "$OUTPUT" "$file line 1: unsupported frontmatter delimiter"
+    done
+    same_bytes "$P3/original" "$file" "default-install $form fixture stays byte-identical"
+done
 
 finish

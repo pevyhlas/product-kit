@@ -18,7 +18,7 @@ change by change.
 
 ### Fixed
 
-- Agent rendering and `--check` reject noncanonical opening frontmatter delimiters, such as a UTF-8 BOM, trailing spaces or tabs, or CRLF. This prevents a 3.1.2 bug that could erase project-owned metadata by treating the file as headerless, even without optional settings or model bans.
+- Agent rendering and `--check` reject noncanonical frontmatter delimiters and CRLF in files with frontmatter, even without optional settings or model bans. This prevents a 3.1.2 bug that could erase project-owned metadata by treating the file as headerless. Doctor and adoption inspect projection delimiters only for managed projections with an active tier baseline or files covered by configured model bans.
 
 ## [3.1.2] — 2026-11-25 — exact-head review facts
 

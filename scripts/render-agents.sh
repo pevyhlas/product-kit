@@ -280,10 +280,10 @@ render_projection() { # def harness name model variant tier
         RP_OUTCOME=created; return 0
     fi
     delimiter="$(at_projection_delimiter "$proj")" || return 1
-    if [ "$delimiter" = unsupported ]; then
-        at_projection_delimiter_finding "$proj" >&2
-        return 1
-    fi
+    case "$delimiter" in
+        canonical|absent) ;;
+        *) at_projection_delimiter_finding "$proj" "$delimiter" >&2; return 1 ;;
+    esac
     if [ "$delimiter" = absent ]; then
         new_projection "$def" "$harness" "$name" "$model" "$variant" "$body" > "$tmp" || return 1
     elif [ "$(at_body_norm "$proj")" = "$body" ]; then

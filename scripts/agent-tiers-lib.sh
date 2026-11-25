@@ -428,25 +428,56 @@ at_frontmatter() { # file, including delimiters (requires a complete header)
 }
 
 # Distinguish genuinely headerless Markdown from YAML we cannot rewrite safely.
-# Inspect the raw first line before any newline or whitespace normalization.
+# Inspect delimiter lines before any newline or whitespace normalization.
 AT_DELIMITER_AWK='
-    function opening_delimiter(line) {
+    function frontmatter_delimiter(line) {
         if (line == "---") return "canonical"
         if (line ~ /^(\357\273\277)?[ \t]*---[ \t]*\r?$/) return "unsupported"
         return "absent"
     }
 '
 
-at_projection_delimiter() { # file -> canonical, unsupported, or absent
+at_projection_delimiter() { # file -> canonical, absent, or finding kind and line
     LC_ALL=C awk "$AT_DELIMITER_AWK"'
-        NR == 1 { print opening_delimiter($0); exit }
-        END { if (!NR) print "absent" }
+        /\r$/ && !crlf { crlf = NR }
+        NR == 1 {
+            opening = frontmatter_delimiter($0)
+            if (opening == "absent") exit
+            if (opening == "unsupported") bad = NR
+            next
+        }
+        !closed {
+            delimiter = frontmatter_delimiter($0)
+            if (delimiter == "absent") next
+            if (/^[ \t]/) {
+                # A delimiter lookalike can be content in a YAML block scalar.
+                if (!indented) indented = NR
+                next
+            }
+            closed = 1
+            if (!bad && delimiter == "unsupported") bad = NR
+        }
+        END {
+            if (!NR || opening == "absent") print "absent"
+            else {
+                if (!bad && !closed) bad = indented
+                if (bad) print "delimiter:" bad (crlf ? ":crlf" : "")
+                else if (crlf) print "crlf:" crlf
+                else print "canonical"
+            }
+        }
     ' "$1"
 }
 
-at_projection_delimiter_finding() { # file
-    printf 'Agent projection %s line 1: unsupported frontmatter delimiter; use exactly --- followed by LF\n' \
-        "${1#"$AT_ROOT"/}"
+at_projection_delimiter_finding() { # file result of at_projection_delimiter
+    local line="${2#*:}" message
+    case "$2" in
+        delimiter:*:crlf) message='unsupported frontmatter delimiter; convert the whole file to LF line endings and use exactly --- for each delimiter' ;;
+        delimiter:*) message='unsupported frontmatter delimiter; use exactly --- followed by LF' ;;
+        crlf:*) message='CRLF line endings in projection; convert the whole file to LF line endings' ;;
+        *) return 0 ;;
+    esac
+    printf 'Agent projection %s line %s: %s\n' "${1#"$AT_ROOT"/}" "${line%%:*}" "$message"
 }
 
 at_lint_projection_delimiters() {
@@ -454,7 +485,7 @@ at_lint_projection_delimiters() {
     for proj in "$AT_ROOT"/.claude/agents/*.md "$AT_ROOT"/.opencode/agents/*.md; do
         [ -f "$proj" ] || continue
         delimiter="$(at_projection_delimiter "$proj")" || return 1
-        [ "$delimiter" != unsupported ] || at_projection_delimiter_finding "$proj"
+        at_projection_delimiter_finding "$proj" "$delimiter"
     done
 }
 
@@ -526,7 +557,7 @@ at_native_projection_findings() { # existing file permissions
     if ! findings="$(LC_ALL=C awk -v opencode="$2" "$AT_DELIMITER_AWK$AT_YAML_SCAN_AWK"'
         NR == 1 {
             # Noncanonical opening delimiters are reported by the inventory check.
-            if (opening_delimiter($0) != "canonical") exit
+            if (frontmatter_delimiter($0) != "canonical") exit
             header = 1; next
         }
         $0 == "---" { closed = 1; exit }
@@ -570,7 +601,7 @@ at_opencode_model() { # projection
         }
         NR == 1 {
             # Noncanonical opening delimiters are reported by the inventory check.
-            if (opening_delimiter($0) != "canonical") exit
+            if (frontmatter_delimiter($0) != "canonical") exit
             header = 1; next
         }
         { sub(/\r$/, "") }
@@ -812,9 +843,6 @@ at_owned_description() { # def
 
 # --- findings ---------------------------------------------------------------------------
 
-# Static tier-map findings. Projects without an agent-tier map need no baseline.
-at_lint() { at_lint_map && at_lint_definitions && at_lint_projection_bans; }
-
 # Neutral-definition findings that make the render target set ambiguous: a `harnesses:` line
 # that is not a bracketed list of known projection harnesses.
 at_lint_definitions() {
@@ -858,7 +886,7 @@ at_ownership_findings() {
 # the render that would fix them; --check, doctor and the adoption gate still report them.
 at_lint_projection_bans() { # [--unverifiable-only]
     local proj model base only="${1:-}"
-    printf '%s\n' "$AT_MAP" | awk -F '\037' '$1 == "banned" { f = 1 } END { exit !f }' || return 0
+    at_has_model_bans || return 0
     for proj in "$AT_ROOT"/.claude/agents/*.md "$AT_ROOT"/.opencode/agents/*.md; do
         [ -f "$proj" ] || continue
         # Native V2 embeds the variant; a banned base id still applies to every variant.
@@ -877,6 +905,10 @@ at_lint_projection_bans() { # [--unverifiable-only]
         esac
         [ -n "$only" ] || ! at_is_banned "$model" || printf "Agent projection %s uses banned model '%s'\n" "${proj#"$AT_ROOT"/}" "$model"
     done
+}
+
+at_has_model_bans() {
+    printf '%s\n' "$AT_MAP" | awk -F '\037' '$1 == "banned" { f = 1 } END { exit !f }'
 }
 
 # Tier map, override and snapshot findings (everything except projection content).
@@ -967,8 +999,8 @@ at_native_model_valid() { # model variant
 
 # Projection findings for every neutral definition and target harness.
 #   include_missing  report absent projections (doctor reports those itself)
-at_projection_findings() { # include_missing
-    local include_missing="$1" def name tier harness proj current model variant key desc targets actual body native blockers
+at_projection_findings() { # include_missing delimiters_checked
+    local include_missing="$1" delimiters_checked="$2" def name tier harness proj current model variant key desc targets actual body native blockers delimiter
     for def in "$AT_ROOT"/.prdkit/agents/*.md; do
         [ -f "$def" ] || continue
         name="$(basename "$def" .md)"
@@ -988,6 +1020,13 @@ at_projection_findings() { # include_missing
             if [ ! -f "$proj" ]; then
                 [ "$include_missing" != true ] || printf "Agent '%s': no projection in .%s/agents/ (run render-agents.sh)\n" "$name" "$harness"
                 continue
+            fi
+            if [ "$delimiters_checked" = false ]; then
+                delimiter="$(at_projection_delimiter "$proj")" || return 1
+                case "$delimiter" in
+                    canonical|absent) ;;
+                    *) at_projection_delimiter_finding "$proj" "$delimiter"; continue ;;
+                esac
             fi
             if [ -n "$AT_P_EFFORT$AT_P_PERMISSIONS" ]; then
                 blockers="$(at_native_projection_findings "$proj" "$AT_P_PERMISSIONS")" || return 1
@@ -1036,7 +1075,7 @@ at_projection_findings() { # include_missing
 # Projection checks run when the tier map declares a shared baseline (the opt-in), or always
 # with --always-projections (render-agents.sh --check).
 agent_tier_findings() {
-    local root="$1" include_missing=false always=false delimiters
+    local root="$1" include_missing=false always=false delimiters_checked=false delimiters
     shift
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -1049,13 +1088,18 @@ agent_tier_findings() {
         [ -n "$AT_LOAD_ERR" ] || return 1
         printf '%s\n' "$AT_LOAD_ERR"; return
     fi
-    at_lint || return 1
-    delimiters="$(at_lint_projection_delimiters)" || return 1
-    # Do not suggest rendering drift when the opening delimiters must be fixed first.
-    if [ -n "$delimiters" ]; then printf '%s\n' "$delimiters"; return; fi
+    at_lint_map && at_lint_definitions || return 1
+    # Explicit render checks and model bans both inspect all projections. Otherwise
+    # only the baseline-gated checks of managed projections need to inspect headers.
+    if $always || at_has_model_bans; then
+        delimiters="$(at_lint_projection_delimiters)" || return 1
+        if [ -n "$delimiters" ]; then printf '%s\n' "$delimiters"; return; fi
+        delimiters_checked=true
+    fi
+    at_lint_projection_bans || return 1
     if $always || [ -n "$AT_BASELINE" ]; then
         if [ -z "$AT_BASELINE" ] || [ -n "$AT_SNAP" ]; then
-            at_projection_findings "$include_missing" || return 1
+            at_projection_findings "$include_missing" "$delimiters_checked" || return 1
         fi
     fi
     [ -z "$AT_BASELINE" ] || at_ownership_findings
