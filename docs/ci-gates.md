@@ -350,10 +350,14 @@ remembered process-group ID. If required, the guard sends TERM, allows five seco
 KILL at most once, ending the guard itself. After release or KILL, the launcher only observes.
 It polls the process table without calling `wait` on a leader, and treats ambiguous states
 (including Linux `Zl`) as live. It allows readers a separate five-second drain window.
+If a guard exits before it is ready, the launcher stops waiting for the operation and refuses
+with `guard-startup`. Missing or failed capture status refuses with `capture-failed`. Neither
+returns a native result or exit code; startup details stay in private diagnostics while scratch exists.
 Before deleting scratch, it checks that the kernel reports every recorded group absent,
 since a process-table scan can miss a fork/exit handoff. An existing group (even a reused
-ID) or any other probe error prevents deletion. If shutdown or drain cannot be verified,
-it refuses with `cleanup-failed` and retains scratch.
+ID) or any other probe error prevents deletion. If shutdown or deletion cannot be verified,
+it refuses with `cleanup-failed` and retains scratch. A startup or capture failure alone does
+not prevent deletion once shutdown is verified.
 If KILL prevents reporting the native exit, `native_exit` is null. This checks supervised
 process groups; it does not contain processes that leave them. Uncatchable runner termination
 can leave no complete result and is not PASS. stdout is one buffered JSON object,

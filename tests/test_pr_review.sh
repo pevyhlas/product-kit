@@ -108,11 +108,38 @@ invoke_launcher() {
         > "$FIX/stdout" 2>"$FIX/stderr"; then STATUS=0; else STATUS=$?; fi
     OUTPUT="$(cat "$FIX/stdout")"
 }
+scratch_entries() {
+    local entry
+    for entry in "$FIX/scratch"/prdkit-pr.*; do
+        if [ -e "$entry" ] || [ -L "$entry" ]; then printf '%s\n' "$entry"; fi
+    done
+}
+new_scratch() {
+    local before=$'\n'"$1"$'\n' entry
+    while IFS= read -r entry; do
+        case "$before" in *$'\n'"$entry"$'\n'*) ;; *) printf '%s\n' "$entry" ;; esac
+    done < <(scratch_entries)
+}
+assert_scratch_clean() {
+    local leaked entry
+    leaked="$(new_scratch "$1")"
+    if [ -z "$leaked" ]; then
+        _ok 'owned scratch cleaned'
+    else
+        _no "$_CURRENT: owned scratch cleaned" "$leaked
+$(jq -cs 'last | {launcher,error,native_exit}' "$FIX/stdout")
+$(while IFS= read -r entry; do
+    find "$entry" \( -name '*.ready' -o -name '*.status' -o -name '*.sealed' -o -name '*.grace' \) -print
+done <<< "$leaked")"
+    fi
+}
 launch() {
+    local before
+    before="$(scratch_entries)"
     invoke_launcher "$@"
     assert_eq "$EXPECTED_BASH" "$(cat "$FIX/interpreter")" 'actual nested supervisor interpreter'
     assert_eq 1 "$(printf '%s' "$OUTPUT" | jq -s length)" 'one structured stdout object'
-    assert_eq '' "$(find "$FIX/scratch" -mindepth 1 -print)" 'owned scratch cleaned'
+    assert_scratch_clean "$before"
 }
 assert_terminated() {
     local state
@@ -135,7 +162,7 @@ arm_fixture_deadline() { # capture basename, readiness file, bounded's deadline 
     # ready, shorten only the selected clock and let the real check expire it.
     awk -v capture="$1" -v ready="$FIX/$2" -v clock="$3" '
         { print }
-        /^    while \[ ! -f "\$operation\/work.status" \]; do$/ {
+        /^    while \[ ! -f "\$operation\/work.status" \]/ {
             print "        if [ \"$out\" = \"$root/" capture "\" ] && [ -s \"" ready "\" ] && [ -z \"${fixture_armed:-}\" ]; then"
             print "            local fixture_armed=1; " clock "=$((SECONDS+2))"
             print "        fi"
@@ -318,6 +345,8 @@ bindings "$HEAD_SHA" 001-carrier; launch
 assert_eq 0 "$STATUS" "$OUTPUT"
 bindings "$HEAD_SHA" 999-absent; launch
 assert_eq 1 "$STATUS"
+assert_eq complete "$(jq -r .launcher "$FIX/stdout")" 'missing carrier completed native evaluation'
+assert_eq 1 "$(jq .native_exit "$FIX/stdout")" 'missing carrier is a native refusal, not a transport failure'
 assert_eq 999-absent "$(printf '%s' "$OUTPUT" | jq -r .native.change)"
 bindings "$HEAD_SHA" feat/001-carrier; launch
 assert_eq 0 "$STATUS" "$OUTPUT"
@@ -482,6 +511,7 @@ git checkout -q --detach "$BASE"
 git add -A; git commit -qm 'negative interrupted native transport'
 git branch -f main HEAD
 bindings "$HEAD_SHA"
+SCRATCH_BEFORE="$(scratch_entries)"
 env -i PATH="$ORIGINAL_PATH" GH_TOKEN=synthetic GITHUB_EVENT_NAME=pull_request \
     GITHUB_REPOSITORY=owner/repo GITHUB_REPOSITORY_ID=42 \
     "$REAL_BASH" "$FIX/launcher" --repository owner/repo --event "$FIX/event" --policy-ref main \
@@ -501,7 +531,7 @@ case "$(jq -r .native_exit "$FIX/stdout")" in
 esac
 assert_file "$FIX/native-descendant"
 assert_terminated "$(cat "$FIX/native-descendant")" 'native cancellation terminates descendant'
-assert_eq '' "$(find "$FIX/scratch" -mindepth 1 -print)" 'native cancellation cleans scratch'
+assert_scratch_clean "$SCRATCH_BEFORE"
 git branch -f main "$BASE"
 bindings "$HEAD_SHA"
 
@@ -639,6 +669,7 @@ it 'cancellation cleans owned groups before emitting refusal'
 instrument
 rm -f "$FIX/descendant"
 touch "$FIX/hang"
+SCRATCH_BEFORE="$(scratch_entries)"
 env -i PATH="$ORIGINAL_PATH" GH_TOKEN=synthetic GITHUB_EVENT_NAME=pull_request \
     GITHUB_REPOSITORY=owner/repo GITHUB_REPOSITORY_ID=42 \
     "$REAL_BASH" "$FIX/launcher" --repository owner/repo --event "$FIX/event" --policy-ref main \
@@ -653,10 +684,20 @@ assert_eq 1 "$STATUS"
 assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
 assert_eq interrupted "$(jq -r .error.code "$FIX/stdout")"
 assert_terminated "$(cat "$FIX/descendant")" 'fetch cancellation terminates descendant'
-assert_eq '' "$(find "$FIX/scratch" -mindepth 1 -print)" 'cancellation cleans invocation scratch'
+assert_scratch_clean "$SCRATCH_BEFORE"
+
+it 'a pre-existing scratch root does not fail a clean launch or mask a new leak'
+instrument
+SENTINEL="$FIX/scratch/prdkit-pr.sentinel"
+mkdir "$SENTINEL"
+launch
+assert_eq 0 "$STATUS" 'clean launch succeeds beside a pre-existing root'
+assert_eq complete "$(jq -r .launcher "$FIX/stdout")"
+run test -d "$SENTINEL"
+assert_eq 0 "$STATUS" 'clean launch leaves the pre-existing root alone'
 
 it 'scratch deletion failure prevents a valid native success'
-instrument
+SCRATCH_BEFORE="$(scratch_entries)"
 touch "$FIX/cleanup-fail"
 # The normal helper intentionally asserts cleanup; test the failure contract separately.
 invoke_launcher
@@ -664,6 +705,11 @@ rm "$FIX/cleanup-fail"
 assert_eq 1 "$STATUS"
 assert_eq cleanup-failed "$(printf '%s' "$OUTPUT" | jq -r .error.code)"
 assert_eq 0 "$(printf '%s' "$OUTPUT" | jq -r .native_exit)"
+LEAKED="$(new_scratch "$SCRATCH_BEFORE")"
+assert_eq 1 "$(printf '%s\n' "$LEAKED" | grep -c .)" 'one newly leaked root is detected beside the sentinel'
+assert_not_contains "$LEAKED" "$SENTINEL" 'only the new root is reported'
+run test -d "$SENTINEL"
+assert_eq 0 "$STATUS" 'failed deletion also leaves the sentinel alone'
 run jq -e --arg h "$HEAD_SHA" --arg p "$BASE" '
     .native.result == "pass" and .native.authority == "host" and .native.problems == [] and
     .native.change == "001-carrier" and .native.pr == "https://github.com/owner/repo/pull/7" and
@@ -675,6 +721,12 @@ run jq -e --arg h "$HEAD_SHA" --arg p "$BASE" '
     (.native.reviews | length > 0)
 ' "$FIX/stdout"
 assert_eq 0 "$STATUS" 'only final deletion fails after a fully bound real native success'
-"$REAL_RM" -rf "$FIX/scratch/"*
+run assert_scratch_clean "$SCRATCH_BEFORE"
+assert_eq 1 "$STATUS" 'the launch cleanup assertion rejects a new leak beside the sentinel'
+assert_contains "$OUTPUT" 'cleanup-failed' 'scratch leak diagnostic includes the launcher outcome'
+if [ -n "$LEAKED" ]; then
+    while IFS= read -r entry; do "$REAL_RM" -rf -- "$entry"; done <<< "$LEAKED"
+fi
+rmdir "$SENTINEL"
 source "$TESTS_DIR/pr-review-process-cases.sh"
 finish

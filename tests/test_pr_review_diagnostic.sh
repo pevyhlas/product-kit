@@ -478,11 +478,14 @@ assert_eq 1 "$STATUS" 'the diagnostic alone is insufficient'
 run awk '
     /cat .*group-guard.*GUARD/ {in_guard=1}
     /^GUARD$/ {in_guard=0}
+    /^guard_exited_before_ready\(\)/ {in_startup=1}
+    /^}/ {in_startup=0}
     /^[[:blank:]]*(kill|wait)[[:blank:]]/ {
         if (!in_guard || $1 != "kill" || $4 != "\"-$$\"") bad=1
         signals++
     }
-    /builtin kill/ && $0 !~ /builtin kill -0 -- "-\$pgid"/ {bad=1}
+    /builtin kill/ && $0 !~ /builtin kill -0 -- "-\$pgid"/ &&
+        !(in_startup && $0 ~ /builtin kill -0 -- "\$pid"/) {bad=1}
     END {exit (bad || signals != 2)}
 ' "$FIX/launcher"
 assert_eq 0 "$STATUS" 'only the executing group leader may signal; launcher never waits on a PID'

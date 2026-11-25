@@ -209,6 +209,63 @@ assert_eq '[null,17,true]' "$(jq -c .native.extension.keep "$FIX/stdout")"
 assert_other_bindings
 restore_control
 
+it 'native work guard exiting before readiness refuses promptly and cleans scratch'
+bindings "$HEAD_SHA" 999-absent
+awk -v dir="$FIX" '
+    /^pgid="\$\(ps -o pgid= -p "\$\$"\)"$/ {
+        print "if [ \"$role\" = work ] && [ -f \"$op/../selected\" ]; then ps() { return 42; }; fi"
+    }
+    /^phase=native$/ { print "native_started=$SECONDS" }
+    /^if bounded 180 / { sub(/180/, "25") }
+    /^    work=\$!/ {
+        print "    if [ \"$phase\" = native ]; then printf \"%s\\n\" \"$!\" \"$reader_out\" \"$reader_err\" > \"" dir "/startup-groups\"; fi"
+    }
+    /^    if ! \$groups_verified \|\| ! remove_scratch; then/ {
+        print "    printf \"%s\\n\" \"$((SECONDS-native_started))\" > \"" dir "/startup-elapsed\""
+        print "    cp \"$root/guard.err\" \"" dir "/startup-private\""
+    }
+    { print }
+' "$FIX/launcher" > "$FIX/injected"
+mv "$FIX/injected" "$FIX/launcher"
+STARTUP_SCRATCH_BEFORE="$(scratch_entries)"
+launch
+assert_eq 1 "$STATUS"
+assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
+assert_eq native "$(jq -r .error.stage "$FIX/stdout")" 'pre-ready exit is a native transport failure'
+assert_eq guard-startup "$(jq -r .error.code "$FIX/stdout")" 'verified shutdown is not cleanup-failed'
+assert_eq '[null,null]' "$(jq -c '[.native_exit,.native]' "$FIX/stdout")" 'no native result from a failed guard startup'
+run test "$(cat "$FIX/startup-elapsed")" -lt 20
+assert_eq 0 "$STATUS" 'pre-ready exit did not wait out the native operation budget'
+assert_contains "$(cat "$FIX/startup-private")" 'role=work step=pgid-lookup status=42' 'private diagnostic identifies guard role, step and status'
+assert_not_contains "$(cat "$FIX/stderr")" 'pgid-lookup' 'bootstrap details stay private'
+assert_eq 3 "$(wc -l < "$FIX/startup-groups" | tr -d '[:space:]')" 'all three native guard PIDs recorded'
+while IFS= read -r group; do
+    if [[ "$group" =~ ^[1-9][0-9]*$ ]]; then
+        assert_group_gone "$group" 'startup failure leaves no live guard group'
+    else _no 'startup fixture produced an invalid guard PID' "$group"; fi
+done < "$FIX/startup-groups"
+# Remove just the root(s) left by this fault on an unfixed launcher, for base replay.
+while IFS= read -r entry; do "$REAL_RM" -rf -- "$entry"; done < <(new_scratch "$STARTUP_SCRATCH_BEFORE")
+restore_control
+
+it 'a failed capture with complete native JSON refuses without exposing a native result'
+awk '
+    /^        record "\$rc"$/ {
+        print "        if [ \"$role\" = out ] && [ \"$1\" = \"${op%/*}/native.json\" ]; then rc=23; fi"
+    }
+    { print }
+' "$FIX/launcher" > "$FIX/injected"
+mv "$FIX/injected" "$FIX/launcher"
+CAPTURE_SCRATCH_BEFORE="$(scratch_entries)"
+launch
+assert_eq 1 "$STATUS"
+assert_eq refused "$(jq -r .launcher "$FIX/stdout")"
+assert_eq native "$(jq -r .error.stage "$FIX/stdout")"
+assert_eq capture-failed "$(jq -r .error.code "$FIX/stdout")"
+assert_eq '[null,null]' "$(jq -c '[.native_exit,.native]' "$FIX/stdout")" 'failed capture cannot salvage otherwise valid native JSON or exit'
+while IFS= read -r entry; do "$REAL_RM" -rf -- "$entry"; done < <(new_scratch "$CAPTURE_SCRATCH_BEFORE")
+restore_control
+
 it 'a live member missed by ps prevents scratch deletion'
 rm -f "$FIX/group" "$FIX/hidden-member" "$FIX/remove-attempted"
 mkfifo "$FIX/member-release"

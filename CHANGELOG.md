@@ -15,6 +15,10 @@ change by change.
 
 - `pr-state.sh` snapshots GitHub PR facts and `ci-wait.sh` waits for required checks on an exact head, with optional signature-based job reruns.
 
+### Fixed
+
+- The PR review launcher refuses promptly if a guard exits before readiness and removes scratch after a capture failure when process shutdown is verified.
+
 ## [3.1.1] — 2026-11-25 — focused spec retrieval
 
 ### Added
