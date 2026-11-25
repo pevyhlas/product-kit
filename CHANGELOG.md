@@ -11,6 +11,13 @@ change by change.
 
 ## [Unreleased]
 
+### Fixed
+
+- The review launcher reports `policy-ref-required` when `--policy-ref` is given without a
+  value and is followed by another flag, instead of a generic usage error. `docs/ci-gates.md`
+  now says that T comes from the PR's target and only P from the pinned branch, and that the
+  two live-default checks are snapshots.
+
 ## [3.1.0] — 2026-11-25 — pinned review policy branch and complete tier floor
 
 ### Added
