@@ -42,8 +42,9 @@ defaults are 600 seconds overall and 10 seconds between polls.
 
 Both helpers match named requirements from the current base branch's classic protection
 and active rulesets to the PR's exact head, not a synthetic merge commit or an older head.
-They read numbered ruleset pages until a short (possibly empty) page confirms the end, and
-refuse missing or repeated pages, unsupported required workflow rules, and ambiguous
+They read up to 10 numbered ruleset pages of 100 entries and exit 2 if no short (possibly
+empty) page confirms the end within that budget. They refuse missing or repeated pages,
+unsupported required workflow rules, and ambiguous
 duplicate contexts. Before reporting evidence or rerunning a job, they recheck the PR
 binding, requirements, and exact-head check identities, statuses, and conclusions.
 If a check changes during confirmation, `ci-wait.sh` keeps waiting and `pr-state.sh`

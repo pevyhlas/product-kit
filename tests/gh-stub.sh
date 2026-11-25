@@ -90,6 +90,12 @@ case "$route" in
         $paginate && $slurp || exit 2 ;;
 esac
 if [ -f "$override" ]; then emit < "$override"; exit; fi
+if [ "${GH_STUB_FULL_RULE_PAGES:-false}" = true ] && [[ "$route" == rules/branches/*\?per_page=100\&page=* ]]; then
+    page="${route##*=}"
+    [[ "$page" =~ ^[1-9][0-9]*$ ]] || exit 2
+    jq -n --argjson page "$page" '[range(100) | {type:"deletion", ruleset_id:(($page - 1) * 100 + . + 1)}]'
+    exit
+fi
 if [ "$endpoint" = graphql ]; then
     case "$operation" in
         PrdkitReviews)

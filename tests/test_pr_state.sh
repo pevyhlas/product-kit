@@ -111,6 +111,34 @@ printf '[]\n' > "$rule_page_two"
 wait_for_ci
 assert_eq 0 "$STATUS" 'a full final page is complete only after an explicit empty next page'
 rm "$rule_page_two"
+
+it 'distinct full rules pages are bounded even when the host never returns a short page'
+rm "$rule_file"
+bounded_rules_feed() {
+    # Keep the regression itself bounded on a build without the application limit.
+    run env GH_STUB_FULL_RULE_PAGES=true python3 -I -B -c '
+import subprocess
+import sys
+try:
+    sys.exit(subprocess.call(sys.argv[1:], timeout=8))
+except subprocess.TimeoutExpired:
+    sys.exit(124)
+' "$@"
+}
+for helper in "$PR_STATE" "$CI_WAIT"; do
+    : > "$GH_STUB_DIR/requests"
+    args=(--repo owner/repo 7)
+    if [ "$helper" = "$CI_WAIT" ]; then args+=(--head "$HEAD_SHA" --timeout 30); fi
+    bounded_rules_feed bash "$helper" "${args[@]}"
+    assert_eq 2 "$STATUS" "${helper##*/} refuses the unterminated list before the watchdog or deadline"
+    assert_contains "$OUTPUT" 'branch rules page budget exhausted (10 pages of 100)'
+    assert_eq 10 "$(grep -cF 'rules/branches/main?per_page=100&page=' "$GH_STUB_DIR/requests")"
+    assert_not_contains "$OUTPUT" '"fetched_at"'
+done
+required_rules > "$ROUTES/rules_branches_main_per_page_100_page_10.json"
+bounded_rules_feed bash "$CI_WAIT" --repo owner/repo 7 --head "$HEAD_SHA" --timeout 30
+assert_eq 0 "$STATUS" 'a short tenth page completes the list within budget'
+rm "$ROUTES/rules_branches_main_per_page_100_page_10.json"
 required_rules > "$rule_file"
 jq -s . "$rule_file" > "$legacy_rule_file"
 

@@ -244,9 +244,9 @@ class GitHub:
         # Require an explicit short (possibly empty) page before accepting this list.
         endpoint = f"rules/branches/{quote(base, safe='')}"
         size = 100
-        number = 1
+        max_pages = 10
         seen = set()
-        while True:
+        for number in range(1, max_pages + 1):
             label = f"active base branch rules page {number}"
             page = self.get(label, self.api(f"{endpoint}?per_page={size}&page={number}"))
             require(isinstance(page, list) and len(page) <= size,
@@ -258,7 +258,8 @@ class GitHub:
             yield from page
             if len(page) < size:
                 return
-            number += 1
+        raise Refusal(f"branch rules page budget exhausted ({max_pages} pages of {size}) without a short page; "
+                      "inspect the active base branch rules in GitHub before retrying")
 
     def requirements(self, base, classic):
         required = {}
