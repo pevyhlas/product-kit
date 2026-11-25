@@ -46,11 +46,11 @@ Independent review requires a distinct reviewer/context. If the harness cannot d
 arrange an available reviewer or report the requirement pending. Optional neutral agent
 definitions are projected by `render-agents.sh`, installed with `init.sh --with agent-tiers`
 (see [agent lifecycle](agent-lifecycle.md)):
-Claude Code receives `model`, OpenCode `model` + `variant` (the official effort field;
-`reasoningEffort` would become a model option). OpenCode also passes unknown frontmatter keys
-to the model, so neutral/provenance keys (`tier`, `source`, `library-ref`, …) are removed from
-its projections and provenance lives in YAML comments. Claude effort is not projected. Native
-extras (tools, permissions, mode, colour, memory) stay project-owned and are preserved.
+By default, Claude Code receives `model` and OpenCode receives separate `model` and `variant`
+fields. [Optional tier settings](customization.md#optional-projection-settings) can add Claude
+`effort`, OpenCode V2 `permissions` and `model#variant`, or an OpenCode prompt preamble.
+Neutral/provenance keys (`tier`, `source`, `library-ref`, …) are removed from OpenCode
+frontmatter and provenance lives in YAML comments. Other native metadata is project-owned.
 The kit does not assume all harnesses have identical subagent, permission, or effort controls.
 
 ## Recorded evaluation coverage
@@ -83,7 +83,8 @@ checkout revision), recorded versus actual file hashes, kit versus project owner
 versus projected models with the winning rule. `null` is unknown; an absent install mode
 is not silently asserted as observed. Project copies override template seeds. Model precedence
 uses the shared baseline, then tier override, then agent override; a specific
-harness overrides wildcard at each scope. Native metadata stays project-owned. Read findings
+harness overrides wildcard at each scope. Projected fields show the literal native values,
+including a combined OpenCode V2 model reference when projected. Read findings
 alongside inventory: projected values are not proof of what an actual running model used.
 
 | Harness | Installed filesystem contract | Recorded real-agent behavior | Native command loading / full delivery |

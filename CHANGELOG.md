@@ -11,6 +11,15 @@ change by change.
 
 ## [Unreleased]
 
+### Added
+
+- Agent tier maps can opt in to Claude effort, deny-by-default OpenCode V2 permissions and `model#variant` syntax, and an OpenCode prompt preamble. Undeclared settings keep existing render behavior.
+- Opt-in rendering reports actual YAML anchor/alias syntax and invalid option cells before writing without mistaking scalar text for references. OpenCode model bans check the base ID in managed and hand-owned projections with simple top-level inline or single-token block scalars; unsupported model forms are reported rather than skipped.
+
+### Fixed
+
+- Agent rendering and `--check` reject noncanonical frontmatter delimiters and CRLF in files with frontmatter, even without optional settings or model bans. This prevents a 3.1.2 bug that could erase project-owned metadata by treating the file as headerless. Doctor and adoption inspect projection delimiters only for managed projections with an active tier baseline or files covered by configured model bans.
+
 ## [3.1.2] — 2026-11-25 — exact-head review facts
 
 ### Added

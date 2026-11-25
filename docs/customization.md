@@ -44,11 +44,74 @@ optional `Banned models:` line lists ids that must never project. Matching is ex
 string: banning `claude-opus-5` does not ban its OpenCode form `anthropic/claude-opus-5`, so
 list each harness's form separately. The snapshot is project-owned: refresh it with
 `render-agents.sh --refresh-baseline` rather than editing it.
+
+When `Banned models:` is set, the kit checks `model:` in `.opencode/agents/*.md`, including
+hand-owned files. Use an unindented top-level key with an inline plain or quoted model
+token (optional trailing comment), or a folded (`>`/`>-`) or literal (`|`) block with one
+model token on one content line. A `#variant` does not exempt the base ID from a ban.
+The kit does not evaluate general YAML: indented root mappings, flow mappings at the
+root, aliases or merges that supply the model, and other unsupported model forms get a
+file-and-line finding in both render and `--check`. Rewrite the model as a plain
+`model: provider/model#variant` scalar to make it verifiable. This is a check of kit
+projection files, not of OpenCode's full configuration or inherited models.
+
+For projection frontmatter, use exactly `---` on the opening and closing lines.
+Render and `--check` report noncanonical delimiters with the file and line, even
+without model bans or optional settings. If the file contains CRLF, convert the
+whole file to LF line endings, not just the reported line. Render refuses before
+updating any projection. Doctor and adoption check managed projections when a tier
+baseline is in use, and also check files covered by configured model bans.
+
 The `.ref` file (library commit + sha256) lets doctor detect hand edits to the snapshot and a
 mismatch with the `Tier baseline:` commit; it does not prove the snapshot came from that upstream commit, so
 review the vendoring diff. `Baseline snapshot:` must be a relative path inside the
 repository. With a baseline, a `Hand-owned agents:` line names projections kept without a
 neutral definition; any other unowned projection is a finding.
+
+### Optional projection settings
+
+Add this table outside a code fence in `.prdkit/memory/agents.md`, separated from other
+tables by a blank line. Keep the four headings
+and use the **local** tier from the neutral definition, not its mapped library tier.
+
+```text
+| Projection tier | Claude effort | OpenCode permissions | OpenCode preamble |
+|-----------------|---------------|----------------------|-------------------|
+| *               |               |                      | Use the project rubric. |
+| deep            | high          | read, glob, grep     | Start with the review rubric. |
+| standard        |               | deny                 |                   |
+```
+
+- Omit the table for unchanged output. Leave a cell empty to leave the setting undeclared.
+  Placeholders such as `-`, `none`, and `n/a` are not valid effort or permissions values.
+  Use LF line endings. Each tier has at most one row, and each row must set something.
+- **Claude effort** owns `effort:` only for that tier. Choose `low`, `medium`, `high`, `xhigh`,
+  or `max`; check that the Claude Code version and chosen model support the level.
+- **OpenCode permissions** opts that tier into **OpenCode V2**. `deny` blocks all actions.
+  A comma-separated list adds allows for those exact action names, for **all** their resources.
+  Names use lowercase letters, digits and underscores and start with a letter. No wildcards.
+  For resource-specific rules, leave this cell blank and manage them in the projection.
+  A nonblank cell replaces the entire `permission:` or `permissions:` entry, not just its
+  defaults. It also writes `model: provider/model#variant` when a variant resolves, removing
+  any separate `variant:`. Keep the model ID and optional variant separate in the baseline and
+  overrides; `--resolve` still reports them separately and `Banned models:` uses the base ID.
+  Before opting in, follow the [OpenCode V2 migration guide](https://opencode.ai/docs/migrate-v1#agent-files).
+  Rename `maxSteps:` to `steps:` and `disable:` to `disabled:`, remove `name:` (the filename
+  supplies the ID), and migrate `prompt:` to the neutral agent body. Review `tools:` against
+  the new permissions and move sampling/provider options to the model variant. If any such
+  legacy keys remain, the renderer names the file and keys and writes no projections.
+- **OpenCode preamble** inserts one literal Markdown line before the neutral body, after
+  any generated-marker comments. The optional `*` row sets only a global preamble; a nonblank
+  local preamble takes precedence. Do not put `|` in the preamble or HTML comments in the row.
+
+When opting into effort or permissions, use a simple YAML block mapping and replace any
+frontmatter anchors, aliases and alias-based merges with explicit values before rendering.
+The guard looks for YAML references at the start of a node, not `*` or `&` in ordinary
+text such as quoted permission patterns or block-scalar descriptions.
+`render-agents.sh --check` reports those blockers as well as drift. Removing an effort or permissions
+setting hands that field back to the project; it does not delete it. Removing the permissions
+setting also restores separate `model` and `variant` fields. If rolling back to the legacy
+OpenCode format, restore the previous `permission:` block and remove `permissions:` by hand.
 
 ## Rigor and proportion
 

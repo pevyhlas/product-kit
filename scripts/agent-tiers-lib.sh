@@ -11,6 +11,7 @@
 #     Baseline snapshot: .prdkit/agent-library/tiers.json        (optional; this is the default)
 #     | Local tier | Library tier |        local tier name -> baseline tier name
 #     | Scope | Harness | Model | Variant | Reason |            deviations, each with a reason
+#     | Projection tier | Claude effort | OpenCode permissions | OpenCode preamble |  (optional)
 #     Banned models: <id>, <id>        (optional; exact ids, so each harness's form is listed)
 #     Hand-owned agents: <name>, <name>   (optional; projections kept without a neutral source)
 #
@@ -23,11 +24,12 @@ AT_HARNESSES="claude opencode"
 
 # --- parsing ---------------------------------------------------------------------------
 
-# Tier map -> tab-separated records (one per line):
+# Tier map -> unit-separated records (one per line):
 #   baseline <ref> <line> | baselinebad <text> <line> | snapshot <path> <line>
 #   banned <id> <line> | handowned <agent> <line> | map <local> <library> <line>
 #   override <scope> <harness> <model> <variant> <reason> <line> <has-reason-column>
 #   literal <tier> <claude-model> <opencode-model> <opencode-variant> <line>
+#   projection <tier> <effort> <permissions> <preamble> <line> | projectionbad <line> <reason>
 at_tier_map_records() { # file [awk skip_fence(line) function]
     [ -f "$1" ] || return 0
     local expected skipper="${2:-}"
@@ -47,6 +49,41 @@ at_tier_map_records() { # file [awk skip_fence(line) function]
             return s
         }
         function after_colon(s) { sub(/^[^:]*:/, "", s); return trim(s) }
+        function permission_actions(value,   actions, seen, count, j, action, out) {
+            if (value == "" || value == "deny") return value
+            count = split(value, actions, ",")
+            for (j = 1; j <= count; j++) {
+                action = trim(actions[j])
+                if (action !~ /^[a-z][a-z0-9_]*$/ ||
+                    action ~ /^(deny|none|null|nil|na)$/ || action in seen) return "!"
+                seen[action] = 1
+                out = out (j == 1 ? "" : " ") action
+            }
+            return out
+        }
+        function projection_row(   tier, effort, permissions, preamble) {
+            if (nc != 4) { print "projectionbad", NR, "expected four Projection tier cells"; return }
+            tier = tolower(cell[1]); effort = trim(raw[3]); permissions = permission_actions(trim(raw[4]))
+            preamble = trim(raw[5])
+            if (tier != "*" && tier !~ /^[a-z0-9][a-z0-9_-]*$/)
+                print "projectionbad", NR, "expected a local Projection tier name or *"
+            else if (tier in projection_seen)
+                print "projectionbad", NR, "duplicate Projection tier " tier
+            else if (effort != "" && effort !~ /^(low|medium|high|xhigh|max)$/)
+                print "projectionbad", NR, "Claude effort must be low, medium, high, xhigh or max"
+            else if (permissions == "!")
+                print "projectionbad", NR, "OpenCode permissions must be deny or a comma-separated list of distinct action names (no wildcards or placeholders)"
+            else if (tier == "*" && (effort != "" || permissions != ""))
+                print "projectionbad", NR, "the * Projection tier row only sets a global OpenCode preamble"
+            else if (preamble ~ /[[:cntrl:]]/)
+                print "projectionbad", NR, "OpenCode preamble must be a single line without control characters"
+            else if (effort == "" && permissions == "" && preamble == "")
+                print "projectionbad", NR, "Projection tier row sets no options"
+            else {
+                projection_seen[tier] = 1
+                print "projection", tier, effort, permissions, preamble, NR
+            }
+        }
         BEGIN { OFS = "\037"; incomment = 0; infence = 0; intable = 0; kind = "" }
         {
             line = $0; sub(/\r$/, "", line)
@@ -55,13 +92,19 @@ at_tier_map_records() { # file [awk skip_fence(line) function]
                 p = index(line, "-->"); if (!p) next
                 line = substr(line, p + 3); incomment = 0
             }
+            if (intable && kind == "projection" && line ~ /^[ \t]*\|/ && line ~ /<!--|-->/) {
+                print "projectionbad", NR, "HTML comments are not allowed in Projection tier rows"
+                next
+            }
             while ((p = index(line, "<!--")) > 0) {
                 rest = substr(line, p + 4); q = index(rest, "-->")
                 if (q) line = substr(line, 1, p - 1) substr(rest, q + 3)
                 else { line = substr(line, 1, p - 1); incomment = 1 }
             }
             if (line ~ /^[ \t]*\|/) {
-                if (line ~ /^[ \t]*\|[ \t:|-]+$/) next          # separator row
+                if (line ~ /^[ \t]*\|[ \t:|-]+$/ && (kind != "projection" || !projection_separator)) {
+                    projection_separator = 1; next             # separator row
+                }
                 n = split(line, raw, "|"); nc = 0
                 for (i = 2; i <= n; i++) {
                     if (i == n && trim(raw[i]) == "") break
@@ -69,6 +112,13 @@ at_tier_map_records() { # file [awk skip_fence(line) function]
                 }
                 if (!intable) {
                     intable = 1; kind = ""
+                    if (tolower(cell[1]) == "projection tier" && nc > 0) {
+                        if (nc == 4 && tolower(cell[2]) == "claude effort" &&
+                            tolower(cell[3]) == "opencode permissions" && tolower(cell[4]) == "opencode preamble") {
+                            kind = "projection"; projection_separator = 0
+                        } else print "projectionbad", NR, "expected Projection tier | Claude effort | OpenCode permissions | OpenCode preamble"
+                        next
+                    }
                     lt = lb = sc = hc = mc = vc = rc = cm = om = ov = oe = 0
                     for (i = 1; i <= nc; i++) {
                         h = tolower(cell[i])
@@ -90,7 +140,8 @@ at_tier_map_records() { # file [awk skip_fence(line) function]
                     else if (tolower(cell[1]) == "tier" && (cm || om)) kind = "literal"
                     next
                 }
-                if (kind == "map" && cell[lt] != "") print "map", tolower(cell[lt]), tolower(cell[lb]), NR
+                if (kind == "projection") { projection_separator = 1; projection_row() }
+                else if (kind == "map" && cell[lt] != "") print "map", tolower(cell[lt]), tolower(cell[lb]), NR
                 else if (kind == "override" && (cell[sc] != "" || cell[mc] != "")) {
                     print "override", cell[sc], (hc ? tolower(cell[hc]) : ""), cell[mc], (vc ? cell[vc] : ""), (rc ? cell[rc] : ""), NR, (rc ? 1 : 0)
                 } else if (kind == "literal" && cell[1] != "") {
@@ -98,7 +149,7 @@ at_tier_map_records() { # file [awk skip_fence(line) function]
                 }
                 next
             }
-            intable = 0
+            intable = 0; kind = ""
             plain = line; gsub(/`/, "", plain); gsub(/\*\*/, "", plain)
             sub(/^[ \t]*([-*][ \t]+)?/, "", plain)
             low = tolower(plain)
@@ -277,6 +328,8 @@ at_load() { # root [awk skip_fence(line) function]
     local root="$1" rec
     AT_ROOT="$root"; AT_TIERMAP="$root/.prdkit/memory/agents.md"
     AT_MAP="$(at_tier_map_records "$AT_TIERMAP" "${2:-}")" || return 1
+    AT_HAS_PROJECTION=false
+    case $'\n'"$AT_MAP" in *$'\nprojection\037'*) AT_HAS_PROJECTION=true ;; esac
     AT_BASELINE="$(printf '%s\n' "$AT_MAP" | awk -F '\037' '!d && $1 == "baseline" { print $2; d = 1 }')" || return 1
     AT_BASELINE_BAD="$(printf '%s\n' "$AT_MAP" | awk -F '\037' '!d && $1 == "baselinebad" { print "line " $3 ": " $2; d = 1 }')" || return 1
     rec="$(printf '%s\n' "$AT_MAP" | awk -F '\037' '!d && $1 == "snapshot" { print $2 "\037" $3; d = 1 }')" || return 1
@@ -305,10 +358,329 @@ EOF
     fi
 }
 
+# Shared input contract for the renderer and its verifier (also used by doctor/adoption).
+at_load_checked() { # root
+    local map="$1/.prdkit/memory/agents.md"
+    AT_LOAD_ERR=""
+    if [ -f "$map" ] && ! verify_lf_file "$map"; then
+        AT_LOAD_ERR="Invalid tier map: expected non-empty LF-terminated text"
+        return 1
+    fi
+    at_load "$1"
+}
+
 at_snap_value() { # library-tier harness key
     printf '%s\n' "$AT_SNAP" | awk -F '\037' -v t="$1" -v h="$2" -v k="$3" '!d && $1 == "tier" && $2 == t && $3 == h && $4 == k { print $5; d = 1 }'
 }
 at_snap_has_tier() { printf '%s\n' "$AT_SNAP" | awk -F '\037' -v t="$1" '$1 == "tier" && $2 == t { found = 1 } END { exit !found }'; }
+
+# Opt-in settings for one local tier and harness. The global preamble is only a fallback.
+at_projection_options() { # tier harness -> AT_P_EFFORT AT_P_PERMISSIONS AT_P_PREAMBLE
+    local options
+    AT_P_EFFORT="" AT_P_PERMISSIONS="" AT_P_PREAMBLE=""
+    "$AT_HAS_PROJECTION" || return 0
+    options="$(printf '%s\n' "$AT_MAP" | AT_P_TIER="$1" awk -F '\037' -v h="$2" '
+        $1 == "projection" && $2 == "*" { global = $5; next }
+        $1 == "projection" && $2 == ENVIRON["AT_P_TIER"] { effort = $3; permissions = $4; preamble = $5 }
+        END {
+            if (h == "claude") print effort "\037\037"
+            else print "\037" permissions "\037" (preamble != "" ? preamble : global)
+        }
+    ')" || return 1
+    IFS=$'\037' read -r AT_P_EFFORT AT_P_PERMISSIONS AT_P_PREAMBLE <<EOF
+$options
+EOF
+}
+
+at_projected_model() { # model variant permissions
+    if [ -n "$3" ] && [ -n "$2" ]; then printf '%s#%s' "$1" "$2"
+    else printf '%s' "$1"; fi
+}
+
+at_projected_body() { # def preamble
+    local body
+    if [ -z "$2" ]; then at_body_norm "$1"; return; fi
+    body="$(at_body_norm "$1")" || return 1
+    printf '%s\n' "$2"
+    [ -z "$body" ] || printf '\n%s\n' "$body"
+}
+
+# The deny rule is first; OpenCode V2 applies the last matching rule. A non-empty
+# action list grants those named actions only, for all resources.
+at_native_fields() { # effort permissions
+    local action
+    if [ -n "$1" ]; then
+        printf 'effort: %s\n' "$1"
+    elif [ -n "$2" ]; then
+        printf 'permissions:\n  - action: "*"\n    resource: "*"\n    effect: deny\n'
+        if [ "$2" != deny ]; then
+            # Word splitting is intentional: the parser produces space-separated identifiers.
+            for action in $2; do
+                printf '  - action: "%s"\n    resource: "*"\n    effect: allow\n' "$action"
+            done
+        fi
+    fi
+}
+
+at_frontmatter() { # file, including delimiters (requires a complete header)
+    awk 'NR == 1 && $0 != "---" { exit } { print } NR > 1 && $0 == "---" { closed = 1; exit }
+         END { if (!closed) exit 1 }' "$1"
+}
+
+# Distinguish genuinely headerless Markdown from YAML we cannot rewrite safely.
+# Inspect delimiter lines before any newline or whitespace normalization.
+AT_DELIMITER_AWK='
+    function frontmatter_delimiter(line) {
+        if (line == "---") return "canonical"
+        if (line ~ /^(\357\273\277)?[ \t]*---[ \t]*\r?$/) return "unsupported"
+        return "absent"
+    }
+'
+
+at_projection_delimiter() { # file -> canonical, absent, or finding kind and line
+    LC_ALL=C awk "$AT_DELIMITER_AWK"'
+        /\r$/ && !crlf { crlf = NR }
+        NR == 1 {
+            opening = frontmatter_delimiter($0)
+            if (opening == "absent") exit
+            if (opening == "unsupported") bad = NR
+            next
+        }
+        !closed {
+            delimiter = frontmatter_delimiter($0)
+            if (delimiter == "absent") next
+            if (/^[ \t]/) {
+                # A delimiter lookalike can be content in a YAML block scalar.
+                if (!indented) indented = NR
+                next
+            }
+            closed = 1
+            if (!bad && delimiter == "unsupported") bad = NR
+        }
+        END {
+            if (!NR || opening == "absent") print "absent"
+            else {
+                if (!bad && !closed) bad = indented
+                if (bad) print "delimiter:" bad (crlf ? ":crlf" : "")
+                else if (crlf) print "crlf:" crlf
+                else print "canonical"
+            }
+        }
+    ' "$1"
+}
+
+at_projection_delimiter_finding() { # file result of at_projection_delimiter
+    local line="${2#*:}" message
+    case "$2" in
+        delimiter:*:crlf) message='unsupported frontmatter delimiter; convert the whole file to LF line endings and use exactly --- for each delimiter' ;;
+        delimiter:*) message='unsupported frontmatter delimiter; use exactly --- followed by LF' ;;
+        crlf:*) message='CRLF line endings in projection; convert the whole file to LF line endings' ;;
+        *) return 0 ;;
+    esac
+    printf 'Agent projection %s line %s: %s\n' "${1#"$AT_ROOT"/}" "${line%%:*}" "$message"
+}
+
+at_lint_projection_delimiters() {
+    local proj delimiter
+    for proj in "$AT_ROOT"/.claude/agents/*.md "$AT_ROOT"/.opencode/agents/*.md; do
+        [ -f "$proj" ] || continue
+        delimiter="$(at_projection_delimiter "$proj")" || return 1
+        at_projection_delimiter_finding "$proj" "$delimiter"
+    done
+}
+
+# A lexical scan, not YAML evaluation. Track node starts, flow collections and
+# quoted/block scalar continuations. Compare bytes only to ASCII syntax; a byte
+# from a UTF-8 scalar must never be passed to an awk regex as a character.
+AT_YAML_SCAN_AWK='
+    function indent(s) { match(s, /^ */); return RLENGTH }
+    function yaml_blank(c) { return c == " " || c == "\t" }
+    function flow_delimiter(c) { return c != "" && index("[]{},", c) > 0 }
+    function scan_yaml(s,   n,i,c,nextc,prev,r,owner,start) {
+        n = indent(s)
+        if (quote == "" && !flow) {
+            if (s ~ /^[ \t]*(#|$)/ || (block && n > block_indent)) return
+            block = 0
+            if (plain && n > plain_indent) return
+            plain = 0; node = 1; done = 0
+        }
+        owner = n; start = n + 1
+        for (i = start; i <= length(s); i++) {
+            c = substr(s,i,1); nextc = substr(s,i+1,1); prev = substr(s,i-1,1)
+            if (quote != "") {
+                if ((quote == "\"" && c == "\\") || (quote == "\047" && c == quote && nextc == quote)) i++
+                else if (c == quote) { quote = ""; done = 1 }
+                continue
+            }
+            if (c == "#" && (node || i == start || yaml_blank(prev))) break
+            if (yaml_blank(c)) continue
+            if (flow && (c == "," || c == "]" || c == "}")) {
+                node = (c == ","); done = !node; plain = 0
+                if (!node) flow--
+                continue
+            }
+            if (c == ":" && (nextc == "" || yaml_blank(nextc) ||
+                    (flow && (done || flow_delimiter(nextc))))) {
+                owner = key_indent; node = 1; done = plain = 0; continue
+            }
+            if (!node) continue
+            r = substr(s,i)
+            if (c == "!") {
+                if (match(r, /^!<[^>]*>/) || match(r, /^![^][{}, \t]*/)) i += RLENGTH - 1
+                continue
+            }
+            if ((c == "&" || c == "*") && nextc != "" && !flow_delimiter(nextc) && !yaml_blank(nextc)) {
+                references = 1
+                match(r, /^[^][{}, \t]+/); i += RLENGTH - 1
+                if (c == "*") { node = 0; done = 1 }
+                continue
+            }
+            key_indent = i - 1
+            if ((c == "?" || (!flow && c == "-")) && (nextc == "" || yaml_blank(nextc))) {
+                owner = key_indent; continue
+            }
+            if (!flow && match(r, /^[|>]([1-9][+-]?|[+-][1-9]?)?([ \t]+#.*|[ \t]*)$/)) {
+                block = 1; block_indent = owner; return
+            }
+            if (c == "[" || c == "{") { flow++; done = plain = 0; continue }
+            node = done = 0
+            if (c == "\"" || c == "\047") quote = c
+            else { plain = 1; plain_indent = owner }
+        }
+    }
+'
+
+# The line-oriented rewriter cannot migrate project-owned V1 fields or preserve YAML
+# references across replaced entries. Report blockers in preflight, not during writes.
+at_native_projection_findings() { # existing file permissions
+    local proj="$1" findings
+    if ! findings="$(LC_ALL=C awk -v opencode="$2" "$AT_DELIMITER_AWK$AT_YAML_SCAN_AWK"'
+        NR == 1 {
+            # Noncanonical opening delimiters are reported by the inventory check.
+            if (frontmatter_delimiter($0) != "canonical") exit
+            header = 1; next
+        }
+        $0 == "---" { closed = 1; exit }
+        !quote && !flow && /^[ \t]*(#|$)/ { next }
+        {
+            scan_yaml($0)
+            if ((!content && /^[ \t]/) || /^[{?!%]/ || /^\[/ || /^["\047][^:]*\\/) unsupported = 1
+            content = 1
+            if (opencode != "" && match($0, /^([A-Za-z_]+|"[A-Za-z_]+"|\047[A-Za-z_]+\047)[ \t]*:/)) {
+                k = substr($0, 1, RLENGTH - 1); gsub(/["\047 \t]/, "", k)
+                if (k ~ /^(name|tools|prompt|disable|maxSteps|temperature|top_p|options)$/ && !seen[k]++)
+                    keys = keys (keys == "" ? "" : ", ") k
+            }
+        }
+        END {
+            if (header && !closed) print "has incomplete frontmatter; close it before opting in"
+            if (unsupported) print "needs an LF-terminated, simple block mapping in frontmatter before opting in"
+            if (references) print "may use YAML anchors or aliases in frontmatter; replace them with explicit values before opting in"
+            if (keys != "") print "has OpenCode V1-only frontmatter keys: " keys "; migrate them manually before opting into V2 permissions"
+        }
+    ' "$proj")"; then
+        findings="could not inspect frontmatter; verify the file is readable"
+    fi
+    local line
+    while IFS= read -r line; do
+        [ -z "$line" ] || printf 'Agent projection %s %s\n' "${proj#"$AT_ROOT"/}" "$line"
+    done <<EOF
+$findings
+EOF
+}
+
+# Read just a model reference from a simple, unindented frontmatter mapping.
+# Output a token, nothing (no model), or !<line> (the model cannot be verified).
+at_opencode_model() { # projection
+    LC_ALL=C awk "$AT_DELIMITER_AWK$AT_YAML_SCAN_AWK"'
+        function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+        function invalid(ln) { bad = ln; exit }
+        function finish_model() {
+            if (model_line && model !~ /^[A-Za-z0-9_.+:\/@~%-]+(#[A-Za-z0-9_.+~-]+)?$/)
+                invalid(model_line)
+        }
+        NR == 1 {
+            # Noncanonical opening delimiters are reported by the inventory check.
+            if (frontmatter_delimiter($0) != "canonical") exit
+            header = 1; next
+        }
+        { sub(/\r$/, "") }
+        $0 == "---" { closed = 1; finish_model(); exit }
+        /^[ \t]*$/ { if (model_block && model == "") leading_blank = 1; next }
+        model_block && /^ / {
+            if (model != "" && indent($0) < model_indent && /^[ ]+#/) next
+            # Two nonempty content lines cannot fold to a single model token.
+            if (model != "" || leading_blank) invalid(model_line)
+            model = trim($0); model_indent = indent($0); next
+        }
+        !quote && !flow && /^[ \t]*#/ { next }
+        /^[ \t]|^-[ \t]/ {
+            if (!mapping) invalid(NR)
+            if (!model_block && model_line == key_line) invalid(model_line)
+            scan_yaml($0); next
+        }
+        {
+            if (quote || flow) invalid(NR)
+            if (!match($0, /^([A-Za-z0-9_.-]+|"[A-Za-z0-9_.-]+"|\047[A-Za-z0-9_.-]+\047)[ \t]*:([ \t]|$)/))
+                invalid(NR)
+            key = substr($0,1,RLENGTH); value = trim(substr($0,RLENGTH+1))
+            gsub(/["\047: \t]/, "", key)
+            mapping = 1; key_line = NR; model_block = 0
+            if (key != "model") { scan_yaml($0); next }
+            if (model_line) invalid(NR)
+            model_line = NR
+            if (value ~ /^[|>]([+-])?([ \t]+#.*|[ \t]*)$/) { model_block = 1; next }
+            if (value ~ /^["\047]/) {
+                if (!match(value, /^("[^"\\]*"|\047[^\047]*\047)([ \t]+#.*|[ \t]*)$/)) invalid(NR)
+                sub(/[ \t]+#.*$/, "", value)
+                model = substr(value,2,length(value)-2)
+            } else { sub(/[ \t]+#.*$/, "", value); model = value }
+            finish_model()
+        }
+        END {
+            if (bad) print "!" bad
+            else if (header && !closed) print "!" NR
+            else if (model != "") print model
+        }
+    ' "$1"
+}
+
+# Filter only opted-in keys before the normal update. Remove the entire value, including
+# nested entries, indentless YAML sequence items and multiline flow closing delimiters.
+# Keep neighboring keys, top-level comments and the blank lines that separate entries.
+at_native_frontmatter() { # existing file effort permissions projected-model
+    local fields
+    fields="$(at_native_fields "$2" "$3")" || return 1
+    AT_NATIVE_FIELDS="$fields" awk -v effort="$2" -v permissions="$3" -v model="$4" '
+        function key(s) {
+            if (!match(s, /^([a-z]+|"[a-z]+"|\047[a-z]+\047)[ \t]*:/)) return ""
+            s = substr(s, 1, RLENGTH - 1); gsub(/["\047 \t]/, "", s); return s
+        }
+        NR == 1 { if ($0 != "---") exit; print; next }
+        skipping && /^[ \t]*$/ { blanks = blanks $0 "\n"; next }
+        skipping && (/^[ \t]+[^ \t]/ || /^-[ \t]/ || /^[}\]]/) { blanks = ""; next }
+        skipping { printf "%s", blanks; blanks = ""; if (!/^#/) skipping = 0 }
+        {
+            k = key($0)
+            if (permissions != "" && k == "model") {
+                if (!wrote_model) print "model: " model
+                wrote_model = skipping = 1; next
+            }
+            if ((effort != "" && k == "effort") ||
+                (permissions != "" && (k == "permission" || k == "permissions" || k == "variant"))) {
+                if (!wrote && k != "variant") { print ENVIRON["AT_NATIVE_FIELDS"]; wrote = 1 }
+                skipping = 1; next
+            }
+        }
+        $0 == "---" {
+            if (permissions != "" && !wrote_model) print "model: " model
+            if (!wrote) print ENVIRON["AT_NATIVE_FIELDS"]
+            print; closed = 1; exit
+        }
+        { print }
+        END { if (!closed) exit 1 }
+    ' "$1"
+}
 
 # Neutral-definition / provenance keys that never belong in a projection's frontmatter:
 # OpenCode turns unknown frontmatter keys into model options, so provenance lives in YAML
@@ -390,6 +762,19 @@ at_is_banned() { # model
     printf '%s\n' "$AT_MAP" | awk -F '\037' -v m="$1" '$1 == "banned" && $2 == m { found = 1 } END { exit !found }'
 }
 
+at_known_projection_tier() { # local tier
+    local def
+    if at_snap_has_tier "$1" || printf '%s\n' "$AT_MAP" | awk -F '\037' -v t="$1" '
+        ($1 == "map" && $2 == t) || ($1 == "override" && $2 == "tier:" t) { found = 1 }
+        END { exit !found }
+    '; then return 0; fi
+    for def in "$AT_ROOT"/.prdkit/agents/*.md; do
+        [ -f "$def" ] || continue
+        [ "$(at_fm_value "$def" tier)" != "$1" ] || return 0
+    done
+    return 1
+}
+
 # A neutral definition's optional `harnesses:` frontmatter -> AT_DH_SET (true when the line is
 # present), AT_DH_LIST (space-separated known names) and AT_DH_ERR (why it is malformed). Only
 # a bracketed, non-empty list of projection harnesses is valid; anything else is a finding,
@@ -458,9 +843,6 @@ at_owned_description() { # def
 
 # --- findings ---------------------------------------------------------------------------
 
-# Static tier-map findings. Projects without an agent-tier map need no baseline.
-at_lint() { at_lint_map && at_lint_definitions && at_lint_projection_bans; }
-
 # Neutral-definition findings that make the render target set ambiguous: a `harnesses:` line
 # that is not a bracketed list of known projection harnesses.
 at_lint_definitions() {
@@ -502,14 +884,31 @@ at_ownership_findings() {
 # Projections whose current model is banned. Kept apart from at_lint_map: render-agents.sh
 # repairs these (it rewrites the model) once the map itself is clean, so they must not block
 # the render that would fix them; --check, doctor and the adoption gate still report them.
-at_lint_projection_bans() {
-    local proj model
-    printf '%s\n' "$AT_MAP" | awk -F '\037' '$1 == "banned" { f = 1 } END { exit !f }' || return 0
+at_lint_projection_bans() { # [--unverifiable-only]
+    local proj model base only="${1:-}"
+    at_has_model_bans || return 0
     for proj in "$AT_ROOT"/.claude/agents/*.md "$AT_ROOT"/.opencode/agents/*.md; do
         [ -f "$proj" ] || continue
-        model="$(at_fm_value "$proj" model)"
-        ! at_is_banned "$model" || printf "Agent projection %s uses banned model '%s'\n" "${proj#"$AT_ROOT"/}" "$model"
+        # Native V2 embeds the variant; a banned base id still applies to every variant.
+        case "$proj" in
+            "$AT_ROOT"/.opencode/agents/*.md)
+                model="$(at_opencode_model "$proj")" || return 1
+                if [[ "$model" == '!'* ]]; then
+                    printf 'Agent projection %s line %s: model reference could not be verified; use a simple top-level model scalar\n' \
+                        "${proj#"$AT_ROOT"/}" "${model#!}"
+                    continue
+                fi
+                base="${model%%#*}"
+                if [ "$base" != "$model" ] && at_is_banned "$base"; then model="$base"; fi ;;
+            *) [ -z "$only" ] || continue
+               model="$(at_fm_value "$proj" model)" || return 1 ;;
+        esac
+        [ -n "$only" ] || ! at_is_banned "$model" || printf "Agent projection %s uses banned model '%s'\n" "${proj#"$AT_ROOT"/}" "$model"
     done
+}
+
+at_has_model_bans() {
+    printf '%s\n' "$AT_MAP" | awk -F '\037' '$1 == "banned" { f = 1 } END { exit !f }'
 }
 
 # Tier map, override and snapshot findings (everything except projection content).
@@ -549,6 +948,14 @@ at_lint_map() {
 $rec
 EOF
         case "$kind" in
+            projectionbad)
+                printf 'Tier map line %s: %s\n' "$a" "$b" ;;
+            projection)
+                if [ -z "$AT_BASELINE" ]; then
+                    printf 'Tier map line %s: Projection tier options need a Tier baseline line\n' "$e"
+                elif [ "$a" != '*' ] && [ -n "$AT_SNAP" ] && ! at_known_projection_tier "$a"; then
+                    printf "Tier map line %s: unknown Projection tier '%s'; use a local tier name\n" "$e" "$a"
+                fi ;;
             literal)
                 printf "Tier map line %s: unsupported literal table for '%s'; expected a Tier baseline and overrides with a Reason\n" "$e" "$a" ;;
             map)
@@ -583,10 +990,17 @@ EOF
     fi
 }
 
+# The new format expects separate model and variant tokens as input, not an already
+# joined reference. Do not interpret whitespace, YAML punctuation or a second # as a model.
+at_native_model_valid() { # model variant
+    local model_pattern='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.+:/@~-]+$' variant_pattern='^[A-Za-z0-9_.+~-]+$'
+    [[ "$1" =~ $model_pattern && "$1" != *: ]] && { [ -z "$2" ] || [[ "$2" =~ $variant_pattern ]]; }
+}
+
 # Projection findings for every neutral definition and target harness.
 #   include_missing  report absent projections (doctor reports those itself)
-at_projection_findings() { # include_missing
-    local include_missing="$1" def name tier harness proj current variant key desc targets actual body
+at_projection_findings() { # include_missing delimiters_checked
+    local include_missing="$1" delimiters_checked="$2" def name tier harness proj current model variant key desc targets actual body native blockers delimiter
     for def in "$AT_ROOT"/.prdkit/agents/*.md; do
         [ -f "$def" ] || continue
         name="$(basename "$def" .md)"
@@ -598,22 +1012,49 @@ at_projection_findings() { # include_missing
                 printf "Agent '%s': no %s model resolves (%s)\n" "$name" "$harness" "$AT_R_ERR"
                 continue
             fi
+            at_projection_options "$tier" "$harness" || return 1
+            if [ -n "$AT_P_PERMISSIONS" ] && ! at_native_model_valid "$AT_R_MODEL" "$AT_R_VARIANT"; then
+                printf "Agent '%s': OpenCode V2 projection requires a provider/model id and an optional separate variant token\n" "$name"
+                continue
+            fi
             if [ ! -f "$proj" ]; then
                 [ "$include_missing" != true ] || printf "Agent '%s': no projection in .%s/agents/ (run render-agents.sh)\n" "$name" "$harness"
                 continue
             fi
+            if [ "$delimiters_checked" = false ]; then
+                delimiter="$(at_projection_delimiter "$proj")" || return 1
+                case "$delimiter" in
+                    canonical|absent) ;;
+                    *) at_projection_delimiter_finding "$proj" "$delimiter"; continue ;;
+                esac
+            fi
+            if [ -n "$AT_P_EFFORT$AT_P_PERMISSIONS" ]; then
+                blockers="$(at_native_projection_findings "$proj" "$AT_P_PERMISSIONS")" || return 1
+                if [ -n "$blockers" ]; then printf '%s\n' "$blockers"; continue; fi
+            fi
+            model="$(at_projected_model "$AT_R_MODEL" "$AT_R_VARIANT" "$AT_P_PERMISSIONS")"
             current="$(at_fm_value "$proj" model)" || return 1
-            [ "$current" = "$AT_R_MODEL" ] ||
-                printf "Agent '%s': .%s/agents/%s.md model '%s' differs from resolved '%s' (%s); run render-agents.sh\n" "$name" "$harness" "$name" "${current:-<none>}" "$AT_R_MODEL" "$AT_R_SOURCE"
+            [ "$current" = "$model" ] ||
+                printf "Agent '%s': .%s/agents/%s.md model '%s' differs from resolved '%s' (%s); run render-agents.sh\n" "$name" "$harness" "$name" "${current:-<none>}" "$model" "$AT_R_SOURCE"
             if [ "$harness" = opencode ]; then
                 for key in $AT_NEUTRAL_ONLY_KEYS; do
                     actual="$(at_fm_line "$proj" "$key")" || return 1
                     [ -z "$actual" ] ||
                         printf "Agent '%s': .opencode/agents/%s.md carries neutral/provenance key '%s:' as a field (OpenCode passes unknown keys to the model as options); keep provenance in YAML comments\n" "$name" "$name" "$key"
                 done
-                variant="$(at_fm_value "$proj" variant)" || return 1
-                [ "$variant" = "$AT_R_VARIANT" ] ||
-                    printf "Agent '%s': .%s/agents/%s.md variant '%s' differs from resolved '%s' (%s); run render-agents.sh\n" "$name" "$harness" "$name" "${variant:-<none>}" "${AT_R_VARIANT:-<none>}" "$AT_R_SOURCE"
+                if [ -z "$AT_P_PERMISSIONS" ]; then
+                    variant="$(at_fm_value "$proj" variant)" || return 1
+                    [ "$variant" = "$AT_R_VARIANT" ] ||
+                        printf "Agent '%s': .%s/agents/%s.md variant '%s' differs from resolved '%s' (%s); run render-agents.sh\n" "$name" "$harness" "$name" "${variant:-<none>}" "${AT_R_VARIANT:-<none>}" "$AT_R_SOURCE"
+                fi
+            fi
+            if [ -n "$AT_P_EFFORT$AT_P_PERMISSIONS" ]; then
+                if ! actual="$(at_frontmatter "$proj")" ||
+                    ! native="$(at_native_frontmatter "$proj" "$AT_P_EFFORT" "$AT_P_PERMISSIONS" "$model")" || [ "$actual" != "$native" ]; then
+                    key=effort
+                    [ -z "$AT_P_PERMISSIONS" ] || key='native model/permissions frontmatter or legacy variant'
+                    printf "Agent '%s': .%s/agents/%s.md %s differs from the Projection tier settings; run render-agents.sh\n" "$name" "$harness" "$name" "$key"
+                fi
             fi
             desc="$(at_owned_description "$def")" || return 1
             if [ -n "$desc" ]; then
@@ -622,7 +1063,7 @@ at_projection_findings() { # include_missing
                     printf "Agent '%s': .%s/agents/%s.md description differs from the neutral definition; run render-agents.sh\n" "$name" "$harness" "$name"
             fi
             actual="$(at_body_norm "$proj")" || return 1
-            body="$(at_body_norm "$def")" || return 1
+            body="$(at_projected_body "$def" "$AT_P_PREAMBLE")" || return 1
             [ "$actual" = "$body" ] ||
                 printf "Agent '%s': .%s/agents/%s.md prompt body differs from the neutral definition; run render-agents.sh\n" "$name" "$harness" "$name"
         done
@@ -634,7 +1075,7 @@ at_projection_findings() { # include_missing
 # Projection checks run when the tier map declares a shared baseline (the opt-in), or always
 # with --always-projections (render-agents.sh --check).
 agent_tier_findings() {
-    local root="$1" include_missing=false always=false
+    local root="$1" include_missing=false always=false delimiters_checked=false delimiters
     shift
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -643,16 +1084,22 @@ agent_tier_findings() {
         esac
         shift
     done
-    if [ -f "$root/.prdkit/memory/agents.md" ]; then
-        verify_lf_file "$root/.prdkit/memory/agents.md" || {
-            printf 'Invalid tier map: expected non-empty LF-terminated text\n'; return
-        }
+    if ! at_load_checked "$root"; then
+        [ -n "$AT_LOAD_ERR" ] || return 1
+        printf '%s\n' "$AT_LOAD_ERR"; return
     fi
-    at_load "$root" || return 1
-    at_lint || return 1
+    at_lint_map && at_lint_definitions || return 1
+    # Explicit render checks and model bans both inspect all projections. Otherwise
+    # only the baseline-gated checks of managed projections need to inspect headers.
+    if $always || at_has_model_bans; then
+        delimiters="$(at_lint_projection_delimiters)" || return 1
+        if [ -n "$delimiters" ]; then printf '%s\n' "$delimiters"; return; fi
+        delimiters_checked=true
+    fi
+    at_lint_projection_bans || return 1
     if $always || [ -n "$AT_BASELINE" ]; then
         if [ -z "$AT_BASELINE" ] || [ -n "$AT_SNAP" ]; then
-            at_projection_findings "$include_missing" || return 1
+            at_projection_findings "$include_missing" "$delimiters_checked" || return 1
         fi
     fi
     [ -z "$AT_BASELINE" ] || at_ownership_findings

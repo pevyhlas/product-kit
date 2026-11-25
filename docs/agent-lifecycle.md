@@ -20,8 +20,8 @@ render; unavailable validation stays unknown.
 | Command | Effect |
 |---------|--------|
 | `render-agents.sh` | Write `.claude/agents/<name>.md` / `.opencode/agents/<name>.md`; nothing is written while the tier map or a definition's `harnesses:` line has findings |
-| `render-agents.sh --check [--json]` | Exit 1 on tier-map findings, malformed `harnesses:` lists, unresolvable tiers, missing or (with a baseline) unowned projections, or model/variant/description/body drift |
-| `render-agents.sh --resolve [--json]` | Show each agent/harness model, variant and its source (baseline, literal, override) |
+| `render-agents.sh --check [--json]` | Exit 1 on tier-map findings, malformed `harnesses:` lists, unresolvable tiers, missing or (with a baseline) unowned projections, or owned-field/body drift |
+| `render-agents.sh --resolve [--json]` | Show each agent/harness's resolved model, separate variant and source (baseline or override) |
 | `render-agents.sh --refresh-baseline <library> [--library-ref <ref>]` | Vendor the library `tiers.json` at a committed revision and update the `Tier baseline:` line |
 
 Resolution: shared baseline (explicit `Local tier -> Library tier` row, else the library tier
@@ -29,10 +29,11 @@ of the same name); then `tier:` overrides, then `agent:`
 overrides (a specific harness beats `*`). The renderer owns `model`, OpenCode `variant`,
 `description` (copied from a single-line neutral description; a block scalar is copied whole
 into a new projection, then stays project-owned) and the prompt body (the whole neutral body,
-local overlay included). Every other projection frontmatter key and leading generated-marker
-comments are preserved; files are rewritten only when content changes. A new projection gets
-name, description and model (plus `mode: subagent` and variant for OpenCode); add native
-extras once and they persist.
+local overlay included). By default other frontmatter keys stay project-owned.
+[Optional tier settings](customization.md#optional-projection-settings) let the renderer manage
+Claude effort, switch OpenCode to native V2 permissions and combined model references, or
+prepend an OpenCode prompt line. Leading generated-marker comments are always kept, and files
+are rewritten only when content changes.
 
 A definition limits its harnesses only with a bracketed list of projection harnesses,
 `harnesses: [opencode]` or `harnesses: [claude, opencode]`. A bare value, an empty list or an
@@ -50,7 +51,7 @@ library's sync tooling) is followed by `render-agents.sh` and a reviewed diff.
 `/prdkit-configure` handles authorized definition/mapping changes. `/prdkit-doctor` diagnoses
 roster coverage, missing projections and tier-map findings (banned exact ids, missing
 reasons, snapshot hand edits or baseline mismatch, literal ids beside a baseline, malformed
-`harnesses:` lists); with a shared baseline it also reports projection drift and unowned
+projection settings or `harnesses:` lists); with a shared baseline it also reports projection drift and unowned
 projections, as does the adoption gate (`check-adoption.sh`). Change a mapping on recorded
 evidence and an explicit proposal; finding counts or model novelty alone do not demonstrate
 better performance.
