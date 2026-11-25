@@ -17,6 +17,10 @@ change by change.
 
 ### Fixed
 
+- The review launcher reports `policy-ref-required` when `--policy-ref` is given without a
+  value and is followed by another flag, instead of a generic usage error. `docs/ci-gates.md`
+  now says that T comes from the PR's target and only P from the pinned branch, and that the
+  two live-default checks are snapshots.
 - Spec navigation recognizes valid footers on BusyBox awk and excludes them from reading budgets
   there. `--target` reads keys literally instead of decoding awk escapes outside the documented key
   syntax. On BusyBox, footers that remain invalid may now report a more specific reason.

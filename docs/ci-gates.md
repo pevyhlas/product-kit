@@ -258,10 +258,14 @@ policy, deployment evidence and no-bypass controls; this entrypoint does not aut
 test or ruleset removal.
 
 The launcher checks the event/live repository IDs, PR number, open state, fork/head repository,
-branch and exact commit H. It separately resolves current target T and policy commit P from
-`refs/heads/<policy-ref>`, fetches their complete histories into new fetch-only objects, checks
-exact tips, and rechecks live bindings before accepting a result. The live default must equal
-`--policy-ref` on both reads (`policy-ref-mismatch` if not); it never supplies the ref to resolve.
+branch and exact commit H. It separately resolves current target T from the bound PR's target
+branch and policy commit P from `refs/heads/<policy-ref>`, fetches their complete histories into
+new fetch-only objects, checks exact tips, and rechecks live bindings before accepting a result.
+The live default branch is read twice, before native evaluation and in the final binding recheck.
+Each read is a snapshot: a value different from `--policy-ref` on either read refuses
+(`policy-ref-mismatch`), which does not prove the setting never changed in between. The live
+default never supplies the ref to resolve, so a change neither read observes cannot redirect the
+policy or checker.
 A live repository identity mismatch (`repository`) or a fetched policy tip different from P
 (`policy-commit-mismatch`) also refuses in the binding stage. Event base SHA remains evidence,
 not current T. Candidate clone URLs, local Git state, hooks, config, replacements, alternates and
