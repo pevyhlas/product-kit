@@ -19,7 +19,7 @@ import sys
 from tempfile import NamedTemporaryFile, TemporaryDirectory, TemporaryFile
 
 
-VERSION = 2
+VERSION = 3
 SUMMARY_LIMIT = 60
 CONFIG = ".prdkit/memory/review-checks.json"
 CACHE = ".prdkit/cache/evidence"
@@ -120,12 +120,12 @@ class Collector:
         require(self.scripts == self.root / SCRIPTS,
                 "run the installed copy under the consumer Git root: .prdkit/scripts/bash/facts.sh")
 
-    def run(self, command):
-        return subprocess.run(command, cwd=self.root, env=self.env, stdin=subprocess.DEVNULL,
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    def run(self, command, *, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE):
+        return subprocess.run(command, cwd=self.root, env=self.env, stdin=stdin,
+                              stdout=stdout, stderr=subprocess.PIPE, check=False)
 
-    def git(self, *args, allowed=(0,)):
-        proc = self.run(("git", *args))
+    def git(self, *args, allowed=(0,), **streams):
+        proc = self.run(("git", *args), **streams)
         require(proc.returncode in allowed, f"git {shlex.join(args)}: {one_line(self.text(proc.stderr)) or 'failed'}")
         return proc.stdout
 
@@ -161,7 +161,7 @@ class Collector:
 class Snapshot(Collector):
     """Private Git metadata and raw HEAD blobs; never register a consumer worktree."""
 
-    def __init__(self, source, directory, head):
+    def __init__(self, source, directory, base, head):
         self.root = directory / "head"
         self.root.mkdir()
         scratch = directory / "tmp"
@@ -176,19 +176,32 @@ class Snapshot(Collector):
                         TMPDIR=str(scratch))
         object_format = source.git("rev-parse", "--show-object-format").decode().strip()
         self.git("init", "--quiet", "--template=", f"--object-format={object_format}")
-        # No promisor remotes or live refs/config. Only read the shared object store.
-        objects = os.fsencode(source.git_path("objects").resolve())
-        require(b"\n" not in objects, "Git object store path contains a newline")
-        (self.root / ".git/objects/info/alternates").write_bytes(objects + b"\n")
         self.shallow = read_optional(source.git_path("shallow"))
         if self.shallow is not None:
             (self.root / ".git/shallow").write_bytes(self.shallow)
         (self.root / ".git/HEAD").write_text(f"{head}\n", encoding="ascii")
-        # Doctor walks history. Refuse missing objects instead of letting later
-        # hydration silently change findings under the same commit and shallow set.
-        self.git("rev-list", "--objects", "--missing=error", "--quiet", head)
+        self.freeze_objects(source, scratch, head)
+        require(self.run(("git", "merge-base", "--is-ancestor", base, head)).returncode == 0,
+                "base is not in the snapshot's available HEAD history")
         self.git("read-tree", head)
         self.materialize(head)
+
+    def freeze_objects(self, source, scratch, head):
+        # Use the consumer store only to build a self-contained pack. In particular,
+        # doctor's abbreviation lookup must never see unrelated or newly hydrated objects.
+        objects = os.fsencode(source.git_path("objects").resolve())
+        require(b"\n" not in objects, "Git object store path contains a newline")
+        alternate = self.root / ".git/objects/info/alternates"
+        alternate.write_bytes(objects + b"\n")
+        try:
+            with TemporaryFile(dir=scratch) as inventory:
+                self.git("rev-list", "--objects", "--no-object-names", "--missing=error", head, stdout=inventory)
+                inventory.seek(0)
+                # Pack exactly the enumerated OIDs, with no deltas against unlisted objects.
+                self.git("pack-objects", "--quiet", "--window=0", "--no-reuse-delta",
+                         ".git/objects/pack/pack", stdin=inventory)
+        finally:
+            alternate.unlink()
 
     def normalize(self, text):
         return super().normalize(text).replace(str(self.root), ".").replace(self.env["TMPDIR"], "<scratch>")
@@ -563,7 +576,7 @@ def main():
         for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, interrupted)
         with TemporaryDirectory(prefix="prdkit-facts-") as directory:
-            snapshot = Snapshot(collector, Path(directory).resolve(), head)
+            snapshot = Snapshot(collector, Path(directory).resolve(), base, head)
             pack = collect(collector, snapshot, args.change_id, base, head, int(args.pr) if args.pr else None)
 
         index = json_bytes(pack)

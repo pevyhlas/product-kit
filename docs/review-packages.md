@@ -99,12 +99,17 @@ failed or mismatched PR snapshot is **not collected**, never green. Check names 
 the snapshot are preserved exactly. The PR's base tip can differ from the local diff's merge base.
 
 The local collectors run against a private, detached snapshot of committed `HEAD`, with its own
-Git index and metadata. It uses raw committed bytes, not checkout filters, and does not register
-a worktree or initialize submodules. Ignored files, generated link targets, live edits, local Git
-configuration and other worktrees do not enter the facts. Diff whitespace uses Git defaults and
-the committed attributes at `HEAD`. Symlinks must stay within the snapshot; a target not in the
-snapshot stays absent. Doctor's stale-worktree and default-branch advisories are outside this
-scope. History must be available locally within the repository's shallow boundaries, if any.
+Git index, metadata and object store. They see only objects reachable from `HEAD` within the
+repository's recorded shallow boundaries. That history must be available locally. Doctor's
+sparse-archive proof lookup uses only those objects, so a proof commit elsewhere in the live
+repository cannot affect the pack. Use standalone `doctor.sh` for live diagnostics, including
+stale-worktree and default-branch advisories.
+
+The snapshot uses raw committed bytes, not checkout filters, and does not register a worktree
+or initialize submodules. Ignored files, generated link targets, live edits, local Git
+configuration and other worktrees do not enter the facts. Diff whitespace uses Git defaults
+and the committed attributes at `HEAD`. Symlinks must stay within the snapshot; a target not
+in the snapshot stays absent.
 
 The cache contains a `summary.md` of at most 60 lines and the full `index.json`; excess detail
 is linked from the summary. The key is facts script version, base SHA, and head SHA. The index

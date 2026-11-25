@@ -17,6 +17,10 @@ change by change.
 - `role-digest.sh` extracts role-specific policy sections with source ranges and Git blob hashes for local review evidence.
 - `facts.sh` collects and verifies exact-head review facts, with an optional consumer-owned map of changed paths to required checks.
 
+### Fixed
+
+- `doctor.sh` reports a dangling test symlink as an advisory and continues scanning other files. `--strict` treats it as a finding.
+
 ## [3.1.1] — 2026-11-25 — focused spec retrieval
 
 ### Added

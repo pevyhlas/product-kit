@@ -65,7 +65,7 @@ assert_contains "$(cat "$SUMMARY")" 'Does not answer design fit, correctness, or
 assert_contains "$(cat "$SUMMARY")" 'not a gate decision'
 assert_contains "$(cat "$SUMMARY")" '[index.json](index.json)'
 assert_eq true "$(jq --arg base "$BASE" --arg head "$HEAD_SHA" '
-    .key == {base:$base, head:$head, version:2}
+    .key == {base:$base, head:$head, version:3}
     and (.facts.doctor.details.advisories | type == "array")
     and .facts.doctor.command[-1] == "--json"
     and .facts.adoption.details.source_verification == "not-requested"
@@ -355,6 +355,45 @@ run env GH_STUB_OFFLINE=true bash "$BIN/facts.sh" "$ID" --pr 7
 assert_eq 0 "$STATUS" "$OUTPUT"
 assert_eq true "$(jq '.facts.ci.exit_status == 2 and .facts.ci.details == null
     and (.facts.ci.result | startswith("not collected: "))' "$INDEX")"
+
+it 'hydrating an unreachable archive proof cannot change facts without changing HEAD history'
+proof_repo="$(mktemp -d)"; track_tmp "$proof_repo"
+git clone -q --local "$PROJ" "$proof_repo" && git -C "$proof_repo" checkout -q --detach "$BASE" || exit 1
+mkdir -p "$proof_repo/.prdkit/history" .prdkit/history
+printf '%s\n' '- 2026-01-01 005-closed: Completed.' > "$proof_repo/.prdkit/history/log.md"
+git -C "$proof_repo" add .prdkit/history/log.md &&
+    git -C "$proof_repo" -c user.name=Fixture -c user.email=fixture@example.invalid commit -qm proof || exit 1
+proof="$(git -C "$proof_repo" rev-parse HEAD)"
+# shellcheck disable=SC2016 # Markdown code span
+printf '**Log condensed through**: none; also 005; those entries: `git show %s:.prdkit/history/log.md`.\nAllocated through: 005\n' \
+    "$proof" > .prdkit/history/archive.md
+git add .prdkit/history/archive.md && git commit -qm 'declare a sparse archive proof' || exit 1
+run git cat-file -t "$proof"
+assert_eq 128 "$STATUS" 'proof starts absent'
+run bash "$BIN/facts.sh" "$ID"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_contains "$(jq -r '.facts.doctor.details.findings[]' "$INDEX")" "cannot resolve sparse snapshot $proof"
+cp "$INDEX" "$saved/proof-missing.json"
+refs="$(git show-ref)"
+local_head="$(git rev-parse HEAD)"
+git fetch -q --no-tags --no-write-fetch-head --no-auto-gc "$proof_repo" "$proof" || exit 1
+assert_eq "$refs" "$(git show-ref)" 'hydration did not update any refs'
+assert_eq "$local_head" "$(git rev-parse HEAD)"
+assert_eq commit "$(git cat-file -t "$proof")"
+run bash "$BIN/doctor.sh" --json
+assert_eq 0 "$STATUS" 'standalone doctor can use the hydrated proof'
+run bash "$BIN/facts.sh" --verify "$ID"
+assert_eq 0 "$STATUS" "$OUTPUT"
+run bash "$BIN/facts.sh" "$ID"
+assert_eq 0 "$STATUS" "$OUTPUT"
+run cmp "$INDEX" "$saved/proof-missing.json"
+assert_eq 0 "$STATUS" 'hydration left facts and stamps unchanged'
+
+it 'an archive proof reachable from HEAD is usable by the facts snapshot'
+git merge -q --no-edit --no-ff -s ours "$proof" || exit 1
+run bash "$BIN/facts.sh" "$ID"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq pass "$(jq -r '.facts.doctor.details.result' "$INDEX")"
 
 it 'malformed committed maps and nonregular cached artifacts refuse'
 printf '{"src/*":["Verify"],"src/*":["Queue"]}\n' > "$MAP"
