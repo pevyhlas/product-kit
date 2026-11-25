@@ -27,6 +27,7 @@ spec_focused() { # snapshot index|section selector expected-lines expected-bytes
             if (substr(s, RLENGTH+1) !~ /^([ \t]|\*\*)/) return ""
             while (match(s, /\*\*+/)) {
                 before = substr(s, 1, RSTART-1); s = substr(s, RSTART+RLENGTH)
+                if (index(before, "`")) return ""
                 if (before != "" && before !~ /[ \t]$/ &&
                     (!match(before, /\\+$/) || RLENGTH % 2 == 0)) return id
             }
@@ -96,8 +97,8 @@ spec_focused() { # snapshot index|section selector expected-lines expected-bytes
             return s ~ /^#+( |$)/ ? spec_heading(s) : 0
         }
         # CommonMark HTML blocks 1 and 3–7. Type 2 is the allowed comment block.
-        # Type 7 cannot interrupt a paragraph; unlike type 6 it needs a complete tag.
-        function html_block(s, in_paragraph,   t,tag) {
+        # Type 7 needs a complete tag and is refused even after paragraph text.
+        function html_block(s,   t,tag) {
             t = tolower(s)
             if (t ~ /^<(script|pre|style|textarea)([ \t>]|$)/ ||
                 s ~ /^<\?|^<![A-Za-z]|^<!\[CDATA\[/) return 1
@@ -106,14 +107,14 @@ spec_focused() { # snapshot index|section selector expected-lines expected-bytes
                 sub(/^<\/?/, "", tag); sub(/[^a-z0-9].*$/, "", tag)
                 if (tag in block_tag) return 1
             }
-            return !in_paragraph && (s ~ closing_tag ||
-                (s ~ opening_tag && t !~ /^<(script|pre|style|textarea)([ \t\/>]|$)/))
+            return s ~ closing_tag ||
+                (s ~ opening_tag && t !~ /^<(script|pre|style|textarea)([ \t\/>]|$)/)
         }
         function shallow_spaces(s) { return s !~ /^    |^ *\t/ }
         function reference_boundary(s, t, at) {
             return fence_run(t) || (length(s) - length(t) <= 3 && atx(t)) ||
                 (shallow_spaces(s) && (thematic(t) ||
-                    t ~ /^([-+*]([ \t]|$)|[0-9]+[.)][ \t]|>|<!--|-+[ \t]*$)/ || html_block(t, 0))) ||
+                    t ~ /^([-+*]([ \t]|$)|[0-9]+[.)][ \t]|>|<!--|-+[ \t]*$)/ || html_block(t))) ||
                 (s == t && table_header(t, at))
         }
         # A link reference at a block boundary can have a continuation destination
@@ -198,7 +199,7 @@ spec_focused() { # snapshot index|section selector expected-lines expected-bytes
                 previous = "literal"; paragraph = table = 0; return
             }
             if (short_spaces && t ~ /^>/) { fail("Block quotes are not supported."); return }
-            if (short_spaces && html_block(t, paragraph)) {
+            if (short_spaces && html_block(t)) {
                 fail("HTML blocks other than comments are not supported."); return
             }
             if (indent) {
@@ -211,6 +212,7 @@ spec_focused() { # snapshot index|section selector expected-lines expected-bytes
                 id = item_id(t); alias(id)
                 previous = "list"; paragraph = table = 0; return
             }
+            if (table) { table_row(t); previous = "table"; return }
             if (table_header(t, line_no)) {
                 if (previous != "blank" && previous != "heading") {
                     fail("A table header must follow a blank line or a heading."); return
@@ -218,7 +220,6 @@ spec_focused() { # snapshot index|section selector expected-lines expected-bytes
                 parts = tolower(first_cell) == "part"
                 table = 1; paragraph = 0; previous = "table"; line_no++; return
             }
-            if (table) { table_row(t); previous = "table"; return }
             if (!paragraph && reference(t)) { previous = "reference"; return }
             previous = "paragraph"; paragraph = 1
         }

@@ -423,6 +423,16 @@ run bash "$READER" --index "$SECTIONS"
 assert_eq 0 "$STATUS"
 assert_eq '4: ## Real (1 reading line)' "${OUTPUT#*$'\n'}"
 
+it "a delimiter-shaped body row does not start a second Parts table"
+printf '%s\n' '# Spec' '## Parts' '| Part | Status |' '|---|---|' '| P1 Actual | yes |' \
+    '| --- | --- |' '| P2 Actual | yes |' '' '## Next' > "$SECTIONS"
+run bash "$READER" --index "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq $'1: # Spec (9 reading lines)\n2:   ## Parts (7 reading lines)\n9:   ## Next (1 reading line)' "${OUTPUT#*$'\n'}"
+run bash "$READER" --section P2 "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq "$(awk 'NR >= 2 && NR <= 8 { print NR ": " $0 }' "$SECTIONS")" "${OUTPUT#*$'\n'}"
+
 it "only column-zero bullets with a same-line bold span define item IDs"
 printf '%s\n' '# Spec' '## Mention' '- **R-77 is referenced here but not defined' \
     '- **R-76 Escaped \**' ' - **R-75 Indented**' '1. **R-74 Ordered**' \
@@ -443,6 +453,25 @@ assert_eq 2 "$STATUS"
 assert_contains "$OUTPUT" 'Ambiguous section selector'
 assert_contains "$OUTPUT" '1: ## A [IDs: R-88]'
 assert_contains "$OUTPUT" '3: ## B [IDs: R-88]'
+
+it "a bold ID span cannot contain a backtick, but code after the closer is fine"
+cat > "$SECTIONS" <<'MD'
+# Spec
+## Quotes
+- **R-11 shows `**` here as an example.
+- **R-13 A `code` span inside bold**
+- **R-14 An escaped \` backtick inside bold**
+## Actual
+- **R-12 Actual**: use `**` here.
+MD
+for id in R-11 R-13 R-14; do
+    run bash "$READER" --section "$id" "$SECTIONS"
+    assert_eq 2 "$STATUS"
+    assert_contains "$OUTPUT" 'No match for section selector'
+done
+run bash "$READER" --section R-12 "$SECTIONS"
+assert_eq 0 "$STATUS"
+assert_eq $'6: ## Actual\n7: - **R-12 Actual**: use `**` here.' "${OUTPUT#*$'\n'}"
 
 it "indented fences refuse column-zero structure until a matching closer at any indentation"
 for structural in '## Heading' '- **R-90 Example**' '| Part | State |' 'P1 | yes' '~~~' '<!-- comment -->'; do
@@ -478,9 +507,14 @@ for prose in '<em>Important</em> context.' '<What it does for the journeys, R an
     assert_eq 0 "$STATUS" "$prose is opaque or paragraph text: $OUTPUT"
     assert_contains "$OUTPUT" '6:   ## Later (1 reading line)'
 done
-printf '%s\n' '# Spec' '## Intro' 'Paragraph.' '<em>' '## Later' > "$SECTIONS"
-run bash "$READER" --index "$SECTIONS"
-assert_eq 0 "$STATUS" "a type-7 tag does not start a block within a paragraph"
+for previous in '  ***' 'Paragraph.'; do
+    printf '%s\n' '# Spec' '## Intro' "$previous" '<em>' '## Fake' '' '## Real' > "$SECTIONS"
+    refuses_focused '4: HTML blocks other than comments'
+    run bash "$READER" --section Fake "$SECTIONS"
+    assert_eq 2 "$STATUS"
+    assert_contains "$OUTPUT" "$SECTIONS: 4: HTML blocks other than comments"
+    assert_not_contains "$OUTPUT" 'Source:'
+done
 
 it "the installed reader indexes every shipped template from a spec location"
 mkdir -p specs/template-fixtures

@@ -108,10 +108,12 @@ identifies the bytes read.
 Column zero means the line starts without a space or tab. Only column-zero headings (`#` through
 `######` followed by a space or end of line) start sections. A `- `, `* `, or `+ ` bullet at column
 zero defines an item ID only if its text begins with a bold span starting with the ID and that span
-closes on the same line. Indented or nested bullets and unclosed bold text never define IDs.
+closes on the same line. The bold ID span contains no code (no backticks); code after it is fine.
+Indented or nested bullets and unclosed bold text never define IDs.
 
 A column-zero table header must be at the start of the file or immediately after a heading or blank
 line, with its matching delimiter on the next line. A header/delimiter pair elsewhere is refused.
+While a table is open, all its rows are body rows, even rows that look like delimiters.
 Outer pipes are optional and `\|` stays in its cell. `Part` in the first header cell enables part
 IDs; well-formed records in first cells supply record IDs. Other text is opaque to section lookup,
 including indented code and list continuations. Plain record rows still work for status and doctor.
@@ -125,8 +127,9 @@ comment opener inside it is refused, except for the matching closer.
 
 Both views check the entire file first. They also refuse ATX headings after one to three spaces or
 tabs, Setext underlines after paragraphs, block quotes, and CommonMark HTML block openers other than
-comments (with zero to three leading spaces). Inline HTML and angle-bracket prose that does not
-start an HTML block are allowed. Refusals exit 2 at the first offending source line with a `--raw` hint.
+comments (with zero to three leading spaces), even directly after paragraph text. Put inline HTML
+inside a sentence, not alone on a line. Angle-bracket prose that does not start an HTML block is
+allowed. Refusals exit 2 at the first offending source line with a `--raw` hint.
 
 Section output keeps the original line numbers and omits a footer only when legacy navigation
 validates it and the focused scanner sees it outside literal examples. Raw Git diffs/blobs remain
