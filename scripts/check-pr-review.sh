@@ -112,6 +112,7 @@ while [ "$#" -gt 0 ]; do
         --event) [ "$#" -ge 2 ] && [ -z "$event" ] || refuse bootstrap usage 2; event="$2"; shift ;;
         --policy-ref)
             [ "$#" -ge 2 ] && [ -n "$2" ] || refuse bootstrap policy-ref-required 2
+            case "$2" in -*) refuse bootstrap policy-ref-required 2 ;; esac # omitted value before a flag
             [ -z "$policy_ref" ] || refuse bootstrap invalid-policy-ref 2
             policy_ref="$2"; shift ;;
         *) refuse bootstrap usage 2 ;;

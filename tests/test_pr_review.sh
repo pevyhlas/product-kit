@@ -152,6 +152,17 @@ assert_eq bootstrap "$(jq -r .error.stage "$FIX/stdout")"
 assert_eq policy-ref-required "$(jq -r .error.code "$FIX/stdout")"
 assert_contains "$(cat "$FIX/stderr")" '3.1 requires --policy-ref <protected branch> in the registered required workflow'
 assert_eq null "$(jq .native_exit "$FIX/stdout")"
+for flag_first in --repository --event; do # omitted value: the next flag is not taken as the pin
+    if env -i PATH="$ORIGINAL_PATH" GH_TOKEN=synthetic-read-token GITHUB_EVENT_NAME=pull_request \
+        GITHUB_REPOSITORY=owner/repo GITHUB_REPOSITORY_ID=42 \
+        "$REAL_BASH" --noprofile --norc "$FIX/launcher" --policy-ref "$flag_first" \
+        "$([ "$flag_first" = --repository ] && printf owner/repo || printf '%s' "$FIX/event")" \
+        > "$FIX/stdout" 2>"$FIX/stderr"; then STATUS=0; else STATUS=$?; fi
+    assert_eq 2 "$STATUS"
+    assert_eq policy-ref-required "$(jq -r .error.code "$FIX/stdout")"
+    assert_contains "$(cat "$FIX/stderr")" '3.1 requires --policy-ref <protected branch> in the registered required workflow'
+    assert_eq null "$(jq .native_exit "$FIX/stdout")"
+done
 for invalid_ref in HEAD 'bad..ref' $'main\n'; do
     POLICY_REF="$invalid_ref" launch
     assert_eq 2 "$STATUS"
