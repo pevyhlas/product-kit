@@ -48,24 +48,44 @@ done
 root="$(get_repo_root)" || die 'Cannot locate consumer root.'
 require_consumer_root "$root" role-digest.sh
 scratch="$(mktemp -d)" || die 'Cannot allocate digest scratch directory.'
-trap 'rm -f "$scratch/input" "$scratch/config" "$scratch/section" "$scratch/digest" "$scratch/inputs"; rmdir "$scratch"' EXIT
+trap 'rm -f "$scratch/input" "$scratch/config" "$scratch/section" "$scratch/digest" "$scratch/inputs" "$scratch/lookup"; rmdir "$scratch"' EXIT
+
+confirm_missing() { # searchable parent, unresolved component, requested path
+    local parent="$1" candidate="$1/./$2" path="$3" entry
+    # A false -e test has no errno. Only report absence after a successful
+    # inventory also shows no such entry. NUL records preserve literal names.
+    if ! find "$parent/." ! -name . -prune -print0 > "$scratch/lookup"; then
+        die "Cannot determine whether input exists: $path (check read and search access to $parent)"
+    fi
+    while IFS= read -r -d '' entry; do
+        if [ "$entry" = "$candidate" ]; then
+            die "Cannot access input component: $parent/$2 (for $path; check permissions or retry)"
+        fi
+    done < "$scratch/lookup"
+}
 
 snapshot_input() { # repository-relative path, snapshot destination; return 1 only if absent
-    local path="$1" component="$1" file="$root/$1"
+    local path="$1" remaining="$1" parent="$root" component candidate
     case "/$path/" in *//*|*/../*|*/./*) die "Not a plain repository-relative path: $path" ;; esac
     [[ "$path" != *[[:cntrl:]]* ]] || die 'Control characters in input paths are unsupported.'
     while :; do
-        [ ! -L "$root/$component" ] || die "Symlink in input path: $path"
-        [[ "$component" == */* ]] || break
-        component="${component%/*}"
-        if [ -e "$root/$component" ] && [ ! -d "$root/$component" ]; then
-            die "Non-directory parent in input path: $path"
+        [ -x "$parent" ] || die "Cannot search parent directory: $parent (for $path; check execute permission)"
+        component="${remaining%%/*}"
+        candidate="$parent/$component"
+        [ ! -L "$candidate" ] || die "Symlink in input path: $path"
+        if [ ! -e "$candidate" ]; then
+            confirm_missing "$parent" "$component" "$path"
+            return 1
         fi
+        [[ "$remaining" == */* ]] || break
+        [ -d "$candidate" ] || die "Non-directory parent in input path: $path"
+        parent="$candidate"
+        remaining="${remaining#*/}"
     done
-    [ -e "$file" ] || return 1
-    [ -f "$file" ] || die "Not a regular input file: $path"
-    if ! cat "$file" > "$2" || ! cmp -s "$file" "$2"; then
-        die "Incomplete input snapshot: $path"
+    [ -f "$candidate" ] || die "Not a regular input file: $path"
+    [ -r "$candidate" ] || die "Cannot read input: $path (check read permission)"
+    if ! cat "$candidate" > "$2" || ! cmp -s "$candidate" "$2"; then
+        die "Incomplete input snapshot: $path (check access or retry)"
     fi
 }
 

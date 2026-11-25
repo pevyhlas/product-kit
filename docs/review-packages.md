@@ -72,7 +72,8 @@ role. Headings inside literal blocks do not start sections.
 Each match has a `Section: path:first-last | heading | content_blob=HASH` header followed by the
 exact bytes in that inclusive line range and a separating newline. The footer lists the
 unfiltered Git blob ID and path of every input, including the config, or `absent` for a missing
-optional file. Section hashes also use Git's blob format. The digest contains no timestamps.
+optional file. An inaccessible path or a lookup that cannot confirm absence is refused, not
+listed as `absent`. Section hashes also use Git's blob format. The digest contains no timestamps.
 
 Exit `0` means a complete digest, including an explicit empty notice when no sections match.
 Exit `2` means bad usage, missing constitution, or a refused input. Unsupported Markdown names

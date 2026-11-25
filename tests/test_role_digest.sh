@@ -80,6 +80,25 @@ assert_eq 0 "$STATUS"
 assert_contains "$OUTPUT" 'Section: punctuation.md:1-2 | Punctuation |'
 assert_contains "$OUTPUT" 'Say —LEAD— now.'
 
+it 'quotes, backslashes, dashes and regex metacharacters are literal at word boundaries'
+literal_role='Lead-"ops"\v[1].*+?(v)$-guard'
+cat > literal.md <<'MD'
+# Literal
+Ask (LEAD-"OPS"\v[1].*+?(v)$-GUARD).
+# Prefixed
+Ask xLead-"ops"\v[1].*+?(v)$-guard.
+# Suffixed
+Ask Lead-"ops"\v[1].*+?(v)$-guard_extra.
+# Different bytes
+Ask Lead-"ops"v1.*+?(v)$-guard.
+MD
+run bash "$DIGEST" --extra literal.md "$literal_role"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" 'Section: literal.md:1-2 | Literal |'
+assert_not_contains "$OUTPUT" '| Prefixed |'
+assert_not_contains "$OUTPUT" '| Suffixed |'
+assert_not_contains "$OUTPUT" '| Different bytes |'
+
 it 'config then CLI additions have stable order and absent inputs are explicit'
 printf '# A\nlead  \n' > 'with space.md'
 printf '# B\nlead\n' > first.md
@@ -126,6 +145,67 @@ assert_eq 2 "$?"
 assert_eq '' "$(cat "$_SCRATCH_CWD/out")"
 assert_contains "$(cat "$_SCRATCH_CWD/err")" 'refused.md: 3: Block quotes'
 assert_contains "$(cat "$_SCRATCH_CWD/err")" '--raw'
+
+assert_refused() { # expected diagnostic, input path, digest arguments
+    local diagnostic="$1" path="$2" err
+    shift 2
+    bash "$DIGEST" "$@" lead > "$_SCRATCH_CWD/out" 2> "$_SCRATCH_CWD/err"
+    assert_eq 2 "$?" "$*: exit 2"
+    assert_eq '' "$(cat "$_SCRATCH_CWD/out")" "$*: empty stdout"
+    err="$(cat "$_SCRATCH_CWD/err")"
+    assert_contains "$err" "$diagnostic" "$*: explains the refusal"
+    assert_contains "$err" "$path" "$*: names the input"
+}
+
+assert_refused_extra_and_entry() { # diagnostic, input path
+    printf '%s\n' "$2" > invalid-entry.conf
+    assert_refused "$1" "$2" --extra "$2"
+    assert_refused "$1" "$2" --config invalid-entry.conf
+}
+
+it 'both CLI extras and config entries refuse symlinks, dot components and absolute paths'
+mkdir path-fixture || exit 1
+printf '# File\nlead\n' > path-fixture/policy.md
+ln -s path-fixture/policy.md symlink-leaf.md || exit 1
+ln -s path-fixture symlink-parent || exit 1
+assert_refused_extra_and_entry 'Symlink in input path' symlink-leaf.md
+assert_refused_extra_and_entry 'Symlink in input path' symlink-parent/policy.md
+assert_refused_extra_and_entry 'Not a plain repository-relative path' path-fixture/./policy.md
+assert_refused_extra_and_entry 'Not a plain repository-relative path' path-fixture/../first.md
+assert_refused_extra_and_entry 'Not a plain repository-relative path' "$PROJ/path-fixture/policy.md"
+
+it 'a nonregular leaf or nondirectory parent is not absent'
+assert_refused_extra_and_entry 'Not a regular input file' path-fixture
+assert_refused 'Not a regular input file' path-fixture --config path-fixture
+assert_refused_extra_and_entry 'Non-directory parent in input path' path-fixture/policy.md/child.md
+
+it 'an unsearchable directory or unreadable file is not absent'
+if [ "$EUID" -eq 0 ]; then
+    echo '  SKIP permission-refusal tests: running as root'
+else
+    mkdir -m 0700 private || exit 1
+    printf '# Private\nlead\n' > private/policy.md
+    printf 'first.md\n' > private/paths.conf
+    chmod 0600 private || exit 1
+    assert_refused_extra_and_entry 'Cannot search parent directory' private/policy.md
+    assert_refused 'Cannot search parent directory' private/paths.conf --config private/paths.conf
+    chmod 0700 private || exit 1
+
+    chmod 000 private/policy.md private/paths.conf || exit 1
+    assert_refused_extra_and_entry 'Cannot read input' private/policy.md
+    assert_refused 'Cannot read input' private/paths.conf --config private/paths.conf
+    chmod 0600 private/policy.md private/paths.conf || exit 1
+
+    chmod 0100 private || exit 1
+    run bash "$DIGEST" --extra private/policy.md lead
+    assert_eq 0 "$STATUS" 'known readable input needs no directory listing'
+    assert_contains "$OUTPUT" 'Section: private/policy.md:'
+    assert_refused 'Cannot determine whether input exists' private/missing.md --extra private/missing.md
+    chmod 0700 private || exit 1
+    run bash "$DIGEST" --extra private/missing/child.md lead
+    assert_eq 0 "$STATUS" 'missing subtree in an accessible parent is optional'
+    assert_contains "$OUTPUT" $'absent\tprivate/missing/child.md'
+fi
 
 it 'a missing constitution is an error; a missing registry or config is not'
 mv "$AGENTS" "$_SCRATCH_CWD/agents"
