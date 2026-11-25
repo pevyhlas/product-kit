@@ -323,6 +323,24 @@ run bash "$DOCTOR" --strict
 assert_eq 1 "$STATUS" "--strict fails on advisories"
 git rm -qf tests/test_old.py scripts/test-ci-evidence.py; rm -f NOTES.txt
 
+it "a dangling test symlink is an advisory by default, a finding in strict mode, and does not stop other citations"
+ln -s missing.py tests/test_dangling.py
+printf '# verifies R-98\n' > tests/test_readable.py
+git add tests/test_dangling.py tests/test_readable.py
+dangling='tests/test_dangling.py: test symlink target is absent; citations not checked'
+citation='ID R-98 is cited at tests/test_readable.py:1 but defined nowhere in the spec'
+run bash "$DOCTOR" --json
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq '[]' "$(jq -c '.findings' <<< "$OUTPUT")"
+assert_contains "$(jq -r '.advisories[]' <<< "$OUTPUT")" "$dangling"
+assert_contains "$(jq -r '.advisories[]' <<< "$OUTPUT")" "$citation"
+run bash "$DOCTOR" --json --strict
+assert_eq 1 "$STATUS" "$OUTPUT"
+assert_eq '[]' "$(jq -c '.advisories' <<< "$OUTPUT")"
+assert_contains "$(jq -r '.findings[]' <<< "$OUTPUT")" "$dangling"
+assert_contains "$(jq -r '.findings[]' <<< "$OUTPUT")" "$citation"
+git rm -qf tests/test_dangling.py tests/test_readable.py
+
 it "records: malformed lines fail, due hold reminders and expired waivers are advisories"
 cat > specs/records.md <<'MD'
 # Records
