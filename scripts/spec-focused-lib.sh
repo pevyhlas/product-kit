@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Focused spec grammar. Do not use this scanner for legacy navigation or budgets.
 
-spec_focused() { # snapshot index|section selector expected-lines expected-bytes
+spec_focused() { # snapshot index|section|role-ranges selector expected-lines expected-bytes
     local range start=0 end=0
-    range="$(spec_navigation "$1" range '' "$4" "$5")" || { printf '%s\n' "$range"; return 1; }
-    if [ -n "$range" ]; then read -r start end <<< "$range"; fi
+    if [ "$2" != role-ranges ]; then
+        range="$(spec_navigation "$1" range '' "$4" "$5")" || { printf '%s\n' "$range"; return 1; }
+        if [ -n "$range" ]; then read -r start end <<< "$range"; fi
+    fi
     LC_ALL=C PRDKIT_FOCUS_SELECTOR="$3" awk -v mode="$2" -v omit_start="$start" -v omit_end="$end" \
         -v expected_lines="$4" -v expected_bytes="$5" \
         "$SPEC_HEADING_AWK $SPEC_PART_AWK $SPEC_RECORD_ROW_AWK"'
@@ -235,6 +237,31 @@ spec_focused() { # snapshot index|section selector expected-lines expected-bytes
                 printf "%s (%d reading line%s)\n", label(n), count, (count == 1 ? "" : "s")
             }
         }
+        function cites_role(s, role,   offset,at,before,after,word) {
+            word = "abcdefghijklmnopqrstuvwxyz0123456789_"
+            s = tolower(s)
+            for (offset = 1; (at = index(substr(s, offset), role)); offset = at + 1) {
+                at += offset - 1
+                before = at > 1 ? substr(s, at - 1, 1) : ""
+                after = substr(s, at + length(role), 1)
+                if (!(before != "" && index(word, before)) &&
+                    !(after != "" && index(word, after))) return 1
+            }
+            return 0
+        }
+        function role_ranges(   role,n,end,i) {
+            role = tolower(ENVIRON["PRDKIT_FOCUS_SELECTOR"])
+            if (role == "") exit 1
+            for (n = 1; n <= section; n++) {
+                # Evidence is a nonoverlapping slice of the original bytes. Give
+                # each line to its nearest heading, not also to every ancestor.
+                end = n < section ? first[n+1] - 1 : NR
+                for (i = first[n]; i <= end; i++) if (cites_role(raw[i], role)) {
+                    printf "%d\t%d\t%s\n", first[n], end, (titles[n] == "" ? "(untitled)" : titles[n])
+                    break
+                }
+            }
+        }
         function select_section(   selector,key,n,found,count,i) {
             selector = ENVIRON["PRDKIT_FOCUS_SELECTOR"]; key = norm(selector)
             for (n = 1; n <= section; n++)
@@ -283,7 +310,8 @@ spec_focused() { # snapshot index|section selector expected-lines expected-bytes
                     prefix[i] = prefix[i-1] + (visible(i) ? weight : 0)
                 }
                 index_sections()
-            } else select_section()
+            } else if (mode == "role-ranges") role_ranges()
+            else select_section()
         }
     ' "$1"
 }
