@@ -21,6 +21,7 @@ change by change.
 
 - `doctor.sh` reports a dangling test symlink as an advisory and continues scanning other files. `--strict` treats it as a finding.
 - The PR review launcher refuses promptly if a guard exits before readiness and removes scratch after a capture failure when process shutdown is verified.
+- The PR review launcher’s failure FIFO descriptor regression on macOS CI fails instead of skipping if the observer is unusable.
 
 ## [3.1.1] — 2026-11-25 — focused spec retrieval
 
