@@ -428,9 +428,12 @@ at_frontmatter() { # file, including delimiters (requires a complete header)
 }
 
 # A lexical scan, not YAML evaluation. Track node starts, flow collections and
-# quoted/block scalar continuations; never interpret the contents of a scalar.
+# quoted/block scalar continuations. Compare bytes only to ASCII syntax; a byte
+# from a UTF-8 scalar must never be passed to an awk regex as a character.
 AT_YAML_SCAN_AWK='
     function indent(s) { match(s, /^ */); return RLENGTH }
+    function yaml_blank(c) { return c == " " || c == "\t" }
+    function flow_delimiter(c) { return c != "" && index("[]{},", c) > 0 }
     function scan_yaml(s,   n,i,c,nextc,prev,r,owner,start) {
         n = indent(s)
         if (quote == "" && !flow) {
@@ -447,15 +450,15 @@ AT_YAML_SCAN_AWK='
                 else if (c == quote) { quote = ""; done = 1 }
                 continue
             }
-            if (c == "#" && (node || i == start || prev ~ /[ \t]/)) break
-            if (c ~ /[ \t]/) continue
+            if (c == "#" && (node || i == start || yaml_blank(prev))) break
+            if (yaml_blank(c)) continue
             if (flow && (c == "," || c == "]" || c == "}")) {
                 node = (c == ","); done = !node; plain = 0
                 if (!node) flow--
                 continue
             }
-            if (c == ":" && (nextc == "" || nextc ~ /[ \t]/ ||
-                    (flow && (done || nextc ~ /[][{},]/)))) {
+            if (c == ":" && (nextc == "" || yaml_blank(nextc) ||
+                    (flow && (done || flow_delimiter(nextc))))) {
                 owner = key_indent; node = 1; done = plain = 0; continue
             }
             if (!node) continue
@@ -464,14 +467,14 @@ AT_YAML_SCAN_AWK='
                 if (match(r, /^!<[^>]*>/) || match(r, /^![^][{}, \t]*/)) i += RLENGTH - 1
                 continue
             }
-            if (c ~ /[&*]/ && nextc != "" && nextc !~ /[][{}, \t]/) {
+            if ((c == "&" || c == "*") && nextc != "" && !flow_delimiter(nextc) && !yaml_blank(nextc)) {
                 references = 1
                 match(r, /^[^][{}, \t]+/); i += RLENGTH - 1
                 if (c == "*") { node = 0; done = 1 }
                 continue
             }
             key_indent = i - 1
-            if ((c == "?" || (!flow && c == "-")) && (nextc == "" || nextc ~ /[ \t]/)) {
+            if ((c == "?" || (!flow && c == "-")) && (nextc == "" || yaml_blank(nextc))) {
                 owner = key_indent; continue
             }
             if (!flow && match(r, /^[|>]([1-9][+-]?|[+-][1-9]?)?([ \t]+#.*|[ \t]*)$/)) {
@@ -489,7 +492,7 @@ AT_YAML_SCAN_AWK='
 # references across replaced entries. Report blockers in preflight, not during writes.
 at_native_projection_findings() { # existing file permissions
     local proj="$1" findings
-    if ! findings="$(awk -v opencode="$2" "$AT_YAML_SCAN_AWK"'
+    if ! findings="$(LC_ALL=C awk -v opencode="$2" "$AT_YAML_SCAN_AWK"'
         NR == 1 {
             if ($0 == "---\r") { unsupported = 1; exit }
             if ($0 != "---") exit

@@ -754,7 +754,7 @@ run bash "$RENDER"
 assert_eq 0 "$STATUS" "a plain opt-in file still renders"
 
 it "node scanning ignores quoted and plain text, globs, and block-scalar descriptions"
-for fixture in glob ampersand markdown plain; do
+for fixture in glob ampersand markdown plain unicode; do
     {
         printf '%s\n' '---' 'mode: subagent' 'model: lib/oc-next#max'
         case "$fixture" in
@@ -762,6 +762,7 @@ for fixture in glob ampersand markdown plain; do
             ampersand) printf '%s\n' 'request:' "  headers: {x-label: \"review &follow-up\", note: 'a ''quoted'' *word'}" ;;
             markdown) printf '%s\n' 'description: >-' '  Keep *short notes* in the report.' '  *literal paragraph*' ;;
             plain) printf '%s\n' 'request:' '  headers:' '    x-label: review &follow-up' '      *continued plain text*' ;;
+            unicode) printf '%s\n' 'request: {headers: {x-label: café &suivi, x-note: "révision *brouillon*"}}' ;;
         esac
         printf '%s\n' '---' '' 'Review only.'
     } > .opencode/agents/rev-a.md
@@ -769,6 +770,10 @@ for fixture in glob ampersand markdown plain; do
     assert_not_contains "$OUTPUT" "YAML anchors or aliases" "$fixture is scalar text"
     run bash "$RENDER"
     assert_eq 0 "$STATUS" "$fixture permits replacement"
+    if [ "$fixture" = unicode ]; then
+        assert_contains "$(cat .opencode/agents/rev-a.md)" 'café &suivi, x-note: "révision *brouillon*"' \
+            "preserved metadata retains the original UTF-8 text"
+    fi
     run bash "$RENDER" --check
     assert_eq 0 "$STATUS" "$fixture checks clean after replacement"
 done
