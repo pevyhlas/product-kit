@@ -181,7 +181,13 @@ cat > "$_SCRATCH_CWD/find-shim/find" <<'SH'
 #!/bin/sh
 "$DIGEST_REAL_FIND" "$@" || exit "$?"
 case "$1" in
-    */path-fixture/.) rm "$TMPDIR"/*/lookup || exit 1 ;;
+    */path-fixture/.)
+        set -- "$TMPDIR"/prdkit-role-digest.??????/lookup
+        if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+            printf 'find shim: expected exactly one role-digest lookup inventory under %s\n' "$TMPDIR" >&2
+            exit 1
+        fi
+        rm "$1" || exit 1 ;;
 esac
 SH
 chmod +x "$_SCRATCH_CWD/find-shim/find" || exit 1

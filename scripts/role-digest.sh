@@ -47,7 +47,7 @@ done
 
 root="$(get_repo_root)" || die 'Cannot locate consumer root.'
 require_consumer_root "$root" role-digest.sh
-scratch="$(mktemp -d)" || die 'Cannot allocate digest scratch directory.'
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/prdkit-role-digest.XXXXXX")" || die 'Cannot allocate digest scratch directory.'
 trap 'rm -f "$scratch/input" "$scratch/config" "$scratch/section" "$scratch/digest" "$scratch/inputs" "$scratch/lookup"; rmdir "$scratch"' EXIT
 
 confirm_missing() { # searchable parent, unresolved component, requested path
