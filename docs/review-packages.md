@@ -46,6 +46,41 @@ is unarmed until claim confirmation and verifies the owned inode before release.
 or unsupported claims can remain stale for explicit reconciliation; no automatic lock repair,
 new runtime dependency or implicit host operation is attempted.
 
+## Role digests
+
+```bash
+bash .prdkit/scripts/bash/role-digest.sh [--extra FILE]... [--config FILE] <role>
+```
+
+The digest reads the consumer's working tree, not HEAD or the trusted integration branch. It
+reads `.prdkit/memory/constitution.md` first and optional `.prdkit/memory/agents.md` second
+(not the root `AGENTS.md`). Then it reads the files listed in optional
+`.prdkit/memory/role-digest.conf`, or in `--config FILE` if supplied, followed by `--extra` files
+in flag order. The config is plain text: one literal path per line, with empty lines and lines
+starting with `#` ignored. No quoting, globbing or shell expansion is applied. All paths are
+relative to the consumer root; spaces are allowed, but dot components, control characters and
+symlinks are not. No config is created by the installer.
+
+Sections use the same [focused Markdown grammar](../workflows/spec.md#generated-tracking-navigation)
+as `read-spec.sh`. The digest checks each entire file and assigns each line to its nearest
+recognized heading: each span starts at its heading and ends before the next heading of any
+level, or at EOF. Text before the first heading is not a section. The heading and body are
+searched literally, line by line (including comments and code within a section). Case folding
+and word boundaries are ASCII: letters, digits and `_` are word characters. Quote a multiword
+role. Headings inside literal blocks do not start sections.
+
+Each match has a `Section: path:first-last | heading | content_blob=HASH` header followed by the
+exact bytes in that inclusive line range and a separating newline. The footer lists the
+unfiltered Git blob ID and path of every input, including the config, or `absent` for a missing
+optional file. An inaccessible path or a lookup that cannot confirm absence is refused, not
+listed as `absent`. Section hashes also use Git's blob format. The digest contains no timestamps.
+
+Exit `0` means a complete digest, including an explicit empty notice when no sections match.
+Exit `2` means bad usage, missing constitution, or a refused input. Unsupported Markdown names
+the file and gives a `--raw` hint: use `read-spec.sh --raw` for a spec or open other files
+directly. A refusal emits no partial digest. This evidence does not decide approval or change
+any gate. It needs Git and standard tools, not jq or network access.
+
 ## Exact-head facts pack
 
 Collect once for the review round, from a clean Git checkout at the intended head (including

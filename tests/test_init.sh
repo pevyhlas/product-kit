@@ -36,6 +36,8 @@ assert_file "$PROJ/.prdkit/scripts/bash/check-pr-review.sh"
 assert_contains "$(cat "$PROJ/.prdkit/.manifest")" '.prdkit/scripts/bash/check-pr-review.sh' 'trusted launcher participates in installation integrity'
 assert_file "$PROJ/.prdkit/scripts/bash/review-report.sh"
 assert_contains "$(cat "$PROJ/.prdkit/.manifest")" '.prdkit/scripts/bash/review-report.sh' 'review report helper is mapped and hashed'
+assert_file "$PROJ/.prdkit/scripts/bash/role-digest.sh"
+assert_contains "$(cat "$PROJ/.prdkit/.manifest")" '.prdkit/scripts/bash/role-digest.sh' 'role digest participates in installation integrity'
 for file in pr-state.sh ci-wait.sh pr-facts-runtime.sh pr-facts.py facts.sh facts.py; do
     assert_file "$PROJ/.prdkit/scripts/bash/$file"
     assert_contains "$(cat "$PROJ/.prdkit/.manifest")" ".prdkit/scripts/bash/$file" 'PR evidence helper participates in installation integrity'

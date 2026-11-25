@@ -30,6 +30,7 @@ test_review_gate.sh
 test_review_lenses.sh
 test_review_record_format.sh
 test_review_report.sh
+test_role_digest.sh
 test_pr_review.sh
 test_pr_state.sh
 test_facts.sh

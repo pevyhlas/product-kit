@@ -45,6 +45,9 @@ The installed `pr-state.sh` and `ci-wait.sh` scripts collect
 [review facts pack](review-packages.md#exact-head-facts-pack). These helpers are not slash commands
 or gates.
 
+The installed `role-digest.sh` script extracts [role-specific policy context](review-packages.md#role-digests)
+as local evidence. It is not a slash command or a gate.
+
 ## Installed version and spec layout
 
 The `status.sh` and `doctor.sh` adoption summary distinguishes the recorded installation
