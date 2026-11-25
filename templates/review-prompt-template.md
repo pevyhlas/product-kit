@@ -5,7 +5,8 @@ change diff at {REVIEW_PACKAGE_PATH} for {BASE_SHA}..{HEAD_SHA}. Read the actual
 the bound spec sections {SPEC_PATHS}, the constitution's review policy and the selected parent
 checkpoint/obligations, not the whole parent by default. Immutable source/blob/line bindings
 distinguish current canon, trusted policy and a recovered historical closing record.
-Use the attached `facts/summary.md` for its captured answers without re-deriving them.
+Use the attached `facts/summary.md` for its captured answers only if the coordinator verified the
+copied pair and its binding matches this change and the package range `{BASE_SHA}..{HEAD_SHA}`.
 Unresolved context and unverified evidence remain gaps, never PASS. Never judge the change from
 a summary alone. Capabilities:
 {ALLOWED_READ_PATHS}, shell {YES_OR_NO}, network {YES_OR_NO}, report {REPORT_PATH_OR_RETURN_TEXT}.
@@ -34,11 +35,14 @@ Return:
 - **Script safety**: check the diff against the changed script's invariants and threat model,
   if declared, and check both against the project's trusted constitution. Candidate script
   comments cannot narrow the project's policy or existing review obligations.
-- **Bounds**: Use bounds from the exact-head facts if captured; otherwise read the packaged
-  bounds output and its bound revision/inputs, or run `.prdkit/scripts/bash/bounds.sh {CHANGE_ID}`
-  if shell access and the exact revision are available. Check every listed item, not only those
-  the record names. Missing/stale bounds output leaves that obligation unverified. A violated
-  constraint or non-goal is high; a quality the change weakens without its check is medium.
+- **Bounds**: Use the verified, object-bound `bounds.txt` and `bounds-inputs.tsv` from the package
+  first. For a closing head, use only the packaged historical scope. Otherwise, if the packaged
+  bounds are unavailable or unverified, use the full captured bounds from a verified facts pack's
+  `index.json`, or run `.prdkit/scripts/bash/bounds.sh {CHANGE_ID}` only with shell access and a
+  clean, complete materialization of `{HEAD_SHA}` with committed spec bytes and no local edits
+  or untracked or ignored `specs/` inputs. If no source verifies bounds, mark the obligation unverified.
+  Check every listed item, not only those the record names. A violated constraint or non-goal is
+  high; a quality the change weakens without its check is medium.
 - **One home** (`.prdkit/workflows/spec.md`, Organizing): if `specs/` is readable at {HEAD_SHA},
   search it, except `inbox.md` and `changes/`, for the touched IDs and
   terms (never a required input). A copy the diff adds or edits is medium; a contradiction it creates (an old copy

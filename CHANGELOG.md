@@ -18,7 +18,7 @@ change by change.
 - `pr-state.sh` snapshots GitHub PR facts and `ci-wait.sh` waits for required checks on an exact head, with optional signature-based job reruns.
 - `role-digest.sh` extracts role-specific policy sections with source ranges and Git blob hashes for local review evidence.
 - `facts.sh` collects and verifies exact-head review facts, with an optional consumer-owned map of changed paths to required checks.
-- The review workflow attaches one exact-head facts pack per round when the change record is present; reviewers use the captured answers without changing the GitHub review gate.
+- The review workflow attaches a facts pack only after successful collection and a matching change and commit range; the GitHub review gate is unchanged.
 
 ### Fixed
 
