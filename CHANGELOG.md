@@ -14,6 +14,7 @@ change by change.
 ### Added
 
 - Agent tier maps can opt in to Claude effort, deny-by-default OpenCode V2 permissions and `model#variant` syntax, and an OpenCode prompt preamble. Undeclared settings keep existing render behavior.
+- Opt-in rendering reports unsafe frontmatter and invalid option cells before writing. Model bans cover the base ID of hand-owned OpenCode `model#variant` projections too.
 
 ## [3.1.2] — 2026-11-25 — exact-head review facts
 

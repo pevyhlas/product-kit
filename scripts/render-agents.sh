@@ -22,6 +22,7 @@
 #   - `OpenCode permissions` owns `permissions:` (OpenCode V2, deny all plus explicit allows),
 #     replaces legacy `permission:`, and writes variants as `model: provider/model#variant`
 #     instead of a separate `variant:`. Without this opt-in the model/variant format is unchanged.
+#     Migrate other V1-only keys manually. Opted-in frontmatter replacements refuse YAML anchors/aliases.
 #   - `OpenCode preamble` prepends a line to the neutral body (local tier takes precedence
 #     over the optional `*` row). Undeclared metadata stays project-owned.
 # A neutral definition may limit its harnesses with a bracketed `harnesses: [claude, opencode]`
@@ -35,8 +36,8 @@
 #
 # Usage:
 #   render-agents.sh                      write/refresh projections (fails closed: nothing is
-#                                         written while the tier map, overrides or snapshot
-#                                         have findings; projections that use a banned id are
+#                                         written while inputs or opted-in frontmatter have
+#                                         blocking findings; projections that use a banned id are
 #                                         rewritten, not a blocker; a failed write exits 1)
 #   render-agents.sh --check [--json]     drift = exit 1: tier-map findings, unresolvable
 #                                         tiers, malformed harnesses: lists, missing or
@@ -143,7 +144,7 @@ refresh_baseline() {
     [ -d "$lib" ] || { echo "render-agents.sh: not a directory: $lib" >&2; exit 2; }
     git -C "$lib" rev-parse --git-dir >/dev/null 2>&1 ||
         { echo "render-agents.sh: $lib is not a git checkout; the baseline must name a library commit" >&2; exit 1; }
-    at_load "$root"
+    at_load_checked "$root" || { echo "render-agents.sh: ${AT_LOAD_ERR:-cannot load the tier map}" >&2; exit 1; }
     [ -z "$AT_SNAPSHOT_BAD" ] ||
         { echo "render-agents.sh: refusing to vendor: 'Baseline snapshot:' path '$AT_SNAPSHOT_REL' $AT_SNAPSHOT_BAD; it must be a relative path inside the repository" >&2; exit 1; }
     ra_tmpdir; staged="$RA_TMP/tiers.json"
@@ -309,8 +310,8 @@ esac
 # that use a banned id are not linted here: the render rewrites their model, and --check
 # keeps failing until it has (any the render cannot reach are reported after it).
 FINDINGS=()
-if ! at_load "$root"; then
-    emit_findings "$json" "Tier map could not be read; check that it is LF-terminated text" >&2
+if ! at_load_checked "$root"; then
+    emit_findings "$json" "${AT_LOAD_ERR:-Tier map could not be read}" >&2
     exit 1
 fi
 while IFS= read -r f; do [ -z "$f" ] || FINDINGS+=("$f"); done < <(at_lint_map; at_lint_definitions)
@@ -329,6 +330,16 @@ for def in "$root"/.prdkit/agents/*.md; do
                 FINDINGS+=("Agent '$name': OpenCode V2 projection requires a provider/model id and an optional separate variant token")
                 continue
             fi
+            proj="$root/.$harness/agents/$name.md"
+            if [ "$mode" = write ] && [ -n "$AT_P_EFFORT$AT_P_PERMISSIONS" ] && [ -f "$proj" ]; then
+                if blockers="$(at_native_projection_findings "$proj" "$AT_P_PERMISSIONS")"; then
+                    while IFS= read -r f; do [ -z "$f" ] || FINDINGS+=("$f"); done <<EOF
+$blockers
+EOF
+                else
+                    FINDINGS+=("Agent projection ${proj#"$root"/}: frontmatter inspection failed")
+                fi
+            fi
             plan+=("$name"$'\037'"$harness"$'\037'"$tier"$'\037'"$AT_R_MODEL"$'\037'"$AT_R_VARIANT"$'\037'"$AT_R_SOURCE")
         else
             FINDINGS+=("Agent '$name': no $harness model resolves ($AT_R_ERR)")
@@ -340,7 +351,7 @@ if [ "${#FINDINGS[@]}" -gt 0 ]; then
     if [ "$mode" = resolve ]; then
         echo 'render-agents.sh: cannot resolve; fix the tier map, override, snapshot, definition or tier findings above.' >&2
     else
-        echo 'render-agents.sh: nothing written; fix the tier map, override, snapshot, definition or tier findings above first.' >&2
+        echo 'render-agents.sh: nothing written; fix the findings above first.' >&2
     fi
     exit 1
 fi

@@ -54,7 +54,8 @@ at_tier_map_records() { # file [awk skip_fence(line) function]
             count = split(value, actions, ",")
             for (j = 1; j <= count; j++) {
                 action = trim(actions[j])
-                if (action !~ /^[a-z][a-z0-9_]*$/ || action == "deny" || action in seen) return "!"
+                if (action !~ /^[a-z][a-z0-9_]*$/ ||
+                    action ~ /^(deny|none|null|nil|na)$/ || action in seen) return "!"
                 seen[action] = 1
                 out = out (j == 1 ? "" : " ") action
             }
@@ -62,9 +63,8 @@ at_tier_map_records() { # file [awk skip_fence(line) function]
         }
         function projection_row(   tier, effort, permissions, preamble) {
             if (nc != 4) { print "projectionbad", NR, "expected four Projection tier cells"; return }
-            tier = tolower(cell[1]); effort = cell[2]; permissions = permission_actions(cell[3])
+            tier = tolower(cell[1]); effort = trim(raw[3]); permissions = permission_actions(trim(raw[4]))
             preamble = trim(raw[5])
-            if (preamble == "-") preamble = ""
             if (tier != "*" && tier !~ /^[a-z0-9][a-z0-9_-]*$/)
                 print "projectionbad", NR, "expected a local Projection tier name or *"
             else if (tier in projection_seen)
@@ -72,7 +72,7 @@ at_tier_map_records() { # file [awk skip_fence(line) function]
             else if (effort != "" && effort !~ /^(low|medium|high|xhigh|max)$/)
                 print "projectionbad", NR, "Claude effort must be low, medium, high, xhigh or max"
             else if (permissions == "!")
-                print "projectionbad", NR, "OpenCode permissions must be deny or a comma-separated list of distinct action names (no wildcards)"
+                print "projectionbad", NR, "OpenCode permissions must be deny or a comma-separated list of distinct action names (no wildcards or placeholders)"
             else if (tier == "*" && (effort != "" || permissions != ""))
                 print "projectionbad", NR, "the * Projection tier row only sets a global OpenCode preamble"
             else if (preamble ~ /[[:cntrl:]]/)
@@ -91,6 +91,10 @@ at_tier_map_records() { # file [awk skip_fence(line) function]
             if (incomment) {
                 p = index(line, "-->"); if (!p) next
                 line = substr(line, p + 3); incomment = 0
+            }
+            if (intable && kind == "projection" && line ~ /^[ \t]*\|/ && line ~ /<!--|-->/) {
+                print "projectionbad", NR, "HTML comments are not allowed in Projection tier rows"
+                next
             }
             while ((p = index(line, "<!--")) > 0) {
                 rest = substr(line, p + 4); q = index(rest, "-->")
@@ -145,7 +149,7 @@ at_tier_map_records() { # file [awk skip_fence(line) function]
                 }
                 next
             }
-            intable = 0
+            intable = 0; kind = ""
             plain = line; gsub(/`/, "", plain); gsub(/\*\*/, "", plain)
             sub(/^[ \t]*([-*][ \t]+)?/, "", plain)
             low = tolower(plain)
@@ -253,12 +257,17 @@ at_tiers_json_records() {
 at_hash_file() { install_hash_stream < "$1"; }
 
 # Frontmatter value of a top-level key (quotes and trailing comments removed).
-at_fm_value() { # file key
-    awk -v key="$2" '
+at_fm_value() { # file key [native-model]
+    awk -v key="$2" -v native="${3:-}" '
+        native != "" { sub(/\r$/, "") }
         NR == 1 { if ($0 != "---") exit; next }
         $0 == "---" { exit }
-        index($0, key ":") == 1 {
-            v = substr($0, length(key) + 2); sub(/^[ \t]+/, "", v); sub(/[ \t\r]+$/, "", v)
+        index($0, key ":") == 1 || (native != "" &&
+                $0 ~ "^(" key "|\"" key "\"|\047" key "\047)[ \t]*:") {
+            v = $0; sub(/^[^:]+:[ \t]*/, "", v); sub(/[ \t\r]+$/, "", v)
+            if (native != "" && match(v, /^("[^"]*"|\047[^\047]*\047)[ \t]+#/))
+                v = substr(v, 1, RLENGTH - 1)
+            sub(/[ \t]+$/, "", v)
             if (v ~ /^".*"$/ || v ~ /^\047.*\047$/) v = substr(v, 2, length(v) - 2)
             else sub(/[ \t]+#.*$/, "", v)
             print v; exit
@@ -354,6 +363,17 @@ EOF
     fi
 }
 
+# Shared input contract for the renderer and its verifier (also used by doctor/adoption).
+at_load_checked() { # root
+    local map="$1/.prdkit/memory/agents.md"
+    AT_LOAD_ERR=""
+    if [ -f "$map" ] && ! verify_lf_file "$map"; then
+        AT_LOAD_ERR="Invalid tier map: expected non-empty LF-terminated text"
+        return 1
+    fi
+    at_load "$1"
+}
+
 at_snap_value() { # library-tier harness key
     printf '%s\n' "$AT_SNAP" | awk -F '\037' -v t="$1" -v h="$2" -v k="$3" '!d && $1 == "tier" && $2 == t && $3 == h && $4 == k { print $5; d = 1 }'
 }
@@ -410,6 +430,45 @@ at_native_fields() { # effort permissions
 at_frontmatter() { # file, including delimiters (requires a complete header)
     awk 'NR == 1 && $0 != "---" { exit } { print } NR > 1 && $0 == "---" { closed = 1; exit }
          END { if (!closed) exit 1 }' "$1"
+}
+
+# The line-oriented rewriter cannot migrate project-owned V1 fields or preserve YAML
+# references across replaced entries. Report blockers in preflight, not during writes.
+at_native_projection_findings() { # existing file permissions
+    local proj="$1" findings
+    if ! findings="$(awk -v opencode="$2" '
+        NR == 1 {
+            if ($0 == "---\r") { unsupported = 1; exit }
+            if ($0 != "---") exit
+            header = 1; next
+        }
+        $0 == "---" { closed = 1; exit }
+        /^[ \t]*(#|$)/ { next }
+        {
+            if ($0 ~ /(^|[[:space:]]|[][{},:?])[&*][^][{},"\047[:space:]]/) references = 1
+            if ((!content && /^[ \t]/) || /^[{?!%]/ || /^\[/ || /^["\047][^:]*\\/) unsupported = 1
+            content = 1
+            if (opencode != "" && match($0, /^([A-Za-z_]+|"[A-Za-z_]+"|\047[A-Za-z_]+\047)[ \t]*:/)) {
+                k = substr($0, 1, RLENGTH - 1); gsub(/["\047 \t]/, "", k)
+                if (k ~ /^(name|tools|prompt|disable|maxSteps|temperature|top_p|options)$/ && !seen[k]++)
+                    keys = keys (keys == "" ? "" : ", ") k
+            }
+        }
+        END {
+            if (header && !closed) print "has incomplete frontmatter; close it before opting in"
+            if (unsupported) print "needs an LF-terminated, simple block mapping in frontmatter before opting in"
+            if (references) print "may use YAML anchors or aliases in frontmatter; replace them with explicit values before opting in"
+            if (keys != "") print "has OpenCode V1-only frontmatter keys: " keys "; migrate them manually before opting into V2 permissions"
+        }
+    ' "$proj")"; then
+        findings="could not inspect frontmatter; verify the file is readable"
+    fi
+    local line
+    while IFS= read -r line; do
+        [ -z "$line" ] || printf 'Agent projection %s %s\n' "${proj#"$AT_ROOT"/}" "$line"
+    done <<EOF
+$findings
+EOF
 }
 
 # Filter only opted-in keys before the normal update. Remove the entire value, including
@@ -655,20 +714,17 @@ at_ownership_findings() {
 # repairs these (it rewrites the model) once the map itself is clean, so they must not block
 # the render that would fix them; --check, doctor and the adoption gate still report them.
 at_lint_projection_bans() {
-    local proj model def tier
+    local proj model base
     printf '%s\n' "$AT_MAP" | awk -F '\037' '$1 == "banned" { f = 1 } END { exit !f }' || return 0
     for proj in "$AT_ROOT"/.claude/agents/*.md "$AT_ROOT"/.opencode/agents/*.md; do
         [ -f "$proj" ] || continue
-        model="$(at_fm_value "$proj" model)"
         # Native V2 embeds the variant; a banned base id still applies to every variant.
-        case "$proj:$model" in
-            "$AT_ROOT"/.opencode/agents/*.md:*'#'*)
-                def="$AT_ROOT/.prdkit/agents/${proj##*/}"
-                if [ -f "$def" ]; then
-                    tier="$(at_fm_value "$def" tier)" || return 1
-                    at_projection_options "$tier" opencode || return 1
-                    [ -z "$AT_P_PERMISSIONS" ] || model="${model%%#*}"
-                fi ;;
+        case "$proj" in
+            "$AT_ROOT"/.opencode/agents/*.md)
+                model="$(at_fm_value "$proj" model native-model)" || return 1
+                base="${model%%#*}"
+                if [ "$base" != "$model" ] && at_is_banned "$base"; then model="$base"; fi ;;
+            *) model="$(at_fm_value "$proj" model)" || return 1 ;;
         esac
         ! at_is_banned "$model" || printf "Agent projection %s uses banned model '%s'\n" "${proj#"$AT_ROOT"/}" "$model"
     done
@@ -763,7 +819,7 @@ at_native_model_valid() { # model variant
 # Projection findings for every neutral definition and target harness.
 #   include_missing  report absent projections (doctor reports those itself)
 at_projection_findings() { # include_missing
-    local include_missing="$1" def name tier harness proj current model variant key desc targets actual body native
+    local include_missing="$1" def name tier harness proj current model variant key desc targets actual body native blockers
     for def in "$AT_ROOT"/.prdkit/agents/*.md; do
         [ -f "$def" ] || continue
         name="$(basename "$def" .md)"
@@ -783,6 +839,10 @@ at_projection_findings() { # include_missing
             if [ ! -f "$proj" ]; then
                 [ "$include_missing" != true ] || printf "Agent '%s': no projection in .%s/agents/ (run render-agents.sh)\n" "$name" "$harness"
                 continue
+            fi
+            if [ -n "$AT_P_EFFORT$AT_P_PERMISSIONS" ]; then
+                blockers="$(at_native_projection_findings "$proj" "$AT_P_PERMISSIONS")" || return 1
+                if [ -n "$blockers" ]; then printf '%s\n' "$blockers"; continue; fi
             fi
             model="$(at_projected_model "$AT_R_MODEL" "$AT_R_VARIANT" "$AT_P_PERMISSIONS")"
             current="$(at_fm_value "$proj" model)" || return 1
@@ -836,12 +896,10 @@ agent_tier_findings() {
         esac
         shift
     done
-    if [ -f "$root/.prdkit/memory/agents.md" ]; then
-        verify_lf_file "$root/.prdkit/memory/agents.md" || {
-            printf 'Invalid tier map: expected non-empty LF-terminated text\n'; return
-        }
+    if ! at_load_checked "$root"; then
+        [ -n "$AT_LOAD_ERR" ] || return 1
+        printf '%s\n' "$AT_LOAD_ERR"; return
     fi
-    at_load "$root" || return 1
     at_lint || return 1
     if $always || [ -n "$AT_BASELINE" ]; then
         if [ -z "$AT_BASELINE" ] || [ -n "$AT_SNAP" ]; then

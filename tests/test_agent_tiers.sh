@@ -552,6 +552,8 @@ same_bytes "$PROJ/hand-oc" .opencode/agents/rev-a.md "both kinds of native permi
 same_bytes "$PROJ/hand-claude" .claude/agents/rev-a.md "native effort untouched when undeclared"
 
 it "an opted-in tier refreshes effort, native permissions, combined model and preamble"
+# Complete the manual migration first: V2 derives the ID from the filename.
+sed '/^name: rev-a$/d' "$PROJ/hand-oc" > .opencode/agents/rev-a.md
 # Earlier write-failure coverage may have regenerated rev-b; give it explicit native policy.
 if ! grep -q '^permission:' .opencode/agents/rev-b.md; then
     sed '/^variant: high$/a\
@@ -578,7 +580,6 @@ run bash "$RENDER"
 assert_eq 0 "$STATUS"
 cat > "$PROJ/native-oc" <<'EOF'
 ---
-name: rev-a
 description: rev-a reviewer.
 model: lib/oc-next#max
 # Native policies belong to the project unless it opts in.
@@ -649,6 +650,13 @@ sed 's/^effort: high$/effort: low/' .claude/agents/rev-a.md > "$PROJ/drift"
 cp "$PROJ/drift" .claude/agents/rev-a.md
 for bad_row in \
     '| deep | too-high | | |' \
+    '| deep | n/a | read | |' \
+    '| deep | - | read | |' \
+    '| deep | high | none | |' \
+    '| deep | high | n/a | |' \
+    '| deep | high | read, none | |' \
+    '| deep | high | read | Begin here <!-- note --> please. |' \
+    '| deep | high | | Begin here <!-- unclosed |' \
     '| deep | low | read, * | |' \
     '| deep | low | | preamble | extra cell |' \
     '| * | high | | |' \
@@ -672,6 +680,68 @@ assert_contains "$OUTPUT" "duplicate Projection tier deep"
 run bash "$SCRIPTS/doctor.sh" --json
 assert_contains "$OUTPUT" "duplicate Projection tier deep" "doctor shares the projection settings lint"
 
+it "write and check both refuse a CRLF projection table without changing files"
+cp "$PROJ/agents.before-extras" "$MAP"
+projection_table '| deep | high | read | Follow the local rubric. |' |
+    awk '{ printf "%s\r\n", $0 }' >> "$MAP"
+before="$(proj_state)"
+for mode in --check --write; do
+    if [ "$mode" = --check ]; then run bash "$RENDER" --check --json
+    else run bash "$RENDER" --json; fi
+    assert_eq 1 "$STATUS" "$mode rejects CRLF"
+    assert_contains "$OUTPUT" "Invalid tier map: expected non-empty LF-terminated text"
+    assert_eq "$before" "$(proj_state)" "$mode leaves all projections unchanged"
+done
+
+it "native opt-in refuses V1-only keys, even when quoted, before writing to either harness"
+cp "$PROJ/agents.extras" "$MAP"
+sed '/^name:/a\
+maxSteps: 2\
+"disable": true\
+tools: {edit: false}
+' "$PROJ/hand-oc" > "$PROJ/v1-options"
+cp "$PROJ/v1-options" .opencode/agents/rev-a.md
+before="$(proj_state)"
+run bash "$RENDER" --check --json
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" ".opencode/agents/rev-a.md has OpenCode V1-only frontmatter keys: name, maxSteps, disable, tools"
+run bash "$RENDER"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "nothing written"
+same_bytes "$PROJ/v1-options" .opencode/agents/rev-a.md "legacy step cap and other settings remain untouched"
+assert_eq "$before" "$(proj_state)" "legacy blocker prevents changes to any projection"
+
+it "native replacement refuses a YAML anchor in permissions used by an unrelated header"
+cat > "$PROJ/with-alias" <<'EOF'
+---
+description: Reviewer with a shared scalar.
+mode: subagent
+model: lib/oc-next#max
+permissions:
+  - action: read
+    resource: &scope "*"
+    effect: allow
+request:
+  headers:
+    x-review-scope: *scope
+---
+
+Review only.
+EOF
+cp "$PROJ/with-alias" .opencode/agents/rev-a.md
+before="$(proj_state)"
+run bash "$RENDER" --check --json
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" ".opencode/agents/rev-a.md may use YAML anchors or aliases"
+run bash "$RENDER"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "nothing written"
+same_bytes "$PROJ/with-alias" .opencode/agents/rev-a.md "both the anchor and its alias survive"
+assert_eq "$before" "$(proj_state)" "YAML blocker prevents changes to any projection"
+cp "$PROJ/native-oc" .opencode/agents/rev-a.md
+run bash "$RENDER"
+assert_eq 0 "$STATUS" "a plain opt-in file still renders"
+
 it "the opt-in cannot hide a banned base model id behind a variant suffix"
 cp "$PROJ/agents.extras" "$MAP"
 printf '\nBanned models: lib/oc-blocked\n' >> "$MAP"
@@ -681,6 +751,36 @@ assert_eq 1 "$STATUS"
 assert_contains "$OUTPUT" "uses banned model 'lib/oc-blocked'"
 run bash "$RENDER"
 assert_eq 0 "$STATUS"
+
+it "the base-model ban covers hand-owned V2 projections without opt-in"
+cp "$PROJ/agents.before-extras" "$MAP"
+printf '\nBanned models: lib/oc-blocked\nHand-owned agents: hand-native\n' >> "$MAP"
+cat > .opencode/agents/hand-native.md <<'EOF'
+---
+description: Project-owned reviewer.
+model: lib/oc-blocked#high
+permissions:
+  - action: "*"
+    resource: "*"
+    effect: deny
+---
+
+Review only.
+EOF
+cp .opencode/agents/hand-native.md "$PROJ/hand-native"
+run bash "$RENDER" --check --json
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" ".opencode/agents/hand-native.md uses banned model 'lib/oc-blocked'"
+run bash "$RENDER"
+assert_eq 1 "$STATUS" "render reports the hand-owned banned model without repairing it"
+same_bytes "$PROJ/hand-native" .opencode/agents/hand-native.md "hand-owned projection stays unchanged"
+sed 's@^model: .*@"model" : "lib/oc-blocked#high" # native model@' "$PROJ/hand-native" > .opencode/agents/hand-native.md
+run bash "$RENDER" --check --json
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" ".opencode/agents/hand-native.md uses banned model 'lib/oc-blocked'" "quoted native references are also checked"
+rm -f .opencode/agents/hand-native.md
+# Recreate the migrated fast-tier file without the legacy name emitted by the opt-out.
+rm -f .opencode/agents/rev-c.md
 
 it "a native OpenCode projection works without a variant; prejoined model overrides are findings"
 cp "$PROJ/agents.extras" "$MAP"

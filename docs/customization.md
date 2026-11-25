@@ -64,8 +64,9 @@ and use the **local** tier from the neutral definition, not its mapped library t
 | standard        |               | deny                 |                   |
 ```
 
-- Omit the table for unchanged output. A blank cell or `-` does not opt into the setting;
-  each tier has at most one row, and each row must set something.
+- Omit the table for unchanged output. Leave a cell empty to leave the setting undeclared.
+  Placeholders such as `-`, `none`, and `n/a` are not valid effort or permissions values.
+  Use LF line endings. Each tier has at most one row, and each row must set something.
 - **Claude effort** owns `effort:` only for that tier. Choose `low`, `medium`, `high`, `xhigh`,
   or `max`; check that the Claude Code version and chosen model support the level.
 - **OpenCode permissions** opts that tier into **OpenCode V2**. `deny` blocks all actions.
@@ -76,14 +77,19 @@ and use the **local** tier from the neutral definition, not its mapped library t
   defaults. It also writes `model: provider/model#variant` when a variant resolves, removing
   any separate `variant:`. Keep the model ID and optional variant separate in the baseline and
   overrides; `--resolve` still reports them separately and `Banned models:` uses the base ID.
-  See the [OpenCode V2 agent fields](https://opencode.ai/docs/agents#options). Review any
-  other legacy keys (such as `name:` or `tools:`) before opting in: existing unrelated fields
-  are preserved, but OpenCode V2 ignores legacy keys in files with native `permissions:`.
+  Before opting in, follow the [OpenCode V2 migration guide](https://opencode.ai/docs/migrate-v1#agent-files).
+  Rename `maxSteps:` to `steps:` and `disable:` to `disabled:`, remove `name:` (the filename
+  supplies the ID), and migrate `prompt:` to the neutral agent body. Review `tools:` against
+  the new permissions and move sampling/provider options to the model variant. If any such
+  legacy keys remain, the renderer names the file and keys and writes no projections.
 - **OpenCode preamble** inserts one literal Markdown line before the neutral body, after
   any generated-marker comments. The optional `*` row sets only a global preamble; a nonblank
-  local preamble takes precedence. Do not put `|` or HTML comments in the preamble cell.
+  local preamble takes precedence. Do not put `|` in the preamble or HTML comments in the row.
 
-`render-agents.sh --check` reports drift on opted-in settings. Removing an effort or permissions
+When opting into effort or permissions, use a simple YAML block mapping and replace any
+frontmatter anchors or aliases with explicit values before rendering. The renderer refuses
+these constructs rather than breaking references in project-owned metadata.
+`render-agents.sh --check` reports those blockers as well as drift. Removing an effort or permissions
 setting hands that field back to the project; it does not delete it. Removing the permissions
 setting also restores separate `model` and `variant` fields. If rolling back to the legacy
 OpenCode format, restore the previous `permission:` block and remove `permissions:` by hand.
