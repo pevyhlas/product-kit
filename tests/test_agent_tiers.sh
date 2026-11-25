@@ -753,6 +753,51 @@ cp "$PROJ/native-oc" .opencode/agents/rev-a.md
 run bash "$RENDER"
 assert_eq 0 "$STATUS" "a plain opt-in file still renders"
 
+it "noncanonical opening delimiters never turn existing projections into headerless files"
+cp "$MAP" "$PROJ/map-before-delimiters"
+cp .claude/agents/rev-b.md "$PROJ/claude-before-delimiters"
+# An otherwise repairable projection must not be written either.
+printf '\nStale local text.\n' >> .claude/agents/rev-b.md
+for settings in legacy opt-in banned; do
+    cp "$PROJ/agents.before-extras" "$MAP"
+    [ "$settings" != opt-in ] || cp "$PROJ/agents.extras" "$MAP"
+    [ "$settings" != banned ] || printf '\nBanned models: lib/oc-blocked\n' >> "$MAP"
+    for delimiter in trailing-space bom bom-tab crlf; do
+        case "$delimiter" in
+            trailing-space) printf '%s\n' '---   ' ;;
+            bom) printf '\357\273\277---\n' ;;
+            bom-tab) printf '\357\273\277---\t\n' ;;
+            crlf) printf '%s\r\n' '---' ;;
+        esac > "$PROJ/unsupported-opening"
+        # Match the reviewer fixture: a cap and a header referencing a permissions anchor.
+        sed -e '1d' -e '/^mode:/a\
+steps: 2
+' "$PROJ/with-alias" >> "$PROJ/unsupported-opening"
+        cp "$PROJ/unsupported-opening" .opencode/agents/rev-a.md
+        before="$(proj_state)"
+        for mode in --check write; do
+            if [ "$mode" = write ]; then run bash "$RENDER"; else run bash "$RENDER" "$mode" --json; fi
+            assert_eq 1 "$STATUS" "$settings/$delimiter $mode refuses the projection"
+            assert_contains "$OUTPUT" ".opencode/agents/rev-a.md line 1: unsupported frontmatter delimiter"
+        done
+        same_bytes "$PROJ/unsupported-opening" .opencode/agents/rev-a.md "$settings/$delimiter preserves project-owned bytes"
+        assert_eq "$before" "$(proj_state)" "$settings/$delimiter prevents all projection updates"
+    done
+done
+cp "$PROJ/agents.before-extras" "$MAP"
+printf '\nHand-owned agents: local-delimiter\n' >> "$MAP"
+cp "$PROJ/unsupported-opening" .claude/agents/local-delimiter.md
+for mode in --check write; do
+    if [ "$mode" = write ]; then run bash "$RENDER"; else run bash "$RENDER" "$mode"; fi
+    assert_eq 1 "$STATUS" "$mode checks hand-owned Claude projections too"
+    assert_contains "$OUTPUT" ".claude/agents/local-delimiter.md line 1: unsupported frontmatter delimiter"
+done
+same_bytes "$PROJ/unsupported-opening" .claude/agents/local-delimiter.md "hand-owned projection remains intact"
+rm -f .claude/agents/local-delimiter.md
+cp "$PROJ/map-before-delimiters" "$MAP"
+cp "$PROJ/native-oc" .opencode/agents/rev-a.md
+cp "$PROJ/claude-before-delimiters" .claude/agents/rev-b.md
+
 it "node scanning ignores quoted and plain text, globs, and block-scalar descriptions"
 for fixture in glob ampersand markdown plain unicode; do
     {

@@ -427,6 +427,37 @@ at_frontmatter() { # file, including delimiters (requires a complete header)
          END { if (!closed) exit 1 }' "$1"
 }
 
+# Distinguish genuinely headerless Markdown from YAML we cannot rewrite safely.
+# Inspect the raw first line before any newline or whitespace normalization.
+AT_DELIMITER_AWK='
+    function opening_delimiter(line) {
+        if (line == "---") return "canonical"
+        if (line ~ /^(\357\273\277)?[ \t]*---[ \t]*\r?$/) return "unsupported"
+        return "absent"
+    }
+'
+
+at_projection_delimiter() { # file -> canonical, unsupported, or absent
+    LC_ALL=C awk "$AT_DELIMITER_AWK"'
+        NR == 1 { print opening_delimiter($0); exit }
+        END { if (!NR) print "absent" }
+    ' "$1"
+}
+
+at_projection_delimiter_finding() { # file
+    printf 'Agent projection %s line 1: unsupported frontmatter delimiter; use exactly --- followed by LF\n' \
+        "${1#"$AT_ROOT"/}"
+}
+
+at_lint_projection_delimiters() {
+    local proj delimiter
+    for proj in "$AT_ROOT"/.claude/agents/*.md "$AT_ROOT"/.opencode/agents/*.md; do
+        [ -f "$proj" ] || continue
+        delimiter="$(at_projection_delimiter "$proj")" || return 1
+        [ "$delimiter" != unsupported ] || at_projection_delimiter_finding "$proj"
+    done
+}
+
 # A lexical scan, not YAML evaluation. Track node starts, flow collections and
 # quoted/block scalar continuations. Compare bytes only to ASCII syntax; a byte
 # from a UTF-8 scalar must never be passed to an awk regex as a character.
@@ -492,10 +523,10 @@ AT_YAML_SCAN_AWK='
 # references across replaced entries. Report blockers in preflight, not during writes.
 at_native_projection_findings() { # existing file permissions
     local proj="$1" findings
-    if ! findings="$(LC_ALL=C awk -v opencode="$2" "$AT_YAML_SCAN_AWK"'
+    if ! findings="$(LC_ALL=C awk -v opencode="$2" "$AT_DELIMITER_AWK$AT_YAML_SCAN_AWK"'
         NR == 1 {
-            if ($0 == "---\r") { unsupported = 1; exit }
-            if ($0 != "---") exit
+            # Noncanonical opening delimiters are reported by the inventory check.
+            if (opening_delimiter($0) != "canonical") exit
             header = 1; next
         }
         $0 == "---" { closed = 1; exit }
@@ -530,21 +561,19 @@ EOF
 # Read just a model reference from a simple, unindented frontmatter mapping.
 # Output a token, nothing (no model), or !<line> (the model cannot be verified).
 at_opencode_model() { # projection
-    LC_ALL=C awk "$AT_YAML_SCAN_AWK"'
+    LC_ALL=C awk "$AT_DELIMITER_AWK$AT_YAML_SCAN_AWK"'
         function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
         function invalid(ln) { bad = ln; exit }
         function finish_model() {
             if (model_line && model !~ /^[A-Za-z0-9_.+:\/@~%-]+(#[A-Za-z0-9_.+~-]+)?$/)
                 invalid(model_line)
         }
-        { sub(/\r$/, "") }
         NR == 1 {
-            if ($0 != "---") {
-                if ($0 ~ /^(\357\273\277)?[ \t]*---[ \t]*$/) invalid(NR)
-                exit
-            }
+            # Noncanonical opening delimiters are reported by the inventory check.
+            if (opening_delimiter($0) != "canonical") exit
             header = 1; next
         }
+        { sub(/\r$/, "") }
         $0 == "---" { closed = 1; finish_model(); exit }
         /^[ \t]*$/ { if (model_block && model == "") leading_blank = 1; next }
         model_block && /^ / {
@@ -1007,7 +1036,7 @@ at_projection_findings() { # include_missing
 # Projection checks run when the tier map declares a shared baseline (the opt-in), or always
 # with --always-projections (render-agents.sh --check).
 agent_tier_findings() {
-    local root="$1" include_missing=false always=false
+    local root="$1" include_missing=false always=false delimiters
     shift
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -1021,6 +1050,9 @@ agent_tier_findings() {
         printf '%s\n' "$AT_LOAD_ERR"; return
     fi
     at_lint || return 1
+    delimiters="$(at_lint_projection_delimiters)" || return 1
+    # Do not suggest rendering drift when the opening delimiters must be fixed first.
+    if [ -n "$delimiters" ]; then printf '%s\n' "$delimiters"; return; fi
     if $always || [ -n "$AT_BASELINE" ]; then
         if [ -z "$AT_BASELINE" ] || [ -n "$AT_SNAP" ]; then
             at_projection_findings "$include_missing" || return 1

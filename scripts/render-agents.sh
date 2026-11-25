@@ -265,7 +265,7 @@ new_projection() { # def harness name model variant body
 # Sets RP_OUTCOME to created|updated|unchanged; returns 1 (outcome empty) on a failed write.
 # Called directly, never inside $(...), so a write failure reaches the caller.
 render_projection() { # def harness name model variant tier
-    local def="$1" harness="$2" name="$3" model="$4" variant="$5" tier="$6" body
+    local def="$1" harness="$2" name="$3" model="$4" variant="$5" tier="$6" body delimiter
     local proj="$root/.$harness/agents/$name.md" tmp="$RA_TMP/projection" markers desc dline=""
     RP_OUTCOME=""
     at_projection_options "$tier" "$harness" || return 1
@@ -279,7 +279,12 @@ render_projection() { # def harness name model variant tier
         ra_install "$tmp" "$proj" || return 1
         RP_OUTCOME=created; return 0
     fi
-    if [ "$(head -n1 "$proj")" != '---' ]; then
+    delimiter="$(at_projection_delimiter "$proj")" || return 1
+    if [ "$delimiter" = unsupported ]; then
+        at_projection_delimiter_finding "$proj" >&2
+        return 1
+    fi
+    if [ "$delimiter" = absent ]; then
         new_projection "$def" "$harness" "$name" "$model" "$variant" "$body" > "$tmp" || return 1
     elif [ "$(at_body_norm "$proj")" = "$body" ]; then
         # Body already current: change only frontmatter lines, keep body bytes exactly.
@@ -318,14 +323,14 @@ while IFS= read -r f; do [ -z "$f" ] || FINDINGS+=("$f"); done < <(at_lint_map; 
 if [ -n "$AT_BASELINE" ] && [ -z "$AT_SNAP" ] && [ "${#FINDINGS[@]}" -eq 0 ]; then
     FINDINGS+=("Tier map: baseline snapshot $AT_SNAPSHOT_REL is unusable")
 fi
-# An unverifiable model is not the same as known drift: refuse before any write.
+# Delimiter variants and unverifiable models are not drift the renderer can repair.
 if [ "$mode" = write ]; then
-    if blockers="$(at_lint_projection_bans --unverifiable-only)"; then
+    if blockers="$(at_lint_projection_delimiters && at_lint_projection_bans --unverifiable-only)"; then
         while IFS= read -r f; do [ -z "$f" ] || FINDINGS+=("$f"); done <<EOF
 $blockers
 EOF
     else
-        FINDINGS+=("Could not verify projection model references")
+        FINDINGS+=("Could not verify projection frontmatter delimiters or model references")
     fi
 fi
 plan=()

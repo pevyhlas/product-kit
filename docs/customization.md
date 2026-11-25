@@ -55,6 +55,11 @@ file-and-line finding in both render and `--check`. Rewrite the model as a plain
 `model: provider/model#variant` scalar to make it verifiable. This is a check of kit
 projection files, not of OpenCode's full configuration or inherited models.
 
+For projection frontmatter, use exactly `---` followed by LF on the first line.
+Render and `--check` report noncanonical opening delimiters with the file and line,
+even without model bans or optional settings. Render refuses before updating any
+projection; fix the delimiter without changing the project-owned metadata.
+
 The `.ref` file (library commit + sha256) lets doctor detect hand edits to the snapshot and a
 mismatch with the `Tier baseline:` commit; it does not prove the snapshot came from that upstream commit, so
 review the vendoring diff. `Baseline snapshot:` must be a relative path inside the
