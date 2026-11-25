@@ -174,6 +174,20 @@ assert_refused_extra_and_entry 'Not a plain repository-relative path' path-fixtu
 assert_refused_extra_and_entry 'Not a plain repository-relative path' path-fixture/../first.md
 assert_refused_extra_and_entry 'Not a plain repository-relative path' "$PROJ/path-fixture/policy.md"
 
+it 'a successful lookup whose inventory cannot reopen refuses instead of reporting absence'
+mkdir "$_SCRATCH_CWD/find-shim" "$_SCRATCH_CWD/digest-tmp" || exit 1
+real_find="$(command -v find)" || exit 1
+cat > "$_SCRATCH_CWD/find-shim/find" <<'SH'
+#!/bin/sh
+"$DIGEST_REAL_FIND" "$@" || exit "$?"
+case "$1" in
+    */path-fixture/.) rm "$TMPDIR"/*/lookup || exit 1 ;;
+esac
+SH
+chmod +x "$_SCRATCH_CWD/find-shim/find" || exit 1
+PATH="$_SCRATCH_CWD/find-shim:$PATH" TMPDIR="$_SCRATCH_CWD/digest-tmp" DIGEST_REAL_FIND="$real_find" \
+    assert_refused 'Cannot reopen lookup inventory' path-fixture/missing.md --extra path-fixture/missing.md
+
 it 'a nonregular leaf or nondirectory parent is not absent'
 assert_refused_extra_and_entry 'Not a regular input file' path-fixture
 assert_refused 'Not a regular input file' path-fixture --config path-fixture

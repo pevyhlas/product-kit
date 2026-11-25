@@ -61,7 +61,7 @@ confirm_missing() { # searchable parent, unresolved component, requested path
         if [ "$entry" = "$candidate" ]; then
             die "Cannot access input component: $parent/$2 (for $path; check permissions or retry)"
         fi
-    done < "$scratch/lookup"
+    done < "$scratch/lookup" || die "Cannot reopen lookup inventory for input: $path (retry the digest)"
 }
 
 snapshot_input() { # repository-relative path, snapshot destination; return 1 only if absent
