@@ -54,6 +54,13 @@ assert_contains "$review" '.prdkit/scripts/bash/build-review-package.sh <change-
 assert_contains "$change" 'read [review.md](review.md)' "the always-read change playbook routes review, merge and closing"
 assert_contains "$(flat "$T/review-prompt-template.md")" 'You did not implement this change' "reviewer contract"
 
+it "review rounds attach exact-head facts as evidence, and reviewers use them before rerunning bounds"
+assert_contains "$review" 'Once per round at the exact head' "scope of collection"
+assert_contains "$review" '.prdkit/scripts/bash/facts.sh <change-id>' "collect facts before packaging"
+assert_contains "$review" 'Attach both `facts/summary.md` and `facts/index.json` via `--evidence`' "attach the complete pack"
+assert_contains "$review" 'Facts are evidence, never a gate decision' "unchanged gate authority"
+assert_contains "$(flat "$T/review-prompt-template.md")" 'Use bounds from the exact-head facts if captured; otherwise' "fresh reviewer uses the pack before the fallback"
+
 it "merged, live and validated stay distinct; status answers first and names the longest pole"
 assert_contains "$protocol" 'Merged, live (deployed) and validated (owner or user outcome) are distinct claims' "distinct claims"
 assert_contains "$(flat "$W/status.md")" 'Answer the owner' "answer first"

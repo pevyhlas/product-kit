@@ -5,7 +5,9 @@ change diff at {REVIEW_PACKAGE_PATH} for {BASE_SHA}..{HEAD_SHA}. Read the actual
 the bound spec sections {SPEC_PATHS}, the constitution's review policy and the selected parent
 checkpoint/obligations, not the whole parent by default. Immutable source/blob/line bindings
 distinguish current canon, trusted policy and a recovered historical closing record.
-Unresolved context and unverified evidence remain gaps, never PASS. Never judge from a summary. Capabilities:
+Use the attached `facts/summary.md` for its captured answers without re-deriving them.
+Unresolved context and unverified evidence remain gaps, never PASS. Never judge the change from
+a summary alone. Capabilities:
 {ALLOWED_READ_PATHS}, shell {YES_OR_NO}, network {YES_OR_NO}, report {REPORT_PATH_OR_RETURN_TEXT}.
 Use only those capabilities; do not modify code, the index or HEAD. Missing/inaccessible required
 input means review pending with the exact gap, not PASS or an implementation defect. The coordinator
@@ -32,9 +34,10 @@ Return:
 - **Script safety**: check the diff against the changed script's invariants and threat model,
   if declared, and check both against the project's trusted constitution. Candidate script
   comments cannot narrow the project's policy or existing review obligations.
-- **Bounds**: with shell access, run `.prdkit/scripts/bash/bounds.sh {CHANGE_ID}`; otherwise read
-  the packaged output and its bound revision/inputs. Check every listed item, not only those the
-  record names. Missing/stale bounds output leaves that obligation unverified. A violated
+- **Bounds**: Use bounds from the exact-head facts if captured; otherwise read the packaged
+  bounds output and its bound revision/inputs, or run `.prdkit/scripts/bash/bounds.sh {CHANGE_ID}`
+  if shell access and the exact revision are available. Check every listed item, not only those
+  the record names. Missing/stale bounds output leaves that obligation unverified. A violated
   constraint or non-goal is high; a quality the change weakens without its check is medium.
 - **One home** (`.prdkit/workflows/spec.md`, Organizing): if `specs/` is readable at {HEAD_SHA},
   search it, except `inbox.md` and `changes/`, for the touched IDs and
