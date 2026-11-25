@@ -310,19 +310,185 @@ for relay_case in timeout cancellation fifo-timeout fifo-cancellation; do
     restore_control
 done
 
+fd_lsof_matches() { # FIFO path, lsof field records; print matching f fields or a safe error
+    local path key
+    # Apple libproc lsof can report a vnode path (n) and inode (i) for a
+    # named FIFO, but omits its device (D). Check the inode against the
+    # known FIFO, using the device too when lsof supplies it.
+    if ! path="$(cd -P -- "${1%/*}" 2>/dev/null && printf '%s/%s' "$PWD" "${1##*/}")" ||
+        ! key="$(stat -Lc 'D0x%D i%i' "$path" 2>/dev/null || stat -Lf 'D0x%Xd i%i' "$path" 2>/dev/null)" ||
+        ! [[ "$key" =~ ^D0x[[:xdigit:]]+\ i[1-9][0-9]*$ ]]; then
+        printf '%s\n' 'cannot identify target FIFO'
+        return 1
+    fi
+    FD_FIFO_PATH="$path" LC_ALL=C awk -v want_dev="${key%% *}" -v want_inode="${key#* }" '
+        BEGIN {
+            # Linux lsof 4.99.4: lib/print.c and lib/dialects/linux/{dnode,dsock}.c.
+            # Apple lsof: dialects/darwin/libproc/{dfile,dsock,dnetpolicy}.c.
+            types = "REG DIR CHR BLK LINK FIFO PIPE SOCK sock unix IPv4 IPv6"
+            types = types " KQUEUE FSEVENTS NPOLICY PSXSHM PSXSEM ATALK rte ndrv key systm ppp vsock vsockp"
+            types = types " a_inode PSXMQ ax25 inet ipx raw raw6 netlink pack icmp"
+            count = split(types, tokens, " ")
+            for (i = 1; i <= count; i++) known["t" tokens[i]] = 1
+        }
+        function problem(message) {
+            if (failure == "") failure = message
+        }
+        function check_fd() {
+            if (fd == "") return
+            # Older lsof versions abbreviate FDs above 9999 as *nnn.
+            if (fd !~ /^f([0-9]+|\*[0-9][0-9][0-9])$/) {
+                problem("invalid FD record")
+                return
+            }
+            seen = 1
+            # A failed lookup can return no type or an unknown token (e.g. UNKNfd).
+            if (!(type in known)) {
+                problem("unclassified FD " fd)
+                return
+            }
+            if (type != "tFIFO" && type != "tPIPE") return
+            # Darwin anonymous PIPEs have an opaque nonzero handle in lowercase
+            # d, not a filesystem inode. Do not compare it with the target inode.
+            # A bare NAME such as "pipe" or "no more information" is not a path.
+            if (name !~ /^n\/./ && inode !~ /^i[1-9][0-9]*$/ &&
+                !(type == "tPIPE" && handle ~ /^d0x0*[1-9a-fA-F][[:xdigit:]]*$/)) {
+                problem("unidentified " substr(type, 2) " " fd)
+                return
+            }
+            if (name == ("n" ENVIRON["FD_FIFO_PATH"]) ||
+                (inode == want_inode && (dev == "" || dev == want_dev)))
+                matches = matches (matches == "" ? "" : " ") fd
+        }
+        /^f/ { check_fd(); fd = $0; type = name = inode = dev = handle = "" }
+        /^t/ { type = $0 }
+        /^n/ { name = $0 }
+        /^i/ { inode = $0 }
+        /^D/ { dev = $0 }
+        /^d/ { handle = $0 }
+        END {
+            check_fd()
+            if (!seen) problem("no numeric FD records")
+            if (failure != "") { print failure; exit 1 }
+            if (matches != "") print matches
+        }
+    ' <<< "$2" 2>/dev/null
+}
+
+fd_lsof_observe() { # FIFO path, pid, lsof binary
+    local fields matches
+    # Include every numeric FD, even ones Bash saves beyond its usual range.
+    if ! fields="$("$3" -w -a -p "$2" -d 0-2147483647 -F ftDdin 2>/dev/null)"; then
+        printf '%s\n' 'observer failed: lsof command failed'
+    elif ! matches="$(fd_lsof_matches "$1" "$fields")"; then
+        printf 'observer failed: %s\n' "${matches:-invalid lsof listing}"
+    elif [ -n "$matches" ]; then
+        printf 'inherited descriptor: %s\n' "$matches"
+    else
+        printf '%s\n' clean
+    fi
+}
+
+fd_lsof_probe() { # known FIFO path, lsof binary
+    local fields matches
+    if ! fields="$("$REAL_BASH" -c '
+        exec 7<>"$1" || exit 1
+        "$2" -w -a -p "$$" -d 7 -F ftDdin
+        exit "$?"
+    ' _ "$1" "$2" 2>/dev/null)"; then
+        printf '%s\n' 'lsof probe command failed'
+    elif ! matches="$(fd_lsof_matches "$1" "$fields")"; then
+        printf '%s\n' "${matches:-invalid lsof listing}"
+    elif [ "$matches" = f7 ]; then
+        return 0
+    else
+        printf '%s\n' 'probe FIFO was not identified on f7'
+    fi
+    return 1
+}
+
+fd_lsof_version() {
+    # lsof writes its version report to stderr; allow only the revision token.
+    "$1" -v 2>&1 | LC_ALL=C awk '
+        /^[[:blank:]]*revision:[[:blank:]]+[0-9]+\.[0-9]+(\.[0-9]+)*[[:alpha:]]?[[:blank:]]*$/ && !seen {
+            print "lsof revision: " $2
+            seen = 1
+        }
+        END { if (!seen) print "lsof revision: unavailable" }
+    '
+}
+
+it 'partial lsof observations never certify a clean descriptor audit'
+FD_CONTROL_FIFO="$FIX/fd-control"
+FD_CONTROL_LSOF="$FIX/lsof-control"
+mkfifo "$FD_CONTROL_FIFO"
+cat > "$FD_CONTROL_LSOF" <<'SHIM'
+#!/bin/bash
+if [ "$1" = -v ]; then
+    printf '%s\n' '    revision: 4.99.4' 'synthetic private stderr' >&2
+    exit 0
+fi
+printf '%s\n' p123 f6 tREG n/synthetic/private-file
+case "${FD_CONTROL_MODE:-}" in
+    partial) printf '%s\n' f8 'nno more information' ;;
+    unknown-type) printf '%s\n' f8 tUNKN n/synthetic/private-file ;;
+    unknown-fd-type) printf '%s\n' f8 tUNKNfd n/synthetic/private-file ;;
+    unexpected-type) printf '%s\n' f8 tUnexpectedTag n/synthetic/private-file ;;
+    missing-identity) printf '%s\n' f8 tFIFO ;;
+    invalid-identity) printf '%s\n' f8 tFIFO i0 'nno more information' ;;
+    missing-pipe-identity) printf '%s\n' f8 tPIPE 'nno more information' ;;
+    zero-pipe-handle) printf '%s\n' f8 tPIPE d0x00000000 ;;
+    darwin-pipe)
+        [[ "${!#}" == *d* ]] || exit 1
+        printf '%s\n' f8 tPIPE d0x000002ab ;;
+    failure)
+        printf '%s\n' 'synthetic private stderr' >&2
+        exit 1 ;;
+esac
+SHIM
+chmod +x "$FD_CONTROL_LSOF"
+for fd_case in partial unknown-type unknown-fd-type unexpected-type missing-identity invalid-identity \
+    missing-pipe-identity zero-pipe-handle failure; do
+    case "$fd_case" in
+        partial|unknown-type|unknown-fd-type|unexpected-type) expected='unclassified FD f8' ;;
+        missing-identity|invalid-identity) expected='unidentified FIFO f8' ;;
+        missing-pipe-identity|zero-pipe-handle) expected='unidentified PIPE f8' ;;
+        failure) expected='lsof command failed' ;;
+    esac
+    # The mock leaves the open FIFO on f8 unclassifiable, while f6 remains classifiable.
+    FD_CONTROL_MODE="$fd_case" run fd_lsof_observe "$FD_CONTROL_FIFO" "$$" "$FD_CONTROL_LSOF" 8<>"$FD_CONTROL_FIFO"
+    assert_eq "observer failed: $expected" "$OUTPUT" "descriptor audit rejects and redacts the $fd_case listing"
+done
+FD_CONTROL_MODE=darwin-pipe run fd_lsof_observe "$FD_CONTROL_FIFO" "$$" "$FD_CONTROL_LSOF"
+assert_eq clean "$OUTPUT" 'a Darwin anonymous pipe with a handle is identifiable and is not the FIFO'
+FD_CONTROL_MODE=partial run fd_lsof_probe "$FD_CONTROL_FIFO" "$FD_CONTROL_LSOF"
+assert_eq 1 "$STATUS" 'partial listing cannot pass preflight'
+assert_eq 'unclassified FD f8' "$OUTPUT" 'preflight redacts names and the vnode error'
+FD_CONTROL_MODE=failure run fd_lsof_probe "$FD_CONTROL_FIFO" "$FD_CONTROL_LSOF"
+assert_eq 1 "$STATUS" 'failed lsof command cannot pass preflight'
+assert_eq 'lsof probe command failed' "$OUTPUT" 'preflight drops stdout and stderr from failed lsof'
+run fd_lsof_version "$FD_CONTROL_LSOF"
+assert_eq 'lsof revision: 4.99.4' "$OUTPUT" 'preflight version diagnostic prints only the revision'
+rm "$FD_CONTROL_FIFO" "$FD_CONTROL_LSOF"
+
 it 'native workload and status helper do not inherit either end of the failure FIFO'
 FD_OBSERVER=''
-if [ -d /proc/self/fd ]; then
+FD_LSOF=''
+FD_PROBE_ERROR='probe not run'
+if [ "${PRDKIT_TEST_FORCE_LSOF:-0}" != 1 ] && [ -d /proc/self/fd ]; then
     FD_OBSERVER=proc
-elif command -v lsof >/dev/null && mkfifo "$FIX/fd-observer"; then
-    # Check that lsof can actually match an open named pipe on this host.
-    if "$REAL_BASH" -c 'exec 7<>"$1"; lsof -w -a -p "$$" -d 7 -F f "$1"; exit "$?"' _ "$FIX/fd-observer" \
-        2>/dev/null | grep -qx f7; then FD_OBSERVER=lsof; fi
+elif FD_LSOF="$(type -P lsof)" && mkfifo "$FIX/fd-observer"; then
+    # Confirm that the same identity matcher used by the audit finds a known open FIFO.
+    if FD_PROBE_ERROR="$(fd_lsof_probe "$FIX/fd-observer" "$FD_LSOF")"; then
+        FD_OBSERVER=lsof
+    fi
     rm "$FIX/fd-observer"
 fi
 if [ -n "$FD_OBSERVER" ]; then
+    _ok "descriptor observer: $FD_OBSERVER"
     {
-        printf '#!/bin/bash\nresult_dir=%q\nobserver=%q\n' "$FIX" "$FD_OBSERVER"
+        printf '#!/bin/bash\nresult_dir=%q\nobserver=%q\nlsof_bin=%q\n' "$FIX" "$FD_OBSERVER" "$FD_LSOF"
+        declare -f fd_lsof_matches fd_lsof_observe
         cat <<'AUDIT'
 role="$1"; shift
 checked=false; result=clean
@@ -340,9 +506,8 @@ for pipe in "$HOME"/../op.*/work.failure; do
                 fi
             done ;;
         lsof)
-            matches="$(lsof -w -a -p "$$" -F f "$pipe" 2>&1)"; rc=$?
-            if [ "$rc" -eq 0 ]; then result="inherited descriptor: $matches"
-            elif [ "$rc" -ne 1 ] || [ -n "$matches" ]; then result="observer failed: $matches"; fi ;;
+            result="$(fd_lsof_observe "$pipe" "$$" "$lsof_bin")"
+            [ "$result" = clean ] || break ;;
     esac
 done
 if ! $checked; then result='failure FIFO not found'; fi
@@ -376,7 +541,17 @@ AUDIT
     rm "$FIX/bin/mv"
     restore_control
 else
-    printf '%s\n' 'SKIP: descriptor identity requires /proc/self/fd or usable lsof'
+    if [ -n "$FD_LSOF" ]; then
+        fd_lsof_version "$FD_LSOF" >&2
+        printf 'lsof probe FD 7 (-F ftDdin): %s\n' "$FD_PROBE_ERROR" >&2
+    else
+        printf '%s\n' 'lsof not found on PATH' >&2
+    fi
+    if [ "${GITHUB_ACTIONS:-}" = true ]; then
+        _no 'descriptor identity requires /proc/self/fd or usable lsof' || :
+    else
+        printf '%s\n' 'SKIP: descriptor identity requires /proc/self/fd or usable lsof'
+    fi
 fi
 
 it 'a live member missed by ps prevents scratch deletion'
