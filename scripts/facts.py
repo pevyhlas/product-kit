@@ -197,8 +197,8 @@ class Snapshot(Collector):
             with TemporaryFile(dir=scratch) as inventory:
                 self.git("rev-list", "--objects", "--no-object-names", "--missing=error", head, stdout=inventory)
                 inventory.seek(0)
-                # Pack exactly the enumerated OIDs, with no deltas against unlisted objects.
-                self.git("pack-objects", "--quiet", "--window=0", "--no-reuse-delta",
+                # Use a non-thin pack: fresh deltas can only use bases in the explicit inventory.
+                self.git("pack-objects", "--quiet", "--no-reuse-delta",
                          ".git/objects/pack/pack", stdin=inventory)
         finally:
             alternate.unlink()

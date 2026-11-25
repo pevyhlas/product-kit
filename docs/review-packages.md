@@ -111,6 +111,11 @@ configuration and other worktrees do not enter the facts. Diff whitespace uses G
 and the committed attributes at `HEAD`. Symlinks must stay within the snapshot; a target not
 in the snapshot stays absent.
 
+Each collection and `--verify` builds the snapshot anew in Python's temporary directory
+(`TMPDIR` on Unix when set to a usable directory). Allow space on that volume for a new,
+compressed pack of the reachable history, the raw checkout of `HEAD`, and Git's index and
+other temporary files. The new pack can differ in size from the consumer's existing packs.
+
 The cache contains a `summary.md` of at most 60 lines and the full `index.json`; excess detail
 is linked from the summary. The key is facts script version, base SHA, and head SHA. The index
 records commands, exit statuses and results, base/head tree IDs (which bind the committed

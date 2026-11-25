@@ -395,6 +395,74 @@ run bash "$BIN/facts.sh" "$ID"
 assert_eq 0 "$STATUS" "$OUTPUT"
 assert_eq pass "$(jq -r '.facts.doctor.details.result' "$INDEX")"
 
+it 'the sealed pack uses deltas without importing any unrelated objects from the source pack'
+run python3 -I -B - "$BIN/facts.py" <<'PY'
+import importlib.util
+from pathlib import Path
+from random import Random
+import shutil
+import subprocess
+import sys
+from tempfile import TemporaryDirectory
+
+
+def pack_bytes(objects):
+    return sum(path.stat().st_size for path in (objects / "pack").glob("*.pack"))
+
+
+with TemporaryDirectory(prefix="facts-pack-") as scratch:
+    work = Path(scratch)
+    repo = work / "repo"
+    scripts = repo / ".prdkit/scripts/bash"
+    scripts.mkdir(parents=True)
+    script = scripts / "facts.py"
+    shutil.copyfile(sys.argv[1], script)
+
+    def git(*args, **kwargs):
+        return subprocess.check_output(["git", "-C", str(repo), *args], **kwargs)
+
+    git("init", "--quiet")
+    git("config", "user.name", "Fixture")
+    git("config", "user.email", "fixture@example.invalid")
+    asset = repo / "asset.bin"
+    asset.write_bytes(Random(5).randbytes(1024 * 1024))
+    git("add", ".")
+    git("commit", "--quiet", "-m", "add binary")
+    base = git("rev-parse", "HEAD").decode().strip()
+    for n in range(1, 16):
+        with asset.open("r+b") as stream:
+            stream.seek(n)
+            changed_byte = stream.read(1)[0] ^ 1
+            stream.seek(n)
+            stream.write(bytes([changed_byte]))
+        git("commit", "--quiet", "-am", f"revise binary {n}")
+    head = git("rev-parse", "HEAD").decode().strip()
+    unrelated = git("hash-object", "-w", "--stdin", input=b"reachable only through an unrelated tag\n").strip()
+    git("tag", "unrelated", unrelated.decode())
+    git("repack", "-ad", "--quiet")
+    source_objects = repo / ".git/objects"
+    assert not (source_objects / unrelated[:2].decode() / unrelated[2:].decode()).exists()
+    assert git("cat-file", "-t", unrelated.decode()).strip() == b"blob"
+
+    spec = importlib.util.spec_from_file_location("facts", script)
+    facts = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(facts)
+    directory = work / "snapshot"
+    directory.mkdir()
+    snapshot = facts.Snapshot(facts.Collector(), directory, base, head)
+    objects = snapshot.root / ".git/objects"
+    assert not (objects / "info/alternates").exists(), "snapshot still has a live alternate"
+    expected = set(git("rev-list", "--objects", "--no-object-names", head).splitlines())
+    actual = set(snapshot.git("cat-file", "--batch-all-objects", "--batch-check=%(objectname)").splitlines())
+    assert actual == expected and unrelated not in actual, (actual - expected, expected - actual)
+
+    source_size, sealed_size = pack_bytes(source_objects), pack_bytes(objects)
+    print(f"Source pack: {source_size} bytes; sealed pack: {sealed_size} bytes; {len(actual)} exact objects")
+    assert 0 < sealed_size <= 3 * source_size, "sealed history lost binary delta compression"
+PY
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_contains "$OUTPUT" 'exact objects'
+
 it 'malformed committed maps and nonregular cached artifacts refuse'
 printf '{"src/*":["Verify"],"src/*":["Queue"]}\n' > "$MAP"
 git add "$MAP" && git commit -qm 'invalid map' || exit 1
