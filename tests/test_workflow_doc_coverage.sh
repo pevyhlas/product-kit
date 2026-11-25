@@ -8,6 +8,9 @@ done
 it "human and agent guides link to their shared source"
 assert_contains "$(cat "$PK_ROOT/docs/agent-workflow.md")" '../workflows/protocol.md' "agent guide links protocol"
 assert_file "$PK_ROOT/docs/human-workflow.md" "human guide exists"
+it "role digest is discoverable from the script catalog and review workflow"
+assert_contains "$(cat "$PK_ROOT/docs/commands.md")" 'review-packages.md#role-digests'
+assert_contains "$(cat "$PK_ROOT/workflows/review.md")" '.prdkit/scripts/bash/role-digest.sh'
 it "the documented required workflow uses only PR activities that both the ruleset and launcher support"
 events="$(awk '/^host-registered immutable required workflow W$/ { block=1; next }
     block && /^  every applicable PR/ { exit }

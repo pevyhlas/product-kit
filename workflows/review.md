@@ -22,6 +22,10 @@ never only the implementer's summary. Before dispatch, confirm the reviewer's al
 shell/network access and report channel; without shell access, supply the captured `bounds.sh`
 output with its input revision/hashes.
 
+For focused policy context, `.prdkit/scripts/bash/role-digest.sh <role>` extracts sections that
+cite the role from working-tree policy and lists the input blobs. Use it as reading evidence,
+not instead of trusted policy, the full source, or review approval.
+
 For committed work run `.prdkit/scripts/bash/build-review-package.sh <change-id> <base> [head]`,
 adding `--context <path>` for selected tracked canon/policy/record files and `--evidence <path>`
 for completed local results. The helper checks structural accessibility, not semantic
