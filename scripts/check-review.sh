@@ -95,10 +95,14 @@ if github_review_policy "$root" "$policy_at"; then
     fi
 else problems+=("$RC_ERROR")
 fi
+record_history_available=false
 if $base_trusted; then
     if ! record_problem="$(review_record_history "$root" "$id" "$import_base" "$head" "$work")"; then
         problems+=("Cannot validate the change record format: fetch the complete local history, trees and record blobs")
-    elif [ -n "$record_problem" ]; then problems+=("$record_problem"); fi
+    else
+        record_history_available=true
+        [ -z "$record_problem" ] || problems+=("$record_problem")
+    fi
 fi
 # Every **Tier** field in a record on stdin, one per line: T0-T3, or ? when its whole value (up to
 # the next · or the end of the line, in optional backticks) is not exactly one tier: T1/T3, T1-T3,
@@ -124,6 +128,54 @@ floor_tiers() {
 highest_tier() { grep -x 'T[0-3]' | sort | tail -n 1; } # tiers on stdin -> the highest
 tier_floor_of() { # rev -> the highest tier the record names there, if any
     { git -C "$root" show "$1:$path" 2>/dev/null || true; } | floor_tiers | highest_tier || true
+}
+raise_floor() { # tier where
+    if [ -n "$1" ] && { [ -z "$floor" ] || [[ "$1" > "$floor" ]]; }; then floor="$1"; floor_at="$2"; fi
+}
+trusted_floor() { # rev where file: absence is fine; a record there must name exactly one tier
+    local entry named shown blob
+    if ! entry="$(GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git --literal-pathspecs -C "$root" \
+        -c core.quotePath=true ls-tree --full-tree "$1" -- "$3" 2>/dev/null)"; then
+        problems+=("Cannot read $(LC_ALL=C printf '%q' "$3") at $2: fetch the complete local history, trees and record blobs")
+        return 0
+    fi
+    [ -n "$entry" ] || return 0
+    shown="${entry#*$'\t'}"
+    case "$entry" in
+        '100644 blob '*|'100755 blob '*)
+            blob="${entry%%$'\t'*}"; blob="${blob##* }"
+            if ! GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -C "$root" cat-file blob "$blob" > "$work/floor-record" 2>/dev/null; then
+                problems+=("Cannot read $shown at $2: fetch the complete local history, trees and record blobs")
+                return 0
+            fi
+            if verify_lf_file "$work/floor-record" && named="$(record_tiers < "$work/floor-record")"; then
+                case "$named" in T[0-3]) raise_floor "$named" "$2 ($shown)"; return 0 ;; esac
+            fi ;;
+    esac
+    problems+=("The record at $2 names no readable tier ($shown), so the trusted minimum is unknown; fix it there first")
+}
+trusted_floors() { # file
+    [ -z "$policy_at" ] || trusted_floor "$policy_at" "the trusted base (${trusted_default#refs/remotes/})" "$1"
+    if [ -n "$import_base" ] && [ "$import_base" != "$policy_at" ]; then
+        trusted_floor "$import_base" "the base ($base_ref)" "$1"
+    fi
+    if [ -n "$start" ] && [ "$start" != "$policy_at" ] && [ "$start" != "$import_base" ]; then
+        trusted_floor "$start" "the change's start ${start:0:12}" "$1"
+    fi
+}
+touched_record_floors() {
+    local file
+    if ! review_touched_paths "$root" "$start" "$head" "$work" > "$work/tier-paths" ||
+        ! verify_lf_file "$work/tier-paths" allow-empty; then
+        problems+=("Cannot determine which records changed: fetch the complete local history and trees")
+        return 0
+    fi
+    while IFS= read -r file; do
+        file="${file//%0D/$'\r'}"
+        file="${file//%0A/$'\n'}"
+        file="${file//%25/%}"
+        [ "$file" = "$path" ] || trusted_floors "$file"
+    done < "$work/tier-paths"
 }
 # T0 is docs only: every changed path outside the record and closing metadata must be a regular,
 # non-executable file under a path the trusted config lists in review-t0-paths (literal paths;
@@ -229,38 +281,26 @@ else
         *$'\n'*) problems+=("The record names more than one review tier ($(printf '%s' "$claims" | tr '\n' ' ')); keep exactly one **Tier** field") ;;
         *) problems+=("The record names no review tier (**Tier**: T0–T3)") ;;
     esac
-    # The merge base bounds the effective tier and docs-only path checks.
-    if [ -n "$base_ref" ] && bases="$(git -C "$root" merge-base --all "$base_ref" "$head" 2>/dev/null)"; then
+    # Use the same pinned import commit as the history scan for the effective tier and path checks.
+    if [ -n "$base_ref" ] &&
+        bases="$(GIT_NO_REPLACE_OBJECTS=1 git -C "$root" merge-base --all "${import_base:-$base_ref}" "$head" 2>/dev/null)"; then
         if [[ "$bases" == *$'\n'* ]]; then
             problems+=("$base_ref and $head have multiple merge bases; merge the target into the branch to establish one change start")
         elif [[ "$bases" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]]; then
             start="$bases"
         fi
     fi
-    # A branch may raise its tier, never lower it. The floor is the highest tier the record names
-    # on the trusted default branch, on the base, where the change left the base, or at any commit
-    # of the branch since; an L0 edit (specs/product.md, specs/product/) is T3 (protocol.md).
+    # A branch may raise its tier, never lower it. Every touched record contributes its tier on
+    # the trusted default branch, the import base and the change's start. Only the carrier also
+    # contributes tiers from branch commits. An L0 edit (specs/product.md, specs/product/) is T3.
     floor=""; floor_at=""
-    raise_floor() { # tier where
-        if [ -n "$1" ] && { [ -z "$floor" ] || [[ "$1" > "$floor" ]]; }; then floor="$1"; floor_at="$2"; fi
-    }
-    trusted_floor() { # rev where: a record there must name exactly one tier, or the minimum is unknown
-        local named
-        git -C "$root" cat-file -e "$1:$path" 2>/dev/null || return 0
-        named="$( { git -C "$root" show "$1:$path" 2>/dev/null || true; } | record_tiers)"
-        case "$named" in
-            T[0-3]) raise_floor "$named" "$2" ;;
-            *) problems+=("The record at $2 names no readable tier, so the trusted minimum is unknown; fix it there first") ;;
-        esac
-    }
-    [ -z "$policy_at" ] || trusted_floor "$policy_at" "the trusted base (${trusted_default#refs/remotes/})"
-    [ -z "$import_base" ] || trusted_floor "$import_base" "the base ($base_ref)"
+    trusted_floors "$path"
     if [ -n "$start" ]; then
-        trusted_floor "$start" "the change's start ${start:0:12}"
         while IFS= read -r commit; do
             [ -n "$commit" ] || continue
-            raise_floor "$(tier_floor_of "$commit")" "commit ${commit:0:12}"
+            raise_floor "$(tier_floor_of "$commit")" "commit ${commit:0:12} ($path)"
         done < <(git -C "$root" rev-list --full-history "$start..$head" -- "$path" 2>/dev/null || true)
+        if $record_history_available; then touched_record_floors; fi
         if [ "$start" != "$head" ] && [ -n "$(changed_since "$start" specs/product.md specs/product)" ]; then
             raise_floor T3 "its L0 edit ($(changed_since "$start" specs/product.md specs/product))"
         fi

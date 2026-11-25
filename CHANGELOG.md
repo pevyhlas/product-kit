@@ -14,6 +14,17 @@ change by change.
 ### Added
 
 - `read-spec.sh --index` lists headings and reading-line counts; `--section` reads one section by heading or ID with its source blob and original line numbers.
+
+### Fixed
+
+- Spec navigation recognizes valid footers on BusyBox awk and excludes them from reading budgets
+  there. `--target` reads keys literally instead of decoding awk escapes outside the documented key
+  syntax.
+
+## [3.1.0] — 2026-11-25 — pinned review policy branch and complete tier floor
+
+### Added
+
 - Scaffold, lint, and normalize local review reports with `review-report.sh` without changing the GitHub review gate.
 
 ### Changed
@@ -27,13 +38,15 @@ change by change.
   required workflow once to pass the literal name of the protected default branch. The
   launcher refuses if the live default differs from that pin, the repository ID does not
   match the authenticated event/environment, or the fetched policy tip differs from the
-  API-bound commit. The pinned branch's policy must still approve the PR target.
+  API-bound commit. The pinned branch's policy must still approve the PR target. Follow the
+  "3.1 workflow migration" steps in `docs/ci-gates.md`: pin the literal branch name in the
+  workflow itself (for example `main`, not `refs/heads/main`), roll out the updated workflow and
+  the 3.1 launcher together, and verify that the host requires the updated workflow before
+  resuming merges.
 
 ### Fixed
 
-- Spec navigation recognizes valid footers on BusyBox awk and excludes them from reading budgets
-  there. `--target` reads keys literally instead of decoding awk escapes outside the documented key
-  syntax.
+- The review gate enforces and names the highest trusted tier across every change record touched in the branch's history (#197).
 
 ## [3.0.0] — 2026-11-24 — native GitHub review gate and optional UI design summary
 
