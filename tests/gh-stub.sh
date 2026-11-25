@@ -64,6 +64,11 @@ if [ "$operation" = PrdkitCheckFacts ]; then
         override="$GH_STUB_DIR/routes/graphql_PrdkitCheckFacts-rerun.json"
     elif [ -n "$after" ]; then
         case "$after" in cursor-[0-9]*) override="$GH_STUB_DIR/routes/graphql_PrdkitCheckFacts-$after.json" ;; *) exit 2 ;; esac
+    elif [ -f "$GH_STUB_DIR/routes/graphql_PrdkitCheckFacts-later.json" ]; then
+        if [ -f "$GH_STUB_DIR/read-check-facts" ]; then
+            override="$GH_STUB_DIR/routes/graphql_PrdkitCheckFacts-later.json"
+        fi
+        : > "$GH_STUB_DIR/read-check-facts"
     fi
 fi
 if [ "$operation" = PrdkitPRFacts ] && [ -f "$GH_STUB_DIR/routes/graphql_PrdkitPRFacts-later.json" ]; then
@@ -80,6 +85,7 @@ case "$route" in
     actions/jobs/*/logs)
         [ "$method" = GET ] && $include && $escapes && [ -f "${override%.json}.txt" ] || exit 2
         cat "${override%.json}.txt"; exit ;;
+    rules/branches/*\&page=*) ;;
     rules/branches/*)
         $paginate && $slurp || exit 2 ;;
 esac

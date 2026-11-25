@@ -13,7 +13,7 @@ bash .prdkit/scripts/bash/ci-wait.sh [--repo OWNER/NAME] [--timeout SECONDS] [--
 ```
 
 These optional helpers need Python 3.11+ (standard library only) and an authenticated
-GitHub CLI with `gh api --slurp` and `--allow-escape-sequences` support. They do not need `jq`. `--repo` defaults
+GitHub CLI with `gh api --allow-escape-sequences` support. They do not need `jq`. `--repo` defaults
 to the current repository as resolved by `gh` on github.com; pass it explicitly to avoid
 remote ambiguity. The helpers report observations, not gate decisions or merge authorization.
 
@@ -42,9 +42,12 @@ defaults are 600 seconds overall and 10 seconds between polls.
 
 Both helpers match named requirements from the current base branch's classic protection
 and active rulesets to the PR's exact head, not a synthetic merge commit or an older head.
-They refuse unsupported required workflow rules and ambiguous duplicate contexts rather than
-guessing. GitHub does not offer an atomic snapshot across these endpoints; the helpers
-recheck the PR binding and requirements before returning terminal evidence.
+They read numbered ruleset pages until a short (possibly empty) page confirms the end, and
+refuse missing or repeated pages, unsupported required workflow rules, and ambiguous
+duplicate contexts. Before reporting evidence or rerunning a job, they recheck the PR
+binding, requirements, and exact-head check identities, statuses, and conclusions.
+If a check changes during confirmation, `ci-wait.sh` keeps waiting and `pr-state.sh`
+refuses the snapshot. This narrows the race window; it is not an atomic GitHub snapshot.
 
 There is no rerun by default. With `--rerun-on FILE` and Actions write access, each failed
 check may be rerun at most once per invocation. Put one literal UTF-8 substring per line

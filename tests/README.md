@@ -4,8 +4,9 @@
 bash tests/run.sh
 ```
 
-The suite uses Bash, standard utilities, Git, and jq 1.6+. Core helpers remain usable without
-jq. CI also runs ShellCheck 0.11.0. Tests create disposable consumer
+The suite requires Bash, standard utilities, Git, jq 1.6+, and Python 3.11+ (standard library only).
+Python is required for the PR evidence tests on both Linux and macOS; they are not skipped.
+Core helpers remain usable without jq. CI also runs ShellCheck 0.11.0. Tests create disposable consumer
 projects. The separate `CI (macOS)` workflow additionally exercises installer, upgrade, change,
 status, doctor and adoption-gate behavior on macOS for every pull request and
 push to main; it must pass before a merge but never gates a release.
@@ -68,6 +69,7 @@ reproduce the duplicate number; synchronization markers avoid a scheduler-depend
 | Change bounds: constraints, non-goals and qualities in scope for a change's parts and journeys, ranges, later-stage items | bounds |
 | Explicit lifecycle orders, whole multiword names, transitions, invalid classifications, single-file canon and upgrade preservation | lifecycle |
 | Merge gate: record format, trusted reviewer areas and native exact-head approvals | check_review, review_record_format, review_lenses, review_gate, pr_review |
+| PR evidence: native-review snapshots, complete required-check inventory, exact-head confirmation and opt-in reruns | pr_state |
 | Immutable review packages and bounded round allocation | review_package |
 | Remote checkpoint observation | delivery_checkpoint |
 | Context-budget advisories and strict doctor | context_budget |

@@ -19,12 +19,15 @@ pr_metadata() {
       }}}}'
 }
 pr_metadata "$HEAD_SHA" > "$ROUTES/graphql_PrdkitPRFacts.json"
-rule_file="$ROUTES/rules_branches_main_per_page_100.json"
+legacy_rule_file="$ROUTES/rules_branches_main_per_page_100.json"
+rule_file="$ROUTES/rules_branches_main_per_page_100_page_1.json"
+rule_page_two="$ROUTES/rules_branches_main_per_page_100_page_2.json"
 required_rules() {
-    jq -n --arg name "$CHECK" '[[{type:"required_status_checks",parameters:{
-        required_status_checks:[{context:$name,integration_id:15368}]}}]]'
+    jq -n --arg name "${1:-$CHECK}" '[{type:"required_status_checks",parameters:{
+        required_status_checks:[{context:$name,integration_id:15368}]}}]'
 }
 required_rules > "$rule_file"
+jq -s . "$rule_file" > "$legacy_rule_file"
 
 check_run() { # status conclusion [opaque id] [url]
     jq -n --arg name "$CHECK" --arg status "$1" --arg conclusion "$2" --arg id "${3:-job-71}" \
@@ -86,7 +89,51 @@ assert_eq 0 "$STATUS"
 assert_eq '' "$OUTPUT"
 assert_contains "$(cat "$GH_STUB_DIR/requests")" 'endCursor=cursor-1'
 
+it 'a full first rules page is not proof of the entire requirement inventory'
+required_rules | jq '. + [range(99) | {type:"deletion",ruleset_id:(.+1)}]' > "$rule_file"
+required_rules 'second-page check' > "$rule_page_two"
+check_run COMPLETED SUCCESS | check_page 1 false '' > "$check_file"
+wait_for_ci 1
+assert_eq 3 "$STATUS" 'A succeeded but B has never appeared'
+assert_contains "$(cat "$GH_STUB_DIR/requests")" '?per_page=100&page=2'
+rm "$rule_page_two"
+# Recreate the formerly accepted gh --paginate response when the next Link is lost.
+jq -s . "$rule_file" > "$legacy_rule_file"
+wait_for_ci
+assert_eq 2 "$STATUS" 'dropping the whole second page cannot reach exit 0'
+assert_contains "$OUTPUT" 'active base branch rules page 2'
+rm "$legacy_rule_file"
+cp "$rule_file" "$rule_page_two"
+wait_for_ci
+assert_eq 2 "$STATUS" 'a repeated full page is not progress'
+assert_contains "$OUTPUT" 'repeated'
+printf '[]\n' > "$rule_page_two"
+wait_for_ci
+assert_eq 0 "$STATUS" 'a full final page is complete only after an explicit empty next page'
+rm "$rule_page_two"
+required_rules > "$rule_file"
+jq -s . "$rule_file" > "$legacy_rule_file"
+
+it 'a replacement check invalidates terminal wait results and PR snapshots'
+later_check="$ROUTES/graphql_PrdkitCheckFacts-later.json"
+check_run IN_PROGRESS '' job-new | check_page 1 false '' > "$later_check"
+wait_for_ci 2
+assert_eq 3 "$STATUS" 'initial success cannot pass while its replacement is running'
+assert_contains "$OUTPUT" 'timed out'
+rm -f "$GH_STUB_DIR/read-check-facts"
+run bash "$PR_STATE" --repo owner/repo 7
+assert_eq 2 "$STATUS" 'a snapshot cannot return an inventory superseded during confirmation'
+assert_contains "$OUTPUT" 'required checks changed during the read'
+assert_not_contains "$OUTPUT" '"fetched_at"'
+rm -f "$GH_STUB_DIR/read-check-facts"
+check_run COMPLETED SUCCESS job-new | check_page 1 false '' > "$later_check"
+run bash "$PR_STATE" --repo owner/repo 7
+assert_eq 2 "$STATUS" 'identical statuses and conclusions do not hide a replaced check identity'
+assert_contains "$OUTPUT" 'required checks changed during the read'
+rm -f "$GH_STUB_DIR/read-check-facts" "$later_check"
+
 it 'a partial or duplicate check inventory cannot pass and never produces a snapshot'
+check_run COMPLETED SUCCESS | check_page 2 true cursor-1 > "$check_file"
 printf '%s\n' '' | check_page 2 false '' > "$ROUTES/graphql_PrdkitCheckFacts-cursor-1.json"
 wait_for_ci
 assert_eq 2 "$STATUS"
@@ -136,6 +183,15 @@ wait_for_ci 30 --rerun-on "$GH_STUB_DIR/signatures"
 assert_eq 1 "$STATUS"
 assert_not_contains "$(cat "$GH_STUB_DIR/requests")" '--method POST'
 printf '%s\n' "$signature" > "$GH_STUB_DIR/signatures"
+it 'a superseded failure cannot cause a rerun even when its log matches'
+check_run IN_PROGRESS '' job-new | check_page 1 false '' > "$later_check"
+wait_for_ci 2 --rerun-on "$GH_STUB_DIR/signatures"
+assert_eq 3 "$STATUS"
+assert_not_contains "$(cat "$GH_STUB_DIR/requests")" '--method POST'
+rm -f "$GH_STUB_DIR/read-check-facts" "$later_check"
+rm "$legacy_rule_file"
+
+it 'a verified rerun can only happen once even when the replacement also matches'
 job2='https://github.com/owner/repo/actions/runs/91/job/72'
 job_fixture 72 "$job2"
 check_run COMPLETED FAILURE job-72 "$job2" | check_page 1 false '' > "$ROUTES/graphql_PrdkitCheckFacts-rerun.json"
@@ -190,7 +246,7 @@ it 'classic protection and legacy statuses work without an installed jq binary'
 pr_metadata "$HEAD_SHA" | jq --arg name "$CHECK" '.data.repository.pullRequest.baseRef.branchProtectionRule={
     requiresStatusChecks:true,requiredStatusCheckContexts:[$name],requiredStatusChecks:[{context:$name,app:null}]
 }' > "$ROUTES/graphql_PrdkitPRFacts.json"
-printf '[[]]\n' > "$rule_file"
+printf '[]\n' > "$rule_file"
 jq -n --arg name "$CHECK" '{__typename:"StatusContext",id:"status-1",context:$name,state:"SUCCESS",
     targetUrl:null,isRequired:true}' | check_page 1 false '' > "$check_file"
 gh api graphql -f 'query=query PrdkitReviews { repository }' -F number=7 > "$GH_STUB_DIR/reviews-response.json" || exit 1
@@ -210,7 +266,7 @@ rm "$GH_STUB_DIR/bin/jq" "$ROUTES/graphql_PrdkitReviews.json"
 pr_metadata "$HEAD_SHA" > "$ROUTES/graphql_PrdkitPRFacts.json"
 
 it 'an empty requirement inventory and corrupt gh output never pass'
-printf '[[]]\n' > "$rule_file"
+printf '[]\n' > "$rule_file"
 wait_for_ci
 assert_eq 2 "$STATUS"
 assert_contains "$OUTPUT" 'no required status checks'
@@ -222,7 +278,7 @@ assert_contains "$OUTPUT" 'expected complete JSON from gh'
 printf '[{"type":"required_status_checks"}]\n' > "$rule_file"
 wait_for_ci
 assert_eq 2 "$STATUS"
-assert_contains "$OUTPUT" 'expected a complete paginated rule list'
+assert_contains "$OUTPUT" 'missing parameters'
 run bash "$CI_WAIT" --repo owner/repo --timeout 0 7 --head "$HEAD_SHA"
 assert_eq 2 "$STATUS"
 finish

@@ -239,6 +239,27 @@ class GitHub:
             "merge_state": enum(pr, "mergeStateStatus", MERGE_STATES),
         }, classic)
 
+    def branch_rules(self, base):
+        # A missing Link header does not prove a full page was the last page.
+        # Require an explicit short (possibly empty) page before accepting this list.
+        endpoint = f"rules/branches/{quote(base, safe='')}"
+        size = 100
+        number = 1
+        seen = set()
+        while True:
+            label = f"active base branch rules page {number}"
+            page = self.get(label, self.api(f"{endpoint}?per_page={size}&page={number}"))
+            require(isinstance(page, list) and len(page) <= size,
+                    f"{label}: expected a rule array of at most {size} entries")
+            entries = {json.dumps(rule, sort_keys=True) for rule in page}
+            require(len(entries) == len(page) and not seen.intersection(entries),
+                    f"{label}: repeated rules; retry a complete branch rule inventory")
+            seen.update(entries)
+            yield from page
+            if len(page) < size:
+                return
+            number += 1
+
     def requirements(self, base, classic):
         required = {}
 
@@ -257,28 +278,22 @@ class GitHub:
             for check in checks or []:
                 add(text(check, "context"), app_id(check, "app"))
 
-        label = "active base branch rules"
-        pages = self.get(label, self.api(f"rules/branches/{quote(base, safe='')}?per_page=100",
-                                         "--paginate", "--slurp"))
-        require(isinstance(pages, list) and pages and all(isinstance(p, list) for p in pages),
-                f"{label}: expected a complete paginated rule list; update gh or check access")
-        for page in pages:
-            for rule in page:
-                kind = text(rule, "type")
-                if kind in OTHER_BRANCH_RULES:
-                    continue
-                require(kind == "required_status_checks",
-                        f"unsupported base branch rule {kind!r}; inspect GitHub for required checks")
-                params = field(rule, "parameters", dict)
-                checks = field(params, "required_status_checks", list)
-                require(checks, "required status check rule has no contexts")
-                for check in checks:
-                    name = text(check, "context")
-                    source = field(check, "integration_id", int, nullable=True) \
-                        if "integration_id" in check else None
-                    require(source is None or source == -1 or source > 0,
-                            "invalid integration_id in required status check rule")
-                    add(name, source if source != -1 else None)
+        for rule in self.branch_rules(base):
+            kind = text(rule, "type")
+            if kind in OTHER_BRANCH_RULES:
+                continue
+            require(kind == "required_status_checks",
+                    f"unsupported base branch rule {kind!r}; inspect GitHub for required checks")
+            params = field(rule, "parameters", dict)
+            checks = field(params, "required_status_checks", list)
+            require(checks, "required status check rule has no contexts")
+            for check in checks:
+                name = text(check, "context")
+                source = field(check, "integration_id", int, nullable=True) \
+                    if "integration_id" in check else None
+                require(source is None or source == -1 or source > 0,
+                        "invalid integration_id in required status check rule")
+                add(name, source if source != -1 else None)
         return required
 
     def checks(self, meta, required):
@@ -372,17 +387,20 @@ class GitHub:
         facts = sorted(map(json.loads, latest.splitlines()), key=lambda r: r["account_id"])
         return {"latest_by_account": facts, "blocking": [r for r in facts if r["state"] == "CHANGES_REQUESTED"]}
 
-    def confirm(self, meta, required):
+    def confirm(self, meta, required, checks):
         current, classic = self.metadata(meta["head_sha"])
         require(current["base_ref"] == meta["base_ref"] and current["state"] == meta["state"],
                 "PR state or target changed; take a fresh snapshot")
         require(self.requirements(current["base_ref"], classic) == required,
-                "required checks changed during the read; retry")
-        # Bind the result after the last rules request as well as before it.
+                "base branch check requirements changed during the read; retry")
+        # Compare the entire named inventory, including check identities and the
+        # link/publisher used for diagnostics. Unrelated optional checks don't matter.
+        unchanged = self.checks(current, required) == checks
+        # Recheck the PR binding after the last check request, even on a mismatch.
         final, final_classic = self.metadata(meta["head_sha"])
         require(final["base_ref"] == current["base_ref"] and final["state"] == current["state"]
                 and final_classic == classic, "PR target, state or classic rules changed; retry")
-        return final
+        return final, unchanged
 
     def diagnose(self, check, app, head, signatures):
         """Return a verified Actions job ID (if eligible), a log excerpt, and whether it matched."""
@@ -460,7 +478,8 @@ def state(host):
     required = host.requirements(meta["base_ref"], classic)
     checks = host.checks(meta, required)
     reviews = host.reviews(meta)
-    final = host.confirm(meta, required)
+    final, unchanged = host.confirm(meta, required, checks)
+    require(unchanged, "required checks changed during the read; retry the snapshot")
     require(final["base_sha"] == meta["base_sha"] and final["draft"] == meta["draft"],
             "PR base commit or draft status changed; retry")
     print(json.dumps({**final, "required_checks": [check for check, _, _ in checks], "reviews": reviews,
@@ -488,12 +507,14 @@ def wait(host, head, interval, signatures):
                     name = check["name"]
                     job, excerpt, matched = host.diagnose(check, app, head, signatures if name not in rerun else ())
                     failures.append((check, identity, job, excerpt, matched))
-            host.confirm(meta, required)
+            _, unchanged = host.confirm(meta, required, checks)
+            if not unchanged:
+                time.sleep(min(interval, host.remaining()))
+                continue
             retried = False
             for check, identity, job, _, matched in failures:
                 name = check["name"]
                 if matched and job is not None and name not in rerun:
-                    host.metadata(head)
                     host.rerun_job(job)
                     rerun[name] = identity
                     retried = True
