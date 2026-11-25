@@ -11,6 +11,8 @@ change by change.
 
 ## [Unreleased]
 
+## [3.1.0] — 2026-11-25 — pinned review policy branch and complete tier floor
+
 ### Added
 
 - Scaffold, lint, and normalize local review reports with `review-report.sh` without changing the GitHub review gate.
