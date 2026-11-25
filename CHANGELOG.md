@@ -11,6 +11,8 @@ change by change.
 
 ## [Unreleased]
 
+## [3.1.3] — 2026-11-26 — agent tier projection settings
+
 ### Added
 
 - Agent tier maps can opt in to Claude effort, deny-by-default OpenCode V2 permissions and `model#variant` syntax, and an OpenCode prompt preamble. Undeclared settings keep existing render behavior.
