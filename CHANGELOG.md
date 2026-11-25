@@ -14,6 +14,7 @@ change by change.
 ### Added
 
 - `pr-state.sh` snapshots GitHub PR facts and `ci-wait.sh` waits for required checks on an exact head, with optional signature-based job reruns.
+- `role-digest.sh` extracts role-specific policy sections with source ranges and Git blob hashes for local review evidence.
 
 ## [3.1.1] — 2026-11-25 — focused spec retrieval
 
