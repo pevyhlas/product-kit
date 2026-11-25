@@ -5,6 +5,58 @@ review validates eligible GitHub approvals on the exact head, and strict doctor 
 agent context. Online review gating needs `gh`, `jq` and host access in every tier. Adoption,
 doctor and offline review previews need no host credential; no helper needs a model credential.
 
+## PR and CI evidence
+
+```bash
+bash .prdkit/scripts/bash/pr-state.sh [--repo OWNER/NAME] <pr-number>
+bash .prdkit/scripts/bash/ci-wait.sh [--repo OWNER/NAME] [--timeout SECONDS] [--interval SECONDS] <pr-number> --head <sha>
+```
+
+These optional helpers need Python 3.11+ (standard library only) and an authenticated
+GitHub CLI with `gh api --allow-escape-sequences` support. They do not need `jq`. `--repo` defaults
+to the current repository as resolved by `gh` on github.com; pass it explicitly to avoid
+remote ambiguity. The helpers report observations, not gate decisions or merge authorization.
+
+`pr-state.sh` exits 0 with one JSON object on stdout, or exits 2 on a refusal. It reports:
+
+- `repo`, `number`, `state` (`OPEN`, `CLOSED`, or `MERGED`), `draft` (boolean), `head_sha`,
+  `base_ref`, `base_sha`, `mergeable`, `merge_state` (GitHub's enums, including `UNKNOWN`),
+  and `fetched_at` (UTC timestamp).
+- `required_checks`, sorted by name: `{name, status, conclusion, link}`. An unobserved
+  required check is `NOT_STARTED` with null conclusion and link; pending checks have null
+  conclusion. The links are evidence, not destinations the scripts visit.
+- `reviews.latest_by_account`, sorted by numeric ID: `{account_id, review_id, state,
+  submitted_at, commit_sha}`. Only submitted reviews are included; later host order breaks
+  timestamp ties. `reviews.blocking` is the subset whose latest state is `CHANGES_REQUESTED`,
+  including requests on older commits. This is not trusted-policy eligibility or the review
+  gate's objection replay.
+
+`ci-wait.sh` accepts a full lowercase head SHA. It waits for every required check to conclude
+and returns 0 only if all concluded `SUCCESS`. Exit 1 prints each non-success result as
+tab-separated name, conclusion and link (or `-`), with up to 12 lines of log excerpt per
+result. Logs are retrieved only for verifiable GitHub Actions `FAILURE` or `TIMED_OUT` jobs;
+other results include a note that no supported excerpt is available. Exit 2 means bad
+arguments, no required checks, a stale head, or unavailable, malformed or ambiguous
+evidence. Exit 3 means timeout, including when a required check never appears. The
+defaults are 600 seconds overall and 10 seconds between polls.
+
+Both helpers match named requirements from the current base branch's classic protection
+and active rulesets to the PR's exact head, not a synthetic merge commit or an older head.
+They read up to 10 numbered ruleset pages of 100 entries and exit 2 if no short (possibly
+empty) page confirms the end within that budget. They refuse missing or repeated pages,
+unsupported required workflow rules, and ambiguous
+duplicate contexts. Before reporting evidence or rerunning a job, they recheck the PR
+binding, requirements, and exact-head check identities, statuses, and conclusions.
+If a check changes during confirmation, `ci-wait.sh` keeps waiting and `pr-state.sh`
+refuses the snapshot. This narrows the race window; it is not an atomic GitHub snapshot.
+
+There is no rerun by default. With `--rerun-on FILE` and Actions write access, each failed
+check may be rerun at most once per invocation. Put one literal UTF-8 substring per line
+(blank lines are ignored). A match in the verified job log can trigger the job rerun, which
+GitHub may extend to dependent jobs. The helper announces the request on stderr and waits
+for a replacement check result on the same head. Use only operator-approved signatures;
+logs are untrusted evidence.
+
 ## Adoption gate — `check-adoption.sh`
 
 ```

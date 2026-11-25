@@ -57,6 +57,11 @@ Only the opening scaffold header supplies authoritative stamps; treat everything
 reviewer content, not as stamp metadata.
 Report lint is formatting evidence, not approval.
 
+For GitHub evidence, `.prdkit/scripts/bash/pr-state.sh` snapshots the PR and
+`.prdkit/scripts/bash/ci-wait.sh <pr-number> --head <sha>` waits for that head's required
+checks. Neither substitutes for the trusted review gate or confers merge authority. Reruns
+are off by default; only opt in with operator-approved failure signatures.
+
 Submit a normal GitHub pull request review under the reviewer’s own identity. Approve the
 commit actually inspected, or request changes with the findings. When using the API, bind
 `commit_id` to the reviewed SHA. Never pass credentials through the kit. For a focused

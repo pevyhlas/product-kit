@@ -40,6 +40,10 @@ only a pointer to the format. See [Running a change](../workflows/change.md).
 For projects with a UI, the optional L1 [design summary](../workflows/spec.md#layout) uses the
 installed `design-template.md`; no separate command is needed.
 
+The installed `pr-state.sh` and `ci-wait.sh` scripts collect
+[GitHub PR and exact-head CI evidence](ci-gates.md#pr-and-ci-evidence); they are not slash
+commands or gates.
+
 ## Installed version and spec layout
 
 The `status.sh` and `doctor.sh` adoption summary distinguishes the recorded installation

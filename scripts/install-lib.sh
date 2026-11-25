@@ -23,7 +23,7 @@ install_file_targets() { # source-path harnesses options [literal output prefix]
             case "$harnesses" in *' opencode '*) printf '%s.opencode/commands/%s\n' "$prefix" "$base" || return 1 ;; esac ;;
         workflows/*.md) printf '%s.prdkit/workflows/%s\n' "$prefix" "$base" ;;
         scripts/init.sh) ;;
-        scripts/*.sh|scripts/agents-section.md|scripts/outcome-checkpoint.md)
+        scripts/*.sh|scripts/pr-facts.py|scripts/agents-section.md|scripts/outcome-checkpoint.md)
             printf '%s.prdkit/scripts/bash/%s\n' "$prefix" "$base" ;;
         templates/*.md)
             printf '%s.prdkit/templates/%s\n' "$prefix" "$base" || return 1

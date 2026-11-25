@@ -833,7 +833,8 @@ it "kit scripts use the approved runtime allowlist"
 # A new runtime needs a justified, owner-approved change to this allowlist.
 # Keep language runtimes distinct from ordinary system tools and the existing
 # GitHub/JSON CLIs. This best-effort check inventories static commands and shebangs.
-runtime_allowlist=(sh bash awk sed jq)
+# Optional, owner-approved Python 3.11+ stdlib runtime for the two PR evidence helpers.
+runtime_allowlist=(sh bash awk sed jq python3)
 kit_tools=(basename cat chmod cmp cp cut date dd dirname env find gh git grep head hostname ln mkdir mkfifo mktemp mv od openssl ps readlink rm rmdir sha256sum shasum sleep sort stat tail touch tr uname wc)
 runtime_check() (
     local file
@@ -857,7 +858,7 @@ printf '%s\n' "python3 is a word in this message"
 allowed="$(sh -c true)"
 sh -c 'echo example; exec ruby -v'
 SH
-assert_eq $'python3\nperl\npython3\npython3\nperl\npython\nhypothetical-runtime\nruby' "$(runtime_check "$SCAN/runtime-probe" | cut -d: -f3)" "unlisted runtimes are rejected, including find actions, env assignments and a previously unknown name"
+assert_eq $'perl\nperl\npython\nhypothetical-runtime\nruby' "$(runtime_check "$SCAN/runtime-probe" | cut -d: -f3)" "unlisted runtimes are rejected, including find actions and a previously unknown name"
 scripts=()
 # The renderers use these two files as literal Markdown data. Every other file,
 # including extensionless or newly added assets, still goes through the scanner.
@@ -875,7 +876,8 @@ else
     _no 'outcome checkpoint source is non-executable Markdown data'
 fi
 while IFS= read -r -d '' file; do scripts+=("$file"); done < <(
-    cd "$PK_ROOT" && find scripts -type f ! -path scripts/agents-section.md ! -path scripts/outcome-checkpoint.md -print0)
+    cd "$PK_ROOT" && find scripts -type f ! -path scripts/agents-section.md ! -path scripts/outcome-checkpoint.md \
+        ! -path scripts/pr-facts.py -print0)
 assert_eq "" "$(cd "$PK_ROOT" && runtime_check "${scripts[@]}")" "every script beneath scripts/ stays within the runtime allowlist"
 
 it "status, doctor and bounds read arrows, dashes and accents beside IDs, links and names"

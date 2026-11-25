@@ -11,6 +11,10 @@ change by change.
 
 ## [Unreleased]
 
+### Added
+
+- `pr-state.sh` snapshots GitHub PR facts and `ci-wait.sh` waits for required checks on an exact head, with optional signature-based job reruns.
+
 ## [3.1.1] — 2026-11-25 — focused spec retrieval
 
 ### Added
