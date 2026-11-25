@@ -99,29 +99,48 @@ github_review_policy() {
     RC_ERROR=""
 }
 
-github_review_fetch() { # URL private-work expected-head expected-base
-    local url="$1" work="$2" expected="$3" base="$4" repo number query cursor="" next count=0 total="" page_total
-    local re='^https://github\.com/([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)/pull/([1-9][0-9]*)$'
-    RC_ERROR='--pr must be a github.com pull request URL'
-    [[ "$url" =~ $re ]] || return 1
-    repo="${BASH_REMATCH[1]}"; number="${BASH_REMATCH[2]}"
-    RC_ERROR='online review checks require gh and jq'
-    command -v gh >/dev/null && command -v jq >/dev/null || return 1
+github_review_page() { # repo number cursor; exec in a dedicated process
+    local repo="$1" number="$2" cursor="$3" query args=()
     query='query PrdkitReviews($owner:String!, $name:String!, $number:Int!, $endCursor:String) {
-      repository(owner:$owner,name:$name) { pullRequest(number:$number) {
+      repository(owner:$owner,name:$name) { nameWithOwner pullRequest(number:$number) {
         number state headRefOid baseRefName author { ... on User { databaseId } ... on Bot { databaseId } }
         reviews(first:100,after:$endCursor) { totalCount nodes {
           fullDatabaseId state submittedAt commit { oid } author { ... on User { databaseId } ... on Bot { databaseId } }
         } pageInfo { hasNextPage endCursor } }
       } }
     }'
+    [ -z "$cursor" ] || args=(-f "endCursor=$cursor")
+    exec gh api graphql --hostname github.com -f query="$query" -f owner="${repo%/*}" -f name="${repo#*/}" \
+        -F number="$number" ${args[@]+"${args[@]}"}
+}
+
+# Evidence only. Input is validated account<TAB>submittedAt<TAB>JSON records
+# in GitHub page order. Full ISO seconds sort lexically; a tie goes to the
+# later submission in host order, as in the policy replay below.
+github_review_latest() {
+    LC_ALL=C awk -F '\t' '
+        {
+            account="id:" $1
+            if (!(account in time) || $2 >= time[account]) {
+                time[account]=$2
+                latest[account]=$3
+            }
+        }
+        END { for (account in latest) print latest[account] }'
+}
+
+github_review_fetch() { # URL private-work expected-head expected-base
+    local url="$1" work="$2" expected="$3" base="$4" repo number cursor="" next count=0 total="" page_total
+    local re='^https://github\.com/([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)/pull/([1-9][0-9]*)$'
+    RC_ERROR='--pr must be a github.com pull request URL'
+    [[ "$url" =~ $re ]] || return 1
+    repo="${BASH_REMATCH[1]}"; number="${BASH_REMATCH[2]}"
+    RC_ERROR='online review checks require gh and jq'
+    command -v gh >/dev/null && command -v jq >/dev/null || return 1
     RC_ERROR='Incomplete, malformed or non-advancing GitHub review pages'
     : > "$work/pages"; : > "$work/cursors"
     while :; do
-        local args=()
-        [ -z "$cursor" ] || args=(-f "endCursor=$cursor")
-        gh api graphql --hostname github.com -f query="$query" -f owner="${repo%/*}" -f name="${repo#*/}" \
-            -F number="$number" ${args[@]+"${args[@]}"} > "$work/page" || return 1
+        (github_review_page "$repo" "$number" "$cursor") > "$work/page" || return 1
         jq -esc --argjson number "$number" '
           def id: type=="number" and .>0 and .==floor and .<9007199254740992;
           def sha: type=="string" and test("^[0-9a-f]{40}\\z");

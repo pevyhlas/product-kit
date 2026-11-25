@@ -5,14 +5,22 @@ set -euo pipefail
 : "${GH_STUB_DIR:?use_gh_stub must select a fixture directory}"
 printf '%s\n' "$*" >> "$GH_STUB_DIR/requests"
 [ "${GH_STUB_OFFLINE:-false}" != true ] || exit 1
+if [ "$*" = 'repo view --json nameWithOwner,url' ]; then
+    printf '%s\n' '{"nameWithOwner":"owner/repo","url":"https://github.com/owner/repo"}'
+    exit
+fi
 [ "${1:-}" = api ] || { echo 'gh stub: expected api' >&2; exit 2; }
 shift
-endpoint=""; query=""; filter=""; paginate=false
+endpoint=""; query=""; filter=""; paginate=false; method=GET; include=false; slurp=false; escapes=false
 owner=owner; name=repo; number=1; after=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         graphql) endpoint=graphql ;;
         --paginate) paginate=true ;;
+        --slurp) slurp=true ;;
+        --include) include=true ;;
+        --allow-escape-sequences) escapes=true ;;
+        --method) shift; method="$1" ;;
         --jq|-q) shift; filter="$1" ;;
         --header|-H) shift ;;
         --hostname) shift; [ "$1" = github.com ] || exit 1 ;;
@@ -51,6 +59,30 @@ override="$GH_STUB_DIR/routes/$(printf '%s' "$route" | tr '/?&=:' '_____').json"
 if [ "$operation" = PrdkitReviews ] && [ -f "$GH_STUB_DIR/routes/graphql_PrdkitReviews-$number.json" ]; then
     override="$GH_STUB_DIR/routes/graphql_PrdkitReviews-$number.json"
 fi
+if [ "$operation" = PrdkitCheckFacts ]; then
+    if [ -f "$GH_STUB_DIR/rerun" ] && [ -f "$GH_STUB_DIR/routes/graphql_PrdkitCheckFacts-rerun.json" ]; then
+        override="$GH_STUB_DIR/routes/graphql_PrdkitCheckFacts-rerun.json"
+    elif [ -n "$after" ]; then
+        case "$after" in cursor-[0-9]*) override="$GH_STUB_DIR/routes/graphql_PrdkitCheckFacts-$after.json" ;; *) exit 2 ;; esac
+    fi
+fi
+if [ "$operation" = PrdkitPRFacts ] && [ -f "$GH_STUB_DIR/routes/graphql_PrdkitPRFacts-later.json" ]; then
+    if [ -f "$GH_STUB_DIR/read-pr-facts" ]; then
+        override="$GH_STUB_DIR/routes/graphql_PrdkitPRFacts-later.json"
+    fi
+    : > "$GH_STUB_DIR/read-pr-facts"
+fi
+case "$route" in
+    actions/jobs/*/rerun)
+        [ "$method" = POST ] && $include && [ -f "$override" ] || exit 2
+        printf '%s\n' "$route" >> "$GH_STUB_DIR/rerun"
+        cat "$override"; exit ;;
+    actions/jobs/*/logs)
+        [ "$method" = GET ] && $include && $escapes && [ -f "${override%.json}.txt" ] || exit 2
+        cat "${override%.json}.txt"; exit ;;
+    rules/branches/*)
+        $paginate && $slurp || exit 2 ;;
+esac
 if [ -f "$override" ]; then emit < "$override"; exit; fi
 if [ "$endpoint" = graphql ]; then
     case "$operation" in
@@ -73,7 +105,7 @@ if [ "$endpoint" = graphql ]; then
                 [ "$next" -ge "$total" ] || more=true
                 jq -n --slurpfile pr "$pr" --slurpfile reviews "$reviews" \
                     --argjson offset "$offset" --argjson size "$page_size" --argjson more "$more" --arg cursor "cursor-$next" '
-                    $pr[0] as $p | {data:{repository:{pullRequest:{
+                    $pr[0] as $p | {data:{repository:{nameWithOwner:"owner/repo",pullRequest:{
                         number:$p.number, author:$p.author,
                         state:(if $p.merged_at!=null then "MERGED" else ($p.state|ascii_upcase) end),
                         headRefOid:$p.head.sha, headRefName:$p.head.ref, baseRefName:$p.base.ref,
