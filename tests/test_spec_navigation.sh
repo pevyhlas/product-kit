@@ -379,7 +379,7 @@ it "GFM cells determine part definitions independent of outer and escaped pipes"
 for variant in one escaped bare; do
     case "$variant" in
         one) header='| Part'; delimiter='|---|'; row='| P1 Real definition |' ;;
-        escaped) header='| Part | State \| Detail |'; delimiter='|---|---|'; row='| P1 Real \| definition | test |' ;;
+        escaped) header='| Part | State \| Detail |'; delimiter='|---|---|'; row='| P1 Café \| 雪 | test |' ;;
         bare) header='Part | State'; delimiter='--- | ---'; row='P1 Real definition | test' ;;
     esac
     printf '%s\n' '# Spec' '## Parts' "$header" "$delimiter" "$row" \

@@ -35,14 +35,10 @@ SPEC_BULLET_ID_AWK='function spec_bullet_id(s) {
     return s
 }'
 
-SPEC_HEADING_AWK='function spec_unindent(line) {
-    if (!match(line, /^ +/)) return line
-    return substr(line, (RLENGTH > 3 ? 3 : RLENGTH) + 1)
-}
-function spec_heading(line,   depth) {
-    line = spec_unindent(line)
-    if (!match(line, /^#+/) || RLENGTH > 6 || substr(line, RLENGTH + 1) !~ /^([ \t]|$)/) return 0
-    depth = RLENGTH; heading_title = substr(line, depth + 1)
+SPEC_HEADING_AWK='function spec_heading(line,   depth) {
+    if (!match(line, /^#+/) || RLENGTH > 6) return 0
+    depth = RLENGTH; heading_title = substr(line, RLENGTH + 1)
+    if (heading_title !~ /^([ \t]|$)/) return 0
     sub(/[ \t]+#+[ \t]*$/, "", heading_title)
     gsub(/^[ \t]+|[ \t]+$/, "", heading_title)
     return depth

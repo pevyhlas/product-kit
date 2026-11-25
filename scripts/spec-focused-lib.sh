@@ -9,6 +9,7 @@ spec_focused() { # snapshot index|section selector expected-lines expected-bytes
         -v expected_lines="$4" -v expected_bytes="$5" \
         "$SPEC_HEADING_AWK $SPEC_BULLET_ID_AWK $SPEC_PART_AWK $SPEC_RECORD_ROW_AWK"'
         function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+        function ltrim(s) { sub(/^[ \t]+/, "", s); return s }
         function norm(s) { s = trim(s); gsub(/[ \t]+/, " ", s); return tolower(s) }
         function indent(s, col,   i,c,n) {
             n = col
@@ -42,24 +43,24 @@ spec_focused() { # snapshot index|section selector expected-lines expected-bytes
         }
         # GFM protects pipes (also in inline code) with a preceding backslash.
         # Outer pipes are optional and not counted as cells.
-        function cells(s, field,   i,c,n,cell,outer) {
+        function cells(s, field,   n,cell,chunk,outer) {
             s = trim(s); sub(/^\|/, "", s); n = 1
-            for (i = 1; i <= length(s); i++) {
-                c = substr(s,i,1)
-                if (c == "\\" && substr(s,i+1,1) == "|") { cell = cell "|"; i++; continue }
-                if (c == "|") {
-                    field[n++] = trim(cell); cell = ""
-                    if (i == length(s)) outer = 1
-                } else cell = cell c
+            while (match(s, /\|/)) {
+                chunk = substr(s,1,RSTART-1); s = substr(s,RSTART+1)
+                if (sub(/\\$/, "", chunk)) cell = cell chunk "|"
+                else {
+                    field[n++] = trim(cell chunk); cell = ""
+                    if (s == "") outer = 1
+                }
             }
             if (outer) return n - 1
-            field[n] = trim(cell); return n
+            field[n] = trim(cell s); return n
         }
         function table_header(s, base,   next_line,w,f,d,n,m,i) {
             if (line_no == NR) return 0
             next_line = raw[line_no+1]; w = indent(next_line, 0)
             if (w < base || w - base >= 4) return 0
-            next_line = substr(next_line, lead+1)
+            next_line = ltrim(next_line)
             if (next_line ~ /^-+[ \t]*$/) return 0 # This is a Setext underline, not a delimiter.
             m = cells(next_line, d)
             for (i = 1; i <= m; i++) if (d[i] !~ /^:?-+:?$/) return 0
@@ -100,9 +101,10 @@ spec_focused() { # snapshot index|section selector expected-lines expected-bytes
             if (!match(s, /^```+|^~~~+/)) return 0
             return RLENGTH
         }
-        function list_mark(s) {
+        function list_mark(s,   tenth) {
             if (match(s, /^[-+*]([ \t]|$)/)) return 1
-            return match(s, /^[0-9]+[.)]([ \t]|$)/) && substr(s,1,10) !~ /^[0-9]+$/
+            tenth = substr(s,10,1)
+            return (tenth == "" || !index("0123456789", tenth)) && match(s, /^[0-9]+[.)]([ \t]|$)/)
         }
         function html_block(s) {
             return s ~ /^<[A-Za-z!?\/]/ &&
@@ -116,10 +118,11 @@ spec_focused() { # snapshot index|section selector expected-lines expected-bytes
         function reference_title(s) {
             return s ~ /^("([^"\\]|\\.)*"|\047([^\047\\]|\\.)*\047|\(([^()\\]|\\.)*\))[ \t]*$/
         }
-        function naked_destination(s,   i,c,depth) {
+        function naked_destination(s,   i,c,depth,following) {
             for (i = 1; i <= length(s); i++) {
                 c = substr(s,i,1)
-                if (c == "\\" && substr(s,i+1,1) ~ /[[:punct:]]/) i++
+                following = substr(s,i+1,1)
+                if (c == "\\" && following != "" && index("!\"#$%&\047()*+,-./:;<=>?@[\\]^_`{|}~", following)) i++
                 else if (c == "(") depth++
                 else if (c == ")" && --depth < 0) return 0
             }
@@ -131,7 +134,7 @@ spec_focused() { # snapshot index|section selector expected-lines expected-bytes
             if (rest == "" && at < NR) {
                 next_text = raw[++at]; w = indent(next_text,0)
                 if (w < base) return 0
-                rest = substr(next_text,lead+1)
+                rest = ltrim(next_text)
                 if (w - base < 4 && (interrupts(rest) || rest ~ /^-+[ \t]*$/)) return 0
             }
             if (!match(rest, /^(<([^<>\\ \t]|\\.)*>|[^<> \t]+)([ \t]|$)/)) return 0
@@ -140,7 +143,7 @@ spec_focused() { # snapshot index|section selector expected-lines expected-bytes
             if (substr(dest,1,1) != "<" && !naked_destination(dest)) return 0
             if (title == "" && at < NR) {
                 next_text = raw[at+1]; w = indent(next_text,0)
-                next_text = substr(next_text,lead+1)
+                next_text = ltrim(next_text)
                 if (w >= base && next_text ~ /^["\047(]/) { title = next_text; at++ }
             }
             if (title != "") {
@@ -148,7 +151,7 @@ spec_focused() { # snapshot index|section selector expected-lines expected-bytes
                 closed = reference_title(title)
                 for (i = at+1; i <= NR && !closed; i++) {
                     next_text = raw[i]; w = indent(next_text,0)
-                    next_text = substr(next_text,lead+1)
+                    next_text = ltrim(next_text)
                     if (w < base || next_text == "" || (w - base < 4 && interrupts(next_text))) break
                     title = title " " next_text
                     if (reference_title(title)) { at = i; closed = 1 }
@@ -159,12 +162,12 @@ spec_focused() { # snapshot index|section selector expected-lines expected-bytes
             return 1
         }
         function scan(s,   col,t,rel,base,k,depth,blank,mark,marker,pad,body,previous_lists) {
-            col = indent(s,0); t = substr(s,lead+1); blank = t == ""
+            col = indent(s,0); t = ltrim(s); blank = t == ""
             if (fence != "") {
                 if (blank || col >= fence_base) {
                     k = fence_run(t)
                     if (col - fence_base < 4 && k >= fence_size && substr(t,1,1) == fence &&
-                        substr(t,k+1) ~ /^[ \t]*$/) fence = ""
+                        t ~ /^(`+|~+)[ \t]*$/) fence = ""
                     return
                 }
                 fence = "" # Dedenting ends a list container and its literal block.
@@ -215,7 +218,7 @@ spec_focused() { # snapshot index|section selector expected-lines expected-bytes
                 }
                 if (!list_mark(t)) break
                 marker = substr(t,1,RLENGTH); sub(/[ \t]$/, "", marker); mark = length(marker)
-                body = substr(t,mark+1); pad = indent(body,col+mark)
+                body = t; sub(/^([-+*]|[0-9]+[.)])/, "", body); pad = indent(body,col+mark)
                 if (paragraph && base == paragraph_base &&
                     ((length(marker) > 1 && marker !~ /^1[.)]$/) || lead == length(body))) break
                 # Keep the source ID convention (bold unordered item), not arbitrary citations.
@@ -227,7 +230,7 @@ spec_focused() { # snapshot index|section selector expected-lines expected-bytes
                 if (pad > 4) { fail("Indented code blocks are not supported."); return }
                 col += mark + pad
                 base = list_col[++lists] = col; rel = 0
-                t = substr(body,lead+1); paragraph = table = previous_lists = 0
+                t = ltrim(body); paragraph = table = previous_lists = 0
             }
             if (table) { table_row(t); return }
             if (!paragraph && reference(t,base)) return
