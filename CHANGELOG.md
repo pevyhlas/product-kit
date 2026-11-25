@@ -28,6 +28,10 @@ change by change.
   match the authenticated event/environment, or the fetched policy tip differs from the
   API-bound commit. The pinned branch's policy must still approve the PR target.
 
+### Fixed
+
+- The review gate enforces and names the highest trusted tier across every change record touched in the branch's history (#197).
+
 ## [3.0.0] — 2026-11-24 — native GitHub review gate and optional UI design summary
 
 ### Added

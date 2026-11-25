@@ -65,6 +65,8 @@ review_record_format() { # record file -> 0 current, 1 unreadable, 2 unsupported
 # or by merging away a branch-side commit. No verdict parsing or clearance.
 review_record_history() ( # root id base head work -> first diagnostic, if any
     local root="$1" id="$2" base="$3" head="$4" work="$5" start entry commit meta mode new_mode old new blob expected checked=0
+    # Object-read settings are intentionally local to this scan.
+    # shellcheck disable=SC2030
     export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
     set -o pipefail
     spec_objects_local "$root" &&
@@ -110,4 +112,50 @@ review_record_history() ( # root id base head work -> first diagnostic, if any
             return 0
         fi
     done < "$work/record-unique"
+)
+
+# Convert NUL-delimited Git paths to an injective line format for portable awk.
+# Escape '%' first; tabs, spaces and non-ASCII bytes can be kept verbatim.
+review_encode_record_paths() { # file -> paths with %, LF and CR escaped
+    local file
+    while IFS= read -r -d '' file; do
+        [ -n "$file" ] || return 1
+        case "$file" in specs/changes/*.md) ;; *) continue ;; esac
+        file="${file//%/%25}"
+        file="${file//$'\n'/%0A}"
+        file="${file//$'\r'/%0D}"
+        printf '%s\n' "$file" || return 1
+    done < "$1" || return 1
+    [ -z "$file" ]
+}
+
+# Tier attribution is narrower than format validation. Keep the net diff and
+# every branch-side commit, but do not count an unchanged import from the target.
+review_touched_paths() ( # root start head work -> escaped paths, one per line
+    local root="$1" start="$2" head="$3" work="$4"
+    # Set object-read settings independently of the format scan.
+    # shellcheck disable=SC2031
+    export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 LC_ALL=C
+    set -o pipefail
+    git -C "$root" rev-list --boundary --parents "$start..$head" > "$work/tier-commits" &&
+        verify_lf_file "$work/tier-commits" allow-empty || return 1
+    # With a single merge base, the boundary parents are exactly the parents
+    # also reachable from the target. For a sync, compare to those parents only;
+    # for other merges, count resolutions differing from every parent. Using a
+    # combined diff preserves this rule for octopus merges too.
+    awk '
+        FNR == NR { if ($1 ~ /^-/) boundary[substr($1, 2)] = 1; next }
+        $1 !~ /^-/ {
+            parents = ""
+            if (NF > 2)
+                for (i = 2; i <= NF; i++)
+                    if ($i in boundary) parents = parents " " $i
+            if (parents != "") print $1 parents; else print
+        }
+    ' "$work/tier-commits" "$work/tier-commits" > "$work/tier-parent-diffs" || return 1
+    git -C "$root" diff-tree --no-commit-id --name-only --no-renames --ignore-submodules=none -r -z \
+        "$start" "$head" -- specs/changes/ > "$work/tier-diff" &&
+        git -C "$root" diff-tree --stdin --root --no-commit-id --name-only --no-renames --ignore-submodules=none -c -r -z \
+            -- specs/changes/ < "$work/tier-parent-diffs" >> "$work/tier-diff" || return 1
+    review_encode_record_paths "$work/tier-diff" | awk '!seen[$0]++'
 )
