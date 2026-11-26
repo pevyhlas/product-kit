@@ -11,6 +11,8 @@ change by change.
 
 ## [Unreleased]
 
+## [3.1.5] — 2026-11-26 — tier least privilege
+
 ### Added
 
 - Agent tier maps can opt into Claude tool allowlists and ordered resource-scoped OpenCode V2 permissions. Claude tool lists compose with skill projection and restore the previous native `tools:` field on opt-out.
