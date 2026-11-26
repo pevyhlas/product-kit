@@ -11,10 +11,32 @@ change by change.
 
 ## [Unreleased]
 
+## [3.2.0] — 2026-11-26 — lean review package
+
 ### Changed
 
 - Review packages open with the full diff, verified facts summary when available, and a required obligations section. It keeps trusted policy separate and retains binding base obligations even if the change drops a parent or citation. Oversized or non-text excerpts and unresolved base sources require the full packaged context. `evidence/facts/` is reserved for the facts pair; collector commands are marked for maintainer reruns only.
 - Review packages resolve Markdown reference links used in captured obligations, even when definitions are outside the excerpt. Undefined full or collapsed references require full context; ordinary brackets and task markers do not.
+
+### Changed (breaking)
+
+- `build-review-package.sh` reserves `evidence/facts/` for the verified facts pair. An
+  `--evidence` input named `facts` or under `facts/` (any ASCII case) is refused, even without
+  `--facts`; 3.1.5 copied it. Attach a `facts.sh` pack with `--facts`, which copies the cached
+  pair to `evidence/facts/{summary.md,index.json}`, instead of passing its files with
+  `--evidence`. Move other evidence out of a top-level `facts/` directory before attaching it.
+  Packages built by earlier versions are not reused: the completion format changed.
+- The facts key moves from 3 to 4. `facts.sh --verify` fails on a pack collected by 3.1.x, and
+  `--facts` copies files without upgrading them. Recollect cached or CI-restored facts packs
+  with `facts.sh` before verifying, attaching or restoring them.
+- `context-manifest.tsv` keeps its eight columns, but rows now carry BASE and HEAD provenance.
+  `source_rev` is `BASE` for unchanged or binding base text, not always `HEAD`, and the
+  `obligation` labels changed: an explicit `--context` snapshot, always `whole-file` in 3.1.5, is
+  now `reference-shared`, `reference-proposed` or `explicit-snapshot`, and automatic canon rows
+  labelled `canon` can become `reference-*` rows. Excerpt rows can share a snapshot's
+  `source_path` and `source_blob`. Tools that read the manifest should select an explicit snapshot
+  by its exact `artifact` path (`context/<repo-relative-path>`), then check `source_blob` and read
+  `source_rev`, not match HEAD-only rows or 3.1 labels.
 
 ## [3.1.5] — 2026-11-26 — tier least privilege
 
