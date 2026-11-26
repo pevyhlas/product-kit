@@ -32,10 +32,13 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
         # Inspect only potential aliases for the reserved neutral key. This is not
         # a validator for unrelated YAML keys. Decode ASCII hex escapes by value;
         # other valid escapes cannot contribute a letter to "skills".
+        function strip_properties(s) {
+            while (sub(/^(!<[^>]*>|[!&][^ \t]*)([ \t]+|$)/, "", s)) {}
+            return s
+        }
         function possible_skills_key(s, explicit,   q,c,i,j,n,d,cp,text,tail,escaped,invalid) {
-            if (sub(/^\?[ \t]+/, "", s)) { explicit = 1; s = trim(s) }
-            while (sub(/^(!<[^>]*>|[!&][^ \t]*)[ \t]+/, "", s)) {}
-            if (s ~ /^skills[ \t]*:([ \t]|$)/ || (explicit && s ~ /^skills([ \t]+#.*|[ \t]*)$/)) return 1
+            s = strip_properties(s)
+            if (explicit ? s ~ /^skills([ \t]+#.*|[ \t]*)$/ : s ~ /^skills[ \t]*:([ \t]|$)/) return 1
             q = substr(s, 1, 1)
             if (q != "\"" && q != "\047") return 0
             for (i = 2; i <= length(s); i++) {
@@ -43,7 +46,8 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
                 if (c == q) {
                     if (q == "\047" && substr(s, i+1, 1) == q) { text = text q; i++; continue }
                     tail = substr(s, i+1) # awk-bytes-ok: begins immediately after the ASCII closing quote
-                    if (tail !~ /^[ \t]*:([ \t]|$)/ && !(explicit && tail ~ /^([ \t]+#.*|[ \t]*)$/)) return 0
+                    if (explicit ? tail !~ /^([ \t]+#.*|[ \t]*)$/ : tail !~ /^[ \t]*:([ \t]|$)/)
+                        return explicit && index(s, "skills") && tail !~ /^[ \t]*:([ \t]|$)/
                     return text == "skills" || invalid
                 }
                 if (q != "\"" || c != "\\") { text = text c; continue }
@@ -66,7 +70,77 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
                 if (cp > 1114111 || (cp >= 55296 && cp <= 57343)) invalid = 1
                 text = text (cp > 0 && cp < 128 ? sprintf("%c", cp) : "?")
             }
-            return escaped
+            return escaped || (explicit && index(s, "skills"))
+        }
+        # Accumulate just the scalar node of a root "? ..." key. Property-only
+        # lines can precede the node, whose scalar style controls line joining.
+        function explicit_start(s) {
+            explicit_key = NR
+            explicit_text = explicit_style = ""
+            explicit_indent = explicit_strip = explicit_more = explicit_blanks = explicit_lead = explicit_ambiguous = 0
+            sub(/^\?[ \t]*/, "", s)
+            explicit_line(s)
+        }
+        function linebreaks(n,   s) {
+            while (n-- > 0) s = s "\n"
+            return s
+        }
+        function explicit_line(s,   n,part,more,sep,i) {
+            if (explicit_style != "") {
+                n = indent(s)
+                if (s ~ /^ *$/ && (!explicit_indent || n <= explicit_indent)) {
+                    if (!explicit_indent && n > explicit_lead) explicit_lead = n
+                    explicit_blanks++; return
+                }
+                if (!explicit_indent) {
+                    explicit_indent = n
+                    if (explicit_lead > n) explicit_ambiguous = 1
+                }
+                if (n < explicit_indent) {
+                    if (s !~ /^[ \t]*#/) {
+                        explicit_ambiguous = 1
+                        explicit_text = explicit_text "\n" trim(s)
+                    }
+                    return
+                }
+                part = substr(s, explicit_indent + 1) # awk-bytes-ok: skip only verified leading ASCII spaces
+                more = n > explicit_indent || part ~ /^\t/
+                sep = explicit_blanks + (explicit_text != "")
+                if (explicit_style == ">" && explicit_text != "" && !explicit_more && !more) {
+                    if (!explicit_blanks) explicit_text = explicit_text " "
+                    sep = explicit_blanks
+                }
+                explicit_text = explicit_text linebreaks(sep) part
+                explicit_blanks = 0; explicit_more = more; return
+            }
+            part = trim(s)
+            if (explicit_text == "") {
+                part = strip_properties(part)
+                if (part ~ /^(#|$)/) return
+                if (block_scalar_header(part)) {
+                    explicit_style = substr(part, 1, 1)
+                    explicit_strip = part ~ /^[|>][1-9]?-/
+                    explicit_indent = block_scalar_indent(part)
+                    return
+                }
+            } else if (part == "") { explicit_blanks++; return }
+            else if (quote != "" || part !~ /^#/) {
+                # A double-quoted backslash-newline suppresses ordinary folding.
+                for (i = length(explicit_text); i > 0 && substr(explicit_text, i, 1) == "\\"; i--) {}
+                if (quote == "\"" && (length(explicit_text) - i) % 2) sub(/\\$/, "", explicit_text)
+                else if (!explicit_blanks) explicit_text = explicit_text " "
+            } else return
+            explicit_text = explicit_text linebreaks(explicit_blanks) part; explicit_blanks = 0
+        }
+        function explicit_finish() {
+            if (!explicit_key || bad_root) { explicit_key = 0; return }
+            if (explicit_style != "") {
+                # Clip/keep preserve at least one newline in a nonempty block.
+                if (!explicit_strip && explicit_text != "") explicit_text = explicit_text "\n"
+                if (explicit_text == "skills" || (explicit_ambiguous && index(explicit_text, "skills"))) bad_root = explicit_key
+            } else if (possible_skills_key(explicit_text, 1) ||
+                (explicit_text ~ /^[*@`]/ && index(explicit_text, "skills"))) bad_root = explicit_key
+            explicit_key = 0
         }
         # Split a single-line flow collection or strip a trailing comment. Commas
         # and comments inside quoted strings are data. No nesting or double-quote escapes.
@@ -173,12 +247,6 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
         function ownership_error(ln) {
             report(ln, "", "cannot establish Claude skill projection ownership; restore the generated comments and fields from a known-good projection before rendering")
         }
-        function marker_like(s) {
-            s = tolower(s)
-            return s ~ /^(#+[ \t]*)?([[:alnum:]_.-]+[-_. ]+)?skill[-_. ]+projection([-_.][[:alnum:]_.-]+)?([ \t]*([:=]|$)|[ \t]+(begin|end|generated-|prior-))/ ||
-                s ~ /^#+.*:[ \t]*(generated-skills|prior-skills)[ \t]+skills:/ ||
-                s ~ /^#+.*:[ \t]*(generated-tool|prior-tool)[ \t]+(tools:|-[ \t]*skill([ \t]|$))/
-        }
         function native_skills_error(ln) {
             report(ln, "", "put native Claude skills on one line as a flow list ([a, b]) before rendering")
         }
@@ -276,13 +344,22 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
                 if ($0 != "---" && !header_bad) header_bad = NR
                 closed = 1; exit
             }
-            if (mode == "claude" && marker_like(trim($0))) {
-                marked = 1
+            if (mode == "claude" && !quote && /^[ \t]*#/) {
                 comment_line = $0; sub(/^[ \t]+/, "", comment_line)
-                if (!quote && !flow && !(block && indent($0) > block_indent) && index(comment_line, mark) == 1)
-                    marker(substr(comment_line, length(mark) + 1)) # awk-bytes-ok: strip the verified ASCII marker prefix
-                else ownership_error(NR)
-                if (!quote && !flow) next
+                if (!yaml_block_content($0) && index(comment_line, "# prdkit-skill-projection:") == 1) {
+                    marked = 1
+                    if (flow)
+                        report(NR, "", "Claude skill projection ownership records cannot be rewritten inside a YAML flow collection")
+                    else if (index(comment_line, mark) == 1)
+                        marker(substr(comment_line, length(mark) + 1)) # awk-bytes-ok: strip the verified ASCII marker prefix
+                    else ownership_error(NR)
+                    next
+                }
+            }
+            if (mode == "neutral" && explicit_key) {
+                if (quote || flow || /^[ \t]|^$/) explicit_line($0)
+                else if (/^#/) {} # Comments between an explicit key and its node/value.
+                else explicit_finish()
             }
             if (!quote && !flow && /^[ \t]*(#|$)/) next
             if (entry && (/^[ \t]/ || /^-[ \t]/)) {
@@ -307,23 +384,18 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
                 if (mode == "neutral" && !mapping && !quote && !flow && pair(trim($0)) && key == "skills") {
                     seen = 1; unreadable(NR)
                 }
-                if (mode == "neutral" && explicit_key && !quote && !flow) {
-                    if (!bad_root && possible_skills_key(trim($0), 1)) bad_root = explicit_key
-                    explicit_key = 0
-                }
-                if (!mapping && !bad_root) bad_root = NR
+                if (mode != "neutral" && !mapping && !bad_root) bad_root = NR
                 scan_yaml($0); next
             }
             if (!pair($0) || (mode != "metadata" && $0 !~ /^[-A-Za-z0-9_.\057]+:([ \t]|$)/)) {
                 if (mode == "neutral") {
                     mapping = 1
-                    if (!bad_root && possible_skills_key($0, explicit_key != 0)) bad_root = explicit_key ? explicit_key : NR
-                    explicit_key = ($0 ~ /^\?([ \t]+#.*|[ \t]*)$/ ? NR : 0)
+                    if ($0 ~ /^\?([ \t]|$)/) explicit_start($0)
+                    else if (!bad_root && possible_skills_key($0, 0)) bad_root = NR
                     root_key = ""; single_line = 0
                 } else if (!bad_root) bad_root = NR
                 scan_yaml($0); next
             }
-            explicit_key = 0
             mapping = 1
             root_key = key
             single_line = key ~ /^(name|description|tier|harnesses|model|variant|domain|source|library-ref|library-agent)$/
@@ -351,6 +423,7 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
         }
         END {
             if (entry) finish_entry()
+            if (mode == "neutral") explicit_finish()
             if (mode == "neutral" && bad_root)
                 report(bad_root, "", "unsupported neutral frontmatter key for skills; use the plain top-level skills: key")
             if (mode == "neutral" && !seen) exit

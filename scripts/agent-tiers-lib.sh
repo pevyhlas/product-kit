@@ -516,10 +516,24 @@ AT_YAML_SCAN_AWK='
     function indent(s) { match(s, /^ */); return RLENGTH }
     function yaml_blank(c) { return c == " " || c == "\t" }
     function flow_delimiter(c) { return c != "" && index("[]{},", c) > 0 }
+    function block_scalar_header(s) {
+        return s ~ /^[|>]([1-9][+-]?|[+-][1-9]?)?([ \t]+#.*|[ \t]*)$/
+    }
+    function block_scalar_indent(s) {
+        if (!match(s, /^[|>][+-]?[1-9]/)) return 0
+        return substr(s, RLENGTH, 1) + 0
+    }
+    function yaml_block_content(s,   n) {
+        if (!block || s ~ /^[ \t]*$/) return 0
+        n = indent(s)
+        if (!block_content_indent && n > block_indent) block_content_indent = n
+        if (block_content_indent && n >= block_content_indent) return 1
+        block = 0; return 0
+    }
     function scan_yaml(s,   n,i,c,nextc,prev,r,owner,start) {
         n = indent(s)
         if (quote == "" && !flow) {
-            if (s ~ /^[ \t]*(#|$)/ || (block && n > block_indent)) return
+            if (yaml_block_content(s) || s ~ /^[ \t]*(#|$)/) return
             block = 0
             if (plain && n > plain_indent) return
             plain = 0; node = 1; done = 0
@@ -559,8 +573,11 @@ AT_YAML_SCAN_AWK='
             if ((c == "?" || (!flow && c == "-")) && (nextc == "" || yaml_blank(nextc))) {
                 owner = key_indent; continue
             }
-            if (!flow && match(r, /^[|>]([1-9][+-]?|[+-][1-9]?)?([ \t]+#.*|[ \t]*)$/)) {
-                block = 1; block_indent = owner; return
+            if (!flow && block_scalar_header(r)) { # awk-bytes-ok: r starts at an ASCII block scalar indicator
+                block = 1; block_indent = owner
+                n = block_scalar_indent(r) # awk-bytes-ok: r starts at the same ASCII indicator
+                block_content_indent = n ? owner + n : 0
+                return
             }
             if (c == "[" || c == "{") { flow++; done = plain = 0; continue }
             node = done = 0

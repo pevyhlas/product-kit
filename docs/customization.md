@@ -177,12 +177,14 @@ For a declaring agent:
 Removing the neutral `skills:` key makes the next render undo its generated Claude entries:
 it restores a prior single-line `skills:` list (or removes the added field) and removes only
 the renderer-added `Skill` tool. Before opting in, put any existing native Claude `skills:`
-block list on one line as a flow list (`[a, b]`). Keep the generated `# prdkit-skill-projection:` comments;
+block list on one line as a flow list (`[a, b]`). Keep the generated
+`# prdkit-skill-projection:` comments, including the prefix and record text;
 `--check` reports stale entries and render refuses to guess if those comments are damaged
 or a field no longer matches its recorded values for cleanup. To change a managed inline
 tools list, first remove the declaration and render, then edit the native list and opt back
-in. Files rendered before ownership comments existed (or with all markers removed) cannot be distinguished from
-hand-owned files; reconcile them against a known-good pre-opt-in version before re-rendering.
+in. Files rendered before ownership comments existed, or with no remaining exact marker
+prefixes, cannot be distinguished from hand-owned files. Reconcile them against a known-good
+pre-opt-in version before re-rendering.
 Skill-managed frontmatter that cannot be rewritten safely is rejected (for example, a
 multiline quoted description). OpenCode regenerates the tier's permissions if that tier
 remains opted in. The renderer does not install, copy or run skill files; make them

@@ -126,7 +126,7 @@ done
 assert_contains "$(cat "$P/no-settings/claude-review.md")" "skills: [hand-owned-skill]" "Claude skills are not owned without a declaration"
 
 it "unrelated quoted and explicit neutral keys do not opt into skill validation"
-def review deep $'"notes": project-owned neutral metadata\n"m\\u0065mo": also owned by the project\n\'owner\'\'s notes\': retained\n? other-key\n: other-value'
+def review deep $'"notes": project-owned neutral metadata\n"m\\u0065mo": also owned by the project\n\'owner\'\'s notes\': retained\n? other-key\n: other-value\n? |-\n  another-key\n: other-value\n? >-\n  notes about\n  skills\n: still-an-unrelated-key\n? |\n  skills\n: the-key-has-a-trailing-newline'
 for check in render check doctor adoption; do
     case "$check" in
         render) run bash "$R" ;;
@@ -142,6 +142,42 @@ for harness in claude opencode; do
     done
 done
 def review deep
+
+it "Claude prose comments and scalar text are not ownership records"
+for shape in comment literal quoted; do
+    case "$shape" in
+        comment) awk '/^tools:/ { print "# Skill projection: configured by this project." } { print }' "$P/no-settings/claude-review.md" ;;
+        literal) awk '/^description:/ {
+            print "description: |2-"
+            print "  Example review."
+            print "  # Skill projection: configured by this project."
+            print "  # prdkit-skill-projection: begin 4"
+            next
+        } { print }' "$P/no-settings/claude-review.md" ;;
+        quoted) awk '/^description:/ {
+            print "description: \"Example review."
+            print "  # prdkit-skill-projection: begin 4"
+            print "  Still the description.\""
+            next
+        } { print }' "$P/no-settings/claude-review.md" ;;
+    esac > "$P/claude-$shape"
+    cp "$P/claude-$shape" .claude/agents/review.md
+    # No neutral description override: these bytes belong to the project.
+    awk '!/^description:/' .prdkit/agents/review.md > "$P/no-description"
+    cp "$P/no-description" .prdkit/agents/review.md
+    for check in render check doctor adoption; do
+        case "$check" in
+            render) run bash "$R" ;;
+            check) run bash "$R" --check --json ;;
+            doctor) run bash "$S/doctor.sh" --json ;;
+            adoption) run bash "$S/check-adoption.sh" --json ;;
+        esac
+        assert_eq 0 "$STATUS" "$shape is not an ownership record: $check"
+    done
+    bytes "$P/claude-$shape" .claude/agents/review.md "$shape is preserved byte-for-byte"
+    def review deep
+done
+cp "$P/no-settings/claude-review.md" .claude/agents/review.md
 # Optional external replay: run this same fixture on the base revision without
 # making the regular suite depend on access to any particular Git history.
 if [ -n "${SKILLS_REPLAY_DIR:-}" ]; then
@@ -416,7 +452,11 @@ it "quoted, escaped and explicit root keys cannot silently opt out"
 for key in '"skills": [example-read]' "'skills': [example-read]" \
     '"sk\u0069lls": [example-read]' '"\x73kill\U00000073": [example-read]' \
     '"sk\x6Zlls": [example-read]' '"sk\qlls": [example-read]' '!!str "skills": [example-read]' \
-    $'? skills\n: [example-read]' $'?\n  "skills"\n: [example-read]'; do
+    $'? skills\n: [example-read]' $'?\n  "skills"\n: [example-read]' \
+    $'? |-\n  skills\n: [example-read]' $'? >2-\n  skills\n: [example-read]' \
+    $'? !!str\n  skills\n: [example-read]' $'? !!str # node follows\n\n  skills\n: [example-read]' \
+    $'? &reserved\n  skills\n: [example-read]' $'? !!str &reserved |-2\n  skills\n\n: [example-read]' \
+    $'? !!str "ski\\\n  lls"\n: [example-read]'; do
     def review deep "$key"
     blocked "line 4: skill '<list>': unsupported neutral frontmatter key"
 done
@@ -517,9 +557,16 @@ for rerender in false true; do
     assert_eq 0 "$STATUS"
 done
 
-it "an altered ownership prefix is damage, not a new or unmanaged projection"
-for prefix in '  # local-skill-projection:' '# edited:' 'prdkit-skill-projection:'; do
-    sed "s/^# prdkit-skill-projection:/$prefix/" "$P/marked-claude" > .claude/agents/review.md
+it "only exact ownership records can be damaged"
+for damage in malformed empty partial duplicate reordered; do
+    case "$damage" in
+        malformed) sed 's/^# prdkit-skill-projection: end$/  # prdkit-skill-projection: gibberish/' "$P/marked-claude" ;;
+        empty) sed 's/^# prdkit-skill-projection: end$/  # prdkit-skill-projection:/' "$P/marked-claude" ;;
+        partial) sed '/^# prdkit-skill-projection: begin /d' "$P/marked-claude" ;;
+        duplicate) awk '/^# prdkit-skill-projection: begin / { print } { print }' "$P/marked-claude" ;;
+        reordered) awk '/^# prdkit-skill-projection: generated-skills / { held = $0; next }
+            /^# prdkit-skill-projection: prior-skills / { print; print held; next } { print }' "$P/marked-claude" ;;
+    esac > .claude/agents/review.md
     def review deep "$ids"
     blocked "cannot establish Claude skill projection ownership"
     def review deep
