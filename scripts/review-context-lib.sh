@@ -279,3 +279,65 @@ review_context_build() {
     if [ "${#EVIDENCE[@]}" -eq 0 ]; then context_gap verification "no verification evidence supplied; dispatch pending"
     else context_gap verification "caller-supplied evidence requires revision/result/applicability verification; no semantic inference"; fi
 }
+
+# Render from the same immutable artifacts the manifest binds, not from the working tree.
+# Keep whole excerpts or require the full context: never cut a rule mid-span.
+review_obligation_append() { # artifact, source label; 2 = over cap, 3 = cannot inline as text
+    local artifact="$1" label="$2" file="$PACKAGE_DIR/$1" bytes status
+    bytes="$(wc -c < "$file")" || return 1
+    [ "$((obligation_bytes + bytes))" -le "$obligation_cap" ] || return 2
+    if review_file_without_nul "$file"; then
+        :
+    else
+        status=$?
+        [ "$status" != 1 ] || return 3
+        return 1
+    fi
+    {
+        printf '    %s\n    Package artifact: %s\n\n' "$label" "$artifact" &&
+        LC_ALL=C sed 's/^/    /' "$file" &&
+        printf '\n\n'
+    } >> "$obligation_draft" || return 1
+    obligation_bytes="$(wc -c < "$obligation_draft")" || return 1
+    [ "$obligation_bytes" -le "$obligation_cap" ] || return 2
+}
+
+review_obligation_capture() {
+    local artifact rev path blob first last kind reason
+    # Bounds inventory supplies applicability and later-stage status, not the bodies below.
+    if [ -s "$PACKAGE_DIR/bounds.txt" ]; then
+        review_obligation_append bounds.txt 'Applicable bounds (scope and stage; see bounds-inputs.tsv)' || return $?
+    fi
+    while IFS=$'\t' read -r artifact rev path blob first last kind reason; do
+        review_obligation_append "$artifact" "Source: $path:$first-$last at $rev ($kind: $reason)" || return $?
+    done < "$PACKAGE_SCRATCH/obligation-spans"
+    if [ -s "$PACKAGE_DIR/context-gaps.txt" ]; then
+        printf '### Unresolved context and verification\n\n' >> "$obligation_draft" || return 1
+        review_obligation_append context-gaps.txt 'Questions to resolve before a verdict' || return $?
+    fi
+}
+
+review_context_obligations() {
+    local obligation_cap=16384 obligation_bytes=0 obligation_draft="$PACKAGE_SCRATCH/obligations" status
+    # Multiple obligations can cite the same excerpt. Include its body just once.
+    awk -F '\t' 'NR>1 && $1!="-" && !seen[$1]++' "$PACKAGE_DIR/context-manifest.tsv" \
+        > "$PACKAGE_SCRATCH/obligation-spans"
+    : > "$obligation_draft"
+    if review_obligation_capture; then
+        cat "$obligation_draft"
+    else
+        status=$?
+        case "$status" in
+            2) printf '**Required full context:** The captured obligations exceed the %s-byte inline cap.\n\n' "$obligation_cap" ;;
+            3) printf '**Required full context:** A captured artifact cannot be included as inline text.\n\n' ;;
+            *) return "$status" ;;
+        esac
+        cat <<'EOF'
+No partial obligation list is shown. Before giving a verdict, read
+[context-manifest.tsv](context-manifest.tsv), the scope, policy and obligation excerpts it lists,
+[context-gaps.txt](context-gaps.txt), and `bounds.txt` with `bounds-inputs.tsv` if present. If
+required context is unreadable or a gap remains unresolved, mark the review pending.
+
+EOF
+    fi
+}

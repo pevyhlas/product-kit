@@ -13,6 +13,7 @@
 # Invariants:
 # Keep the full object-bound base-to-head patch alongside any focused delta. Check
 # emitted patch paths against the trees, including gitlinks hidden by ignore settings.
+# Inline captured obligations from the packaged context or require that context explicitly.
 # Validate the final artifact inventory before marking a round complete. Completion
 # is a package result, not a review verdict or proof that required evidence is present.
 #
@@ -30,7 +31,7 @@
 #                     config); anything else is refused. After a base merge, pass the new merge
 #                     base as BASE to leave the base out
 #   --context PATH    Snapshot a repo-relative tracked file at HEAD (repeatable)
-#   --evidence PATH   Copy a completed repo-relative evidence file (repeatable)
+#   --evidence PATH   Copy a completed repo-relative evidence file (repeatable; facts/ is reserved)
 #   --facts           Copy the cached facts pair to evidence/facts/{summary.md,index.json}.
 #                     The caller must verify the pair and its binding before and after copying.
 #
@@ -88,7 +89,7 @@ shift 2
 HEAD_SHA=HEAD
 if [ "$#" -gt 0 ] && [[ "$1" != --* ]]; then HEAD_SHA="$1"; shift; fi
 SINCE=""; CONTEXT=(); EVIDENCE=(); ATTACH_FACTS=false
-PACKAGE_VERSION=package6
+PACKAGE_VERSION=package7
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --facts) ATTACH_FACTS=true; shift ;;
@@ -193,12 +194,13 @@ unique_snapshot_paths() {
 }
 unique_snapshot_paths ${CONTEXT[@]+"${CONTEXT[@]}"}; CONTEXT=(${SNAPSHOT_PATHS[@]+"${SNAPSHOT_PATHS[@]}"})
 FACTS_CACHE=".prdkit/cache/evidence/$CHANGE_ID/facts"
+for p in ${EVIDENCE[@]+"${EVIDENCE[@]}"}; do
+    # Reserve ASCII case variants too, for case-insensitive checkouts.
+    case "${p%%/*}" in
+        [Ff][Aa][Cc][Tt][Ss]) echo "ERROR: evidence/facts/ is reserved for --facts: conflicting --evidence $p" >&2; exit 1 ;;
+    esac
+done
 if $ATTACH_FACTS; then
-    for p in ${EVIDENCE[@]+"${EVIDENCE[@]}"}; do
-        case "$p" in
-            facts|facts/*) echo "ERROR: --facts reserves evidence/facts/: conflicting --evidence $p" >&2; exit 1 ;;
-        esac
-    done
     EVIDENCE+=("$FACTS_CACHE/summary.md" "$FACTS_CACHE/index.json")
 fi
 unique_snapshot_paths ${EVIDENCE[@]+"${EVIDENCE[@]}"}; EVIDENCE=(${SNAPSHOT_PATHS[@]+"${SNAPSHOT_PATHS[@]}"})
@@ -462,18 +464,31 @@ EOF
    only after the coordinator verifies the copied pair for this change and range. Do not
    re-derive those answers.
 EOF
+        obligation_read=3
+    else
+        obligation_read=2
     fi
+    # shellcheck disable=SC2016 # Literal Markdown backticks.
+    printf '%s. `index.md`, [Review obligations](#review-obligations) below — check every applicable obligation.\n' "$obligation_read"
     cat <<'EOF'
 
-For a small change, no other file is a default read.
+For a small change, no other file is a default read unless the obligations below require it.
 
+## Review obligations
+
+Check the diff against these excerpts, including the body of each listed bound. They are
+captured source, not a substitute for review judgment. Account for every applicability or
+verification gap; do not assume an unanswered obligation passes.
+
+EOF
+    review_context_obligations
+    cat <<'EOF'
 ## Open only if a finding needs it
 
-Use the remaining files to investigate a finding or resolve a review obligation the first reads
-do not answer. Use `manifest.tsv` to locate artifacts and `context-manifest.tsv` for source
-bindings. This includes the change record, spec and policy excerpts, parent obligations, bounds
-and their inputs, other verification evidence, and `context-gaps.txt`. The facts index (if
-attached) supplies detail beyond the summary, not commands for shell-less reviewers to run.
+Unless the obligations require full context, use the remaining files only to investigate a
+finding or resolve an obligation. Use `manifest.tsv` to locate artifacts and `context-manifest.tsv`
+for source bindings. The facts index (if attached) supplies detail beyond the summary,
+not commands for shell-less reviewers to run.
 `commits.txt`, `diffstat.txt`, and any `delta.patch` are available for focused investigation or
 re-review. Completion and inventory metadata are for coordination, not required reviewer reads.
 
@@ -493,8 +508,9 @@ EOF
 
 Read the inventory. Supply the change/acceptance record, applicable canon and review policy,
 bounds output with its input revision, prior findings for re-review, and completed verification
-results (command, revision, environment, exit/result and limitations). Explicitly identify missing
-required proof. This structural package does not certify semantic completeness or review readiness.
+results (command, revision, environment, exit/result and limitations). Put any mandatory obligation
+or unresolved question not captured here inline in the dispatch prompt, with its source path.
+This structural package does not certify semantic completeness or review readiness.
 
 Confirm the reviewer's allowed read paths, shell/network access and report channel. Copy or attach
 this package inside that access boundary; local sibling paths are not portable evidence. A read-only

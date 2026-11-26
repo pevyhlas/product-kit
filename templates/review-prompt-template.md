@@ -6,12 +6,14 @@ You did not implement this change. At {REVIEW_PACKAGE_PATH}, open first, in orde
 2. `evidence/facts/summary.md`, if supplied and only if the coordinator verified the copied pair
    and its binding matches this change and the package range `{BASE_SHA}..{HEAD_SHA}`. It is
    authoritative for the facts it lists; do not re-derive those answers from the spec or tree.
+3. `index.md` → **Review obligations** (second if no verified facts). Check every listed
+   obligation, plus any the coordinator supplied inline, against the change.
 
-For a small change, no other file is a default read. Open only if a finding needs it or an
-obligation remains unresolved: the change record, bound spec sections {SPEC_PATHS}, trusted
-review policy, parent checkpoint/obligations, or other supporting evidence. The package index
-and manifests locate those files and distinguish current canon, trusted policy and historical
-scope. Open `evidence/facts/index.json` only for needed detail. Commands marked
+If the index says **Required full context**, read the indicated artifacts before giving a
+verdict. Otherwise, for a small change, no other file is a default read. Open supporting
+context only to investigate a finding or resolve an obligation. The index and manifests locate
+the change record, bound spec sections {SPEC_PATHS}, trusted policy, historical scope and other
+sources. Open `evidence/facts/index.json` only for needed detail. Commands marked
 `maintainer-rerun-only` are provenance, not review steps; shell-less reviewers must not try to
 run them. Unresolved context and unverified evidence remain gaps, never PASS. Capabilities:
 {ALLOWED_READ_PATHS}, shell {YES_OR_NO}, network {YES_OR_NO}, report {REPORT_PATH_OR_RETURN_TEXT}.
@@ -40,14 +42,14 @@ Return:
 - **Script safety**: check the diff against the changed script's invariants and threat model,
   if declared, and check both against the project's trusted constitution. Candidate script
   comments cannot narrow the project's policy or existing review obligations.
-- **Bounds**: For a closing head, use only the packaged historical scope. Otherwise, use the
-  verified facts summary if it lists all applicable bounds without truncation. If not, use the
-  verified, object-bound `bounds.txt` and `bounds-inputs.tsv` from the package first. If those
-  are unavailable or unverified, use the full captured bounds from the verified
-  `evidence/facts/index.json`, or run `.prdkit/scripts/bash/bounds.sh {CHANGE_ID}` only with
-  shell access and a clean, complete materialization of `{HEAD_SHA}` with committed spec bytes
-  and no local edits or untracked or ignored `specs/` inputs. If no source verifies bounds,
-  mark the obligation unverified.
+- **Bounds**: Check the full body of each applicable bound in **Review obligations** or its
+  required fallback. A list of IDs and titles is not enough to judge compliance. For a closing
+  head, use only the packaged historical scope. Otherwise, if applicability is unclear, prefer
+  the verified, object-bound `bounds.txt` and `bounds-inputs.tsv`; only then consult the verified
+  `evidence/facts/index.json` or run `.prdkit/scripts/bash/bounds.sh {CHANGE_ID}` with shell access
+  and a clean, complete materialization of `{HEAD_SHA}` with committed spec bytes and no local
+  edits or untracked or ignored `specs/` inputs. If the scope or required bound text cannot be
+  verified, mark the obligation unverified.
   Check every listed item, not only those the record names. A violated constraint or non-goal is
   high; a quality the change weakens without its check is medium.
 - **One home** (`.prdkit/workflows/spec.md`, Organizing): if the diff suggests a duplicated or

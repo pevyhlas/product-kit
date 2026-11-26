@@ -10,6 +10,20 @@ package_context_fixture() {
     printf '# Change\n\n**Tier**: T1\n' > "specs/changes/$1.md"
 }
 
+# Same one-line change and three unchanged review obligations in baseline and candidate.
+package_small_obligation_fixture() {
+    local id="$1"
+    package_context_fixture "$id"
+    printf '\n## Acceptance\n\nAcceptance: Preserve the exported public label.\n' >> "specs/changes/$id.md"
+    printf '\n## Review policy\n\n- **Rigor**: full\n- Release-label edits require the application smoke check.\n' >> .prdkit/memory/constitution.md
+    printf '# Constraints\n\n- **C-01 Example bound**: Scope: all.\n  Keep the published label stable for automated clients.\n' > specs/product/constraints.md
+    printf 'old label\n' > label.txt
+    snapshot_upgrade_fixture "$PWD" || return 1
+    git checkout -qb "$id" || return 1
+    printf 'new label\n' > label.txt
+    git commit -qam 'edit one label'
+}
+
 # Test evidence only: relative path -> inode/type/mode/size/hash, including empty directories.
 # Unlike an unordered hash multiset, this detects swaps, in-place corruption and mode changes.
 package_snapshot() {

@@ -17,10 +17,13 @@ or log delivered tasks.
 
 The reviewer is a fresh context that did not implement the change. Reviews are run by the worker,
 not CI. Send `.prdkit/templates/review-prompt-template.md` with the full `diff.patch` first and
-the verified `evidence/facts/summary.md` second, if available. For a small change, no other file
-is a default read. Keep the change record, relevant spec sections, trusted policy and PR context
-available: open only if a finding needs it or an obligation remains unresolved. Make `specs/`
-readable at the head for targeted searches when possible. Never send only the implementer's summary.
+the verified `evidence/facts/summary.md` second, if available. Always include `index.md`, under
+**Review obligations**, as the last default read. The reviewer must check every listed obligation,
+including full bound text, trusted policy and acceptance. A bounds inventory alone is not enough.
+If the index requires full context, the reviewer must read the indicated artifacts before a
+verdict; otherwise open supporting files only to investigate a finding or resolve an obligation.
+Make `specs/` readable at the head for targeted searches when possible. Never send only the
+implementer's summary.
 Before dispatch, confirm the reviewer's allowed read paths, shell/network access and report channel;
 without shell access, supply the captured `bounds.sh` output with its input revision/hashes.
 
@@ -47,14 +50,18 @@ source for details and `facts.sh --help` for attachment syntax.
 
 For committed work run `.prdkit/scripts/bash/build-review-package.sh <change-id> <base> [head]`,
 adding `--context <path>` for selected tracked canon/policy/record files and `--evidence <path>`
-for completed local results. The helper checks structural accessibility, not semantic
-completeness: verify the index covers each review obligation, prior findings, acceptance results
-and unknowns. Every result names its command, revision, environment, completion/exit status and
-limits; running logs are not completed evidence. Copy required sibling/remote evidence into the
+for completed local results; ordinary evidence cannot occupy `evidence/facts/`. The helper checks
+structural accessibility, not semantic completeness. Before dispatch, check the captured obligations
+against the change record, relevant canon (including full bound bodies), the parent and dependencies
+where applicable, trusted policy, and the required verification and prior findings. Put any missing
+mandatory obligation or unresolved question inline in the dispatch prompt with its source path.
+Every result names its command, revision, environment, completion/exit status and limits; running
+logs are not completed evidence. Copy required sibling/remote evidence into the
 checkout first with original source provenance, then attach or place the package inside the
 reviewer's actual access boundary. Verify access before a costly review round. For uncommitted
-work send the tracked diff plus the untracked file contents, with their hashes. Without a
-trustworthy package, review is pending.
+work send the tracked diff plus the untracked file contents, with their hashes, and include the
+same obligation text and gaps inline in the prompt. Without a trustworthy package, review is
+pending.
 
 For spec edits, judge each line at its edited level: [Levels](spec.md#levels),
 [What earns a line](spec.md#what-earns-a-line) and Left open ([Elements](spec.md#elements)).

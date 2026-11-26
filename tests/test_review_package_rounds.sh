@@ -23,8 +23,8 @@ F1="$(git rev-parse HEAD)"
 first="$(bash "$SCRIPT" 001-equal "$BASE")"; PKG="$(printf '%s' "$first" | jq -r .PACKAGE_DIR)"
 ROOT="$(dirname "$PKG")"
 it "An old, otherwise valid package is regenerated without editing its files"
-# Simulate a package written before the lean navigation contract.
-sed 's/^package6/package5/' "$PKG/completed.tsv" > "$P/old-binding"
+# Simulate a package written before inline obligations were required.
+sed 's/^package7/package6/' "$PKG/completed.tsv" > "$P/old-binding"
 cp "$P/old-binding" "$PKG/completed.tsv"
 old_snapshot="$(package_snapshot "$PKG")"
 run bash "$SCRIPT" 001-equal "$BASE"
@@ -184,7 +184,7 @@ for gap in canon historical; do
     pkg="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
     assert_file "$pkg/bounds.txt"
 done
-for damage in missing-patch changed-section manifest; do
+for damage in missing-patch changed-section changed-obligations manifest; do
     id="009-$damage"
     cp specs/changes/001-equal.md "specs/changes/$id.md"
     git add "specs/changes/$id.md"; git commit -qm 'prepare complete context'
@@ -192,6 +192,7 @@ for damage in missing-patch changed-section manifest; do
     case "$damage" in
         missing-patch) rm "$pkg/diff.patch" ;;
         changed-section) printf 'changed artifact\n' >> "$pkg/context-sections/1.txt" ;;
+        changed-obligations) printf 'changed obligations\n' >> "$pkg/index.md" ;;
         manifest) rm "$pkg/manifest.tsv" ;;
     esac
     run bash "$SCRIPT" "$id" "$TIP"

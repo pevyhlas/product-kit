@@ -6,16 +6,25 @@ automatic-merge/fallback rules; it never replaces the full diff. `--context PATH
 whole tracked regular file at HEAD; `--evidence PATH` copies stable local evidence without
 certifying its revision, completion or applicability. `--facts` copies the exact change's
 cached pair to `evidence/facts/{summary.md,index.json}` without certifying its binding.
-All input paths are repository-relative.
+All input paths are repository-relative. Ordinary `--evidence` cannot use the source paths
+`facts` or `facts/*`, including ASCII case variants, even in a package without `--facts`.
 
 ## Read order
 
 The package's `index.md` and the [review prompt](../templates/review-prompt-template.md) direct
 reviewers to open `diff.patch` first, then `evidence/facts/summary.md` if the coordinator verified
-the attached pair. The summary is authoritative for the facts it lists, not for correctness or
-approval. For a small change these are the only default reads. Open other files only if a finding
-needs them or a review obligation remains unanswered. Use `manifest.tsv` to find an artifact and
-`context-manifest.tsv` to check its source. The facts index is for detail omitted from the summary.
+the attached pair, then the **Review obligations** section of `index.md`. That section reproduces
+the captured change record, trusted policy, bound bodies, other selected context, and gaps with
+source pointers. Reviewers check every listed obligation. The facts summary is authoritative for
+the facts it lists, not for correctness or approval. Its bounds inventory does not show full bound
+bodies.
+
+The inline excerpt budget is 16 KiB, including source labels and formatting. If the captured
+material would exceed it or cannot be inlined as text, the index shows no partial list and
+explicitly requires reading `context-manifest.tsv`, the relevant packaged context, the bounds
+inventory with its input bindings if present, and `context-gaps.txt`. Otherwise, reviewers open
+other files only to investigate a finding or resolve an obligation. The dispatcher still supplies
+mandatory obligations and unresolved questions that automatic capture missed.
 
 ## What is automatic
 

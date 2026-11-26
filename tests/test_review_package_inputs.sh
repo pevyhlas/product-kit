@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016 # Literal Markdown in assertions and sed patterns.
 # Synthetic, NONAUTHORITATIVE host/input regressions. Never use a live host or key.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+source "$TESTS_DIR/review-package-fixtures.sh"
 STATUS=0; OUTPUT=""; PKG=""
-# Override only this test driver to retain pre-fix reproductions against a frozen kit snapshot.
-BUILD="${PACKAGE_TEST_BUILDER:-$PK_ROOT/scripts/build-review-package.sh}"
 
 setup() {
     P="$(make_inited_project)" || exit 1
@@ -65,6 +65,13 @@ EOF
     printf 'initial\n' >> src/app.txt
     git add -A; git commit -qm 'initial synthetic input change' || exit 1
 }
+setup_small() {
+    P="$(make_inited_project)" || exit 1
+    track_tmp "$P"; cd "$P" || exit 1
+    ID=001-small
+    package_small_obligation_fixture "$ID" || exit 1
+    BASE="$(git rev-parse HEAD^)"
+}
 advance() { printf '%s\n' "$1" >> src/app.txt; git add src/app.txt; git commit -qm "$1" || exit 1; }
 build() {
     run bash "$BUILD" "$ID" "$BASE" "$@"
@@ -81,9 +88,19 @@ integrity() {
     assert_eq 0 "$(cut -f1 "$PKG/manifest.tsv" | LC_ALL=C sort | uniq -d | wc -l | tr -d ' ')" 'no conflicting artifact names'
 }
 
-[ "$#" -gt 0 ] || set -- context paths facts
+default_reads() { awk '/^## Open first/{ open=1; next } /^## /{ open=0 } open && /^[0-9]+\. /' "$PKG/index.md"; }
+reject_reserved() {
+    local path="$1"; shift
+    run bash "$BUILD" "$ID" "$BASE" "$@" --evidence "$path"
+    assert_eq 1 "$STATUS" "refuse ordinary reserved evidence: $path ($*)"
+    assert_contains "$OUTPUT" "conflicting --evidence $path"
+}
+
+[ "$#" -gt 0 ] || set -- context paths facts obligations
 for mode in "$@"; do
-    setup
+    if [ "$mode" = obligations ]; then setup_small; else setup; fi
+    # The default exercises installed behavior; the override supports replay against a prior builder.
+    BUILD="${PACKAGE_TEST_BUILDER:-$P/.prdkit/scripts/bash/build-review-package.sh}"
     case "$mode" in
         context)
             it "Generated context cannot overwrite explicit whole-file context"
@@ -134,28 +151,33 @@ for mode in "$@"; do
         facts)
             it "Only copied facts get a spot in the default reading list"
             if build; then
-                assert_eq '1. [diff.patch](diff.patch) — the full change, not just a summary.' \
-                    "$(sed -n '/^## Open first/,/^## Open only/{
-                        /^[0-9][0-9]*\. /p
-                    }' "$PKG/index.md")" \
-                    'no default read of absent facts or bundled context'
+                assert_eq 2 "$(default_reads | wc -l | tr -d ' ')" 'diff and obligations without facts'
+                assert_contains "$(default_reads)" '2. `index.md`, [Review obligations]'
+                assert_not_contains "$(default_reads)" 'evidence/facts/'
+                assert_eq absent "$([ -e "$PKG/evidence/facts" ] || echo absent)"
                 assert_contains "$(cat "$PKG/index.md")" '## Open only if a finding needs it'
             fi
             cache=".prdkit/cache/evidence/$ID/facts"
-            mkdir -p "$cache" facts proof
+            mkdir -p "$cache" proof
             printf 'Example summary\n' > "$cache/summary.md"
             run bash "$BUILD" "$ID" "$BASE" --facts
             assert_eq 1 "$STATUS" 'a partial pair cannot be attached'
             assert_contains "$OUTPUT" "$cache/index.json"
             printf 'Example index\n' > "$cache/index.json"
             printf 'Other evidence\n' > proof/result.txt
+            printf 'Conflicting leaf\n' > facts
+            reject_reserved facts
+            reject_reserved facts --facts
+            rm facts; mkdir facts
             printf 'Conflicting evidence\n' > facts/summary.md
-            run bash "$BUILD" "$ID" "$BASE" --facts --evidence facts/summary.md
-            assert_eq 1 "$STATUS" 'ordinary evidence cannot overwrite the reserved pair'
-            assert_contains "$OUTPUT" 'conflicting --evidence facts/summary.md'
+            reject_reserved facts/summary.md
+            reject_reserved facts/summary.md --facts
+            reject_reserved Facts/summary.md
             if build --facts --evidence proof/result.txt; then
                 assert_eq 2 "$(jq .ROUND <<<"$OUTPUT")" 'validation failures do not allocate a round'
-                assert_eq $'diff.patch\nevidence/facts/summary.md' "$(sed -n '/^## Open first/,/^## Open only/s/^[0-9][0-9]*\. \[\([^]]*\)\].*/\1/p' "$PKG/index.md")" 'exact default read order'
+                assert_eq $'diff.patch\nevidence/facts/summary.md\nindex.md' \
+                    "$(default_reads | sed -e 's/^[0-9][0-9]*\. \[\([^]]*\)\].*/\1/' -e 's/^[0-9][0-9]*\. `\([^`]*\)`.*/\1/')" \
+                    'exact default read order'
                 assert_contains "$(cat "$PKG/index.md")" 'no other file is a default read'
                 assert_file "$PKG/evidence/proof/result.txt"
                 assert_file "$PKG/bounds.txt"
@@ -166,6 +188,56 @@ for mode in "$@"; do
                     assert_contains "$(cat "$PKG/manifest.tsv")" "caller-supplied:$cache/$name"
                 done
                 integrity
+            fi ;;
+        obligations)
+            it "The one-line installed fixture exposes each unchanged requirement in a default read"
+            assert_eq label.txt "$(git diff --name-only "$BASE" HEAD)"
+            assert_eq $'1\t1\tlabel.txt' "$(git diff --numstat "$BASE" HEAD)"
+            run env PRDKIT_TODAY=2026-01-02 bash .prdkit/scripts/bash/facts.sh "$ID" --base "$BASE"
+            assert_eq 0 "$STATUS" "$OUTPUT"
+            if build --facts; then
+                assert_contains "$(default_reads)" '3. `index.md`, [Review obligations]' 'required default read'
+                section="$(sed -n '/^## Review obligations$/,/^## Open only if/p' "$PKG/index.md")"
+                assert_contains "$section" 'Acceptance: Preserve the exported public label.'
+                assert_contains "$section" 'Release-label edits require the application smoke check.'
+                assert_contains "$section" 'Keep the published label stable for automated clients.'
+                assert_contains "$section" '**Rigor**: full'
+                assert_contains "$section" "Source: specs/changes/$ID.md:"
+                assert_contains "$section" 'Source: .prdkit/memory/constitution.md:'
+                assert_contains "$section" 'Source: specs/product/constraints.md:'
+                assert_contains "$section" '### Unresolved context and verification'
+                assert_contains "$section" 'caller-supplied evidence requires revision/result/applicability verification'
+                assert_not_contains "$section" '**Required full context:**'
+                integrity
+            fi
+
+            it "Combined overflow retains all source artifacts and explicitly requires reading them"
+            for file in first.md second.md; do
+                awk -v label="$file" 'BEGIN {
+                    print "EXPLICIT_START " label
+                    for (i=0;i<240;i++) print "A selected obligation with a long body."
+                    print "EXPLICIT_END " label
+                }' > "$file"
+            done
+            git add first.md second.md; git commit -qm 'add two long explicit obligations'
+            if build --context first.md; then
+                assert_not_contains "$(cat "$PKG/index.md")" '**Required full context:**'
+                assert_contains "$(cat "$PKG/index.md")" 'EXPLICIT_END first.md'
+            fi
+            if build --context first.md --context second.md; then
+                section="$(sed -n '/^## Review obligations$/,/^## Open only if/p' "$PKG/index.md")"
+                assert_contains "$section" 'captured obligations exceed the 16384-byte inline cap'
+                assert_contains "$section" 'No partial obligation list is shown'
+                assert_contains "$section" '[context-manifest.tsv](context-manifest.tsv)'
+                assert_contains "$section" '[context-gaps.txt](context-gaps.txt)'
+                assert_not_contains "$section" 'Preserve the exported public label'
+                assert_not_contains "$section" EXPLICIT_START
+                assert_not_contains "$section" EXPLICIT_END
+                for file in first.md second.md; do
+                    assert_contains "$(cat "$PKG/context-manifest.tsv")" "context/$file"
+                    run cmp "$file" "$PKG/context/$file"
+                    assert_eq 0 "$STATUS" 'full source is still present'
+                done
             fi ;;
         *) echo "unknown fixture group: $mode" >&2; exit 2 ;;
     esac
