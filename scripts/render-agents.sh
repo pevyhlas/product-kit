@@ -25,6 +25,11 @@
 #     Migrate other V1-only keys manually. Opted-in frontmatter replacements refuse YAML anchors/aliases.
 #   - `OpenCode preamble` prepends a line to the neutral body (local tier takes precedence
 #     over the optional `*` row). Undeclared metadata stays project-owned.
+# A neutral `skills: [example-skill]` opts that agent into vendored skill references. Configure
+# `Skill roots:` and `Claude skill prefix:` in agents.md; SKILL.md may declare metadata
+# `prdkit/needs`. Claude gets plugin-qualified skills and the Skill tool on restricted lists.
+# OpenCode requires renderer-owned V2 permissions and only allows declared skills it can run;
+# shell-dependent skills on a shell-less agent get review-evidence notes instead.
 # A neutral definition may limit its harnesses with a bracketed `harnesses: [claude, opencode]`
 # list; any other form is a finding. Once a Tier baseline is declared, a projection with no
 # neutral definition (or excluded by its harnesses: list) is a finding unless agents.md lists
@@ -225,7 +230,7 @@ updated_frontmatter() { # proj harness model variant desc_line desc
 
 # Canonicalize opted-in frontmatter before applying the original field updates.
 projection_frontmatter() { # proj harness model variant desc_line desc
-    if [ -n "$AT_P_EFFORT$AT_P_PERMISSIONS" ]; then
+    if [ -n "$AT_P_EFFORT$AT_P_PERMISSIONS$AS_CLAUDE$AS_CLAUDE_STATE" ]; then
         at_native_frontmatter "$1" "$AT_P_EFFORT" "$AT_P_PERMISSIONS" "$3" | updated_frontmatter - "${@:2}"
     else
         updated_frontmatter "$@"
@@ -257,7 +262,8 @@ new_projection() { # def harness name model variant body
     [ "$harness" != opencode ] || printf 'mode: subagent\n'
     printf 'model: %s\n' "$model"
     [ "$harness" != opencode ] || [ -z "$variant" ] || printf 'variant: %s\n' "$variant"
-    at_native_fields "$AT_P_EFFORT" "$AT_P_PERMISSIONS"
+    at_native_fields "$AT_P_EFFORT" "$AT_P_PERMISSIONS" "$AS_OC"
+    printf '%s' "$AS_CLAUDE"
     printf -- '---\n\n'
     [ -z "$body" ] || printf '%s\n' "$body"
 }
@@ -272,7 +278,7 @@ render_projection() { # def harness name model variant tier
     model="$(at_projected_model "$model" "$variant" "$AT_P_PERMISSIONS")"
     [ -z "$AT_P_PERMISSIONS" ] || variant=""
     desc="$(at_owned_description "$def")"
-    body="$(at_projected_body "$def" "$AT_P_PREAMBLE")" || return 1
+    body="$(at_projected_body "$def" "$AT_P_PREAMBLE" "$AS_NOTES")" || return 1
     [ -z "$desc" ] || dline="$(at_fm_line "$def" description)"
     if [ ! -f "$proj" ]; then
         new_projection "$def" "$harness" "$name" "$model" "$variant" "$body" > "$tmp" || return 1
@@ -333,20 +339,44 @@ EOF
         FINDINGS+=("Could not verify projection frontmatter delimiters or model references")
     fi
 fi
-plan=()
+plan=() as_oc=() as_notes=() as_claude=() as_claude_state=() as_tool_action=() as_tool_line=() as_tool_edit=()
+has_skills=false
 for def in "$root"/.prdkit/agents/*.md; do
     [ -f "$def" ] || continue
     name="$(basename "$def" .md)"
     tier="$(at_fm_value "$def" tier)"
+    AS_LINE=""
+    if [ "$mode" = write ]; then
+        if ! as_definition "$def"; then
+            FINDINGS+=("Agent '$name': could not inspect its skills: declaration")
+            continue
+        fi
+        if [ -n "$AS_FINDINGS" ]; then
+            while IFS= read -r f; do [ -z "$f" ] || FINDINGS+=("$f"); done <<< "$AS_FINDINGS"
+            continue
+        fi
+        [ -z "$AS_LINE" ] || has_skills=true
+    fi
     for harness in $(at_targets "$root" "$def"); do
+        proj="$root/.$harness/agents/$name.md"
+        at_projection_options "$tier" "$harness"
+        if [ "$mode" = write ]; then
+            if ! as_projection "$harness" "$proj" "$AT_P_PERMISSIONS"; then
+                FINDINGS+=("Agent '$name': $harness skill projection inspection failed")
+                continue
+            fi
+            if [ -n "$AS_FINDINGS" ]; then
+                while IFS= read -r f; do [ -z "$f" ] || FINDINGS+=("$f"); done <<< "$AS_FINDINGS"
+                continue
+            fi
+            [ -z "$AS_CLAUDE_STATE" ] || has_skills=true
+        fi
         if at_resolve "$name" "$tier" "$harness"; then
-            at_projection_options "$tier" "$harness"
             if [ -n "$AT_P_PERMISSIONS" ] && ! at_native_model_valid "$AT_R_MODEL" "$AT_R_VARIANT"; then
                 FINDINGS+=("Agent '$name': OpenCode V2 projection requires a provider/model id and an optional separate variant token")
                 continue
             fi
-            proj="$root/.$harness/agents/$name.md"
-            if [ "$mode" = write ] && [ -n "$AT_P_EFFORT$AT_P_PERMISSIONS" ] && [ -f "$proj" ]; then
+            if [ "$mode" = write ] && [ -z "$AS_LINE$AS_CLAUDE_STATE" ] && [ -n "$AT_P_EFFORT$AT_P_PERMISSIONS" ] && [ -f "$proj" ]; then
                 if blockers="$(at_native_projection_findings "$proj" "$AT_P_PERMISSIONS")"; then
                     while IFS= read -r f; do [ -z "$f" ] || FINDINGS+=("$f"); done <<EOF
 $blockers
@@ -355,12 +385,26 @@ EOF
                     FINDINGS+=("Agent projection ${proj#"$root"/}: frontmatter inspection failed")
                 fi
             fi
+            if [ "$mode" = write ]; then
+                as_oc+=("$AS_OC"); as_notes+=("$AS_NOTES"); as_claude+=("$AS_CLAUDE")
+                as_claude_state+=("$AS_CLAUDE_STATE")
+                as_tool_action+=("$AS_TOOL_ACTION"); as_tool_line+=("$AS_TOOL_LINE"); as_tool_edit+=("$AS_TOOL_EDIT")
+            fi
             plan+=("$name"$'\037'"$harness"$'\037'"$tier"$'\037'"$AT_R_MODEL"$'\037'"$AT_R_VARIANT"$'\037'"$AT_R_SOURCE")
         else
             FINDINGS+=("Agent '$name': no $harness model resolves ($AT_R_ERR)")
         fi
     done
 done
+# With skills opted in, also block on findings that no render can repair. Keep
+# the legacy post-render reporting behavior when no definition declares skills.
+if $has_skills; then
+    if blockers="$(at_ownership_findings && at_lint_projection_bans --unmanaged-only)"; then
+        while IFS= read -r f; do [ -z "$f" ] || FINDINGS+=("$f"); done <<< "$blockers"
+    else
+        FINDINGS+=("Could not verify unmanaged agent projections")
+    fi
+fi
 if [ "${#FINDINGS[@]}" -gt 0 ]; then
     emit_findings "$json" "${FINDINGS[@]}" >&2
     if [ "$mode" = resolve ]; then
@@ -396,10 +440,15 @@ fi
 
 ra_tmpdir
 created=0 updated=0 unchanged=0
+i=0
 for entry in ${plan[@]+"${plan[@]}"}; do
     IFS=$'\037' read -r name harness tier model variant source <<EOF
 $entry
 EOF
+    AS_OC="${as_oc[$i]}" AS_NOTES="${as_notes[$i]}" AS_CLAUDE="${as_claude[$i]}"
+    AS_CLAUDE_STATE="${as_claude_state[$i]}"
+    AS_TOOL_ACTION="${as_tool_action[$i]}" AS_TOOL_LINE="${as_tool_line[$i]}" AS_TOOL_EDIT="${as_tool_edit[$i]}"
+    i=$((i + 1))
     if ! render_projection "$root/.prdkit/agents/$name.md" "$harness" "$name" "$model" "$variant" "$tier"; then
         echo "✗ .$harness/agents/$name.md: write failed" >&2
         echo "render-agents.sh: stopped at the first write failure; $((created + updated)) projection file(s) were written before it. Fix the permissions and re-run." >&2

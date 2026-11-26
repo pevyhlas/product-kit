@@ -20,6 +20,7 @@ test_bounds.sh
 test_lifecycle.sh
 test_spec_navigation.sh
 test_agent_tiers.sh
+test_agent_skills.sh
 test_context_budget.sh
 test_adoption_gate.sh
 test_pinned_source.sh

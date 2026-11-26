@@ -53,6 +53,14 @@ Neutral/provenance keys (`tier`, `source`, `library-ref`, …) are removed from 
 frontmatter and provenance lives in YAML comments. Other native metadata is project-owned.
 The kit does not assume all harnesses have identical subagent, permission, or effort controls.
 
+[Optional skill projection](customization.md#optional-skill-projection) starts with a neutral
+`skills: [example-skill]` declaration. Claude Code preloads plugin-qualified skills and
+adds `Skill` to a restricted `tools:` list without granting `Bash`. OpenCode adds its skill
+allowlist after the managed V2 permission rules. A skill needing shell access is allowed only
+if those rules allow `shell`; otherwise the prompt tells the reviewer to consult packaged
+evidence or mark the facts unverified. The renderer validates the vendored files, but does not
+make them discoverable or run them. Check each target's agent and skill loader separately.
+
 ## Recorded evaluation coverage
 
 Record capabilities separately. A result for one capability never fills another column:

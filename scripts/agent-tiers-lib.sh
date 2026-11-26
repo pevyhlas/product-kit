@@ -14,6 +14,8 @@
 #     | Projection tier | Claude effort | OpenCode permissions | OpenCode preamble |  (optional)
 #     Banned models: <id>, <id>        (optional; exact ids, so each harness's form is listed)
 #     Hand-owned agents: <name>, <name>   (optional; projections kept without a neutral source)
+#     Skill roots: <repo-relative directories>   (optional; active only with neutral skills:)
+#     Claude skill prefix: <plugin-name>        (required to project skills to Claude)
 #
 # The kit names no models: every id comes from the project's tier map or its vendored
 # baseline snapshot. Fenced code blocks and HTML comments in agents.md are never parsed, so
@@ -30,6 +32,7 @@ AT_HARNESSES="claude opencode"
 #   override <scope> <harness> <model> <variant> <reason> <line> <has-reason-column>
 #   literal <tier> <claude-model> <opencode-model> <opencode-variant> <line>
 #   projection <tier> <effort> <permissions> <preamble> <line> | projectionbad <line> <reason>
+#   skillroots|skillprefix <value> <line>
 at_tier_map_records() { # file [awk skip_fence(line) function]
     [ -f "$1" ] || return 0
     local expected skipper="${2:-}"
@@ -169,6 +172,10 @@ at_tier_map_records() { # file [awk skip_fence(line) function]
             } else if (low ~ /^hand-owned agents[ \t]*:/) {
                 value = after_colon(plain); n = split(value, ids, ",")
                 for (i = 1; i <= n; i++) { id = trim(ids[i]); if (id != "") print "handowned", id, NR }
+            } else if (low ~ /^(skill roots|claude skill prefix)[ \t]*:/) {
+                value = after_colon(plain)
+                gsub(/[[:cntrl:]]/, "?", value)
+                print (low ~ /^skill roots/ ? "skillroots" : "skillprefix"), value, NR
             }
         }
         END { if (NR != expected) exit 1 }
@@ -397,8 +404,15 @@ at_projected_model() { # model variant permissions
     else printf '%s' "$1"; fi
 }
 
-at_projected_body() { # def preamble
+at_projected_body() { # def preamble [skill notes]
     local body
+    if [ -n "${3:-}" ]; then
+        body="$(at_body_norm "$1")" || return 1
+        [ -z "$2" ] || printf '%s\n\n' "$2"
+        printf '%s' "$3"
+        [ -z "$body" ] || printf '\n%s\n' "$body"
+        return 0
+    fi
     if [ -z "$2" ]; then at_body_norm "$1"; return; fi
     body="$(at_body_norm "$1")" || return 1
     printf '%s\n' "$2"
@@ -407,8 +421,8 @@ at_projected_body() { # def preamble
 
 # The deny rule is first; OpenCode V2 applies the last matching rule. A non-empty
 # action list grants those named actions only, for all resources.
-at_native_fields() { # effort permissions
-    local action
+at_native_fields() { # effort permissions [skill allowlist: deny followed by runnable IDs]
+    local action id
     if [ -n "$1" ]; then
         printf 'effort: %s\n' "$1"
     elif [ -n "$2" ]; then
@@ -417,6 +431,12 @@ at_native_fields() { # effort permissions
             # Word splitting is intentional: the parser produces space-separated identifiers.
             for action in $2; do
                 printf '  - action: "%s"\n    resource: "*"\n    effect: allow\n' "$action"
+            done
+        fi
+        if [ -n "${3:-}" ]; then
+            printf '  - action: "skill"\n    resource: "*"\n    effect: deny\n'
+            for id in ${3#deny}; do
+                printf '  - action: "skill"\n    resource: "%s"\n    effect: allow\n' "$id"
             done
         fi
     fi
@@ -496,10 +516,24 @@ AT_YAML_SCAN_AWK='
     function indent(s) { match(s, /^ */); return RLENGTH }
     function yaml_blank(c) { return c == " " || c == "\t" }
     function flow_delimiter(c) { return c != "" && index("[]{},", c) > 0 }
+    function block_scalar_header(s) {
+        return s ~ /^[|>]([1-9][+-]?|[+-][1-9]?)?([ \t]+#.*|[ \t]*)$/
+    }
+    function block_scalar_indent(s) {
+        if (!match(s, /^[|>][+-]?[1-9]/)) return 0
+        return substr(s, RLENGTH, 1) + 0
+    }
+    function yaml_block_content(s,   n) {
+        if (!block || s ~ /^[ \t]*$/) return 0
+        n = indent(s)
+        if (!block_content_indent && n > block_indent) block_content_indent = n
+        if (block_content_indent && n >= block_content_indent) return 1
+        block = 0; return 0
+    }
     function scan_yaml(s,   n,i,c,nextc,prev,r,owner,start) {
         n = indent(s)
         if (quote == "" && !flow) {
-            if (s ~ /^[ \t]*(#|$)/ || (block && n > block_indent)) return
+            if (yaml_block_content(s) || s ~ /^[ \t]*(#|$)/) return
             block = 0
             if (plain && n > plain_indent) return
             plain = 0; node = 1; done = 0
@@ -539,8 +573,11 @@ AT_YAML_SCAN_AWK='
             if ((c == "?" || (!flow && c == "-")) && (nextc == "" || yaml_blank(nextc))) {
                 owner = key_indent; continue
             }
-            if (!flow && match(r, /^[|>]([1-9][+-]?|[+-][1-9]?)?([ \t]+#.*|[ \t]*)$/)) {
-                block = 1; block_indent = owner; return
+            if (!flow && block_scalar_header(r)) { # awk-bytes-ok: r starts at an ASCII block scalar indicator
+                block = 1; block_indent = owner
+                n = block_scalar_indent(r) # awk-bytes-ok: r starts at the same ASCII indicator
+                block_content_indent = n ? owner + n : 0
+                return
             }
             if (c == "[" || c == "{") { flow++; done = plain = 0; continue }
             node = done = 0
@@ -549,6 +586,8 @@ AT_YAML_SCAN_AWK='
         }
     }
 '
+
+source "$(dirname "${BASH_SOURCE[0]}")/agent-skills-lib.sh"
 
 # The line-oriented rewriter cannot migrate project-owned V1 fields or preserve YAML
 # references across replaced entries. Report blockers in preflight, not during writes.
@@ -648,20 +687,41 @@ at_opencode_model() { # projection
 # Filter only opted-in keys before the normal update. Remove the entire value, including
 # nested entries, indentless YAML sequence items and multiline flow closing delimiters.
 # Keep neighboring keys, top-level comments and the blank lines that separate entries.
-at_native_frontmatter() { # existing file effort permissions projected-model
+at_native_frontmatter() { # existing file effort permissions projected-model (plus AS_* projection plan)
     local fields
-    fields="$(at_native_fields "$2" "$3")" || return 1
-    AT_NATIVE_FIELDS="$fields" awk -v effort="$2" -v permissions="$3" -v model="$4" '
+    fields="$(at_native_fields "$2" "$3" "${AS_OC:-}")" || return 1
+    AT_NATIVE_FIELDS="$fields" AS_CLAUDE="${AS_CLAUDE:-}" AS_TOOL_EDIT="${AS_TOOL_EDIT:-}" \
+        awk -v effort="$2" -v permissions="$3" -v model="$4" -v oc_skills="${AS_OC:-}" \
+        -v tool_line="${AS_TOOL_LINE:-0}" -v tool_action="${AS_TOOL_ACTION:-}" -v state="${AS_CLAUDE_STATE:-}" '
+        BEGIN { split(state, owned, " ") }
         function key(s) {
             if (!match(s, /^([a-z]+|"[a-z]+"|\047[a-z]+\047)[ \t]*:/)) return ""
             s = substr(s, 1, RLENGTH - 1); gsub(/["\047 \t]/, "", s); return s
         }
         NR == 1 { if ($0 != "---") exit; print; next }
+        owned[1] && NR >= owned[1] && NR <= owned[2] {
+            if (NR == owned[1] && !owned[3]) {
+                printf "%s", ENVIRON["AS_CLAUDE"]
+                wrote_skills = 1
+            }
+            next
+        }
         skipping && /^[ \t]*$/ { blanks = blanks $0 "\n"; next }
         skipping && (/^[ \t]+[^ \t]/ || /^-[ \t]/ || /^[}\]]/) { blanks = ""; next }
         skipping { printf "%s", blanks; blanks = ""; if (!/^#/) skipping = 0 }
         {
             k = key($0)
+            if (tool_line == NR) {
+                if (tool_action == "insert") print
+                if (tool_action != "delete") print ENVIRON["AS_TOOL_EDIT"]
+                next
+            }
+            if (owned[3] == NR || (k == "skills" && oc_skills != "")) {
+                printf "%s", ENVIRON["AS_CLAUDE"]
+                wrote_skills = 1
+                if (oc_skills != "") skipping = 1
+                next
+            }
             if (permissions != "" && k == "model") {
                 if (!wrote_model) print "model: " model
                 wrote_model = skipping = 1; next
@@ -674,7 +734,8 @@ at_native_frontmatter() { # existing file effort permissions projected-model
         }
         $0 == "---" {
             if (permissions != "" && !wrote_model) print "model: " model
-            if (!wrote) print ENVIRON["AT_NATIVE_FIELDS"]
+            if (!wrote && ENVIRON["AT_NATIVE_FIELDS"] != "") print ENVIRON["AT_NATIVE_FIELDS"]
+            if (!wrote_skills) printf "%s", ENVIRON["AS_CLAUDE"]
             print; closed = 1; exit
         }
         { print }
@@ -884,11 +945,19 @@ at_ownership_findings() {
 # Projections whose current model is banned. Kept apart from at_lint_map: render-agents.sh
 # repairs these (it rewrites the model) once the map itself is clean, so they must not block
 # the render that would fix them; --check, doctor and the adoption gate still report them.
-at_lint_projection_bans() { # [--unverifiable-only]
-    local proj model base only="${1:-}"
+at_lint_projection_bans() { # [--unverifiable-only|--unmanaged-only]
+    local proj model base name harness def targets only="${1:-}"
     at_has_model_bans || return 0
     for proj in "$AT_ROOT"/.claude/agents/*.md "$AT_ROOT"/.opencode/agents/*.md; do
         [ -f "$proj" ] || continue
+        if [ "$only" = --unmanaged-only ]; then
+            name="${proj##*/}"; def="$AT_ROOT/.prdkit/agents/$name"
+            harness="${proj#"$AT_ROOT"/.}"; harness="${harness%%/*}"
+            if [ -f "$def" ]; then
+                targets="$(at_targets "$AT_ROOT" "$def")" || return 1
+                case " $targets " in *" $harness "*) continue ;; esac
+            fi
+        fi
         # Native V2 embeds the variant; a banned base id still applies to every variant.
         case "$proj" in
             "$AT_ROOT"/.opencode/agents/*.md)
@@ -900,10 +969,10 @@ at_lint_projection_bans() { # [--unverifiable-only]
                 fi
                 base="${model%%#*}"
                 if [ "$base" != "$model" ] && at_is_banned "$base"; then model="$base"; fi ;;
-            *) [ -z "$only" ] || continue
+            *) [ "$only" != --unverifiable-only ] || continue
                model="$(at_fm_value "$proj" model)" || return 1 ;;
         esac
-        [ -n "$only" ] || ! at_is_banned "$model" || printf "Agent projection %s uses banned model '%s'\n" "${proj#"$AT_ROOT"/}" "$model"
+        [ "$only" = --unverifiable-only ] || ! at_is_banned "$model" || printf "Agent projection %s uses banned model '%s'\n" "${proj#"$AT_ROOT"/}" "$model"
     done
 }
 
@@ -999,20 +1068,29 @@ at_native_model_valid() { # model variant
 
 # Projection findings for every neutral definition and target harness.
 #   include_missing  report absent projections (doctor reports those itself)
-at_projection_findings() { # include_missing delimiters_checked
-    local include_missing="$1" delimiters_checked="$2" def name tier harness proj current model variant key desc targets actual body native blockers delimiter
+at_projection_findings() { # include_missing delimiters_checked [skills-only]
+    local include_missing="$1" delimiters_checked="$2" skills_only="${3:-false}" def name tier harness proj current model variant key desc targets actual body native blockers delimiter
     for def in "$AT_ROOT"/.prdkit/agents/*.md; do
         [ -f "$def" ] || continue
         name="$(basename "$def" .md)"
+        as_definition "$def" || return 1
+        if [ -n "$AS_FINDINGS" ]; then printf '%s' "$AS_FINDINGS"; continue; fi
         tier="$(at_fm_value "$def" tier)" || return 1
         targets="$(at_targets "$AT_ROOT" "$def")" || return 1
         for harness in $targets; do
             proj="$AT_ROOT/.$harness/agents/$name.md"
+            at_projection_options "$tier" "$harness" || return 1
+            as_projection "$harness" "$proj" "$AT_P_PERMISSIONS" || return 1
+            if [ -n "$AS_FINDINGS" ]; then printf '%s' "$AS_FINDINGS"; continue; fi
+            if [ -z "$AS_LINE" ] && [ -n "$AS_CLAUDE_STATE" ]; then
+                printf "Agent '%s': .claude/agents/%s.md has stale generated Claude skill entries; run render-agents.sh\n" "$name" "$name"
+                continue
+            fi
+            if $skills_only; then continue; fi
             if ! at_resolve "$name" "$tier" "$harness"; then
                 printf "Agent '%s': no %s model resolves (%s)\n" "$name" "$harness" "$AT_R_ERR"
                 continue
             fi
-            at_projection_options "$tier" "$harness" || return 1
             if [ -n "$AT_P_PERMISSIONS" ] && ! at_native_model_valid "$AT_R_MODEL" "$AT_R_VARIANT"; then
                 printf "Agent '%s': OpenCode V2 projection requires a provider/model id and an optional separate variant token\n" "$name"
                 continue
@@ -1028,7 +1106,7 @@ at_projection_findings() { # include_missing delimiters_checked
                     *) at_projection_delimiter_finding "$proj" "$delimiter"; continue ;;
                 esac
             fi
-            if [ -n "$AT_P_EFFORT$AT_P_PERMISSIONS" ]; then
+            if [ -z "$AS_LINE" ] && [ -n "$AT_P_EFFORT$AT_P_PERMISSIONS" ]; then
                 blockers="$(at_native_projection_findings "$proj" "$AT_P_PERMISSIONS")" || return 1
                 if [ -n "$blockers" ]; then printf '%s\n' "$blockers"; continue; fi
             fi
@@ -1048,11 +1126,13 @@ at_projection_findings() { # include_missing delimiters_checked
                         printf "Agent '%s': .%s/agents/%s.md variant '%s' differs from resolved '%s' (%s); run render-agents.sh\n" "$name" "$harness" "$name" "${variant:-<none>}" "${AT_R_VARIANT:-<none>}" "$AT_R_SOURCE"
                 fi
             fi
-            if [ -n "$AT_P_EFFORT$AT_P_PERMISSIONS" ]; then
+            if [ -n "$AT_P_EFFORT$AT_P_PERMISSIONS$AS_CLAUDE" ]; then
                 if ! actual="$(at_frontmatter "$proj")" ||
                     ! native="$(at_native_frontmatter "$proj" "$AT_P_EFFORT" "$AT_P_PERMISSIONS" "$model")" || [ "$actual" != "$native" ]; then
                     key=effort
                     [ -z "$AT_P_PERMISSIONS" ] || key='native model/permissions frontmatter or legacy variant'
+                    [ -z "$AS_OC" ] || key='native model/permissions or skills frontmatter'
+                    [ -z "$AS_CLAUDE" ] || key='skills frontmatter, Skill tool or opted-in effort'
                     printf "Agent '%s': .%s/agents/%s.md %s differs from the Projection tier settings; run render-agents.sh\n" "$name" "$harness" "$name" "$key"
                 fi
             fi
@@ -1063,7 +1143,7 @@ at_projection_findings() { # include_missing delimiters_checked
                     printf "Agent '%s': .%s/agents/%s.md description differs from the neutral definition; run render-agents.sh\n" "$name" "$harness" "$name"
             fi
             actual="$(at_body_norm "$proj")" || return 1
-            body="$(at_projected_body "$def" "$AT_P_PREAMBLE")" || return 1
+            body="$(at_projected_body "$def" "$AT_P_PREAMBLE" "$AS_NOTES")" || return 1
             [ "$actual" = "$body" ] ||
                 printf "Agent '%s': .%s/agents/%s.md prompt body differs from the neutral definition; run render-agents.sh\n" "$name" "$harness" "$name"
         done
@@ -1097,10 +1177,10 @@ agent_tier_findings() {
         delimiters_checked=true
     fi
     at_lint_projection_bans || return 1
-    if $always || [ -n "$AT_BASELINE" ]; then
-        if [ -z "$AT_BASELINE" ] || [ -n "$AT_SNAP" ]; then
-            at_projection_findings "$include_missing" "$delimiters_checked" || return 1
-        fi
+    if { $always || [ -n "$AT_BASELINE" ]; } && { [ -z "$AT_BASELINE" ] || [ -n "$AT_SNAP" ]; }; then
+        at_projection_findings "$include_missing" "$delimiters_checked" || return 1
+    else
+        at_projection_findings "$include_missing" "$delimiters_checked" true || return 1
     fi
     [ -z "$AT_BASELINE" ] || at_ownership_findings
 }

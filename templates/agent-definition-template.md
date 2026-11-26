@@ -4,6 +4,7 @@ domain: Domain / Role
 tier: standard
 description: One line — when this agent should be dispatched.
 # harnesses: [claude, opencode]   # optional; default = every configured harness
+# skills: [example-skill]         # optional; see skill projection settings in agents.md
 # source: agent-library           # optional provenance, never projected
 ---
 
