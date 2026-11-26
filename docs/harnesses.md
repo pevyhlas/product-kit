@@ -48,18 +48,22 @@ definitions are projected by `render-agents.sh`, installed with `init.sh --with 
 (see [agent lifecycle](agent-lifecycle.md)):
 By default, Claude Code receives `model` and OpenCode receives separate `model` and `variant`
 fields. [Optional tier settings](customization.md#optional-projection-settings) can add Claude
-`effort`, OpenCode V2 `permissions` and `model#variant`, or an OpenCode prompt preamble.
+`effort` and a `tools` allowlist, ordered resource-scoped OpenCode V2 `permissions`
+and `model#variant`, or an OpenCode prompt preamble.
 Neutral/provenance keys (`tier`, `source`, `library-ref`, …) are removed from OpenCode
 frontmatter and provenance lives in YAML comments. Other native metadata is project-owned.
+Project-defined agents inherit shared tier settings; use a maker tier that grants edit or
+shell access for agents that need it. A Claude tool list with `Bash` is not read-only.
 The kit does not assume all harnesses have identical subagent, permission, or effort controls.
 
 [Optional skill projection](customization.md#optional-skill-projection) starts with a neutral
 `skills: [example-skill]` declaration. Claude Code preloads plugin-qualified skills and
 adds `Skill` to a restricted `tools:` list without granting `Bash`. OpenCode adds its skill
 allowlist after the managed V2 permission rules. A skill needing shell access is allowed only
-if those rules allow `shell`; otherwise the prompt tells the reviewer to consult packaged
-evidence or mark the facts unverified. The renderer validates the vendored files, but does not
-make them discoverable or run them. Check each target's agent and skill loader separately.
+if those rules allow shell on all resources with no later shell deny; otherwise the prompt tells
+the reviewer to consult packaged evidence or mark the facts unverified. The renderer validates
+the vendored files, but does not make them discoverable or run them. Check each target's agent
+and skill loader separately.
 
 ## Recorded evaluation coverage
 

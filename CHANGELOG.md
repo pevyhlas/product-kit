@@ -15,6 +15,12 @@ change by change.
 
 - Review packages open with the full diff, verified facts summary when available, and a required obligations section. It keeps trusted policy separate and retains binding base obligations even if the change drops a parent or citation. Oversized or non-text excerpts and unresolved base sources require the full packaged context. `evidence/facts/` is reserved for the facts pair; collector commands are marked for maintainer reruns only.
 
+## [3.1.5] — 2026-11-26 — tier least privilege
+
+### Added
+
+- Agent tier maps can opt into Claude tool allowlists and ordered resource-scoped OpenCode V2 permissions. Claude tool lists compose with skill projection and restore the previous native `tools:` field on opt-out.
+
 ## [3.1.4] — 2026-11-26 — agent skill projection
 
 ### Added
