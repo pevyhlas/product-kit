@@ -97,9 +97,9 @@ reject_reserved() {
     assert_contains "$OUTPUT" "conflicting --evidence $path"
 }
 
-[ "$#" -gt 0 ] || set -- context paths facts obligations reconcile references edge-blanks nontext
+[ "$#" -gt 0 ] || set -- context paths facts obligations reconcile references reference-style edge-blanks nontext
 for mode in "$@"; do
-    case "$mode" in obligations|reconcile|references|edge-blanks|nontext) setup_small ;; *) setup ;; esac
+    case "$mode" in obligations|reconcile|references|reference-style|edge-blanks|nontext) setup_small ;; *) setup ;; esac
     # The default exercises installed behavior; the override supports replay against a prior builder.
     BUILD="${PACKAGE_TEST_BUILDER:-$P/.prdkit/scripts/bash/build-review-package.sh}"
     case "$mode" in
@@ -415,6 +415,129 @@ EOF
                 assert_contains "$gaps" "parent unresolved BASE obligation: missing/unsafe parent $BASE:$parent"
                 assert_contains "$gaps" "unresolved BASE obligation: missing/unsafe context $BASE:specs/decisions/guidance.md"
                 assert_contains "$gaps" "unresolved BASE obligation: missing/ambiguous spec ID R-99 at $BASE"
+            fi ;;
+        reference-style)
+            it "The dropped BASE parent retains its reference-style upstream readiness gate"
+            record="specs/changes/$ID.md"
+            parent=specs/changes/900-programme.md
+            upstream=specs/changes/901-upstream.md
+            hold='Do not rename the customer-facing endpoint until the upstream cutover is signed off.'
+            sed 's/\*\*Tier\*\*: T1/**Tier**: T1 · **Parent**: 900-programme/' "$record" > .git/record
+            cp .git/record "$record"
+            cat > "$parent" <<'EOF'
+# Programme
+
+## Outcome checkpoint
+
+Keep the endpoint transition compatible.
+
+## Children
+
+| Child | Outcome |
+|---|---|
+| 001-small | Preserve the published contract. |
+
+## Dependencies
+
+The readiness gate for [the upstream change][upstream-ready] applies.
+
+## References
+
+[upstream-ready]: 901-upstream.md#readiness
+EOF
+            printf '# Upstream change\n\n## Readiness\n\n%s\n' "$hold" > "$upstream"
+            git add specs && git commit -qm 'establish ordinary Markdown reference-style dependency' || exit 1
+            BASE="$(git rev-parse HEAD)"
+            git update-ref refs/remotes/origin/main "$BASE"
+            sed 's/Parent\*\*: 900-programme/Parent**: —/' "$record" > .git/record
+            cp .git/record "$record"
+            printf 'endpoint renamed\n' > label.txt
+            git commit -qam 'detach the child and rename the endpoint' || exit 1
+            if build; then
+                section="$(obligations_section)"
+                assert_contains "$section" 'Linked context (specs/changes/901-upstream.md#readiness) — BASE, removed by this change'
+                assert_contains "$section" "$hold"
+                assert_contains "$(cat "$PKG/context-manifest.tsv")" "$BASE"$'\t'"$upstream"$'\t'"$(git rev-parse "$BASE:$upstream")"
+                assert_not_contains "$(cat "$PKG/diff.patch")" "$hold"
+                assert_not_contains "$section" '**Required full context:**'
+            fi
+
+            it "Shortcut and collapsed references normalize case and whitespace and use each revision's definitions"
+            git checkout -qb reference-forms "$BASE" || exit 1
+            sed '/^The readiness gate/,$d' "$parent" > .git/parent
+            cp .git/parent "$parent"
+            cat >> "$parent" <<'EOF'
+The [ UpStream   Ready ] gate and [STRASSE   Check][] apply.
+The [multiline reference][Multi
+ Word] also applies.
+The `code [not-a-reference]` and \[literal] are not references.
+<!-- [comment] -->
+
+~~~md
+[example]: missing.md#ignored
+[Not an obligation]
+~~~
+
+````md
+```
+[Also not an obligation]
+````
+
+## References
+
+[upstream ready]: 901-upstream.md#readiness
+[UPSTREAM READY]: 901-upstream.md#unused
+[Straße Check]:
+  <901-upstream.md#rollback>
+> [Multi   Word]: 901-upstream.md#schedule
+[unused]: missing.md#ignored
+EOF
+            printf '\n## Rollback\n\nKeep the previous route ready.\n\n## Schedule\n\nKeep the rollout window.\n' >> "$upstream"
+            git commit -qam 'establish shortcut and collapsed bindings' || exit 1
+            BASE="$(git rev-parse HEAD)"
+            git update-ref refs/remotes/origin/main "$BASE"
+            sed 's@901-upstream.md#readiness@902-new.md#readiness@' "$parent" > .git/parent
+            cp .git/parent "$parent"
+            printf '# Another dependency\n\n## Readiness\n\nProposed readiness replacement.\n' > specs/changes/902-new.md
+            git add specs && git commit -qm 'retarget only the shortcut definition' || exit 1
+            if build; then
+                section="$(obligations_section)"
+                assert_contains "$section" 'Linked context (specs/changes/901-upstream.md#readiness) — BASE, removed by this change'
+                assert_contains "$section" 'Linked context (specs/changes/902-new.md#readiness) — Proposed by this change'
+                assert_contains "$section" 'Linked context (specs/changes/901-upstream.md#rollback) — unchanged from BASE'
+                assert_contains "$section" 'Linked context (specs/changes/901-upstream.md#schedule) — unchanged from BASE'
+                assert_contains "$section" 'Keep the previous route ready.'
+                assert_contains "$section" 'Proposed readiness replacement.'
+                assert_not_contains "$section" '**Required full context:**'
+                assert_eq 'verification no verification evidence supplied; dispatch pending' "$(cat "$PKG/context-gaps.txt")" 'unused, escaped, fenced or duplicate markup does not create gaps'
+            fi
+
+            it "An undefined label at a selected HEAD usage forces full context with the usage location"
+            sed 's/\[Multi   Word\]:/[Something Else]:/' "$parent" > .git/parent
+            cp .git/parent "$parent"
+            git commit -qam 'drop a definition at HEAD' || exit 1
+            if build; then
+                section="$(obligations_section)"
+                use_line="$(awk '/\[multiline reference\]/ { print NR }' "$parent")"
+                assert_contains "$section" '**Required full context:** A reference label is undefined.'
+                assert_not_contains "$section" 'Preserve the exported public label'
+                assert_contains "$(cat "$PKG/context-gaps.txt")" "undefined reference label multi\\ word at $(git rev-parse HEAD):$parent:$use_line"
+            fi
+
+            it "HEAD cannot erase an undefined BASE shortcut by detaching the child"
+            sed 's/\[ UpStream   Ready \]/[unbound-shortcut]/' "$parent" > .git/parent
+            cp .git/parent "$parent"
+            git commit -qam 'establish a parent with an unresolved shortcut' || exit 1
+            BASE="$(git rev-parse HEAD)"
+            git update-ref refs/remotes/origin/main "$BASE"
+            sed 's/Parent\*\*: 900-programme/Parent**: —/' "$record" > .git/record
+            cp .git/record "$record"
+            git commit -qam 'remove the parent reference' || exit 1
+            if build; then
+                section="$(obligations_section)"
+                use_line="$(awk '/\[unbound-shortcut\]/ { print NR }' "$parent")"
+                assert_contains "$section" '**Required full context:** A BASE obligation could not be resolved.'
+                assert_contains "$(cat "$PKG/context-gaps.txt")" "unresolved BASE obligation: undefined reference label unbound-shortcut at $BASE:$parent:$use_line"
             fi ;;
         edge-blanks)
             it "A moved bound without the separator blank line renders once from BASE"

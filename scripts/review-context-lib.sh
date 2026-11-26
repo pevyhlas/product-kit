@@ -334,18 +334,21 @@ context_reference_id() { # rev, ID inventory, ID, reason
 }
 
 context_reference_links() { # rev, material, source path, optional TSV of selected line ranges
-    local rev="$1" material="$2" source="$3" spans="${4:-}" file line target dest anchor
+    local rev="$1" material="$2" source="$3" spans="${4:-}" file line target dest issue anchor
     # Use the same link parser for both revisions and for selected parent text.
     if ! spec_links "$material" --with-destinations "$source" > "$CTX_TMP/reference-links"; then
         context_gap link "cannot enumerate links in $rev:$source"; return
     fi
-    while IFS=$'\037' read -r file line target dest; do
+    while IFS=$'\037' read -r file line target issue dest; do
         if [ -n "$spans" ] && ! awk -v n="$line" '$1<=n && n<=$2 { found=1 } END { exit !found }' "$spans"; then
             continue
         fi
         anchor=
         case "$dest" in *\#*) anchor="${dest#*\#}" ;; esac
-        if [ -z "$target" ]; then
+        if [ "$issue" = undefined ]; then
+            undefined_link_gap=true
+            context_gap link "undefined reference label $(printf '%q' "$dest") at $rev:$source:$line; supply explicit context"
+        elif [ -z "$target" ]; then
             context_gap link "unsupported destination $(printf '%q' "$dest") at $rev:$source:$line; supply explicit context"
         elif [ -n "$anchor" ] && safe_path "$target" object && [[ "$anchor" != *[[:cntrl:]\\]* ]]; then
             context_reference_select "link:$target#$anchor" "$rev" "$target" "$anchor" link "Linked context ($target#$anchor)"
@@ -513,6 +516,7 @@ review_context_build() {
     local path blob base_blob record record_rev last count a entry base_material base_items hist_material reference_side
     local shared_inputs=false explicit_kind explicit_rev
     base_reference_gap=false
+    undefined_link_gap=false
     CTX_TMP="$PACKAGE_SCRATCH/context"; mkdir -p "$CTX_TMP/material/.prdkit"
     CTX_N=1
     printf 'artifact\tsource_rev\tsource_path\tsource_blob\tfirst_line\tlast_line\tobligation\treason\n' > "$PACKAGE_DIR/context-manifest.tsv"
@@ -726,6 +730,8 @@ review_context_obligations() {
     : > "$obligation_draft"
     if $base_reference_gap; then
         status=4
+    elif $undefined_link_gap; then
+        status=5
     elif review_obligation_capture; then
         cat "$obligation_draft"
         return
@@ -736,6 +742,7 @@ review_context_obligations() {
         2) printf '**Required full context:** The captured obligations exceed the %s-byte inline cap.\n\n' "$obligation_cap" ;;
         3) printf '**Required full context:** A captured artifact cannot be included as inline text.\n\n' ;;
         4) printf '**Required full context:** A BASE obligation could not be resolved. See [context-gaps.txt](context-gaps.txt) for the exact gap.\n\n' ;;
+        5) printf '**Required full context:** A reference label is undefined. See [context-gaps.txt](context-gaps.txt) for the exact gap.\n\n' ;;
         *) return "$status" ;;
     esac
     cat <<'EOF'

@@ -14,6 +14,7 @@ change by change.
 ### Changed
 
 - Review packages open with the full diff, verified facts summary when available, and a required obligations section. It keeps trusted policy separate and retains binding base obligations even if the change drops a parent or citation. Oversized or non-text excerpts and unresolved base sources require the full packaged context. `evidence/facts/` is reserved for the facts pair; collector commands are marked for maintainer reruns only.
+- Review packages resolve Markdown reference links used in captured obligations, even when the definitions are outside the excerpt. An undefined label requires full context.
 
 ## [3.1.5] — 2026-11-26 — tier least privilege
 

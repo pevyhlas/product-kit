@@ -23,8 +23,8 @@ in the [review workflow](../workflows/review.md#review). Facts don't set obligat
 approval, and their bounds inventory does not show full bound bodies.
 
 The inline excerpt budget is 16 KiB, including source labels and formatting. If the captured
-material would exceed it, is not valid UTF-8 text, or a BASE obligation cannot be resolved,
-the index shows no partial list and
+material would exceed it, is not valid UTF-8 text, a BASE obligation cannot be resolved, or a
+selected reference label is undefined, the index shows no partial list and
 explicitly requires reading `context-manifest.tsv`, the relevant packaged context, the bounds
 inventories with their input bindings if present, and `context-gaps.txt`. Inline text permits
 tab and LF but no other C0, DEL or C1 control characters. This includes rejecting CR even in
@@ -43,8 +43,11 @@ The four-column `manifest.tsv` inventories artifacts. `context-manifest.tsv` add
 - the union of the BASE and HEAD parents' headers, outcome checkpoints, actual child rows, and
   dependency/hold/limit sections, not whole parent records;
 - spec IDs and heading links cited by the child and selected parent text, resolved at each
-  source revision and including nested item bodies. Dropping a citation or parent reference
-  does not drop the BASE target; a closing record's historical context is labeled separately;
+  source revision and including nested item bodies. Full, collapsed, and shortcut Markdown
+  reference links use definitions in the same document, even outside the selected excerpt.
+  Label matching folds case and collapses whitespace. Undefined labels name their usage
+  location in `context-gaps.txt`. Dropping a citation or parent reference does not drop
+  the BASE target; a closing record's historical context is labeled separately;
 - the **actual** installed `bounds.sh` output on materialized HEAD canon and the actual child's
   scope (a recovered scope record keeps its historical binding). When relevant inputs differ,
   `bounds-base.txt` and `bounds-base-inputs.tsv` capture the BASE scope independently. With no
