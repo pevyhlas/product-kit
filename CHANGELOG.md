@@ -11,7 +11,16 @@ change by change.
 
 ## [Unreleased]
 
-## [3.1.6] — 2026-11-26 — lean review package
+## [3.2.0] — 2026-11-26 — lean review package
+
+### Changed (breaking)
+
+- `build-review-package.sh` reserves `evidence/facts/` for the verified facts pair. An
+  `--evidence` input named `facts` or under `facts/` (any ASCII case) is refused, even without
+  `--facts`; 3.1.5 copied it. Attach a `facts.sh` pack with `--facts`, which copies the cached
+  pair to `evidence/facts/{summary.md,index.json}`, instead of passing its files with
+  `--evidence`. Move other evidence out of a top-level `facts/` directory before attaching it.
+  Packages built by earlier versions are not reused: the completion format changed.
 
 ### Changed
 
