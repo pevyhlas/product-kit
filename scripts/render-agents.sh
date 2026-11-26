@@ -19,7 +19,8 @@
 # comments) is project-owned native metadata and is preserved, as are leading generated-marker
 # comment lines in the body. The optional `Projection tier` table opts in per field:
 #   - `Claude effort` owns `effort:`.
-#   - `OpenCode permissions` owns `permissions:` (OpenCode V2, deny all plus explicit allows),
+#   - `Claude tools` owns `tools:` and restores the prior field on opt-out.
+#   - `OpenCode permissions` owns `permissions:` (OpenCode V2, deny all plus ordered rules),
 #     replaces legacy `permission:`, and writes variants as `model: provider/model#variant`
 #     instead of a separate `variant:`. Without this opt-in the model/variant format is unchanged.
 #     Migrate other V1-only keys manually. Opted-in frontmatter replacements refuse YAML anchors/aliases.
@@ -263,6 +264,7 @@ new_projection() { # def harness name model variant body
     printf 'model: %s\n' "$model"
     [ "$harness" != opencode ] || [ -z "$variant" ] || printf 'variant: %s\n' "$variant"
     at_native_fields "$AT_P_EFFORT" "$AT_P_PERMISSIONS" "$AS_OC"
+    [ -z "$AS_TOOL_EDIT" ] || printf '%s\n' "$AS_TOOL_EDIT"
     printf '%s' "$AS_CLAUDE"
     printf -- '---\n\n'
     [ -z "$body" ] || printf '%s\n' "$body"
@@ -340,7 +342,7 @@ EOF
     fi
 fi
 plan=() as_oc=() as_notes=() as_claude=() as_claude_state=() as_tool_action=() as_tool_line=() as_tool_edit=()
-has_skills=false
+has_managed_extras=false
 for def in "$root"/.prdkit/agents/*.md; do
     [ -f "$def" ] || continue
     name="$(basename "$def" .md)"
@@ -355,13 +357,13 @@ for def in "$root"/.prdkit/agents/*.md; do
             while IFS= read -r f; do [ -z "$f" ] || FINDINGS+=("$f"); done <<< "$AS_FINDINGS"
             continue
         fi
-        [ -z "$AS_LINE" ] || has_skills=true
+        [ -z "$AS_LINE" ] || has_managed_extras=true
     fi
     for harness in $(at_targets "$root" "$def"); do
         proj="$root/.$harness/agents/$name.md"
         at_projection_options "$tier" "$harness"
         if [ "$mode" = write ]; then
-            if ! as_projection "$harness" "$proj" "$AT_P_PERMISSIONS"; then
+            if ! as_projection "$harness" "$proj" "$AT_P_PERMISSIONS" "$AT_P_TOOLS"; then
                 FINDINGS+=("Agent '$name': $harness skill projection inspection failed")
                 continue
             fi
@@ -369,14 +371,14 @@ for def in "$root"/.prdkit/agents/*.md; do
                 while IFS= read -r f; do [ -z "$f" ] || FINDINGS+=("$f"); done <<< "$AS_FINDINGS"
                 continue
             fi
-            [ -z "$AS_CLAUDE_STATE" ] || has_skills=true
+            if [ -n "$AS_CLAUDE_STATE$AT_P_TOOLS" ] || [[ "$AT_P_PERMISSIONS" == @* ]]; then has_managed_extras=true; fi
         fi
         if at_resolve "$name" "$tier" "$harness"; then
             if [ -n "$AT_P_PERMISSIONS" ] && ! at_native_model_valid "$AT_R_MODEL" "$AT_R_VARIANT"; then
                 FINDINGS+=("Agent '$name': OpenCode V2 projection requires a provider/model id and an optional separate variant token")
                 continue
             fi
-            if [ "$mode" = write ] && [ -z "$AS_LINE$AS_CLAUDE_STATE" ] && [ -n "$AT_P_EFFORT$AT_P_PERMISSIONS" ] && [ -f "$proj" ]; then
+            if [ "$mode" = write ] && ! "$AS_REVIEWED_NATIVE" && [ -n "$AT_P_EFFORT$AT_P_PERMISSIONS" ] && [ -f "$proj" ]; then
                 if blockers="$(at_native_projection_findings "$proj" "$AT_P_PERMISSIONS")"; then
                     while IFS= read -r f; do [ -z "$f" ] || FINDINGS+=("$f"); done <<EOF
 $blockers
@@ -396,9 +398,9 @@ EOF
         fi
     done
 done
-# With skills opted in, also block on findings that no render can repair. Keep
-# the legacy post-render reporting behavior when no definition declares skills.
-if $has_skills; then
+# With skills or least-privilege extras, also block on findings that no render
+# can repair. Keep legacy post-render reporting otherwise.
+if $has_managed_extras; then
     if blockers="$(at_ownership_findings && at_lint_projection_bans --unmanaged-only)"; then
         while IFS= read -r f; do [ -z "$f" ] || FINDINGS+=("$f"); done <<< "$blockers"
     else

@@ -230,7 +230,8 @@ rm .claude/agents/make.md .opencode/agents/make.md
 run bash "$R"
 assert_eq 0 "$STATUS" "mixed roles render"
 perm_rules() {
-    awk '/^  - action:/ { a=$NF } /^    resource:/ { r=$NF } /^    effect:/ { print a, r, $NF }' "$1"
+    awk '/^  - action:/ { a=substr($0, 13) } /^    resource:/ { r=substr($0, 15) }
+         /^    effect:/ { print a, r, $NF }' "$1"
 }
 assert_eq '"*" "*" deny
 "read" "*" allow
@@ -642,5 +643,244 @@ it "more than 32 declarations are refused before vendored skill lookup"
 many="$(awk 'BEGIN { printf "skills: ["; for (i=1; i<=33; i++) printf "%sexample-%d", (i==1 ? "" : ", "), i; print "]" }')"
 def review deep "$many"
 blocked "line 4: skill '<list>': declare at most 32 skills"
+
+it "tier tools restrict fresh and existing agents and compose with skills in either opt-in order"
+printf '\nSkill roots: custom-skills\n' >> "$P/map-skills"
+cp "$P/map-skills" "$MAP"
+sed \
+    -e '/^| Projection tier /s/ |$/ | Claude tools |/' \
+    -e '/^|-----------------|---------------|----------------------|-------------------|$/s/$/--------------|/' \
+    -e '/^| deep /s/ |$/ | Read, Grep, Glob, New_Tool-v2 |/' \
+    -e '/^| standard /s/ |$/ | Read, Bash, Edit, Write, Skill |/' \
+    "$MAP" > "$P/map-least"
+cp "$P/map-least" "$MAP"
+C=.claude/agents/review.md
+O=.opencode/agents/review.md
+def review deep
+def make standard
+NATIVE_TOOLS=$'tools: # project list\n  - Read  # retained \\n text\n  # between list items\n  - "Bash"\n# next field comment'
+NATIVE_TOOLS="$NATIVE_TOOLS" awk '/^tools:/ { print ENVIRON["NATIVE_TOOLS"]; next } { print }' \
+    "$P/no-settings/claude-review.md" > "$P/prior-policy"
+cp "$P/prior-policy" "$C"
+rm .claude/agents/make.md
+run bash "$R"
+assert_eq 0 "$STATUS" "tier tools apply to existing and fresh projections"
+assert_eq 'tools: Read, Grep, Glob, New_Tool-v2' "$(grep '^tools:' "$C")"
+assert_eq 'tools: Read, Bash, Edit, Write, Skill' "$(grep '^tools:' .claude/agents/make.md)"
+assert_contains "$(cat "$C")" '# next field comment'
+assert_contains "$(cat "$C")" 'skills: [hand-owned-skill]'
+run bash "$R" --check --json
+assert_eq 0 "$STATUS"
+cp "$C" "$P/tier-only"
+sed '/^| deep /s/Read, Grep, Glob, New_Tool-v2/Read, Grep/' "$P/map-least" > "$MAP"
+run bash "$R" --check
+assert_eq 1 "$STATUS" "changed tier allowlist is reported as drift"
+run bash "$R"
+assert_eq 0 "$STATUS"
+assert_eq 'tools: Read, Grep' "$(grep '^tools:' "$C")" "tier updates keep ownership of the original tools"
+cp "$P/map-least" "$MAP"
+def review deep 'skills: [example-read]'
+def make standard 'skills: [example-read]'
+run bash "$R"
+assert_eq 0 "$STATUS" "skills compose with tier tools"
+assert_eq 'tools: Read, Grep, Glob, New_Tool-v2, Skill' "$(grep '^tools:' "$C")"
+assert_eq 'tools: Read, Bash, Edit, Write, Skill' "$(grep '^tools:' .claude/agents/make.md)"
+cp "$C" "$P/tier-and-skill"
+def review deep
+def make standard
+run bash "$R"
+assert_eq 0 "$STATUS"
+assert_eq 'tools: Read, Grep, Glob, New_Tool-v2' "$(grep '^tools:' "$C")" "skill opt-out preserves the tier allowlist"
+assert_eq 'skills: [hand-owned-skill]' "$(grep '^skills:' "$C")" "skill opt-out restores native preloads"
+run bash "$R" --check
+assert_eq 0 "$STATUS" "tier-only projection checks clean after skill opt-out"
+cp "$P/map-skills" "$MAP"
+run bash "$R" --check
+assert_eq 1 "$STATUS" "tier opt-out is reported before cleanup"
+assert_contains "$OUTPUT" "stale generated Claude tools"
+run bash "$R"
+assert_eq 0 "$STATUS"
+bytes "$P/prior-policy" "$C" "restores exact native block list including comments and quoting"
+assert_not_contains "$(cat .claude/agents/make.md)" 'tools:' "fresh agent loses its generated tools field"
+
+def review deep 'skills: [example-read]'
+run bash "$R"
+assert_eq 0 "$STATUS" "start with an existing skills-only tool edit"
+cp "$P/map-least" "$MAP"
+run bash "$R"
+assert_eq 0 "$STATUS" "tier tools take over a previous skills-only edit"
+assert_eq 'tools: Read, Grep, Glob, New_Tool-v2, Skill' "$(grep '^tools:' "$C")"
+cp "$P/map-skills" "$MAP"
+run bash "$R"
+assert_eq 0 "$STATUS"
+assert_eq 1 "$(grep -c '^  - Skill$' "$C")" "tier opt-out with skills still active keeps exactly one Skill"
+assert_contains "$(cat "$C")" '  - "Bash"'
+run bash "$R" --check
+assert_eq 0 "$STATUS"
+def review deep
+run bash "$R"
+assert_eq 0 "$STATUS"
+bytes "$P/prior-policy" "$C" "second opt-out restores the original block list"
+
+it "tier tools reject invalid values, conflicts, and unsafe ownership without writing to either harness"
+cp "$P/map-least" "$MAP"
+cp "$P/prior-policy" "$C"
+for value in '[]' 'null' '""' 'Read,,Bash' 'Read, Read' 'Read(Bash *)' '*tools'; do
+    TOOLS="$value" awk '/^\| deep / { sub(/Read, Grep, Glob, New_Tool-v2/, ENVIRON["TOOLS"]) } { print }' \
+        "$P/map-least" > "$MAP"
+    blocked "Claude tools must be a nonempty comma-separated allowlist"
+done
+cp "$P/map-least" "$MAP"
+for setting in 'disallowedTools: Read' $'disallowedTools:\n  - Grep' 'disallowedTools: [Glob, Other]'; do
+    EXTRA="$setting" awk '/^color:/ { print ENVIRON["EXTRA"] } { print }' "$P/prior-policy" > "$C"
+    blocked "allowlist conflicts with disallowedTools"
+done
+def review deep 'skills: [example-read]'
+awk '/^color:/ { print "disallowedTools: Skill" } { print }' "$P/prior-policy" > "$C"
+blocked "allowlist conflicts with disallowedTools: Skill"
+def review deep
+awk '/^color:/ { print "disallowedTools: [Edit, Write]" } { print }' "$P/prior-policy" > "$C"
+run bash "$R"
+assert_eq 0 "$STATUS" "unrelated native denies stay project-owned"
+assert_contains "$(cat "$C")" "disallowedTools: [Edit, Write]"
+
+for key in '"tools": Read' '"to\u006fls": Read' $'? tools\n: Read' '"disallowedTools": Read' \
+    '"disallowed\u0054ools": Read' $'? |-\n  disallowedTools\n: Read' 'tools: &review [Read]' \
+    'tools: null' 'tools: {Read: true}'; do
+    EXTRA="$key" awk '/^color:/ { print ENVIRON["EXTRA"] } { print }' "$P/prior-policy" > "$C"
+    blocked "unreadable Claude tools/frontmatter"
+done
+for record in 'saved-tools ' 'saved-tools tools: {Read: true}' 'saved-tools tools:' \
+    'applied-tools tools: []' 'applied-tools tools: "Read"' 'tool-policy []'; do
+    awk -v field="${record%% *}" -v record="$record" '
+        index($0, "# prdkit-skill-projection: " field " ") == 1 { $0 = "# prdkit-skill-projection: " record }
+        { print }' "$P/tier-and-skill" > "$C"
+    for map in "$P/map-least" "$P/map-skills"; do
+        cp "$map" "$MAP"
+        blocked "cannot establish Claude skill projection ownership"
+    done
+done
+cp "$P/map-least" "$MAP"
+sed '/^tools:/s/$/, Bash/' "$P/tier-only" > "$C"
+blocked "cannot establish Claude skill projection ownership"
+sed '/^# prdkit-skill-projection:/s/^/  /' "$P/tier-only" > "$C"
+cp "$P/map-skills" "$MAP"
+run bash "$R"
+assert_eq 0 "$STATUS" "indented real ownership comments are recognized on cleanup"
+bytes "$P/prior-policy" "$C" "indented ownership records restore the exact prior list"
+
+it "tier tools ignore ownership lookalikes in values and leave native skills alone"
+cp "$P/map-least" "$MAP"
+awk '/^skills:/ {
+        print "skills:\n  - hand-owned-skill"
+        print "notes: |2-\n  # prdkit-skill-projection: tool-policy not-a-record"
+        print "caption: \"first line\n  # prdkit-skill-projection: saved-tools also not a record\n  last line\""
+        next
+    } { print }' "$P/prior-policy" > "$P/tier-prose"
+cp "$P/tier-prose" "$C"
+run bash "$R"
+assert_eq 0 "$STATUS"
+run bash "$R" --check
+assert_eq 0 "$STATUS"
+cp "$P/map-skills" "$MAP"
+run bash "$R"
+assert_eq 0 "$STATUS"
+bytes "$P/tier-prose" "$C" "native block skills and marker-like scalar text survive opt-out"
+
+cp "$P/map-least" "$MAP"
+awk '/^tools:/ {
+        print "tools: [ Read, Skill ]  # project-owned"
+        skip = 1; next
+    }
+    skip && /^[ \t]/ { next }
+    { skip = 0; print }' "$P/prior-policy" > "$P/tier-inline"
+cp "$P/tier-inline" "$C"
+run bash "$R"
+assert_eq 0 "$STATUS"
+cp "$P/map-skills" "$MAP"
+run bash "$R"
+assert_eq 0 "$STATUS"
+bytes "$P/tier-inline" "$C" "tier opt-out restores the native inline list exactly"
+
+cp "$P/map-least" "$MAP"
+printf 'Old prompt without frontmatter.\n' > "$C"
+run bash "$R"
+assert_eq 0 "$STATUS"
+assert_eq 'tools: Read, Grep, Glob, New_Tool-v2' "$(grep '^tools:' "$C")" "headerless projection receives the tier tools"
+run bash "$R" --check
+assert_eq 0 "$STATUS"
+
+it "ordered scoped OpenCode permissions lead and skill rules still override tier rules"
+cp "$P/map-least" "$MAP"
+def review deep 'skills: [example-shell, example-read]'
+set_scoped() {
+    RULES="$1" awk '/^\| deep / && match($0, /read, skill/) {
+        $0 = substr($0, 1, RSTART-1) ENVIRON["RULES"] substr($0, RSTART+RLENGTH)
+    } { print }' "$P/map-least" > "$MAP"
+}
+set_scoped '[{action: read, resource: "*", effect: allow}, {effect: deny, resource: "*.env", action: read}, {action: read, resource: '"'"'*.env.*'"'"', effect: deny}, {action: read, resource: public/*.env, effect: allow}, {action: shell, resource: "*", effect: allow}, {action: shell, resource: "git push *", effect: deny}, {action: skill, resource: "*", effect: allow}]'
+cp "$MAP" "$P/map-scoped"
+run bash "$R"
+assert_eq 0 "$STATUS"
+assert_eq '"*" "*" deny
+"read" "*" allow
+"read" "*.env" deny
+"read" "*.env.*" deny
+"read" "public/*.env" allow
+"shell" "*" allow
+"shell" "git push *" deny
+"skill" "*" allow
+"skill" "*" deny
+"skill" "example-read" allow' "$(perm_rules "$O")" "scoped rules preserve order before generated skill rules"
+assert_contains "$(cat "$O")" 'resource: "git push *"'
+assert_contains "$(cat "$O")" "needs a shell"
+run bash "$R" --check --json
+assert_eq 0 "$STATUS"
+run bash "$S/doctor.sh" --json
+assert_eq 0 "$STATUS"
+run bash "$S/check-adoption.sh" --json
+assert_eq 0 "$STATUS"
+
+set_scoped '[{action: shell, resource: "git push *", effect: deny}, {action: shell, resource: "*", effect: allow}]'
+run bash "$R"
+assert_eq 0 "$STATUS"
+assert_contains "$(perm_rules "$O")" '"skill" "example-shell" allow' "a later blanket shell allow supersedes a scoped deny"
+assert_not_contains "$(cat "$O")" "needs a shell"
+set_scoped '[{action: shell, resource: "git status *", effect: allow}]'
+run bash "$R"
+assert_eq 0 "$STATUS"
+assert_not_contains "$(perm_rules "$O")" '"skill" "example-shell" allow' "a narrowed shell allow cannot satisfy unknown needs"
+assert_contains "$(cat "$O")" "needs a shell"
+
+for invalid in '[]' '[{action: read, resource: "*", effect: ask}]' \
+    '[{action: "*", resource: "*", effect: allow}]' '[{action: null, resource: "*", effect: deny}]' \
+    '[{action: read, resource: "*", resource: "*"}]' '[{action: read, resource: [], effect: deny}]' \
+    '[{action: read, resource: null, effect: deny}]' '[{action: read, resource: 42, effect: deny}]' \
+    '[{action: read, resource: *.env, effect: deny}]' '[{action: read, resource: &wild "x", effect: deny}]' \
+    '[{action: read, resource: "", effect: deny}]' '[{action: read, resource: "x\n", effect: deny}]' \
+    $'[{action: read, resource: "x\tz", effect: deny}]'; do
+    set_scoped "$invalid"
+    blocked "OpenCode permission rules must be a nonempty list"
+done
+cp "$P/map-scoped" "$MAP"
+cp "$O" "$P/scoped-valid"
+for key in '"permissions": []' '"permissio\u006es": []' $'? permissions\n: []' 'permissions: []'; do
+    EXTRA="$key" awk '/^model:/ { print ENVIRON["EXTRA"] } { print }' "$P/scoped-valid" > "$O"
+    if [ "$key" = 'permissions: []' ]; then blocked "duplicate OpenCode frontmatter key: permissions"
+    else blocked "unreadable OpenCode frontmatter"; fi
+done
+cp "$P/scoped-valid" "$O"
+set_scoped $'[{action: read, resource: "x\302\205z", effect: deny}]'
+# Locale-aware awk may reject directly; byte-oriented awk rejects after packing.
+blocked "OpenCode permission"
+def review deep
+set_scoped '[{action: read, resource: "folder\\name/\"quoted\"*.md", effect: allow}, {action: read, resource: "a # literal, [glob]", effect: deny}]'
+run bash "$R"
+assert_eq 0 "$STATUS"
+assert_contains "$(cat "$O")" 'resource: "folder\\name/\"quoted\"*.md"' "quotes and backslashes round-trip"
+assert_contains "$(cat "$O")" 'resource: "a # literal, [glob]"' "embedded punctuation is literal"
+assert_not_contains "$(cat "$O")" 'action: "skill"' "no skill rules without a declaration"
+run bash "$R" --check
+assert_eq 0 "$STATUS"
 
 finish

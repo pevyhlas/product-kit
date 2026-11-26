@@ -71,15 +71,15 @@ neutral definition; any other unowned projection is a finding.
 ### Optional projection settings
 
 Add this table outside a code fence in `.prdkit/memory/agents.md`, separated from other
-tables by a blank line. Keep the four headings
-and use the **local** tier from the neutral definition, not its mapped library tier.
+tables by a blank line. The fifth column is optional; existing four-column tables still
+work. Use the **local** tier from the neutral definition, not its mapped library tier.
 
 ```text
-| Projection tier | Claude effort | OpenCode permissions | OpenCode preamble |
-|-----------------|---------------|----------------------|-------------------|
-| *               |               |                      | Use the project rubric. |
-| deep            | high          | read, glob, grep     | Start with the review rubric. |
-| standard        |               | deny                 |                   |
+| Projection tier | Claude effort | OpenCode permissions | OpenCode preamble | Claude tools |
+|-----------------|---------------|----------------------|-------------------|--------------|
+| *               |               |                      | Use the project rubric. | |
+| reviewer        | high          | read, glob, grep     | Start with the review rubric. | Read, Grep, Glob |
+| maker           |               | read, glob, grep, edit, shell |          | Read, Grep, Glob, Bash, Edit, Write |
 ```
 
 - Omit the table for unchanged output. Leave a cell empty to leave the setting undeclared.
@@ -87,10 +87,22 @@ and use the **local** tier from the neutral definition, not its mapped library t
   Use LF line endings. Each tier has at most one row, and each row must set something.
 - **Claude effort** owns `effort:` only for that tier. Choose `low`, `medium`, `high`, `xhigh`,
   or `max`; check that the Claude Code version and chosen model support the level.
+- **Claude tools** sets `tools:` to a comma-separated allowlist. Use distinct tool names
+  starting with an ASCII letter, followed by letters, digits, `_`, `.` or `-`. Do not use
+  `[]`, wildcards or argument restrictions. If the projection has a `disallowedTools:` list,
+  it must be readable and must not overlap the allowlist, including an added `Skill` tool.
+  The renderer saves any previous native `tools:` in ownership comments. Keep those comments
+  intact: on opt-out it restores the original field, or removes `tools:` if it was absent.
+  It still applies any active skill declaration to the restored tools.
 - **OpenCode permissions** opts that tier into **OpenCode V2**. `deny` blocks all actions.
   A comma-separated list adds allows for those exact action names, for **all** their resources.
   Names use lowercase letters, digits and underscores and start with a letter. No wildcards.
-  For resource-specific rules, leave this cell blank and manage them in the projection.
+  For resource-specific rules, use a single-line list of `{action, resource, effect}` entries.
+  Each needs an action name, a nonempty plain or quoted glob string, and `allow` or `deny`.
+  Quote patterns starting with `*` or `?`, such as `"*.env"`. In double quotes, use
+  `\"` or `\\` when needed. In single quotes, double any apostrophes. Control
+  characters, a literal `|` (the table delimiter), YAML anchors and aliases are not supported.
+  Rules follow the generated deny-all in the order given; the last matching rule wins.
   A nonblank cell replaces the entire `permission:` or `permissions:` entry, not just its
   defaults. It also writes `model: provider/model#variant` when a variant resolves, removing
   any separate `variant:`. Keep the model ID and optional variant separate in the baseline and
@@ -104,7 +116,18 @@ and use the **local** tier from the neutral definition, not its mapped library t
   any generated-marker comments. The optional `*` row sets only a global preamble; a nonblank
   local preamble takes precedence. Do not put `|` in the preamble or HTML comments in the row.
 
-When opting into effort or permissions, use a simple YAML block mapping and replace any
+For example, this **OpenCode permissions** cell grants `read` except for `.env` and
+`.env.*` files. It does not grant shell, which is a separate way to read files:
+
+```text
+[{action: read, resource: "*", effect: allow}, {action: read, resource: "*.env", effect: deny}, {action: read, resource: "*.env.*", effect: deny}]
+```
+
+Project-owned agent definitions on a shared tier inherit its permissions and tools. Put an
+agent that needs to edit or run shell commands on a maker tier that grants those operations.
+Tools and permission patterns are not a sandbox; in particular, Claude's `Bash` can modify files.
+
+When opting into effort, tools or permissions, use a simple YAML block mapping and replace any
 frontmatter anchors, aliases and alias-based merges with explicit values before rendering.
 The guard looks for YAML references at the start of a node, not `*` or `&` in ordinary
 text such as quoted permission patterns or block-scalar descriptions.
@@ -160,8 +183,9 @@ For a declaring agent:
 
 - **OpenCode:** Set its local tier's **OpenCode permissions** cell to take ownership of
   V2 permissions, or exclude OpenCode from that agent's `harnesses:` list. The renderer
-  refuses to infer shell access from hand-owned or legacy permissions. A rendered `shell`
-  allow is required to allow shell-dependent skills. After the tier's rules, the renderer
+  refuses to infer shell access from hand-owned or legacy permissions. A shell-dependent
+  skill needs a `shell` allow on `*` with no later shell deny; the declaration does not say
+  which commands the skill needs. After the tier's rules, the renderer
   denies all skills and then allows only the declared runnable IDs. For each blocked skill,
   the prompt points to `<id>.json` or `<id>.md` supplied by the maker. Pass those completed
   files with `build-review-package.sh --evidence <repo-relative-path>`; the package keeps
@@ -169,7 +193,8 @@ For a declaring agent:
   evidence the reviewer should report the facts as unverified.
 - **Claude Code:** The renderer owns `skills:` and writes all declared IDs as
   `<plugin>:<id>`. Claude skips missing, disabled or non-model-invocable skills. The
-  renderer preserves native tool restrictions, adding `Skill` if needed to a comma-separated
+  renderer adds `Skill` to a tier's tool allowlist if missing. Without a tier allowlist it
+  preserves native tool restrictions, adding `Skill` if needed to a comma-separated
   value, single-line bracketed list or block list of tool names. Claude applies
   `disallowedTools` before `tools`; shell availability does not affect the Claude projection.
   Skill projection does not grant `Bash`.
