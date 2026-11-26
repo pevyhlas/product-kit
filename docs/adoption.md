@@ -17,3 +17,9 @@ and tests realize them, so the spec grows only where it narrows real choices.
 Long-lived consumers can check the adoption contract mechanically with the installed
 [CI gates](ci-gates.md): the pinned kit revision, manifest and command surface
 (`check-adoption.sh`), and optionally `doctor.sh --strict`.
+
+Land the initial review policy under your existing protections before requiring the
+[review gate](ci-gates.md#review-check--check-reviewsh), which fails if the default branch
+has no valid policy. Later policy-changing PRs must pass under the current default-branch
+policy; the new policy applies only after it lands there. A `--policy-ref` change takes
+effect through the updated registered workflow, not from the PR diff.
