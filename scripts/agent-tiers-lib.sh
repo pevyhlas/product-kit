@@ -11,7 +11,7 @@
 #     Baseline snapshot: .prdkit/agent-library/tiers.json        (optional; this is the default)
 #     | Local tier | Library tier |        local tier name -> baseline tier name
 #     | Scope | Harness | Model | Variant | Reason |            deviations, each with a reason
-#     | Projection tier | Claude effort | OpenCode permissions | OpenCode preamble |  (optional)
+#     | Projection tier | Claude effort | OpenCode permissions | OpenCode preamble | Claude tools |  (optional last column)
 #     Banned models: <id>, <id>        (optional; exact ids, so each harness's form is listed)
 #     Hand-owned agents: <name>, <name>   (optional; projections kept without a neutral source)
 #     Skill roots: <repo-relative directories>   (optional; active only with neutral skills:)
@@ -31,8 +31,76 @@ AT_HARNESSES="claude opencode"
 #   banned <id> <line> | handowned <agent> <line> | map <local> <library> <line>
 #   override <scope> <harness> <model> <variant> <reason> <line> <has-reason-column>
 #   literal <tier> <claude-model> <opencode-model> <opencode-variant> <line>
-#   projection <tier> <effort> <permissions> <preamble> <line> | projectionbad <line> <reason>
+#   projection <tier> <effort> <permissions> <preamble> <line> <tools> | projectionbad <line> <reason>
 #   skillroots|skillprefix <value> <line>
+AT_ACTION_RE='^[a-z][a-z0-9_]*$'
+AT_TOOL_RE='^[A-Za-z][A-Za-z0-9_.-]*$'
+
+# The Markdown permission cell accepts a small flow-list grammar, not general YAML.
+# Pack decoded rules using a separator forbidden in input; preserve order and glob bytes.
+AT_SCOPED_RULES_AWK='
+    function action_name(s) {
+        return s ~ action_re && s !~ /^(deny|none|null|nil|na)$/
+    }
+    function take(c) {
+        rule_input = trim(rule_input)
+        if (substr(rule_input, 1, 1) != c) return 0
+        rule_input = substr(rule_input, 2); return 1
+    }
+    function rule_value(stops,   q,c,i,s,tail) {
+        rule_input = trim(rule_input)
+        q = substr(rule_input, 1, 1)
+        if (q == "\"" || q == "\047") {
+            for (i = 2; i <= length(rule_input); i++) {
+                c = substr(rule_input, i, 1)
+                if (q == "\"" && c == "\\") {
+                    c = substr(rule_input, ++i, 1)
+                    if (c != "\"" && c != "\\") return ""
+                } else if (c == q) {
+                    if (q == "\047" && substr(rule_input, i+1, 1) == q) i++
+                    else { rule_input = substr(rule_input, i+1); return s } # awk-bytes-ok: start after a verified ASCII quote
+                }
+                s = s c # awk-bytes-ok: copy all bytes, decoding only complete ASCII escapes
+            }
+            return ""
+        }
+        for (i = 1; i <= length(rule_input); i++) {
+            c = substr(rule_input, i, 1)
+            if (index(stops, c)) break
+        }
+        s = trim(substr(rule_input, 1, i-1)) # awk-bytes-ok: end just before an ASCII separator or at end of input
+        rule_input = substr(rule_input, i)
+        # Reject YAML node indicators, comments, nested nodes, and implicit non-strings.
+        if (q == "" || index("!&*?@`|>%,{}[]#", q) || s ~ /[][{},]|(^| )#|:[ ]|:$|^[-:]($| )/) return ""
+        tail = tolower(s)
+        if (tail ~ /^(~|null|true|false|[-+]?\.inf|\.nan)$/ ||
+            tail ~ /^[-+]?([0-9][0-9_]*(\.[0-9_]*)?|\.[0-9][0-9_]*)(e[-+]?[0-9]+)?$/ ||
+            tail ~ /^[-+]?(0x[0-9a-f_]+|0o[0-7_]+|0b[01_]+)$/) return ""
+        return s
+    }
+    function scoped_rules(s,   k,v,fields,n,out,sep) {
+        if (s ~ /[[:cntrl:]]/) return "!"
+        rule_input = s; sep = "\036"
+        if (!take("[")) return "!"
+        do {
+            if (!take("{")) return "!"
+            for (k in fields) delete fields[k]
+            for (n = 1; n <= 3; n++) {
+                k = rule_value(":")
+                if ((k != "action" && k != "resource" && k != "effect") || k in fields || !take(":")) return "!"
+                v = rule_value(",}")
+                if (trim(v) == "") return "!"
+                fields[k] = v
+                if (!take(n < 3 ? "," : "}")) return "!"
+            }
+            if (!action_name(fields["action"]) || fields["effect"] !~ /^(allow|deny)$/) return "!"
+            out = out sep fields["action"] sep fields["resource"] sep fields["effect"]
+        } while (take(","))
+        if (!take("]") || trim(rule_input) != "") return "!"
+        return "@" out
+    }
+'
+
 at_tier_map_records() { # file [awk skip_fence(line) function]
     [ -f "$1" ] || return 0
     local expected skipper="${2:-}"
@@ -44,7 +112,7 @@ at_tier_map_records() { # file [awk skip_fence(line) function]
             return 0
         }'
     fi
-    awk -v expected="$expected" "$skipper"'
+    awk -v expected="$expected" -v action_re="$AT_ACTION_RE" -v tool_re="$AT_TOOL_RE" "$skipper$AT_SCOPED_RULES_AWK"'
         function trim(s) { sub(/^[ \t\r]+/, "", s); sub(/[ \t\r]+$/, "", s); return s }
         function clean(s) {
             gsub(/`/, "", s); gsub(/\*\*/, "", s); s = trim(s)
@@ -57,17 +125,32 @@ at_tier_map_records() { # file [awk skip_fence(line) function]
             count = split(value, actions, ",")
             for (j = 1; j <= count; j++) {
                 action = trim(actions[j])
-                if (action !~ /^[a-z][a-z0-9_]*$/ ||
-                    action ~ /^(deny|none|null|nil|na)$/ || action in seen) return "!"
+                if (!action_name(action) || action in seen) return "!"
                 seen[action] = 1
                 out = out (j == 1 ? "" : " ") action
             }
             return out
         }
-        function projection_row(   tier, effort, permissions, preamble) {
-            if (nc != 4) { print "projectionbad", NR, "expected four Projection tier cells"; return }
-            tier = tolower(cell[1]); effort = trim(raw[3]); permissions = permission_actions(trim(raw[4]))
+        function tool_names(value,   a,n,i,t,seen,out) {
+            if (value == "") return ""
+            n = split(value, a, ",")
+            for (i = 1; i <= n; i++) {
+                t = trim(a[i])
+                if (t !~ tool_re || tolower(t) ~ /^(true|false|null|none|nil|na)$/ || t in seen) return "!"
+                seen[t] = 1
+                out = out (i == 1 ? "" : ", ") t
+            }
+            return out
+        }
+        function projection_row(   tier, effort, permissions, preamble, tools, scoped) {
+            if (nc != projection_columns) {
+                print "projectionbad", NR, (projection_columns == 4 ? "expected four Projection tier cells" : "expected five Projection tier cells"); return
+            }
+            tier = tolower(cell[1]); effort = trim(raw[3]); permissions = trim(raw[4])
+            scoped = permissions ~ /^\[/
+            permissions = scoped ? scoped_rules(permissions) : permission_actions(permissions)
             preamble = trim(raw[5])
+            tools = projection_columns == 5 ? tool_names(trim(raw[6])) : ""
             if (tier != "*" && tier !~ /^[a-z0-9][a-z0-9_-]*$/)
                 print "projectionbad", NR, "expected a local Projection tier name or *"
             else if (tier in projection_seen)
@@ -75,16 +158,18 @@ at_tier_map_records() { # file [awk skip_fence(line) function]
             else if (effort != "" && effort !~ /^(low|medium|high|xhigh|max)$/)
                 print "projectionbad", NR, "Claude effort must be low, medium, high, xhigh or max"
             else if (permissions == "!")
-                print "projectionbad", NR, "OpenCode permissions must be deny or a comma-separated list of distinct action names (no wildcards or placeholders)"
-            else if (tier == "*" && (effort != "" || permissions != ""))
+                print "projectionbad", NR, (scoped ? "OpenCode permission rules must be a nonempty list of {action, resource, effect} entries with a valid action, a glob string, and allow or deny" : "OpenCode permissions must be deny or a comma-separated list of distinct action names (no wildcards or placeholders)")
+            else if (tools == "!")
+                print "projectionbad", NR, "Claude tools must be a nonempty comma-separated allowlist of distinct tool names"
+            else if (tier == "*" && (effort != "" || permissions != "" || tools != ""))
                 print "projectionbad", NR, "the * Projection tier row only sets a global OpenCode preamble"
             else if (preamble ~ /[[:cntrl:]]/)
                 print "projectionbad", NR, "OpenCode preamble must be a single line without control characters"
-            else if (effort == "" && permissions == "" && preamble == "")
+            else if (effort == "" && permissions == "" && preamble == "" && tools == "")
                 print "projectionbad", NR, "Projection tier row sets no options"
             else {
                 projection_seen[tier] = 1
-                print "projection", tier, effort, permissions, preamble, NR
+                print "projection", tier, effort, permissions, preamble, NR, tools
             }
         }
         BEGIN { OFS = "\037"; incomment = 0; infence = 0; intable = 0; kind = "" }
@@ -116,9 +201,9 @@ at_tier_map_records() { # file [awk skip_fence(line) function]
                 if (!intable) {
                     intable = 1; kind = ""
                     if (tolower(cell[1]) == "projection tier" && nc > 0) {
-                        if (nc == 4 && tolower(cell[2]) == "claude effort" &&
+                        if ((nc == 4 || (nc == 5 && tolower(cell[5]) == "claude tools")) && tolower(cell[2]) == "claude effort" &&
                             tolower(cell[3]) == "opencode permissions" && tolower(cell[4]) == "opencode preamble") {
-                            kind = "projection"; projection_separator = 0
+                            kind = "projection"; projection_separator = 0; projection_columns = nc
                         } else print "projectionbad", NR, "expected Projection tier | Claude effort | OpenCode permissions | OpenCode preamble"
                         next
                     }
@@ -335,6 +420,18 @@ at_load() { # root [awk skip_fence(line) function]
     local root="$1" rec
     AT_ROOT="$root"; AT_TIERMAP="$root/.prdkit/memory/agents.md"
     AT_MAP="$(at_tier_map_records "$AT_TIERMAP" "${2:-}")" || return 1
+    # Check encoded Unicode controls consistently even in awks that see UTF-8 as
+    # bytes. Also reject Unicode line separators in the single-line rule format.
+    case "$AT_MAP" in
+        *$'\037@\036'*)
+            AT_MAP="$(printf '%s\n' "$AT_MAP" | LC_ALL=C awk -F '\037' '
+                $1 == "projection" && $4 ~ /^@\036/ && $4 ~ /\302[\200-\237]|\342\200[\250\251]/ {
+                    print "projectionbad\037" $6 "\037OpenCode permission resources must not contain control characters or line separators"
+                    next
+                }
+                { print }
+            ')" || return 1 ;;
+    esac
     AT_HAS_PROJECTION=false
     case $'\n'"$AT_MAP" in *$'\nprojection\037'*) AT_HAS_PROJECTION=true ;; esac
     AT_BASELINE="$(printf '%s\n' "$AT_MAP" | awk -F '\037' '!d && $1 == "baseline" { print $2; d = 1 }')" || return 1
@@ -382,19 +479,19 @@ at_snap_value() { # library-tier harness key
 at_snap_has_tier() { printf '%s\n' "$AT_SNAP" | awk -F '\037' -v t="$1" '$1 == "tier" && $2 == t { found = 1 } END { exit !found }'; }
 
 # Opt-in settings for one local tier and harness. The global preamble is only a fallback.
-at_projection_options() { # tier harness -> AT_P_EFFORT AT_P_PERMISSIONS AT_P_PREAMBLE
+at_projection_options() { # tier harness -> AT_P_EFFORT AT_P_PERMISSIONS AT_P_PREAMBLE AT_P_TOOLS
     local options
-    AT_P_EFFORT="" AT_P_PERMISSIONS="" AT_P_PREAMBLE=""
+    AT_P_EFFORT="" AT_P_PERMISSIONS="" AT_P_PREAMBLE="" AT_P_TOOLS=""
     "$AT_HAS_PROJECTION" || return 0
     options="$(printf '%s\n' "$AT_MAP" | AT_P_TIER="$1" awk -F '\037' -v h="$2" '
         $1 == "projection" && $2 == "*" { global = $5; next }
-        $1 == "projection" && $2 == ENVIRON["AT_P_TIER"] { effort = $3; permissions = $4; preamble = $5 }
+        $1 == "projection" && $2 == ENVIRON["AT_P_TIER"] { effort = $3; permissions = $4; preamble = $5; tools = $7 }
         END {
-            if (h == "claude") print effort "\037\037"
-            else print "\037" permissions "\037" (preamble != "" ? preamble : global)
+            if (h == "claude") print effort "\037\037\037" tools
+            else print "\037" permissions "\037" (preamble != "" ? preamble : global) "\037"
         }
     ')" || return 1
-    IFS=$'\037' read -r AT_P_EFFORT AT_P_PERMISSIONS AT_P_PREAMBLE <<EOF
+    IFS=$'\037' read -r AT_P_EFFORT AT_P_PERMISSIONS AT_P_PREAMBLE AT_P_TOOLS <<EOF
 $options
 EOF
 }
@@ -419,15 +516,23 @@ at_projected_body() { # def preamble [skill notes]
     [ -z "$body" ] || printf '\n%s\n' "$body"
 }
 
-# The deny rule is first; OpenCode V2 applies the last matching rule. A non-empty
-# action list grants those named actions only, for all resources.
+# The deny rule is first; OpenCode V2 applies the last matching rule.
 at_native_fields() { # effort permissions [skill allowlist: deny followed by runnable IDs]
-    local action id
+    local action id resource effect
     if [ -n "$1" ]; then
         printf 'effort: %s\n' "$1"
     elif [ -n "$2" ]; then
         printf 'permissions:\n  - action: "*"\n    resource: "*"\n    effect: deny\n'
-        if [ "$2" != deny ]; then
+        if [[ "$2" == @* ]]; then
+            local -a rules
+            local i
+            IFS=$'\036' read -r -a rules <<< "${2#@$'\036'}"
+            for ((i=0; i<${#rules[@]}; i+=3)); do
+                action="${rules[i]}" resource="${rules[i+1]}" effect="${rules[i+2]}"
+                resource="${resource//\\/\\\\}"; resource="${resource//\"/\\\"}"
+                printf '  - action: "%s"\n    resource: "%s"\n    effect: %s\n' "$action" "$resource" "$effect"
+            done
+        elif [ "$2" != deny ]; then
             # Word splitting is intentional: the parser produces space-separated identifiers.
             for action in $2; do
                 printf '  - action: "%s"\n    resource: "*"\n    effect: allow\n' "$action"
@@ -439,6 +544,25 @@ at_native_fields() { # effort permissions [skill allowlist: deny followed by run
                 printf '  - action: "skill"\n    resource: "%s"\n    effect: allow\n' "$id"
             done
         fi
+    fi
+}
+
+# Needs declares no command, so only an unrestricted shell grant can satisfy it.
+# A later shell deny (even for one resource) makes that grant insufficient.
+at_allows_shell() {
+    if [[ "$1" == @* ]]; then
+        local -a rules
+        local i allowed=false
+        IFS=$'\036' read -r -a rules <<< "${1#@$'\036'}"
+        for ((i=0; i<${#rules[@]}; i+=3)); do
+            [ "${rules[i]}" = shell ] || continue
+            if [ "${rules[i+2]}" = deny ]; then allowed=false
+            elif [ "${rules[i+1]}" = '*' ]; then allowed=true
+            fi
+        done
+        $allowed
+    else
+        [[ " $1 " == *' shell '* ]]
     fi
 }
 
@@ -593,7 +717,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/agent-skills-lib.sh"
 # references across replaced entries. Report blockers in preflight, not during writes.
 at_native_projection_findings() { # existing file permissions
     local proj="$1" findings
-    if ! findings="$(LC_ALL=C awk -v opencode="$2" "$AT_DELIMITER_AWK$AT_YAML_SCAN_AWK"'
+    if ! findings="$(LC_ALL=C awk -v opencode="${2:+1}" "$AT_DELIMITER_AWK$AT_YAML_SCAN_AWK"'
         NR == 1 {
             # Noncanonical opening delimiters are reported by the inventory check.
             if (frontmatter_delimiter($0) != "canonical") exit
@@ -691,7 +815,7 @@ at_native_frontmatter() { # existing file effort permissions projected-model (pl
     local fields
     fields="$(at_native_fields "$2" "$3" "${AS_OC:-}")" || return 1
     AT_NATIVE_FIELDS="$fields" AS_CLAUDE="${AS_CLAUDE:-}" AS_TOOL_EDIT="${AS_TOOL_EDIT:-}" \
-        awk -v effort="$2" -v permissions="$3" -v model="$4" -v oc_skills="${AS_OC:-}" \
+        awk -v effort="$2" -v permissions="${3:+1}" -v model="$4" -v oc_skills="${AS_OC:-}" \
         -v tool_line="${AS_TOOL_LINE:-0}" -v tool_action="${AS_TOOL_ACTION:-}" -v state="${AS_CLAUDE_STATE:-}" '
         BEGIN { split(state, owned, " ") }
         function key(s) {
@@ -699,6 +823,7 @@ at_native_frontmatter() { # existing file effort permissions projected-model (pl
             s = substr(s, 1, RLENGTH - 1); gsub(/["\047 \t]/, "", s); return s
         }
         NR == 1 { if ($0 != "---") exit; print; next }
+        tool_end && NR <= tool_end { next }
         owned[1] && NR >= owned[1] && NR <= owned[2] {
             if (NR == owned[1] && !owned[3]) {
                 printf "%s", ENVIRON["AS_CLAUDE"]
@@ -713,7 +838,9 @@ at_native_frontmatter() { # existing file effort permissions projected-model (pl
             k = key($0)
             if (tool_line == NR) {
                 if (tool_action == "insert") print
-                if (tool_action != "delete") print ENVIRON["AS_TOOL_EDIT"]
+                if (tool_action ~ /^range:/) tool_end = substr(tool_action, 7) + 0
+                if (tool_action != "delete" && ENVIRON["AS_TOOL_EDIT"] != "") print ENVIRON["AS_TOOL_EDIT"]
+                if ($0 == "---") { close_header(); exit }
                 next
             }
             if (owned[3] == NR || (k == "skills" && oc_skills != "")) {
@@ -732,12 +859,13 @@ at_native_frontmatter() { # existing file effort permissions projected-model (pl
                 skipping = 1; next
             }
         }
-        $0 == "---" {
+        function close_header() {
             if (permissions != "" && !wrote_model) print "model: " model
             if (!wrote && ENVIRON["AT_NATIVE_FIELDS"] != "") print ENVIRON["AT_NATIVE_FIELDS"]
             if (!wrote_skills) printf "%s", ENVIRON["AS_CLAUDE"]
-            print; closed = 1; exit
+            print; closed = 1
         }
+        $0 == "---" { close_header(); exit }
         { print }
         END { if (!closed) exit 1 }
     ' "$1"
@@ -1080,9 +1208,9 @@ at_projection_findings() { # include_missing delimiters_checked [skills-only]
         for harness in $targets; do
             proj="$AT_ROOT/.$harness/agents/$name.md"
             at_projection_options "$tier" "$harness" || return 1
-            as_projection "$harness" "$proj" "$AT_P_PERMISSIONS" || return 1
+            as_projection "$harness" "$proj" "$AT_P_PERMISSIONS" "$AT_P_TOOLS" || return 1
             if [ -n "$AS_FINDINGS" ]; then printf '%s' "$AS_FINDINGS"; continue; fi
-            if [ -z "$AS_LINE" ] && [ -n "$AS_CLAUDE_STATE" ]; then
+            if "$AS_STALE_SKILLS"; then
                 printf "Agent '%s': .claude/agents/%s.md has stale generated Claude skill entries; run render-agents.sh\n" "$name" "$name"
                 continue
             fi
@@ -1106,7 +1234,7 @@ at_projection_findings() { # include_missing delimiters_checked [skills-only]
                     *) at_projection_delimiter_finding "$proj" "$delimiter"; continue ;;
                 esac
             fi
-            if [ -z "$AS_LINE" ] && [ -n "$AT_P_EFFORT$AT_P_PERMISSIONS" ]; then
+            if ! "$AS_REVIEWED_NATIVE" && [ -n "$AT_P_EFFORT$AT_P_PERMISSIONS" ]; then
                 blockers="$(at_native_projection_findings "$proj" "$AT_P_PERMISSIONS")" || return 1
                 if [ -n "$blockers" ]; then printf '%s\n' "$blockers"; continue; fi
             fi
@@ -1126,13 +1254,16 @@ at_projection_findings() { # include_missing delimiters_checked [skills-only]
                         printf "Agent '%s': .%s/agents/%s.md variant '%s' differs from resolved '%s' (%s); run render-agents.sh\n" "$name" "$harness" "$name" "${variant:-<none>}" "${AT_R_VARIANT:-<none>}" "$AT_R_SOURCE"
                 fi
             fi
-            if [ -n "$AT_P_EFFORT$AT_P_PERMISSIONS$AS_CLAUDE" ]; then
+            if [ -n "$AT_P_EFFORT$AT_P_PERMISSIONS$AS_CLAUDE$AS_CLAUDE_STATE" ]; then
                 if ! actual="$(at_frontmatter "$proj")" ||
                     ! native="$(at_native_frontmatter "$proj" "$AT_P_EFFORT" "$AT_P_PERMISSIONS" "$model")" || [ "$actual" != "$native" ]; then
                     key=effort
                     [ -z "$AT_P_PERMISSIONS" ] || key='native model/permissions frontmatter or legacy variant'
                     [ -z "$AS_OC" ] || key='native model/permissions or skills frontmatter'
                     [ -z "$AS_CLAUDE" ] || key='skills frontmatter, Skill tool or opted-in effort'
+                    if [ -n "$AT_P_TOOLS" ]; then key='Claude tools, skills or ownership comments'
+                    elif [ -z "$AS_LINE" ] && [ -n "$AS_CLAUDE_STATE" ]; then key='stale generated Claude tools'
+                    fi
                     printf "Agent '%s': .%s/agents/%s.md %s differs from the Projection tier settings; run render-agents.sh\n" "$name" "$harness" "$name" "$key"
                 fi
             fi

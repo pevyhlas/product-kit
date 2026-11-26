@@ -7,12 +7,15 @@
 # separators; diagnostic labels are display-only. Use the tier library's lexical scan
 # to distinguish top-level keys from unrelated multiline values. Use the C locale
 # so the scanner can walk bytes; only split text at ASCII syntax boundaries.
-as_records() { # neutral|metadata|claude|opencode file [projected skills line or "1" for OpenCode]
-    LC_ALL=C awk -v mode="$1" -v projected="${3:-}" "$AT_DELIMITER_AWK$AT_YAML_SCAN_AWK"'
+as_records() { # neutral|metadata|claude|opencode file [projected skills] [tier tools] [scoped permissions]
+    LC_ALL=C awk -v mode="$1" -v projected="${3:-}" -v tier_tools="${4:-}" -v scoped="${5:-}" \
+        -v tool_re="$AT_TOOL_RE" "$AT_DELIMITER_AWK$AT_YAML_SCAN_AWK"'
         BEGIN {
             OFS = "\037"; mark = "# prdkit-skill-projection: "; active = projected != ""
+            if (ARGV[1] == "/dev/null") opening = "absent"
             mark_order["generated-skills"] = 1; mark_order["prior-skills"] = 2
             mark_order["prior-tool"] = 3; mark_order["generated-tool"] = 4
+            mark_order["tool-policy"] = 5; mark_order["saved-tools"] = 6; mark_order["applied-tools"] = 7
         }
         function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
         function report(ln, label, msg) {
@@ -20,6 +23,7 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
             gsub(/[[:cntrl:]]/, "?", label); print "error", ln, label, msg
         }
         function unreadable(ln) {
+            if (collect_tools) { policy_invalid = 1; return }
             if (mode == "metadata") report(ln, "", "unreadable metadata; use a simple map of single-line values")
             else if (mode == "claude") report(ln, "", "unreadable Claude tools/frontmatter; use a simple mapping and a list of tool names")
             else if (mode == "opencode") report(ln, "", "unreadable OpenCode frontmatter; use a simple mapping")
@@ -186,7 +190,8 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
             else print "skill", ln, token
         }
         function tool_name(s, ln) {
-            if (s !~ /^[A-Za-z][A-Za-z0-9_.-]*$/) { unreadable(ln); return }
+            if (s !~ tool_re) { unreadable(ln); return }
+            if (collect_tools) policy_names[s] = 1
             if (s == "Skill") skill_tool++
         }
         function tool(s, ln) {
@@ -257,13 +262,13 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
             return s ~ /[\001-\010\013-\037\177]/ # awk-bytes-ok: input is a whole payload or concatenation of whole payloads
         }
         function native_skills_error(ln) {
-            report(ln, "", "put native Claude skills on one line as a flow list ([a, b]) before rendering; list items must be skill names")
+            if (!bad_native_skills) bad_native_skills = ln
         }
         function marker(s,   field,payload) {
-            if (s ~ /^begin [1-4]$/ && !mark_from) { mark_from = NR; mark_count = $NF + 0 }
+            if (s ~ /^begin [1-5]$/ && !mark_from) { mark_from = NR; mark_count = $NF + 0 }
             else if (!mark_from || mark_to || NR != mark_last + 1) ownership_error(NR)
             else if (s == "end") mark_to = NR
-            else if (match(s, /^(generated-skills|prior-skills|prior-tool|generated-tool) /)) {
+            else if (match(s, /^(generated-skills|prior-skills|prior-tool|generated-tool|tool-policy|saved-tools|applied-tools) /)) {
                 field = substr(s, 1, RLENGTH - 1)
                 payload = substr(s, RLENGTH + 1) # awk-bytes-ok: strip the verified ASCII record prefix
                 if (mark_seen[field] || mark_order[field] <= mark_rank) ownership_error(NR)
@@ -320,23 +325,150 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
             tool_edit = saved_edit; skill_tool = saved_skill; block_tools = 0
             return ok
         }
-        function claude_plan(   i,hit,action,line,edit,generated_skills,prior_skills,prior_tool,generated_tool,has_prior_skills,has_prior_tool,has_generated_tool) {
+        # A policy record stores an entire native tools entry in a single YAML
+        # comment. Escape only backslash and line breaks, independently of YAML.
+        function pack_tools(s,   i,c,out) {
+            for (i = 1; i <= length(s); i++) {
+                c = substr(s,i,1)
+                out = out (c == "\\" ? "\\\\" : (c == "\n" ? "\\n" : c)) # awk-bytes-ok: copy every byte except ASCII syntax we escape
+            }
+            return out
+        }
+        function unpack_tools(s,   i,c,out) {
+            for (i = 1; i <= length(s); i++) {
+                c = substr(s,i,1)
+                if (c == "\\") {
+                    c = substr(s,++i,1)
+                    if (c == "n") c = "\n"
+                    else if (c != "\\") return ""
+                }
+                out = out c # awk-bytes-ok: copy all bytes, decoding only complete ASCII escapes
+            }
+            return out
+        }
+        function raw_entry(start, end, omit,   i,out) {
+            for (i = start; i && i <= end; i++) {
+                if (i >= mark_from && i <= mark_to) { ownership_error(i); return "" }
+                if (i != omit) out = out (out == "" ? "" : "\n") raw[i]
+            }
+            return out
+        }
+        # Reuse the existing inline and block-list tool parser, including its
+        # Skill edit. This runs at planning time only; no saved text is trusted
+        # as replacement YAML until it passes the same grammar as a live entry.
+        function policy_tools(s, want,   rows,n,i,a,item,child,nitems,last,insertion,edit,saved_edit,saved_skill,saved_block) {
+            for (i in policy_names) delete policy_names[i]
+            policy_result = s
+            if (s == "") return 1
+            n = split(s, rows, "\n")
+            for (i = 1; i <= n; i++) if (invalid_marker_bytes(rows[i])) return 0
+            if (rows[1] !~ /^[A-Za-z]+:([ \t]|$)/ || !pair(rows[1]) || key != want) return 0
+            saved_edit = tool_edit; saved_skill = skill_tool; saved_block = block_tools
+            tool_edit = ""; skill_tool = block_tools = policy_invalid = 0; collect_tools = 1
+            tools(value, 0)
+            if (block_tools) {
+                edit = rows[1]
+                for (i = 2; i <= n; i++) {
+                    if (index(trim(rows[i]), "# prdkit-skill-projection:") == 1) {
+                        policy_invalid = 1; break
+                    }
+                    if (rows[i] !~ /^[ \t]*(#|$)/) {
+                        if (rows[i] !~ /^ *-[ \t]+/ || (nitems && child != indent(rows[i]))) {
+                            policy_invalid = 1; break
+                        }
+                        child = indent(rows[i]); nitems++; last = i
+                        item = trim(rows[i]); sub(/^-[ \t]+/, "", item)
+                        if (cells(item, "", a) < 0) policy_invalid = 1; else tool(a[1], 0)
+                    }
+                    edit = edit "\n" rows[i]
+                }
+                if (!nitems || last != n) policy_invalid = 1
+                else insertion = edit "\n" substr(rows[last], 1, child) "- Skill" # awk-bytes-ok: child counts verified ASCII indentation
+            } else if (n != 1) policy_invalid = 1
+            else insertion = tool_edit
+            if (!skill_tool && insertion != "") policy_result = insertion
+            collect_tools = 0; tool_edit = saved_edit; skill_tool = saved_skill; block_tools = saved_block
+            return !policy_invalid
+        }
+        function canonical_tier_tools(s,   a,n,i,seen_tier_tool) {
+            if (s !~ /^tools: /) return 0
+            n = split(substr(s, 8), a, /, /)
+            for (i = 1; i <= n; i++)
+                if (a[i] !~ tool_re || tolower(a[i]) ~ /^(true|false|null|none|nil|na)$/ || seen_tier_tool[a[i]]++) return 0
+            return n > 0
+        }
+        function policy_plan(prior_tool, generated_tool, hit,   end,live,prior,applied,policy,wanted,disallowed,t,a,n,i) {
+            end = block_tool_list ? tool_line : tools_line
+            live = raw_entry(tools_line, end, 0)
+            if (mark_invalid) return
+            prior = live
+            if (mark_seen["tool-policy"] || mark_seen["saved-tools"] || mark_seen["applied-tools"]) {
+                policy = mark_value["tool-policy"]
+                prior = unpack_tools(mark_value["saved-tools"])
+                applied = unpack_tools(mark_value["applied-tools"])
+                if (generated_tool != "" || prior_tool != "" || (policy != "tier" && policy != "skill") ||
+                    !mark_seen["applied-tools"]) {
+                    ownership_error(mark_from); return
+                }
+                if ((mark_seen["saved-tools"] && prior == "") || !policy_tools(prior, "tools")) {
+                    ownership_error(mark_seen["saved-tools"]); return
+                }
+                if (applied == "" || (policy == "tier" && !canonical_tier_tools(applied)) ||
+                    (policy == "skill" && (prior == "" || applied == prior || applied != policy_result))) {
+                    ownership_error(mark_seen["applied-tools"]); return
+                }
+                if (live != prior && live != applied) {
+                    ownership_error(tools_line ? tools_line : mark_from); return
+                }
+            } else if (generated_tool != "") {
+                # Roll back the older skills-only tool edit before taking over.
+                if (prior_tool != "") prior = prior_tool
+                else if (hit) prior = raw_entry(tools_line, end, hit)
+            }
+            if (!policy_tools(prior, "tools")) { unreadable(tools_line); return }
+            if (tier_tools != "") {
+                wanted = "tools: " tier_tools
+                if (active && index(", " tier_tools ", ", ", Skill, ") == 0) wanted = wanted ", Skill"
+                if (deny_line) {
+                    disallowed = raw_entry(deny_line, deny_end, 0)
+                    if (deny_duplicate || mark_invalid || !policy_tools(disallowed, "disallowedTools")) {
+                        report(deny_line, "", "unreadable Claude disallowedTools; use a simple list of tool names"); return
+                    }
+                    n = split(substr(wanted, 8), a, /, /) # awk-bytes-ok: strip the ASCII tools prefix from canonical tool names
+                    for (i = 1; i <= n; i++) if (a[i] in policy_names)
+                        report(deny_line, "", "Claude tools allowlist conflicts with disallowedTools: " a[i])
+                }
+                policy = "tier"
+            } else if (active && prior != "" && policy_result != prior) {
+                wanted = policy_result; policy = "skill"
+            } else { wanted = prior; policy = "" }
+            if (wanted != live) {
+                t = wanted; gsub(/\n/, "\036", t) # awk-bytes-ok: replace ASCII line breaks in a whole entry
+                print "tool", (tools_line ? tools_line : NR), "range:" end, t
+            }
+            policy_kind = policy
+            policy_saved = pack_tools(prior)
+            policy_applied = pack_tools(wanted)
+        }
+        function claude_plan(   i,hit,action,line,edit,generated_skills,prior_skills,prior_tool,generated_tool,has_prior_skills,has_prior_tool,has_generated_tool,new_tools,count) {
             if (mark_invalid) return
             generated_skills = mark_value["generated-skills"]
             prior_skills = mark_value["prior-skills"]; has_prior_skills = !!mark_seen["prior-skills"]
             prior_tool = mark_value["prior-tool"]; has_prior_tool = !!mark_seen["prior-tool"]
             generated_tool = mark_value["generated-tool"]; has_generated_tool = !!mark_seen["generated-tool"]
+            new_tools = tier_tools != "" || mark_seen["tool-policy"] || mark_seen["saved-tools"] || mark_seen["applied-tools"]
             if (mark_last && (!mark_from || !mark_to || mark_to - mark_from - 1 != mark_count ||
-                !mark_seen["generated-skills"])) {
+                (!mark_seen["generated-skills"] && mark_value["tool-policy"] != "tier") ||
+                (has_prior_skills && !mark_seen["generated-skills"]))) {
                 ownership_error(mark_last); return
             }
-            if (mark_from && !saved_generated_skills(generated_skills)) {
+            if (mark_seen["generated-skills"] && !saved_generated_skills(generated_skills)) {
                 ownership_error(mark_seen["generated-skills"]); return
             }
             if (has_prior_skills && (!pair(prior_skills) || key != "skills" || !native_skills(value))) {
                 ownership_error(mark_seen["prior-skills"]); return
             }
-            if (!active && skills_line && (skills_line != mark_to + 1 ||
+            if (!active && mark_seen["generated-skills"] && skills_line && (skills_line != mark_to + 1 ||
                 (raw_skills != generated_skills && (!has_prior_skills || raw_skills != prior_skills)))) {
                 ownership_error(skills_line); return
             }
@@ -359,7 +491,7 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
                         if (active) { action = "insert"; line = tool_line; edit = generated_tool }
                     } else { ownership_error(mark_from); return }
                 } else { ownership_error(mark_seen["generated-tool"]); return }
-            } else if (active && !skill_tool && tool_edit != "") {
+            } else if (!new_tools && active && !skill_tool && tool_edit != "") {
                 action = (tool_line ? "insert" : "replace"); line = (tool_line ? tool_line : tools_line); edit = tool_edit
                 generated_tool = edit; has_generated_tool = 1
                 if (action == "replace") { prior_tool = raw_tools; has_prior_tool = 1 }
@@ -367,18 +499,31 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
             if (invalid_marker_bytes(prior_skills prior_tool generated_tool)) {
                 ownership_error(mark_from ? mark_from : NR); return
             }
-            if (action != "") print "tool", line, action, edit
-            if (mark_from || skills_line) print "state", mark_from+0, mark_to+0, skills_line+0
-            if (active) {
-                if (!mark_from && skills_line) { prior_skills = raw_skills; has_prior_skills = 1 }
+            if (new_tools) {
+                policy_plan(prior_tool, generated_tool, hit)
+                if (mark_invalid) return
+                has_prior_tool = has_generated_tool = 0
+            } else if (action != "") print "tool", line, action, edit
+            if (mark_seen["generated-skills"] && !active) print "stale-skills"
+            if (mark_from || (active && skills_line)) print "state", mark_from+0, mark_to+0, (active || mark_seen["generated-skills"] ? skills_line+0 : 0)
+            if (active || policy_kind != "") {
+                if (active && !mark_seen["generated-skills"] && skills_line) { prior_skills = raw_skills; has_prior_skills = 1 }
                 if (invalid_marker_bytes(prior_skills)) { ownership_error(skills_line); return }
-                print "save", mark "begin " (1 + has_prior_skills + has_prior_tool + has_generated_tool)
-                print "save", mark "generated-skills " projected
-                if (has_prior_skills) print "save", mark "prior-skills " prior_skills
+                count = (active ? 1 + has_prior_skills : 0) + has_prior_tool + has_generated_tool
+                if (policy_kind != "") count += (policy_saved == "" ? 2 : 3)
+                print "save", mark "begin " count
+                if (active) print "save", mark "generated-skills " projected
+                if (active && has_prior_skills) print "save", mark "prior-skills " prior_skills
                 if (has_prior_tool) print "save", mark "prior-tool " prior_tool
                 if (has_generated_tool) print "save", mark "generated-tool " generated_tool
+                if (policy_kind != "") {
+                    print "save", mark "tool-policy " policy_kind
+                    if (policy_saved != "") print "save", mark "saved-tools " policy_saved
+                    print "save", mark "applied-tools " policy_applied
+                }
                 print "save", mark "end"
-                print "save", projected
+                if (active) print "save", projected
+                else if (has_prior_skills) print "save", prior_skills
             } else if (has_prior_skills) print "restore", prior_skills
         }
         function finish_entry() {
@@ -395,6 +540,7 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
         }
         {
             if (sub(/\r$/, "") && !header_bad) header_bad = NR
+            if (mode == "claude") raw[NR] = $0
             if ($0 ~ /^---([ \t]*|[ \t]+#.*)$/) {
                 if ($0 != "---" && !header_bad) header_bad = NR
                 closed = 1; exit
@@ -417,6 +563,10 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
                 else explicit_finish()
             }
             if (!quote && !flow && /^[ \t]*(#|$)/) next
+            if (in_deny) {
+                if (/^[ \t]|^-[ \t]/) deny_end = NR
+                else in_deny = 0
+            }
             if (entry && (/^[ \t]/ || /^-[ \t]/)) {
                 if (block_metadata && /^ +[^ \t]/ && (!child_indent || child_indent == indent($0))) {
                     child_indent = indent($0); metadata_entry(trim($0), NR)
@@ -453,10 +603,16 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
             }
             mapping = 1
             root_key = key
+            if (scoped && key ~ /^(model|variant|permission|permissions|skills)$/ && scoped_keys[key]++)
+                report(NR, "", "duplicate OpenCode frontmatter key: " key)
+            if (mode == "claude" && key == "disallowedTools") {
+                if (deny_line) deny_duplicate = 1
+                deny_line = deny_end = NR; in_deny = 1
+            }
             single_line = key ~ /^(name|description|tier|harnesses|model|variant|domain|source|library-ref|library-agent)$/
             if (mode == "claude" && key == "skills") {
-                block = plain = 0
-                if (skills_line) unreadable(NR)
+                scan_yaml($0)
+                if (skills_line) duplicate_skills = NR
                 native_skills_invalid = !native_skills(value)
                 if (native_skills_invalid) native_skills_error(NR)
                 skills_line = NR; raw_skills = $0; entry = NR; native_skills_entry = 1
@@ -470,7 +626,7 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
                 print "entry", NR
                 if (mode == "neutral") skills(value, NR)
                 else if (mode == "metadata") metadata(value, NR)
-                else { tools_line = NR; raw_tools = $0; tools(value, NR); block_tool_list = block_tools }
+                else { tools_line = NR; raw_tools = $0; tools(value, NR); block_tool_list = block_tools; scan_yaml($0) }
             } else {
                 scan_yaml($0)
                 if ((quote || flow) && single_line && !unsafe) unsafe = NR
@@ -483,7 +639,13 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
                 report(bad_root, "", "unsupported neutral frontmatter key for skills; use the plain top-level skills: key")
             if (mode == "neutral" && !seen) exit
             if (mode == "claude" && marked) print "marked"
-            if (mode == "claude" && !active && !marked) exit
+            if (mode == "claude" && (mark_seen["tool-policy"] || mark_seen["saved-tools"] || mark_seen["applied-tools"])) print "policy-record"
+            if (mode == "claude" && !active && !marked && tier_tools == "") exit
+            if (mode == "claude" && (active || mark_seen["generated-skills"])) {
+                if (duplicate_skills) unreadable(duplicate_skills)
+                if (bad_native_skills)
+                    report(bad_native_skills, "", "put native Claude skills on one line as a flow list ([a, b]) before rendering; list items must be skill names")
+            }
             if (opening != "absent" && (!closed || quote || flow || header_bad || (bad_root && mode != "neutral")))
                 unreadable(header_bad ? header_bad : (bad_root ? bad_root : (NR ? NR : 1)))
             if (unsafe && mode != "metadata")
@@ -496,6 +658,11 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
 
 as_finding() { # source line skill message
     AS_FINDINGS="$AS_FINDINGS$(printf "Agent '%s': %s line %s: skill '%s': %s" "$AS_NAME" "$1" "$2" "${3:-<list>}" "$4")"$'\n'
+}
+
+as_projection_finding() { # source line message
+    if [ -n "$AS_FIRST" ]; then as_finding "$1" "$2" "$AS_FIRST" "$3"
+    else AS_FINDINGS="$AS_FINDINGS$(printf "Agent '%s': %s line %s: %s" "$AS_NAME" "$1" "$2" "$3")"$'\n'; fi
 }
 
 as_config() { # Load only for a declaring agent. Defaults may search plugin subdirectories.
@@ -602,19 +769,21 @@ $records
 EOF
 }
 
-# The V2 action list passed here is exactly the one used to emit the role rules.
-# Claude receives all declarations independent of shell availability.
-as_projection() { # harness proj permissions
-    local has_shell=false runnable="" list="" records kind field label msg id needs blockers active=""
+# The inputs are the same tier options used for emission. Claude receives all
+# skill declarations independent of shell availability.
+as_projection() { # harness proj permissions [tier tools]
+    local has_shell=false runnable="" list="" records kind field label msg id needs blockers active="" scoped="" tier_tools="${4:-}" source="$2" new_policy=""
     AS_FINDINGS=""; AS_OC=""; AS_NOTES=""; AS_CLAUDE=""; AS_CLAUDE_STATE=""; AS_TOOL_ACTION=""; AS_TOOL_LINE=""; AS_TOOL_EDIT=""
+    AS_STALE_SKILLS=false; AS_REVIEWED_NATIVE=false
     [ -z "$AS_SKILLS" ] || active=1
     if [ "$1" = opencode ]; then
-        [ -n "$active" ] || return 0
+        [[ "$3" != @* ]] || scoped=1
+        [ -n "$active$scoped" ] || return 0
         if [ -z "$3" ]; then
             as_finding "$AS_DEF" "$AS_LINE" "$AS_FIRST" "OpenCode permissions are not renderer-owned; set the local tier's OpenCode permissions cell to opt into V2, or exclude OpenCode in harnesses:"
             return 0
         fi
-        case " $3 " in *" shell "*) has_shell=true ;; esac
+        if at_allows_shell "$3"; then has_shell=true; fi
     else
         if [ -n "$active" ] && [ -z "$AS_PREFIX" ]; then
             as_finding "$AS_DEF" "$AS_LINE" "$AS_FIRST" "set 'Claude skill prefix:' to the plugin name in .prdkit/memory/agents.md"
@@ -628,31 +797,42 @@ as_projection() { # harness proj permissions
             active="skills: [$list]"
         fi
     fi
-    if [ -f "$2" ]; then
-        records="$(as_records "$1" "$2" "$active")" || return 1
-        if [ -z "$active" ]; then
+    if [ ! -f "$source" ]; then
+        [ "$1" != claude ] || [ -n "$active$tier_tools" ] || return 0
+        source=/dev/null
+    fi
+    records="$(as_records "$1" "$source" "$active" "$tier_tools" "$scoped")" || return 1
+    case $'\n'"$records"$'\n' in *$'\npolicy-record\n'*) new_policy=1 ;; esac
+    if [ "$source" != /dev/null ]; then
+        if [ -n "$tier_tools$scoped$new_policy" ] && ! review_file_without_nul "$2"; then
+            as_projection_finding "${2#"$AT_ROOT"/}" 1 "cannot inspect the native projection; expected text without NUL bytes"
+            return 0
+        fi
+        if [ -z "$active$tier_tools$scoped" ]; then
             case $'\n'"$records"$'\n' in *$'\nmarked\n'*) ;; *) return 0 ;; esac
         fi
+        AS_REVIEWED_NATIVE=true
         blockers="$(at_native_projection_findings "$2" "$3")" || return 1
         while IFS= read -r msg; do
-            [ -z "$msg" ] || as_finding "$AS_DEF" "${AS_LINE:-1}" "$AS_FIRST" "$msg"
+            [ -n "$msg" ] || continue
+            if [ -n "$tier_tools$scoped$new_policy" ]; then as_projection_finding "$AS_DEF" "${AS_LINE:-1}" "$msg"
+            else as_finding "$AS_DEF" "${AS_LINE:-1}" "$AS_FIRST" "$msg"; fi
         done <<EOF
 $blockers
 EOF
-        while IFS=$'\037' read -r kind field label msg; do
-            case "$kind" in
-                state) AS_CLAUDE_STATE="$field $label $msg" ;;
-                save) AS_CLAUDE="$AS_CLAUDE$field"$'\n' ;;
-                restore) AS_CLAUDE="$field"$'\n' ;;
-                tool) AS_TOOL_LINE="$field"; AS_TOOL_ACTION="$label"; AS_TOOL_EDIT="$msg" ;;
-                error) as_finding "${2#"$AT_ROOT"/}" "$field" "$AS_FIRST" "$msg" ;;
-            esac
-        done <<EOF
-$records
-EOF
-    elif [ "$1" = claude ] && [ -n "$active" ]; then
-        AS_CLAUDE="$(printf '# prdkit-skill-projection: begin 1\n# prdkit-skill-projection: generated-skills %s\n# prdkit-skill-projection: end\n%s' "$active" "$active")"$'\n'
     fi
+    while IFS=$'\037' read -r kind field label msg; do
+        case "$kind" in
+            state) AS_CLAUDE_STATE="$field $label $msg" ;;
+            save) AS_CLAUDE="$AS_CLAUDE$field"$'\n' ;;
+            restore) AS_CLAUDE="$field"$'\n' ;;
+            stale-skills) AS_STALE_SKILLS=true ;;
+            tool) AS_TOOL_LINE="$field"; AS_TOOL_ACTION="$label"; AS_TOOL_EDIT="${msg//$'\036'/$'\n'}" ;;
+            error)
+                if [ -n "$tier_tools$scoped$new_policy" ]; then as_projection_finding "${2#"$AT_ROOT"/}" "$field" "$msg"
+                else as_finding "${2#"$AT_ROOT"/}" "$field" "$AS_FIRST" "$msg"; fi ;;
+        esac
+    done <<< "$records"
     [ "$1" = opencode ] && [ -n "$active" ] || return 0
     while read -r id needs; do
         [ -n "$id" ] || continue
