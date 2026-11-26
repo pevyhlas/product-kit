@@ -13,6 +13,11 @@ change by change.
 
 ## [3.2.0] — 2026-11-26 — lean review package
 
+### Changed
+
+- Review packages open with the full diff, verified facts summary when available, and a required obligations section. It keeps trusted policy separate and retains binding base obligations even if the change drops a parent or citation. Oversized or non-text excerpts and unresolved base sources require the full packaged context. `evidence/facts/` is reserved for the facts pair; collector commands are marked for maintainer reruns only.
+- Review packages resolve Markdown reference links used in captured obligations, even when definitions are outside the excerpt. Undefined full or collapsed references require full context; ordinary brackets and task markers do not.
+
 ### Changed (breaking)
 
 - `build-review-package.sh` reserves `evidence/facts/` for the verified facts pair. An
@@ -21,11 +26,14 @@ change by change.
   pair to `evidence/facts/{summary.md,index.json}`, instead of passing its files with
   `--evidence`. Move other evidence out of a top-level `facts/` directory before attaching it.
   Packages built by earlier versions are not reused: the completion format changed.
-
-### Changed
-
-- Review packages open with the full diff, verified facts summary when available, and a required obligations section. It keeps trusted policy separate and retains binding base obligations even if the change drops a parent or citation. Oversized or non-text excerpts and unresolved base sources require the full packaged context. `evidence/facts/` is reserved for the facts pair; collector commands are marked for maintainer reruns only.
-- Review packages resolve Markdown reference links used in captured obligations, even when definitions are outside the excerpt. Undefined full or collapsed references require full context; ordinary brackets and task markers do not.
+- The facts key moves from 3 to 4. `facts.sh --verify` fails on a pack collected by 3.1.x, and
+  `--facts` copies files without upgrading them. Recollect cached or CI-restored facts packs
+  with `facts.sh` before verifying, attaching or restoring them.
+- `context-manifest.tsv` keeps its eight columns, but rows now carry BASE and HEAD provenance.
+  `source_rev` is `BASE` for unchanged or binding base text, not always `HEAD`, and the
+  `obligation` labels changed (for example, an explicit `--context` snapshot that 3.1.5 labelled
+  `whole-file` or `canon` now gets a `reference-*` label). Tools that read the manifest should find explicit snapshots by `source_path` and
+  `source_blob` and read `source_rev` for provenance, not match HEAD-only rows or 3.1 labels.
 
 ## [3.1.5] — 2026-11-26 — tier least privilege
 
