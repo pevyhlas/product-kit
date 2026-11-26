@@ -492,6 +492,16 @@ for tools in 'tools: Read, Grep # retain comment' 'tools: [Read, Skill]' 'tools:
     run bash "$R" --check --json
     assert_eq 0 "$STATUS" "cleanup is clean"
 done
+sed 's/^skills:.*/skills: [] # intentionally empty/' "$P/no-settings/claude-review.md" > "$P/cleanup-empty-list"
+cp "$P/cleanup-empty-list" .claude/agents/review.md
+def review deep "$ids"
+run bash "$R"
+assert_eq 0 "$STATUS" "an explicit empty native list is a valid prior value"
+def review deep
+run bash "$R"
+assert_eq 0 "$STATUS"
+bytes "$P/cleanup-empty-list" .claude/agents/review.md "restore the original empty flow list, not an absent field"
+
 def review deep "$ids"
 sed '/^skills:/d; /^tools:/d' "$P/no-settings/claude-review.md" > .claude/agents/review.md
 cp .claude/agents/review.md "$P/cleanup-inherited"
@@ -570,6 +580,53 @@ for damage in malformed empty partial duplicate reordered; do
     def review deep "$ids"
     blocked "cannot establish Claude skill projection ownership"
     def review deep
+    blocked "cannot establish Claude skill projection ownership"
+done
+cp "$P/no-settings/claude-review.md" .claude/agents/review.md
+
+it "empty and whitespace-only ownership payloads block check and write without modifying either projection"
+awk '/^tools:/ { print "tools:\n  - Read\n  - Grep"; next } { print }' \
+    "$P/no-settings/claude-review.md" > .claude/agents/review.md
+def review deep "$ids"
+run bash "$R"
+assert_eq 0 "$STATUS" "render a native block tools list"
+cp .claude/agents/review.md "$P/marked-block-tools"
+cp .opencode/agents/review.md "$P/marked-opencode"
+def review deep
+for field in prior-skills generated-tool; do
+    case "$field" in
+        prior-skills) marked="$P/marked-claude" ;;
+        generated-tool) marked="$P/marked-block-tools" ;;
+    esac
+    for payload in '' $' \t '; do
+        MARK_PAYLOAD="$payload" awk -v field="$field" '
+            index($0, "# prdkit-skill-projection: " field " ") == 1 {
+                $0 = "# prdkit-skill-projection: " field " " ENVIRON["MARK_PAYLOAD"]
+            }
+            { print }' "$marked" > "$P/bad-marker"
+        cp "$P/bad-marker" .claude/agents/review.md
+        cp "$P/marked-opencode" .opencode/agents/review.md
+        record_line="$(awk -v field="$field" 'index($0, "# prdkit-skill-projection: " field " ") == 1 { print NR }' "$marked")"
+        for mode in check write; do
+            if [ "$mode" = check ]; then run bash "$R" --check --json; else run bash "$R"; fi
+            assert_eq 1 "$STATUS" "$mode rejects blank $field"
+            assert_contains "$OUTPUT" "line $record_line: skill '<list>': cannot establish Claude skill projection ownership" "$mode pinpoints blank $field"
+            bytes "$P/bad-marker" .claude/agents/review.md "$mode preserves Claude bytes with blank $field"
+            bytes "$P/marked-opencode" .opencode/agents/review.md "$mode preserves OpenCode bytes with blank $field"
+        done
+    done
+done
+
+it "every present ownership field must carry a value of the right type"
+def review deep "$ids"
+for record in 'generated-skills ' 'generated-skills skills: []' 'generated-skills skills: [unqualified]' \
+    'generated-skills skills: [example-plugin:sample, example-plugin:sample]' \
+    'prior-skills skills: false' 'prior-skills skills: [[nested]]' 'prior-skills skills: [true]' \
+    'prior-tool ' 'prior-tool tools: {Read: true}' 'generated-tool tools: false'; do
+    field="${record%% *}"
+    awk -v field="$field" -v record="$record" '
+        index($0, "# prdkit-skill-projection: " field " ") == 1 { $0 = "# prdkit-skill-projection: " record }
+        { print }' "$P/marked-claude" > .claude/agents/review.md
     blocked "cannot establish Claude skill projection ownership"
 done
 cp "$P/no-settings/claude-review.md" .claude/agents/review.md

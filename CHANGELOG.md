@@ -13,7 +13,7 @@ change by change.
 
 ### Added
 
-- Neutral agents can opt in to up to 32 vendored skills: project plugin-qualified Claude references and OpenCode V2 skill permissions, with evidence notes for skills that need an unavailable shell. Removing the declaration restores renderer-managed Claude fields to their pre-opt-in state; agents that never opt in keep their native skill configuration.
+- Neutral agents can opt in to up to 32 vendored skills: project plugin-qualified Claude references and OpenCode V2 skill permissions, with evidence notes for skills that need an unavailable shell. Removing the declaration restores renderer-managed Claude fields to their pre-opt-in state. Render and `--check` refuse damaged ownership records, including blank values. Agents that never opt in keep their native skill configuration.
 
 ## [3.1.3] — 2026-11-26 — agent tier projection settings
 

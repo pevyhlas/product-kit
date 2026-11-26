@@ -9,9 +9,14 @@
 # so the scanner can walk bytes; only split text at ASCII syntax boundaries.
 as_records() { # neutral|metadata|claude|opencode file [projected skills line or "1" for OpenCode]
     LC_ALL=C awk -v mode="$1" -v projected="${3:-}" "$AT_DELIMITER_AWK$AT_YAML_SCAN_AWK"'
-        BEGIN { OFS = "\037"; mark = "# prdkit-skill-projection: "; active = projected != "" }
+        BEGIN {
+            OFS = "\037"; mark = "# prdkit-skill-projection: "; active = projected != ""
+            mark_order["generated-skills"] = 1; mark_order["prior-skills"] = 2
+            mark_order["prior-tool"] = 3; mark_order["generated-tool"] = 4
+        }
         function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
         function report(ln, label, msg) {
+            findings++
             gsub(/[[:cntrl:]]/, "?", label); print "error", ln, label, msg
         }
         function unreadable(ln) {
@@ -245,57 +250,105 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
             for (i = 1; i <= n; i++) skill(a[i], ln)
         }
         function ownership_error(ln) {
+            mark_invalid = 1
             report(ln, "", "cannot establish Claude skill projection ownership; restore the generated comments and fields from a known-good projection before rendering")
         }
-        function native_skills_error(ln) {
-            report(ln, "", "put native Claude skills on one line as a flow list ([a, b]) before rendering")
+        function invalid_marker_bytes(s) {
+            return s ~ /[\001-\010\013-\037\177]/ # awk-bytes-ok: input is a whole payload or concatenation of whole payloads
         }
-        function marker(s) {
+        function native_skills_error(ln) {
+            report(ln, "", "put native Claude skills on one line as a flow list ([a, b]) before rendering; list items must be skill names")
+        }
+        function marker(s,   field,payload) {
             if (s ~ /^begin [1-4]$/ && !mark_from) { mark_from = NR; mark_count = $NF + 0 }
             else if (!mark_from || mark_to || NR != mark_last + 1) ownership_error(NR)
             else if (s == "end") mark_to = NR
-            else if (index(s, "generated-skills ") == 1 && NR == mark_from + 1)
-                generated_skills = substr(s, length("generated-skills ") + 1) # awk-bytes-ok: strip the verified ASCII record prefix
-            else if (index(s, "prior-skills ") == 1 && prior_skills == "" && prior_tool == "" && generated_tool == "")
-                prior_skills = substr(s, length("prior-skills ") + 1) # awk-bytes-ok: strip the verified ASCII record prefix
-            else if (index(s, "prior-tool ") == 1 && prior_tool == "" && generated_tool == "")
-                prior_tool = substr(s, length("prior-tool ") + 1) # awk-bytes-ok: strip the verified ASCII record prefix
-            else if (index(s, "generated-tool ") == 1 && generated_tool == "")
-                generated_tool = substr(s, length("generated-tool ") + 1) # awk-bytes-ok: strip the verified ASCII record prefix
+            else if (match(s, /^(generated-skills|prior-skills|prior-tool|generated-tool) /)) {
+                field = substr(s, 1, RLENGTH - 1)
+                payload = substr(s, RLENGTH + 1) # awk-bytes-ok: strip the verified ASCII record prefix
+                if (mark_seen[field] || mark_order[field] <= mark_rank) ownership_error(NR)
+                mark_seen[field] = NR; mark_rank = mark_order[field]
+                if (payload !~ /[^ \t]/ || invalid_marker_bytes(payload)) ownership_error(NR)
+                mark_value[field] = payload
+            }
             else ownership_error(NR)
             mark_last = NR
         }
-        function flow_list(s,   a) { return cells(s, "", a) >= 0 && a[1] ~ /^\[.*\]$/ }
-        function saved_skills(s) { return pair(s) && key == "skills" && flow_list(value) }
+        # Preserve a native single-line list of names (including []), not nested
+        # YAML nodes or implicit non-string scalars that only look like a list.
+        function native_skills(s,   a,i,n,item,plain) {
+            if (cells(s, "", a) < 0 || a[1] !~ /^\[.*\]$/) return 0
+            s = trim(substr(a[1], 2, length(a[1])-2)) # awk-bytes-ok: remove verified ASCII brackets
+            if (s == "") return 1
+            n = cells(s, ",", a)
+            if (n < 1) return 0
+            if (n > 1 && a[n] == "") n--
+            for (i = 1; i <= n; i++) {
+                item = a[i]
+                if (!scalar(item) || trim(token) == "") return 0
+                if (item ~ /^["\047]/) continue
+                plain = tolower(item)
+                if (plain ~ /[][{},]/ || plain ~ /^(~|null|true|false|[-+]?\.inf|\.nan)$/ ||
+                    plain ~ /^[-+]?([0-9][0-9_]*(\.[0-9_]*)?|\.[0-9][0-9_]*)(e[-+]?[0-9]+)?$/ ||
+                    plain ~ /^[-+]?(0x[0-9a-f_]+|0o[0-7_]+|0b[01_]+)$/) return 0
+            }
+            return 1
+        }
+        function saved_generated_skills(s,   a,i,n,p,plugin,id,ids) {
+            if (s !~ /^skills: \[[A-Za-z0-9].*\]$/) return 0
+            p = length("skills: [")
+            n = split(substr(s, p+1, length(s)-p-1), a, /, /) # awk-bytes-ok: strip the verified ASCII prefix and bracket
+            if (n < 1 || n > 32) return 0
+            for (i = 1; i <= n; i++) {
+                if (a[i] !~ /^[A-Za-z0-9][A-Za-z0-9_.-]*:[a-z0-9]+(-[a-z0-9]+)*$/) return 0
+                p = index(a[i], ":")
+                if (i == 1) plugin = substr(a[i], 1, p-1)
+                else if (substr(a[i], 1, p-1) != plugin) return 0
+                id = substr(a[i], p+1)
+                if (length(id) > 64 || ids[id]++) return 0
+            }
+            return 1
+        }
         # A saved inline edit is reversible only if it is the same edit we would
         # derive from the original line. Do not trust comment text as YAML to replay.
-        function valid_inline_record(   saved_edit,saved_skill,ok) {
+        function valid_inline_record(prior_tool, generated_tool,   saved_edit,saved_skill,saved_findings,ok) {
             if (!pair(prior_tool) || key != "tools") return 0
-            saved_edit = tool_edit; saved_skill = skill_tool
+            saved_edit = tool_edit; saved_skill = skill_tool; saved_findings = findings
             tool_edit = ""; skill_tool = 0
             tools(value, mark_from)
-            ok = !block_tools && !skill_tool && tool_edit == generated_tool && tool_edit != ""
+            ok = findings == saved_findings && !block_tools && !skill_tool && tool_edit == generated_tool && tool_edit != ""
             tool_edit = saved_edit; skill_tool = saved_skill; block_tools = 0
             return ok
         }
-        function claude_plan(   i,hit,action,line,edit) {
+        function claude_plan(   i,hit,action,line,edit,generated_skills,prior_skills,prior_tool,generated_tool,has_prior_skills,has_prior_tool,has_generated_tool) {
+            if (mark_invalid) return
+            generated_skills = mark_value["generated-skills"]
+            prior_skills = mark_value["prior-skills"]; has_prior_skills = !!mark_seen["prior-skills"]
+            prior_tool = mark_value["prior-tool"]; has_prior_tool = !!mark_seen["prior-tool"]
+            generated_tool = mark_value["generated-tool"]; has_generated_tool = !!mark_seen["generated-tool"]
             if (mark_last && (!mark_from || !mark_to || mark_to - mark_from - 1 != mark_count ||
-                !saved_skills(generated_skills) || (prior_skills != "" && !saved_skills(prior_skills)))) {
+                !mark_seen["generated-skills"])) {
                 ownership_error(mark_last); return
             }
+            if (mark_from && !saved_generated_skills(generated_skills)) {
+                ownership_error(mark_seen["generated-skills"]); return
+            }
+            if (has_prior_skills && (!pair(prior_skills) || key != "skills" || !native_skills(value))) {
+                ownership_error(mark_seen["prior-skills"]); return
+            }
             if (!active && skills_line && (skills_line != mark_to + 1 ||
-                (raw_skills != generated_skills && raw_skills != prior_skills))) {
+                (raw_skills != generated_skills && (!has_prior_skills || raw_skills != prior_skills)))) {
                 ownership_error(skills_line); return
             }
-            if (prior_tool != "" && !valid_inline_record()) {
-                ownership_error(mark_from); return
+            if (has_prior_tool && (!has_generated_tool || !valid_inline_record(prior_tool, generated_tool))) {
+                ownership_error(mark_seen["prior-tool"]); return
             }
-            if (generated_tool != "") {
-                if (!block_tool_list && prior_tool != "" && tools_line &&
+            if (has_generated_tool) {
+                if (!block_tool_list && has_prior_tool && tools_line &&
                     (raw_tools == prior_tool || raw_tools == generated_tool)) {
                     if (active && raw_tools == prior_tool) { action = "replace"; line = tools_line; edit = generated_tool }
                     if (!active && raw_tools == generated_tool) { action = "replace"; line = tools_line; edit = prior_tool }
-                } else if (block_tool_list && prior_tool == "" && generated_tool ~ /^ *- Skill$/) { # awk-bytes-ok: record sliced only after an ASCII prefix
+                } else if (block_tool_list && !has_prior_tool && generated_tool ~ /^ *- Skill$/) { # awk-bytes-ok: record sliced only after an ASCII prefix
                     for (i in tool_rows) if (tool_rows[i] == generated_tool) hit = i
                     if (skill_tool == 1 && hit) {
                         if (!active) {
@@ -305,26 +358,28 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
                     } else if (!skill_tool && tool_line && tool_edit == generated_tool) {
                         if (active) { action = "insert"; line = tool_line; edit = generated_tool }
                     } else { ownership_error(mark_from); return }
-                } else { ownership_error(mark_from); return }
+                } else { ownership_error(mark_seen["generated-tool"]); return }
             } else if (active && !skill_tool && tool_edit != "") {
                 action = (tool_line ? "insert" : "replace"); line = (tool_line ? tool_line : tools_line); edit = tool_edit
-                generated_tool = edit
-                if (action == "replace") prior_tool = raw_tools
+                generated_tool = edit; has_generated_tool = 1
+                if (action == "replace") { prior_tool = raw_tools; has_prior_tool = 1 }
             }
-            if (index(prior_skills prior_tool generated_tool, "\037")) { ownership_error(mark_from ? mark_from : NR); return }
+            if (invalid_marker_bytes(prior_skills prior_tool generated_tool)) {
+                ownership_error(mark_from ? mark_from : NR); return
+            }
             if (action != "") print "tool", line, action, edit
             if (mark_from || skills_line) print "state", mark_from+0, mark_to+0, skills_line+0
             if (active) {
-                if (!mark_from) prior_skills = raw_skills
-                if (index(prior_skills, "\037")) { ownership_error(skills_line); return }
-                print "save", mark "begin " (1 + (prior_skills != "") + (prior_tool != "") + (generated_tool != ""))
+                if (!mark_from && skills_line) { prior_skills = raw_skills; has_prior_skills = 1 }
+                if (invalid_marker_bytes(prior_skills)) { ownership_error(skills_line); return }
+                print "save", mark "begin " (1 + has_prior_skills + has_prior_tool + has_generated_tool)
                 print "save", mark "generated-skills " projected
-                if (prior_skills != "") print "save", mark "prior-skills " prior_skills
-                if (prior_tool != "") print "save", mark "prior-tool " prior_tool
-                if (generated_tool != "") print "save", mark "generated-tool " generated_tool
+                if (has_prior_skills) print "save", mark "prior-skills " prior_skills
+                if (has_prior_tool) print "save", mark "prior-tool " prior_tool
+                if (has_generated_tool) print "save", mark "generated-tool " generated_tool
                 print "save", mark "end"
                 print "save", projected
-            } else if (prior_skills != "") print "restore", prior_skills
+            } else if (has_prior_skills) print "restore", prior_skills
         }
         function finish_entry() {
             if (block_metadata && !child_indent) unreadable(entry)
@@ -402,7 +457,7 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
             if (mode == "claude" && key == "skills") {
                 block = plain = 0
                 if (skills_line) unreadable(NR)
-                native_skills_invalid = !flow_list(value)
+                native_skills_invalid = !native_skills(value)
                 if (native_skills_invalid) native_skills_error(NR)
                 skills_line = NR; raw_skills = $0; entry = NR; native_skills_entry = 1
                 next
