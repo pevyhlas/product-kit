@@ -21,6 +21,7 @@ change by change.
 ### Fixed
 
 - Review packages no longer require full context just because neither revision has spec bounds.
+  A missing or unrecoverable child record still produces the usual warning.
   Historical records and diagnostics remain review evidence, including for same-ID follow-ups.
   Absent conventional canon and optional trusted registry/config no longer create gaps, even
   in repositories with specs. Heads packaged in the older format can get a fresh

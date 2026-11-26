@@ -107,8 +107,7 @@ obligations_section() { sed -n '/^## Review obligations$/,/^## Open only if/p' "
 non_verification_gaps() { sed '/^verification /d' "$PKG/context-gaps.txt"; }
 released_context_retained() { # opt-in with a local v3.2.0 builder; named exceptions follow
     [ -n "${PACKAGE_TEST_REFERENCE_BUILDER:-}" ] || return 0
-    local old artifact row found tab=$'\t' gap source keep_child_warning="$1"
-    shift
+    local old artifact row found tab=$'\t' gap source
     run bash "$PACKAGE_TEST_REFERENCE_BUILDER" "$ID" "$BASE" "$@"
     assert_eq 0 "$STATUS" "released builder: $OUTPUT" || return 1
     old="$(printf '%s' "$OUTPUT" | jq -er .PACKAGE_DIR)" || return 1
@@ -128,8 +127,6 @@ released_context_retained() { # opt-in with a local v3.2.0 builder; named except
             'bounds bounds unavailable; inspect bounds.stderr')
                 if [ "$(cat "$PKG/bounds.txt" 2>/dev/null)" = 'No spec bounds apply at this revision.' ] &&
                     { [ ! -e "$old/bounds.stderr" ] || [ "$(cat "$old/bounds.stderr")" = 'No spec files under specs/' ]; }; then continue; fi ;;
-            'child actual child record missing or unrecoverable:'*)
-                [ "$keep_child_warning" = true ] || continue ;;
             'canon missing/unsafe/unreadable context '*| 'policy missing/unsafe/unreadable context '*)
                 case "${gap#* context }" in
                     *:specs/product.md|*:specs/architecture.md|*:.prdkit/memory/agents.md|*:.prdkit/memory/config.md)
@@ -172,11 +169,12 @@ for mode in "$@"; do
                 assert_not_contains "$section" '**Required full context:**'
                 assert_not_contains "$section" 'mark the review pending'
                 assert_eq 2 "$(default_reads | wc -l | tr -d ' ')" 'only diff and inline obligations by default'
-                assert_eq '' "$(non_verification_gaps)" 'no spec or optional policy gaps'
+                assert_eq "child actual child record missing or unrecoverable: specs/changes/$ID.md" \
+                    "$(non_verification_gaps)" 'only the released missing-child warning remains'
                 assert_eq '' "$(awk -F '\t' '$3 ~ /^specs\// {print}' "$PKG/context-manifest.tsv")" 'no spec obligations'
                 assert_contains "$(cat "$PKG/context-manifest.tsv")" '.prdkit/memory/constitution.md' 'required trusted policy remains'
                 integrity
-                released_context_retained false
+                released_context_retained
             fi
 
             it "Adding the first spec includes its canon as proposed and retains the missing scope warning"
@@ -193,7 +191,7 @@ for mode in "$@"; do
                 assert_contains "$(non_verification_gaps)" 'child actual child record missing or unrecoverable:'
                 assert_contains "$(non_verification_gaps)" 'bounds bounds unavailable; inspect bounds.stderr'
                 assert_not_contains "$(non_verification_gaps)" 'unresolved BASE obligation'
-                released_context_retained true
+                released_context_retained
             fi
 
             it "Deleting the last spec keeps its BASE canon and bounds for review"
@@ -210,7 +208,7 @@ for mode in "$@"; do
                 assert_contains "$(non_verification_gaps)" 'child actual child record missing or unrecoverable:'
                 assert_not_contains "$(non_verification_gaps)" 'bounds unavailable'
                 assert_not_contains "$(non_verification_gaps)" 'canon missing/unsafe/unreadable context'
-                released_context_retained true
+                released_context_retained
             fi
 
             it "An unreadable committed BASE spec does not count as absent"
@@ -285,7 +283,7 @@ EOF
                 assert_contains "$(cat "$PKG/bounds.txt")" 'No spec bounds apply at this revision.'
                 assert_contains "$(cat "$PKG/bounds-base.txt")" 'No spec bounds apply at this revision.'
                 assert_contains "$(cat "$PKG/bounds-inputs.tsv")" "$record"$'\t'"$historical"
-                released_context_retained true
+                released_context_retained
             fi
 
             it "A same-ID follow-up preserves the pre-deletion record and citations when BASE is the closure"
@@ -307,7 +305,7 @@ EOF
                     assert_contains "$(obligations_section)" 'Pre-BASE contract body.'
                     assert_contains "$(non_verification_gaps)" "link missing/unsafe context $historical:specs/missing.md"
                     assert_not_contains "$(non_verification_gaps)" 'child actual child record missing or unrecoverable'
-                    released_context_retained true ${args[@]+"${args[@]}"}
+                    released_context_retained ${args[@]+"${args[@]}"}
                 fi
             done
 
@@ -329,7 +327,7 @@ EOF
                         assert_not_contains "$(cat "$PKG/context-manifest.tsv")" 'child-historical'
                     fi
                     assert_not_contains "$(non_verification_gaps)" 'cannot inspect child record history'
-                    released_context_retained true
+                    released_context_retained
                 fi
                 cd "$P" || exit 1
             done
@@ -346,7 +344,7 @@ EOF
                 assert_contains "$(obligations_section)" 'No spec files at BASE or HEAD; no spec bounds apply.'
                 assert_contains "$(non_verification_gaps)" "unreadable child record $historical:$record"
                 assert_not_contains "$(non_verification_gaps)" 'bounds unavailable'
-                released_context_retained true
+                released_context_retained
             fi
 
             it "A failed history lookup with empty endpoints remains a gap"
@@ -362,9 +360,8 @@ exec "$FIXTURE_GIT" "$@"
 EOF
             chmod +x "$shim/git"
             if PATH="$shim:$PATH" build --evidence src/app.txt; then
-                assert_contains "$(non_verification_gaps)" "cannot inspect child record history at $(git rev-parse HEAD):$record"
-                assert_contains "$(non_verification_gaps)" "actual child record missing or unrecoverable: $record"
-                assert_not_contains "$(non_verification_gaps)" 'bounds unavailable'
+                assert_eq "child actual child record missing or unrecoverable: $record" "$(non_verification_gaps)"
+                PATH="$shim:$PATH" released_context_retained --evidence src/app.txt
             fi
 
             it "An empty bounds inventory does not bypass validation of a record header"
@@ -376,7 +373,7 @@ EOF
                 assert_contains "$(non_verification_gaps)" 'bounds bounds unavailable; inspect bounds.stderr'
                 assert_contains "$(cat "$PKG/bounds.stderr")" 'Duplicate Parts field'
                 assert_not_contains "$(cat "$PKG/bounds.txt")" 'No spec bounds apply'
-                released_context_retained true
+                released_context_retained
             fi
             BASE="$(git rev-parse HEAD)"
             advance 'change code with the same invalid scope'
@@ -384,7 +381,7 @@ EOF
                 assert_contains "$(obligations_section)" '**Required full context:** A BASE obligation could not be resolved.'
                 assert_contains "$(non_verification_gaps)" 'bounds unresolved BASE obligation: shared bounds unavailable'
                 assert_contains "$(cat "$PKG/bounds.stderr")" 'Duplicate Parts field'
-                released_context_retained true
+                released_context_retained
             fi
 
             it "A historical-only record still validates its header without endpoint bounds"
@@ -400,11 +397,11 @@ EOF
                 assert_contains "$(cat "$PKG/bounds-inputs.tsv")" "$record"$'\t'"$historical"
                 assert_eq '' "$(cat "$PKG/bounds.txt")" 'diagnostic only; no HEAD bounds'
                 assert_contains "$(cat "$PKG/bounds-base.txt")" 'No spec bounds apply at this revision.'
-                released_context_retained true
+                released_context_retained
             fi ;;
         merged-history)
             record="specs/changes/$ID.md"
-            it "A no-ff merge does not hide a side branch's closing record or unresolved link"
+            it "A no-ff merge that prunes a closing record keeps the released missing-child warning"
             git checkout -qb closing "$BASE" || exit 1
             mkdir -p specs/changes
             printf '# Change\n\n**Tier**: T1\n\n## Acceptance\n\nMerged acceptance. See [contract](../missing.md#contract).\n' > "$record"
@@ -412,18 +409,17 @@ EOF
             historical="$(git rev-parse HEAD)"
             git rm -q "$record" && git commit -qm 'close selected record on side branch' || exit 1
             git checkout -q "$ID" && git merge -q --no-ff -m 'merge closing branch' closing || exit 1
+            merged_base="$(git rev-parse HEAD)"
             assert_eq "$BASE" "$(git merge-base origin/HEAD HEAD)" 'BASE is the trusted merge base'
             assert_eq '' "$(git ls-tree -r --name-only "$BASE" -- specs)" 'BASE has no specs'
             assert_eq '' "$(git ls-tree -r --name-only HEAD -- specs)" 'HEAD has no specs'
             assert_eq '' "$(git log -1 --format=%H HEAD -- "$record")" 'default path history prunes both record commits'
             if build; then
                 assert_contains "$(obligations_section)" 'No spec files at BASE or HEAD; no spec bounds apply.'
-                assert_contains "$(obligations_section)" 'Merged acceptance.'
-                assert_contains "$(cat "$PKG/context-manifest.tsv")" "$historical"$'\t'"$record"$'\t'"$(git rev-parse "$historical:$record")"$'\t1\t7\tchild-historical'
-                assert_contains "$(non_verification_gaps)" "link missing/unsafe context $historical:specs/missing.md"
-                assert_contains "$(non_verification_gaps)" "actual child record missing or unrecoverable: $record"
+                assert_eq "child actual child record missing or unrecoverable: $record" "$(non_verification_gaps)"
+                assert_not_contains "$(cat "$PKG/context-manifest.tsv")" 'child-historical'
                 assert_contains "$(cat "$PKG/bounds.txt")" 'No spec bounds apply at this revision.'
-                released_context_retained true
+                released_context_retained
             fi
 
             it "The legacy lookup wins when incomparable closures include a first-parent record"
@@ -436,21 +432,30 @@ EOF
             if build; then
                 assert_contains "$(obligations_section)" 'Merged acceptance.'
                 assert_contains "$(cat "$PKG/context-manifest.tsv")" "$historical"$'\t'"$record"
-                assert_not_contains "$(non_verification_gaps)" 'competing child record history'
-                released_context_retained true
+                assert_contains "$(non_verification_gaps)" "link missing/unsafe context $historical:specs/missing.md"
+                assert_not_contains "$(non_verification_gaps)" 'actual child record missing or unrecoverable'
+                released_context_retained
             fi
 
-            it "If the legacy lookup is empty, competing merged closures produce a gap instead of choosing a record"
-            git checkout -qb integrated "$BASE" && advance 'unrelated first parent' || exit 1
-            git merge -q --no-ff -m 'merge both closing branches' both-closings || exit 1
+            it "A same-ID follow-up keeps the released warning when trusted BASE already contains a merged closure"
+            BASE="$merged_base"
+            git checkout -q "$ID" && git update-ref refs/remotes/origin/main "$BASE" || exit 1
+            advance 'follow up after the merged closure'
+            assert_eq "$BASE" "$(git merge-base origin/HEAD HEAD)" 'merged closure is the trusted BASE'
             assert_eq '' "$(git log -1 --format=%H HEAD -- "$record")" 'default lookup is empty'
-            if build; then
-                assert_contains "$(non_verification_gaps)" "actual child record missing or unrecoverable: $record"
-                assert_contains "$(non_verification_gaps)" "competing child record history for $record"
-                assert_not_contains "$(cat "$PKG/context-manifest.tsv")" 'child-historical'
-                assert_contains "$(obligations_section)" 'No spec files at BASE or HEAD; no spec bounds apply.'
-                released_context_retained true
-            fi ;;
+            assert_eq '' "$(git log --full-history --format=%H "$BASE..HEAD" -- "$record")" 'range misses older history'
+            assert_contains "$(git log --full-history --format=%H "$BASE" -- "$record")" "$historical" 'pre-deletion commit is reachable from BASE'
+            for style in full delta; do
+                args=()
+                [ "$style" != delta ] || args=(--since "$BASE")
+                if build ${args[@]+"${args[@]}"}; then
+                    assert_eq "child actual child record missing or unrecoverable: $record" "$(non_verification_gaps)" "$style: exact released child warning"
+                    assert_not_contains "$(cat "$PKG/context-manifest.tsv")" 'child-historical'
+                    assert_contains "$(obligations_section)" 'No spec files at BASE or HEAD; no spec bounds apply.'
+                    assert_not_contains "$(obligations_section)" '**Required full context:**'
+                    released_context_retained ${args[@]+"${args[@]}"}
+                fi
+            done ;;
         context)
             it "Generated context cannot overwrite explicit whole-file context"
             mkdir -p sections; printf 'EXPLICIT_SOURCE_BYTES\n' > sections/1.txt

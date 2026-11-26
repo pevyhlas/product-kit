@@ -230,38 +230,6 @@ context_bodies_equal() {
         cmp -s "$CTX_TMP/body-key-base" "$CTX_TMP/body-key-head"
 }
 
-context_recover_merged_child() { # called only after a successful, empty legacy lookup
-    local path="$1" range="$BASE_SHA..$HEAD_SHA" last other entry parents commit parent extra
-    # Default path simplification can prune a merged side whose closing tree matches HEAD.
-    # In a shallow checkout keep the legacy missing-child warning if its lookup found nothing.
-    [ "$(git -C "$REPO_ROOT" rev-parse --is-shallow-repository 2>/dev/null)" = false ] || return 1
-    if ! last="$(git -C "$REPO_ROOT" rev-list --full-history --topo-order -1 "$range" -- ":(literal)$path" 2>/dev/null)"; then
-        context_gap child "cannot inspect child record history in $range:$path"
-        return 1
-    fi
-    [ -n "$last" ] || return 0
-    # A topo-order tie across independent histories is not provenance. Check for changes
-    # outside the candidate's ancestry, and only recover a proven single-parent deletion.
-    if ! other="$(git -C "$REPO_ROOT" rev-list --full-history -1 "$range" "^$last" -- ":(literal)$path" 2>/dev/null)"; then
-        context_gap child "cannot inspect child record history in $range:$path"
-        return 1
-    fi
-    if [ -n "$other" ]; then
-        context_gap child "competing child record history for $path at $last and $other"
-        return 1
-    fi
-    if entry="$(git -C "$REPO_ROOT" ls-tree "$last" -- ":(literal)$path" 2>/dev/null)" && [ -z "$entry" ] &&
-        parents="$(git -C "$REPO_ROOT" rev-list --parents -1 "$last" 2>/dev/null)" &&
-        IFS=' ' read -r commit parent extra <<< "$parents" &&
-        [ "$commit" = "$last" ] && [ -n "$parent" ] && [ -z "$extra" ] &&
-        context_object "$parent" "$path" >/dev/null; then
-        record_rev="$parent"
-    else
-        context_gap child "cannot prove pre-deletion record for $path at $last"
-        return 1
-    fi
-}
-
 context_review_child() { # record path, usable HEAD or historical record revision
     local path="$1" rev="$2" base_blob head_blob entry
     base_blob="$(context_object "$BASE_SHA" "$path")" || {
@@ -590,7 +558,7 @@ context_emit_references() {
 review_context_build() {
     local path blob base_blob record record_rev last count a entry base_material base_items hist_material reference_side
     local shared_inputs=false explicit_kind explicit_rev spec_presence base_specs head_specs
-    local head_capture=true history_ok=true
+    local head_capture=true
     base_reference_gap=false
     undefined_link_gap=false
     no_spec_files=false
@@ -612,19 +580,10 @@ review_context_build() {
         if [ -n "$entry" ]; then
             record_rev=""; context_gap child "actual child record is unsafe/unreadable at HEAD: $record; no historical substitution"
         else
-            # Keep the released HEAD-ancestry lookup, including records closed at or before BASE.
-            last="$(git -C "$REPO_ROOT" log -1 --format=%H "$HEAD_SHA" -- "$record" 2>/dev/null)" || history_ok=false
+            last="$(git -C "$REPO_ROOT" log -1 --format=%H "$HEAD_SHA" -- "$record" 2>/dev/null || true)"
             if [ -n "$last" ] && context_object "$last^" "$record" >/dev/null; then
                 record_rev="$(git -C "$REPO_ROOT" rev-parse "$last^")"
-            else
-                record_rev=""
-                if ! $history_ok; then context_gap child "cannot inspect child record history at $HEAD_SHA:$record"; fi
-                # A merge-only recovery may add evidence but never replaces a legacy record.
-                if [ -n "$last" ] || ! $history_ok || ! $no_spec_files ||
-                    ! context_recover_merged_child "$record" || [ -n "$record_rev" ]; then
-                    context_gap child "actual child record missing or unrecoverable: $record"
-                fi
-            fi
+            else record_rev=""; context_gap child "actual child record missing or unrecoverable: $record"; fi
         fi
     fi
     # Materialize canon from H; bounds scope alone may use the recovered historical child.
