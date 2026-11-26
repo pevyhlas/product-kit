@@ -148,6 +148,71 @@ assert_contains "$OUTPUT" 'specs/SPEC.md:17 (<request>)'
 assert_contains "$OUTPUT" 'specs/SPEC.md:20 (<part name>)'
 rm specs/SPEC.md
 
+it "combined requirements and qualities recognize lists and ranges without hiding stock slots"
+cat > specs/SPEC.md <<'MD'
+# Request Service — spec
+
+## Journeys
+
+- **J-01 Submit** (hypothesis): a requester sends a request.
+- **J-02 Track** (hypothesis): a requester looks up the status.
+- **J-03 Resolve** (hypothesis): an operator records a decision.
+
+## Requirements and qualities
+
+- **R-01 Show the outcome** (hypothesis): the user sees progress. Journeys: J-01,J-02. Source: <owner, date: "<words>"; observed; or the change that introduced it>.
+- **Q-01 Respond promptly** (hypothesis): p95 under 1 s on a slow network. Journeys: J-01, J-02–J-03.
+  Enforced by: <test, metric, owner review or unenforced>.
+
+## Shape and parts
+
+One service delivers J-01, J-02, J-03, R-01 and Q-01.
+MD
+run bash "$DOCTOR" --strict --json
+assert_eq 1 "$STATUS" "$OUTPUT"
+assert_eq 2 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" 'specs/SPEC.md:11 (<owner, date:'
+assert_contains "$OUTPUT" 'specs/SPEC.md:12 (<test, metric, owner review or unenforced>)'
+sed -i.bak 's/Source: <.*>/Source: observed/; s/Enforced by: <.*>/Enforced by: unenforced/' specs/SPEC.md
+run bash "$DOCTOR" --strict --json
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq 0 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+rm specs/SPEC.md specs/SPEC.md.bak
+
+it "other stock citation fields preserve slots beside mixed ID lists, subparts and linked lists"
+mkdir -p specs/parts
+cat > specs/architecture.md <<'MD'
+# Request Service — architecture
+
+| Part | What it is | Why it exists | Components | Maturity | Spec |
+|------|------------|---------------|------------|----------|------|
+| P2.1 Index | tracks requests | Q-01, J-01 to J-02, R-01, P2.2 | <components> | hypothesis | [p2.1-index](parts/p2.1-index.md) |
+MD
+cat > specs/parts/p2.1-index.md <<'MD'
+# P2.1 Index
+
+- <When a dependency fails, what this part does>. Users see: J-01, J-02, Variations.
+MD
+cat > specs/product.md <<'MD'
+# Request Service
+
+| Pain today | Evidence | Solved by |
+|------------|----------|-----------|
+| Lost updates | <assumed, desk research, observed or measured; a link> | J-01 J-02 |
+
+| Area | Idea (now) | Demo | MVP |
+|------|------------|------|-----|
+| Requests | [J-01](product/journeys/j-01-submit.md), [J-02 <journey>](product/journeys/j-02-track.md), [J-03 Resolve](product/journeys/j-03-resolve.md) | [J-04 Review](product/journeys/j-04-review.md), [J-05 Reopen](product/journeys/j-05-reopen.md) | |
+MD
+run bash "$DOCTOR" --json
+assert_eq 4 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")" "one stock slot per row"
+assert_contains "$OUTPUT" 'specs/architecture.md:5 (<components>)'
+assert_contains "$OUTPUT" 'specs/parts/p2.1-index.md:3 (<When a dependency fails, what this part does>)'
+assert_contains "$OUTPUT" 'specs/product.md:5 (<assumed, desk research, observed or measured; a link>)'
+assert_contains "$OUTPUT" 'specs/product.md:9 (<journey>)'
+rm specs/architecture.md specs/parts/p2.1-index.md specs/product.md
+rmdir specs/parts
+
 it "record reasons count only when the whole field is still the stock slot"
 cat > specs/records.md <<'MD'
 # Records
@@ -1648,6 +1713,27 @@ An alert shows `P<n>` as the generic identifier notation when the part index is 
 
     Code: <path> (a sample line of indented CLI help)
 MD
+run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq 0 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+
+it "split requirement and quality metadata survives multiple linked journeys"
+journeys="$EX/specs/product/journeys"
+sed '1s/J-01 Get a request handled/J-02 Track a request/' "$journeys/j-01-get-a-request-handled.md" > "$journeys/j-02-track-a-request.md"
+printf '\n[J-02 Track a request](product/journeys/j-02-track-a-request.md).\n' >> "$EX/specs/product.md"
+req="$EX/specs/product/requirements.md"
+qual="$EX/specs/product/qualities.md"
+sed -i.bak 's/Journeys: J-01\./Journeys: J-01, J-02./' "$req"
+sed -i.bak '6s/$/ Source: <owner, date: "<words>"; observed; or the change that introduced it>./' "$req"
+sed -i.bak 's/Journeys: J-01\. Enforced by: unenforced\./Journeys: J-01, J-02. Enforced by: <test, metric, owner review or unenforced>./' "$qual"
+run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
+assert_eq 1 "$STATUS" "$OUTPUT"
+assert_eq 1 "$(jq '.findings | length' <<< "$OUTPUT")" "residue is the only failure"
+assert_eq 2 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" 'specs/product/requirements.md:5 (<owner, date:'
+assert_contains "$OUTPUT" 'specs/product/qualities.md:3 (<test, metric, owner review or unenforced>)'
+sed -i.bak 's/Source: <.*>/Source: observed/' "$req"
+sed -i.bak 's/Enforced by: <.*>/Enforced by: unenforced/' "$qual"
 run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
 assert_eq 0 "$STATUS" "$OUTPUT"
 assert_eq 0 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"

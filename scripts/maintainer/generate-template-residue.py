@@ -53,6 +53,40 @@ EXAMPLE_VALUE = re.compile(
     r"|\bp[1-9](?=-)|\bj-0[1-9](?=-)|(?<=\.)(?:B|I)-01\b| \(hypothesis\)"
 )
 NUMBER = "[0-9][0-9]*"
+ITEM_NUMBER = "[0-9]" + NUMBER
+PART_ID = NUMBER + r"(\." + NUMBER + ")?"
+ID_SEPARATOR = "( *, *| +)"
+RANGE_SEPARATOR = r" *(to|through|-|–|—|\.\.) *"
+
+
+def citation_list(*ids):
+    # spec-lib.sh recognizes numbered citations; bounds.sh and doctor.sh also
+    # recognize closed ranges of the same kind. The change metadata reader
+    # accepts commas and whitespace as separators, including for subparts.
+    citation = "(" + "|".join(f"{id_}({RANGE_SEPARATOR}{id_})?" for id_ in ids) + ")"
+    return citation + f"({ID_SEPARATOR}{citation})*"
+
+
+JOURNEYS = citation_list("J-" + ITEM_NUMBER)
+PART = "P" + PART_ID
+REFERENCES = citation_list(PART, PART + r"\.[BI]-" + ITEM_NUMBER,
+                           *(kind + "-" + ITEM_NUMBER for kind in "JRQCDN"))
+# Only expand a sample when it occupies a citation field, never a definition
+# ID, a single link's label/path, a reference to one band or decision, or a
+# Mermaid node. The literal label/column/delimiter still anchors each field.
+CITATION_FIELDS = {
+    "requirements": ((rf"(?<=Journeys: ){JOURNEYS}(?=\.)", JOURNEYS),),
+    "qualities": ((rf"(?<=Journeys: ){JOURNEYS}(?=\.)", JOURNEYS),),
+    "part": ((rf"(?<=Users see: ){JOURNEYS}(?=, Variations\.)", JOURNEYS),),
+    "architecture": ((rf"(?<=\| ){REFERENCES}(?= \|)", REFERENCES),),
+    "product": ((rf"(?<=\| ){JOURNEYS}(?= \|)", JOURNEYS),),
+}
+JOURNEY_LINK = rf"\[J-{ITEM_NUMBER}( [^]|]*)?\]\(product/journeys/j-{ITEM_NUMBER}-[^)|]+\.md\)"
+LINK_SEPARATOR = " *, *"
+LINK_CELL_EDGES = (
+    (r"(?<=\| )(?=\[J-[0-9]+ )", f"({JOURNEY_LINK}{LINK_SEPARATOR})*"),
+    (r"(?<=\.md\))(?= \|)", f"({LINK_SEPARATOR}{JOURNEY_LINK})*"),
+)
 
 
 def normalize(text):
@@ -124,11 +158,7 @@ def escape(text):
     return re.sub(r"[][\\.^$*+?(){}|]", r"\\\g<0>", text)
 
 
-def literal_regex(text, diagram):
-    if diagram:
-        # Keep the stock node names and edges: a label alone is not a scaffold.
-        return escape(text)
-
+def scalar_regex(text):
     def value(match):
         word = match[0]
         if word == " (hypothesis)":
@@ -139,6 +169,8 @@ def literal_regex(text, diagram):
             return "(D-NN|D-" + NUMBER + ")"
         if "-" in word:
             return word.split("-")[0] + "-" + NUMBER
+        if word[0] in "Pp":
+            return word[0] + PART_ID
         return word[0] + NUMBER
 
     parts = []
@@ -147,6 +179,25 @@ def literal_regex(text, diagram):
         parts.extend((escape(text[start:match.start()]), value(match)))
         start = match.end()
     return "".join(parts) + escape(text[start:])
+
+
+def literal_regex(text, group, linked_table):
+    if group.endswith("@mermaid"):
+        # Keep the stock node names and edges: a label alone is not a scaffold.
+        return escape(text)
+    rules = CITATION_FIELDS.get(group, ())
+    if linked_table:
+        # Stage cells may contain several links; allow filled neighbours on
+        # either side of the stock link without crossing into another column.
+        rules += LINK_CELL_EDGES
+    fields = sorted((match.start(), match.end(), regex)
+                    for source, regex in rules for match in re.finditer(source, text))
+    pieces = []
+    cursor = 0
+    for start, end, regex in fields:
+        pieces.extend((scalar_regex(text[cursor:start]), regex))
+        cursor = end
+    return "".join(pieces) + scalar_regex(text[cursor:])
 
 
 def slot_spans(group, row):
@@ -184,6 +235,7 @@ def skeletons(group, row, wrapped):
     ends.append(len(row))
     seen = Counter()
     diagram = group.endswith("@mermaid")
+    linked_table = group == "product" and row.startswith("|") and "(product/journeys/" in row
     for start, end, token in spans:
         seen[token] += 1
         variants = []
@@ -195,10 +247,10 @@ def skeletons(group, row, wrapped):
             for a, b, slot in spans:
                 if b > stop:
                     break
-                pieces.append(literal_regex(row[cursor:a], diagram))
+                pieces.append(literal_regex(row[cursor:a], group, linked_table))
                 pieces.append(escape(slot) if a == start else filled_regex(row, b, slot, diagram))
                 cursor = b
-            pieces.append(literal_regex(row[cursor:stop], diagram))
+            pieces.append(literal_regex(row[cursor:stop], group, linked_table))
             variants.append("".join(pieces))
         pattern = variants[0] if len(variants) == 1 else "(" + "|".join(variants) + ")"
         # A row may wrap differently after filling a value. Join project
