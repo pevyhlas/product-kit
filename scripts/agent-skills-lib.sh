@@ -29,6 +29,45 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
             sub(/[ \t]*:[ \t]*$/, "", key); gsub(/["\047]/, "", key)
             return 1
         }
+        # Inspect only potential aliases for the reserved neutral key. This is not
+        # a validator for unrelated YAML keys. Decode ASCII hex escapes by value;
+        # other valid escapes cannot contribute a letter to "skills".
+        function possible_skills_key(s, explicit,   q,c,i,j,n,d,cp,text,tail,escaped,invalid) {
+            if (sub(/^\?[ \t]+/, "", s)) { explicit = 1; s = trim(s) }
+            while (sub(/^(!<[^>]*>|[!&][^ \t]*)[ \t]+/, "", s)) {}
+            if (s ~ /^skills[ \t]*:([ \t]|$)/ || (explicit && s ~ /^skills([ \t]+#.*|[ \t]*)$/)) return 1
+            q = substr(s, 1, 1)
+            if (q != "\"" && q != "\047") return 0
+            for (i = 2; i <= length(s); i++) {
+                c = substr(s, i, 1)
+                if (c == q) {
+                    if (q == "\047" && substr(s, i+1, 1) == q) { text = text q; i++; continue }
+                    tail = substr(s, i+1) # awk-bytes-ok: begins immediately after the ASCII closing quote
+                    if (tail !~ /^[ \t]*:([ \t]|$)/ && !(explicit && tail ~ /^([ \t]+#.*|[ \t]*)$/)) return 0
+                    return text == "skills" || invalid
+                }
+                if (q != "\"" || c != "\\") { text = text c; continue }
+                escaped = 1; c = substr(s, ++i, 1)
+                n = (c == "x" ? 2 : (c == "u" ? 4 : (c == "U" ? 8 : 0)))
+                if (!n) {
+                    if (c == "" || !index("0abtnvfre \"/\\N_LP\t", c)) invalid = 1
+                    text = text "?"; continue
+                }
+                cp = 0
+                for (j = 1; j <= n; j++) {
+                    c = substr(s, i+j, 1)
+                    d = (c == "" ? 0 : index("0123456789abcdef", c))
+                    if (!d && c != "") { d = index("ABCDEF", c); if (d) d += 10 }
+                    if (!d) break
+                    cp = cp * 16 + d - 1
+                }
+                if (j <= n) { invalid = 1; continue }
+                i += n
+                if (cp > 1114111 || (cp >= 55296 && cp <= 57343)) invalid = 1
+                text = text (cp > 0 && cp < 128 ? sprintf("%c", cp) : "?")
+            }
+            return escaped
+        }
         # Split a single-line flow collection or strip a trailing comment. Commas
         # and comments inside quoted strings are data. No nesting or double-quote escapes.
         function cells(s, sep, out,   i,c,q,start,n) {
@@ -134,6 +173,15 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
         function ownership_error(ln) {
             report(ln, "", "cannot establish Claude skill projection ownership; restore the generated comments and fields from a known-good projection before rendering")
         }
+        function marker_like(s) {
+            s = tolower(s)
+            return s ~ /^(#+[ \t]*)?([[:alnum:]_.-]+[-_. ]+)?skill[-_. ]+projection([-_.][[:alnum:]_.-]+)?([ \t]*([:=]|$)|[ \t]+(begin|end|generated-|prior-))/ ||
+                s ~ /^#+.*:[ \t]*(generated-skills|prior-skills)[ \t]+skills:/ ||
+                s ~ /^#+.*:[ \t]*(generated-tool|prior-tool)[ \t]+(tools:|-[ \t]*skill([ \t]|$))/
+        }
+        function native_skills_error(ln) {
+            report(ln, "", "put native Claude skills on one line as a flow list ([a, b]) before rendering")
+        }
         function marker(s) {
             if (s ~ /^begin [1-4]$/ && !mark_from) { mark_from = NR; mark_count = $NF + 0 }
             else if (!mark_from || mark_to || NR != mark_last + 1) ownership_error(NR)
@@ -213,7 +261,7 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
         function finish_entry() {
             if (block_metadata && !child_indent) unreadable(entry)
             if (block_tools && !tool_line) unreadable(entry)
-            entry = block_metadata = block_tools = child_indent = 0
+            entry = block_metadata = block_tools = child_indent = native_skills_entry = 0
         }
         NR == 1 {
             opening = frontmatter_delimiter($0)
@@ -228,11 +276,13 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
                 if ($0 != "---" && !header_bad) header_bad = NR
                 closed = 1; exit
             }
-            if (mode == "claude" && !quote && !flow && index($0, "# prdkit-skill-projection:") == 1) {
+            if (mode == "claude" && marker_like(trim($0))) {
                 marked = 1
-                if (index($0, mark) == 1) marker(substr($0, length(mark) + 1)) # awk-bytes-ok: strip the verified ASCII marker prefix
+                comment_line = $0; sub(/^[ \t]+/, "", comment_line)
+                if (!quote && !flow && !(block && indent($0) > block_indent) && index(comment_line, mark) == 1)
+                    marker(substr(comment_line, length(mark) + 1)) # awk-bytes-ok: strip the verified ASCII marker prefix
                 else ownership_error(NR)
-                next
+                if (!quote && !flow) next
             }
             if (!quote && !flow && /^[ \t]*(#|$)/) next
             if (entry && (/^[ \t]/ || /^-[ \t]/)) {
@@ -244,6 +294,9 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
                     tool_edit = substr($0, 1, child_indent) "- Skill"
                     item = trim($0); sub(/^-[ \t]+/, "", item)
                     if (cells(item, "", piece) < 0) unreadable(NR); else tool(piece[1], NR)
+                } else if (native_skills_entry) {
+                    if (!native_skills_invalid) native_skills_error(entry)
+                    native_skills_invalid = 1
                 } else unreadable(NR)
                 next
             }
@@ -254,23 +307,37 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
                 if (mode == "neutral" && !mapping && !quote && !flow && pair(trim($0)) && key == "skills") {
                     seen = 1; unreadable(NR)
                 }
+                if (mode == "neutral" && explicit_key && !quote && !flow) {
+                    if (!bad_root && possible_skills_key(trim($0), 1)) bad_root = explicit_key
+                    explicit_key = 0
+                }
                 if (!mapping && !bad_root) bad_root = NR
                 scan_yaml($0); next
             }
             if (!pair($0) || (mode != "metadata" && $0 !~ /^[-A-Za-z0-9_.\057]+:([ \t]|$)/)) {
-                if (!bad_root) bad_root = NR
+                if (mode == "neutral") {
+                    mapping = 1
+                    if (!bad_root && possible_skills_key($0, explicit_key != 0)) bad_root = explicit_key ? explicit_key : NR
+                    explicit_key = ($0 ~ /^\?([ \t]+#.*|[ \t]*)$/ ? NR : 0)
+                    root_key = ""; single_line = 0
+                } else if (!bad_root) bad_root = NR
                 scan_yaml($0); next
             }
+            explicit_key = 0
             mapping = 1
             root_key = key
             single_line = key ~ /^(name|description|tier|harnesses|model|variant|domain|source|library-ref|library-agent)$/
             if (mode == "claude" && key == "skills") {
-                if (skills_line || !flow_list(value)) unreadable(NR)
-                skills_line = NR; raw_skills = $0; entry = NR
+                block = plain = 0
+                if (skills_line) unreadable(NR)
+                native_skills_invalid = !flow_list(value)
+                if (native_skills_invalid) native_skills_error(NR)
+                skills_line = NR; raw_skills = $0; entry = NR; native_skills_entry = 1
                 next
             }
             if ((mode == "neutral" && key == "skills") || (mode == "metadata" && key == "metadata") ||
                 (mode == "claude" && key == "tools")) {
+                block = plain = 0
                 if (seen++) { unreadable(NR); next }
                 entry = NR
                 print "entry", NR
@@ -285,7 +352,7 @@ as_records() { # neutral|metadata|claude|opencode file [projected skills line or
         END {
             if (entry) finish_entry()
             if (mode == "neutral" && bad_root)
-                report(bad_root, "", "unsupported neutral frontmatter key; use unquoted, unescaped top-level keys")
+                report(bad_root, "", "unsupported neutral frontmatter key for skills; use the plain top-level skills: key")
             if (mode == "neutral" && !seen) exit
             if (mode == "claude" && marked) print "marked"
             if (mode == "claude" && !active && !marked) exit
@@ -434,7 +501,6 @@ as_projection() { # harness proj permissions
         fi
     fi
     if [ -f "$2" ]; then
-        if [ -z "$active" ] && ! grep -q '^# prdkit-skill-projection:' "$2"; then return 0; fi
         records="$(as_records "$1" "$2" "$active")" || return 1
         if [ -z "$active" ]; then
             case $'\n'"$records"$'\n' in *$'\nmarked\n'*) ;; *) return 0 ;; esac

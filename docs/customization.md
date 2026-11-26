@@ -117,9 +117,9 @@ OpenCode format, restore the previous `permission:` block and remove `permission
 
 Declare `skills: [example-skill, another-skill]` in a neutral agent's frontmatter. Use a
 nonempty, single-line bracketed list (not a block list) of at most 32 distinct lowercase IDs,
-each at most 64 characters, with digits and single hyphens between segments. Use plain,
-unquoted top-level keys in neutral frontmatter. An agent that never opts in keeps its
-native skill configuration.
+each at most 64 characters, with digits and single hyphens between segments. Write the
+top-level `skills:` key without quotes or escapes. An agent that never opts in keeps
+its native skill configuration.
 
 In `.prdkit/memory/agents.md`, add the applicable settings outside code fences and HTML
 comments. `Skill roots:` is optional and replaces both default search locations:
@@ -176,7 +176,8 @@ For a declaring agent:
 
 Removing the neutral `skills:` key makes the next render undo its generated Claude entries:
 it restores a prior single-line `skills:` list (or removes the added field) and removes only
-the renderer-added `Skill` tool. Keep the generated `# prdkit-skill-projection:` comments;
+the renderer-added `Skill` tool. Before opting in, put any existing native Claude `skills:`
+block list on one line as a flow list (`[a, b]`). Keep the generated `# prdkit-skill-projection:` comments;
 `--check` reports stale entries and render refuses to guess if those comments are damaged
 or a field no longer matches its recorded values for cleanup. To change a managed inline
 tools list, first remove the declaration and render, then edit the native list and opt back

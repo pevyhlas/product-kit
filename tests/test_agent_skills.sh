@@ -124,6 +124,24 @@ for check in pre-check pre-doctor pre-adoption; do
     assert_eq 1 "$(cat "$P/no-settings/$check.exit")" "opt-out $check detects stale model/drift before first render"
 done
 assert_contains "$(cat "$P/no-settings/claude-review.md")" "skills: [hand-owned-skill]" "Claude skills are not owned without a declaration"
+
+it "unrelated quoted and explicit neutral keys do not opt into skill validation"
+def review deep $'"notes": project-owned neutral metadata\n"m\\u0065mo": also owned by the project\n\'owner\'\'s notes\': retained\n? other-key\n: other-value'
+for check in render check doctor adoption; do
+    case "$check" in
+        render) run bash "$R" ;;
+        check) run bash "$R" --check --json ;;
+        doctor) run bash "$S/doctor.sh" --json ;;
+        adoption) run bash "$S/check-adoption.sh" --json ;;
+    esac
+    assert_eq 0 "$STATUS" "unrelated neutral keys: $check"
+done
+for harness in claude opencode; do
+    for f in ".$harness"/agents/*.md; do
+        bytes "$P/no-settings/$harness-${f##*/}" "$f" "unrelated neutral keys leave $f unchanged"
+    done
+done
+def review deep
 # Optional external replay: run this same fixture on the base revision without
 # making the regular suite depend on access to any particular Git history.
 if [ -n "${SKILLS_REPLAY_DIR:-}" ]; then
@@ -396,13 +414,20 @@ cp "$P/review-round2" .prdkit/agents/review.md
 
 it "quoted, escaped and explicit root keys cannot silently opt out"
 for key in '"skills": [example-read]' "'skills': [example-read]" \
-    '"sk\u0069lls": [example-read]' $'? skills\n: [example-read]' '"unrelated": value'; do
+    '"sk\u0069lls": [example-read]' '"\x73kill\U00000073": [example-read]' \
+    '"sk\x6Zlls": [example-read]' '"sk\qlls": [example-read]' '!!str "skills": [example-read]' \
+    $'? skills\n: [example-read]' $'?\n  "skills"\n: [example-read]'; do
     def review deep "$key"
     blocked "line 4: skill '<list>': unsupported neutral frontmatter key"
 done
 def review deep $'notes: "unrelated\nskills: [example-not-a-skill]\nend of notes."'
 run bash "$R"
 assert_eq 0 "$STATUS" "a key-shaped line in an unrelated neutral value does not opt in"
+run bash "$R" --check
+assert_eq 0 "$STATUS"
+def review deep $'"notes": "project-owned\n  multiline metadata"\n'"$ids"
+run bash "$R"
+assert_eq 0 "$STATUS" "unrelated quoted metadata is allowed while opted in"
 run bash "$R" --check
 assert_eq 0 "$STATUS"
 cp "$P/review-round2" .prdkit/agents/review.md
@@ -470,6 +495,44 @@ cp "$P/marked-claude" .claude/agents/review.md
 run bash "$R"
 assert_eq 0 "$STATUS"
 bytes "$P/plain-claude" .claude/agents/plain.md "cleanup never touches a Claude agent that never declared skills"
+
+it "indented ownership comments work with direct cleanup and with an intervening opt-in render"
+for rerender in false true; do
+    sed '/^# prdkit-skill-projection:/s/^/  /' "$P/marked-claude" > .claude/agents/review.md
+    def review deep "$ids"
+    if $rerender; then
+        run bash "$R"
+        assert_eq 0 "$STATUS" "rerender the existing ownership block"
+        assert_eq 1 "$(grep -c '^[[:blank:]]*# prdkit-skill-projection: begin ' .claude/agents/review.md)" "rerender leaves exactly one block"
+        bytes "$P/marked-claude" .claude/agents/review.md "rerender keeps the original ownership, normalizing indentation"
+    fi
+    def review deep
+    run bash "$R" --check --json
+    assert_eq 1 "$STATUS"
+    assert_contains "$OUTPUT" "stale generated Claude skill entries"
+    run bash "$R"
+    assert_eq 0 "$STATUS" "cleanup recognizes indented records"
+    bytes "$P/no-settings/claude-review.md" .claude/agents/review.md "cleanup restores exact Claude preload and tools"
+    run bash "$R" --check
+    assert_eq 0 "$STATUS"
+done
+
+it "an altered ownership prefix is damage, not a new or unmanaged projection"
+for prefix in '  # local-skill-projection:' '# edited:' 'prdkit-skill-projection:'; do
+    sed "s/^# prdkit-skill-projection:/$prefix/" "$P/marked-claude" > .claude/agents/review.md
+    def review deep "$ids"
+    blocked "cannot establish Claude skill projection ownership"
+    def review deep
+    blocked "cannot establish Claude skill projection ownership"
+done
+cp "$P/no-settings/claude-review.md" .claude/agents/review.md
+
+it "an existing Claude block-list preload gets a migration hint"
+def review deep "$ids"
+awk '/^skills:/ { print "skills:\n  - hand-owned-skill"; next } { print }' \
+    "$P/no-settings/claude-review.md" > .claude/agents/review.md
+blocked "put native Claude skills on one line as a flow list ([a, b])"
+cp "$P/no-settings/claude-review.md" .claude/agents/review.md
 
 it "more than 32 declarations are refused before vendored skill lookup"
 many="$(awk 'BEGIN { printf "skills: ["; for (i=1; i<=33; i++) printf "%sexample-%d", (i==1 ? "" : ", "), i; print "]" }')"
