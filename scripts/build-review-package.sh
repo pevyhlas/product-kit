@@ -89,7 +89,7 @@ shift 2
 HEAD_SHA=HEAD
 if [ "$#" -gt 0 ] && [[ "$1" != --* ]]; then HEAD_SHA="$1"; shift; fi
 SINCE=""; CONTEXT=(); EVIDENCE=(); ATTACH_FACTS=false
-PACKAGE_VERSION=package7
+PACKAGE_VERSION=package8
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --facts) ATTACH_FACTS=true; shift ;;
@@ -476,9 +476,10 @@ For a small change, no other file is a default read unless the obligations below
 
 ## Review obligations
 
-Check the diff against these excerpts, including the body of each listed bound. They are
-captured source, not a substitute for review judgment. Account for every applicability or
-verification gap; do not assume an unanswered obligation passes.
+Judge the change against binding BASE text and trusted policy, including each applicable bound's
+body and the existing acceptance. Reconcile proposed or removed text; HEAD does not replace BASE.
+These excerpts are evidence, not a substitute for review judgment. Account for every applicability
+or verification gap; do not assume an unanswered obligation passes.
 
 EOF
     review_context_obligations

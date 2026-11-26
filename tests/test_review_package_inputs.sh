@@ -89,6 +89,7 @@ integrity() {
 }
 
 default_reads() { awk '/^## Open first/{ open=1; next } /^## /{ open=0 } open && /^[0-9]+\. /' "$PKG/index.md"; }
+obligations_section() { sed -n '/^## Review obligations$/,/^## Open only if/p' "$PKG/index.md"; }
 reject_reserved() {
     local path="$1"; shift
     run bash "$BUILD" "$ID" "$BASE" "$@" --evidence "$path"
@@ -96,9 +97,9 @@ reject_reserved() {
     assert_contains "$OUTPUT" "conflicting --evidence $path"
 }
 
-[ "$#" -gt 0 ] || set -- context paths facts obligations
+[ "$#" -gt 0 ] || set -- context paths facts obligations reconcile nontext
 for mode in "$@"; do
-    if [ "$mode" = obligations ]; then setup_small; else setup; fi
+    case "$mode" in obligations|reconcile|nontext) setup_small ;; *) setup ;; esac
     # The default exercises installed behavior; the override supports replay against a prior builder.
     BUILD="${PACKAGE_TEST_BUILDER:-$P/.prdkit/scripts/bash/build-review-package.sh}"
     case "$mode" in
@@ -201,6 +202,9 @@ for mode in "$@"; do
                 assert_contains "$section" 'Acceptance: Preserve the exported public label.'
                 assert_contains "$section" 'Release-label edits require the application smoke check.'
                 assert_contains "$section" 'Keep the published label stable for automated clients.'
+                assert_eq 1 "$(printf '%s\n' "$section" | grep -Fc 'Keep the published label stable for automated clients.')" 'unchanged bound appears once'
+                assert_eq 1 "$(printf '%s\n' "$section" | grep -Fc 'Acceptance: Preserve the exported public label.')" 'unchanged acceptance appears once'
+                assert_not_contains "$section" 'Proposed by this change'
                 assert_contains "$section" '**Rigor**: full'
                 assert_contains "$section" "Source: specs/changes/$ID.md:"
                 assert_contains "$section" 'Source: .prdkit/memory/constitution.md:'
@@ -238,6 +242,92 @@ for mode in "$@"; do
                     run cmp "$file" "$PKG/context/$file"
                     assert_eq 0 "$STATUS" 'full source is still present'
                 done
+            fi ;;
+        reconcile)
+            it "Binding BASE acceptance and bounds remain visible before proposed replacements"
+            printf '\n- **C-02 Removed bound**: Scope: all.\n  Retain the public alias.\n' >> specs/product/constraints.md
+            git add specs/product/constraints.md; git commit -qm 'extend the binding fixture'
+            BASE="$(git rev-parse HEAD)"
+            git update-ref refs/remotes/origin/main "$BASE"
+            printf 'revised label\n' > label.txt
+            sed 's/Preserve the exported public label/Change the exported public label/' "specs/changes/$ID.md" > .git/record
+            cp .git/record "specs/changes/$ID.md"
+            printf '# Constraints\n\n- **C-01 Example bound**: Scope: all.\n  Label changes are allowed for automated clients.\n\n- **C-03 New bound**: Scope: all.\n  Document the alias.\n' > specs/product/constraints.md
+            printf '\n- Proposed policy: smoke checks are optional.\n' >> .prdkit/memory/constitution.md
+            git commit -qam 'relax an existing bound and acceptance, remove another and propose a new bound'
+            binding='BASE, binding for this review'
+            proposal='Proposed by this change — not yet an obligation; the reviewer must reconcile'
+            removed='BASE, removed by this change — the reviewer must judge'
+            if build; then
+                section="$(obligations_section)"
+                assert_contains "$section" "C-01 — $binding"
+                assert_contains "$section" "C-01 — $proposal"
+                assert_contains "$section" "C-02 — $removed"
+                assert_contains "$section" "C-03 — $proposal"
+                assert_not_contains "$section" "C-03 — $binding"
+                assert_contains "$section" 'Retain the public alias.'
+                assert_contains "$section" 'Document the alias.'
+                assert_contains "$section" "Child record — $binding"
+                assert_contains "$section" "Child record — $proposal"
+                assert_contains "$section" 'Release-label edits require the application smoke check.'
+                assert_not_contains "$section" 'smoke checks are optional'
+                assert_eq $'Acceptance: Preserve the exported public label.\nAcceptance: Change the exported public label.\nKeep the published label stable for automated clients.\nLabel changes are allowed for automated clients.' \
+                    "$(printf '%s\n' "$section" | sed -nE 's/^ +((Acceptance:|Keep the published|Label changes).*)/\1/p')" \
+                    'base text is followed by the proposed text, without an unlabeled duplicate'
+                assert_contains "$(cat "$PKG/bounds-base.txt")" C-02
+                assert_not_contains "$(cat "$PKG/bounds-base.txt")" C-03
+                assert_contains "$(cat "$PKG/bounds-base-inputs.tsv")" "$(git rev-parse "$BASE:specs/product/constraints.md")"
+                integrity
+            fi
+            it "Deleting the child keeps BASE acceptance and the historical scope distinct"
+            git rm -q "specs/changes/$ID.md"; git commit -qm 'remove proposed child record'
+            if build; then
+                section="$(obligations_section)"
+                assert_contains "$section" "Child record — $removed"
+                assert_contains "$section" 'Acceptance: Preserve the exported public label.'
+                assert_contains "$section" 'Historical child record — scope evidence only, not a substitute for BASE'
+                assert_contains "$(cat "$PKG/bounds-inputs.tsv")" "$(git rev-parse "HEAD^:specs/changes/$ID.md")"
+            fi
+            it "A new child record is proposed only and cannot scope away BASE bounds"
+            ID=002-new
+            mkdir -p specs/changes
+            printf '# Change\n\n**Tier**: T1\n\n## Acceptance\n\nA new proposed expectation.\n' > "specs/changes/$ID.md"
+            git add "specs/changes/$ID.md" && git commit -qm 'add a proposed child record' || exit 1
+            if build; then
+                section="$(obligations_section)"
+                assert_contains "$section" "Child record — $proposal"
+                assert_not_contains "$section" "Child record — $binding"
+                assert_contains "$section" 'A new proposed expectation.'
+                assert_contains "$section" 'Retain the public alias.'
+                assert_contains "$(cat "$PKG/bounds-base.txt")" 'Bounds for every change'
+            fi ;;
+        nontext)
+            it "Invalid UTF-8 and controls never enter the required index, and source bytes are retained"
+            printf 'opaque \377\n' > malformed.dat
+            printf 'escape \033[31m\n' > escape.dat
+            printf 'lone CR\rhere\n' > cr.dat
+            printf 'C1 \302\205\n' > c1.dat
+            printf 'UTF-8 surrogate \355\240\200\n' > surrogate.dat
+            printf 'NUL \000\n' > nul.dat
+            printf 'Valid café\twith tab and 😀\n' > valid.txt
+            git add ./*.dat valid.txt; git commit -qm 'snapshot text and non-text samples'
+            for file in malformed.dat escape.dat cr.dat c1.dat surrogate.dat nul.dat; do
+                if build --context "$file"; then
+                    section="$(obligations_section)"
+                    assert_contains "$section" '**Required full context:** A captured artifact cannot be included as inline text.'
+                    assert_contains "$section" 'No partial obligation list is shown'
+                    assert_not_contains "$section" 'Preserve the exported public label'
+                    assert_not_contains "$section" "$file"
+                    run cmp "$file" "$PKG/context/$file"
+                    assert_eq 0 "$STATUS" 'original bytes unchanged'
+                    run python3 -I -B -c 'import pathlib,sys,unicodedata as u; text=pathlib.Path(sys.argv[1]).read_bytes().decode(); assert all(c in "\t\n" or u.category(c)!="Cc" for c in text)' "$PKG/index.md"
+                    assert_eq 0 "$STATUS" 'required index remains valid safe UTF-8'
+                fi
+            done
+            if build --context valid.txt; then
+                section="$(obligations_section)"
+                assert_contains "$section" $'Valid café\twith tab and 😀'
+                assert_not_contains "$section" '**Required full context:**'
             fi ;;
         *) echo "unknown fixture group: $mode" >&2; exit 2 ;;
     esac

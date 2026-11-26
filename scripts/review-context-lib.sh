@@ -122,6 +122,152 @@ context_id() { # actual ID -> unique definition, never select an arbitrary sibli
     context_select "$HEAD_SHA" "$path" "" "$wanted" "$reason" "$line"
 }
 
+context_collect_specs() { # rev material-root inputs-name
+    local rev="$1" material="$2" inputs="$3" path blob
+    mkdir -p "$material/.prdkit"
+    if ! git -C "$REPO_ROOT" ls-tree -r -z --name-only "$rev" -- specs > "$CTX_TMP/spec-paths"; then
+        context_gap canon "cannot completely enumerate spec entries at $rev"
+    fi
+    while IFS= read -r -d '' path; do
+        case "$path" in specs/*.md) ;; *) continue ;; esac
+        case "$path" in specs/changes/*) continue ;; esac
+        if blob="$(context_object "$rev" "$path")"; then
+            mkdir -p "$(dirname "$material/$path")"
+            if git -C "$REPO_ROOT" cat-file blob "$blob" > "$material/$path" &&
+                review_file_without_nul "$material/$path"; then
+                continue
+            fi
+            context_gap canon "unreadable/non-text input $path at $rev"; rm -f "$material/$path"
+        else context_gap canon "unsafe spec input $(printf '%q' "$path") at $rev"; fi
+    done < "$CTX_TMP/spec-paths"
+    while IFS= read -r path; do
+        blob="$(context_object "$rev" "$path")"
+        printf '%s\t%s\t%s\n' "$path" "$rev" "$blob" >> "$PACKAGE_DIR/$inputs"
+    done < <(spec_files "$material")
+}
+
+context_collect_record() { # rev path material-root inputs-name
+    local rev="$1" path="$2" material="$3" inputs="$4" blob
+    blob="$(context_object "$rev" "$path")" || return 1
+    mkdir -p "$(dirname "$material/$path")" || return 1
+    if ! git -C "$REPO_ROOT" cat-file blob "$blob" > "$material/$path" ||
+        ! review_file_without_nul "$material/$path"; then
+        rm -f "$material/$path"
+        return 1
+    fi
+    printf '%s\t%s\t%s\n' "$path" "$rev" "$blob" >> "$PACKAGE_DIR/$inputs"
+}
+
+context_review_child() { # record path, usable HEAD or historical record revision
+    local path="$1" rev="$2" base_blob head_blob entry
+    base_blob="$(context_object "$BASE_SHA" "$path")" || {
+        entry="$(git -C "$REPO_ROOT" ls-tree "$BASE_SHA" -- ":(literal)$path")" || entry=unreadable
+        if [ -n "$entry" ]; then context_gap child "unsafe/unreadable base child record $BASE_SHA:$path"; fi
+    }
+    if [ "$rev" = "$HEAD_SHA" ]; then
+        head_blob="$(context_object "$HEAD_SHA" "$path")"
+        if [ "$base_blob" = "$head_blob" ]; then
+            context_span "$HEAD_SHA" "$path" 1 all child-shared "Child record"
+            return
+        fi
+        if [ -n "$base_blob" ]; then context_span "$BASE_SHA" "$path" 1 all child-base "Child record"; fi
+        context_span "$HEAD_SHA" "$path" 1 all child-proposed "Child record"
+    else
+        if [ -n "$base_blob" ]; then
+            entry="$(git -C "$REPO_ROOT" ls-tree "$HEAD_SHA" -- ":(literal)$path")" || entry=unreadable
+            if [ -z "$entry" ]; then
+                context_span "$BASE_SHA" "$path" 1 all child-removed "Child record"
+            else
+                context_span "$BASE_SHA" "$path" 1 all child-base "Child record"
+            fi
+        fi
+        if [ -n "$rev" ] && [ "$base_blob" != "$(context_object "$rev" "$path")" ]; then
+            context_span "$rev" "$path" 1 all child-historical "actual record (historical when source_rev differs from HEAD)"
+        fi
+    fi
+}
+
+context_bound_body() { # material-root items ID; 1 absent, 2 unresolved
+    local material="$1" items="$2" id="$3" locations line spans
+    locations="$(awk -F '\037' -v id="$id" '$1==id { print $7 }' "$items")" || return 2
+    [ -n "$locations" ] || return 1
+    [[ "$locations" != *$'\n'* ]] || return 2
+    bound_path="${locations%:*}"; line="${locations##*:}"
+    spans="$(context_select_spans -v at="$line" < "$material/$bound_path")" || return 2
+    IFS=$'\t' read -r bound_first bound_last <<< "${spans##*$'\n'}" || return 2
+    sed -n "${bound_first},${bound_last}p" "$material/$bound_path" > "$CTX_TMP/bound-body" || return 2
+}
+
+context_compare_bound() {
+    local id="$1" base_material="$2" base_items="$3" base_status=0 head_status=0 base_kind
+    local bound_path bound_first bound_last base_path base_first base_last
+    context_bound_body "$base_material" "$base_items" "$id" || base_status=$?
+    if [ "$base_status" -eq 0 ]; then
+        base_path="$bound_path"; base_first="$bound_first"; base_last="$bound_last"
+        mv "$CTX_TMP/bound-body" "$CTX_TMP/base-body"
+    elif [ "$base_status" -eq 2 ]; then context_gap "$id" "ambiguous/unreadable bound body at BASE $BASE_SHA"; fi
+    context_bound_body "$CTX_TMP/material" "$CTX_TMP/items" "$id" || head_status=$?
+    if [ "$head_status" -eq 2 ]; then context_gap "$id" "ambiguous/unreadable bound body at HEAD $HEAD_SHA"; fi
+    # Compare the body, not its line numbers or parent headings. An ID can move
+    # without changing a rule; the inventories still preserve both scope decisions.
+    if [ "$base_status" -eq 0 ] && [ "$head_status" -eq 0 ] &&
+        cmp -s "$CTX_TMP/base-body" "$CTX_TMP/bound-body"; then
+        context_span "$HEAD_SHA" "$bound_path" "$bound_first" "$bound_last" bound-shared "$id"
+    else
+        if [ "$base_status" -eq 0 ]; then
+            base_kind=bound-base
+            [ "$head_status" -ne 1 ] || base_kind=bound-removed
+            context_span "$BASE_SHA" "$base_path" "$base_first" "$base_last" "$base_kind" "$id"
+        fi
+        if [ "$head_status" -eq 0 ]; then
+            context_span "$HEAD_SHA" "$bound_path" "$bound_first" "$bound_last" bound-proposed "$id"
+        fi
+    fi
+    if [ "$head_status" -eq 0 ]; then
+        context_select "$HEAD_SHA" "$bound_path" "" bound-context "$id (supporting headings)" "$bound_first"
+    fi
+}
+
+context_review_bounds() { # record path and resolution at HEAD (possibly historical)
+    local path="$1" rev="$2" base_material="$CTX_TMP/material" base_items="$CTX_TMP/items"
+    local base_bounds="$PACKAGE_DIR/bounds.txt" base_scope="$CHANGE_ID" file id
+    : > "$CTX_TMP/head-bound-ids"
+    if [ -n "$rev" ] && (bounds_for_root "$CTX_TMP/material" "$CHANGE_ID") > "$PACKAGE_DIR/bounds.txt" 2> "$PACKAGE_DIR/bounds.stderr"; then
+        awk '/^- [CNQ]-[0-9]/ { print $2 }' "$PACKAGE_DIR/bounds.txt" > "$CTX_TMP/head-bound-ids"
+    else context_gap bounds "bounds unavailable; inspect bounds.stderr"; fi
+    # Fast path: identical relevant spec tree and child. If the child did not yet exist at
+    # BASE, err towards inclusion: scope all BASE bounds, never via the proposed record.
+    if ! git -C "$REPO_ROOT" diff --quiet --no-ext-diff --no-textconv "$BASE_SHA" "$HEAD_SHA" -- specs ':!specs/changes' ||
+        ! git -C "$REPO_ROOT" diff --quiet --no-ext-diff --no-textconv "$BASE_SHA" "$HEAD_SHA" -- "$path" ||
+        [ "$rev" != "$HEAD_SHA" ]; then
+        base_material="$CTX_TMP/base"; base_items="$CTX_TMP/base-items"; base_bounds="$PACKAGE_DIR/bounds-base.txt"
+        printf 'path\tsource_rev\tsource_blob\n' > "$PACKAGE_DIR/bounds-base-inputs.tsv"
+        context_collect_specs "$BASE_SHA" "$base_material" bounds-base-inputs.tsv
+        if ! context_collect_record "$BASE_SHA" "$path" "$base_material" bounds-base-inputs.tsv; then
+            if context_object "$BASE_SHA" "$path" >/dev/null; then
+                context_gap child "unreadable base child record $BASE_SHA:$path"
+            fi
+            base_scope=--all
+        fi
+        if ! spec_items "$base_material" > "$base_items"; then
+            context_gap bounds "BASE spec ID inventory incomplete at $BASE_SHA"
+        fi
+        if ! (bounds_for_root "$base_material" "$base_scope") > "$base_bounds" 2> "$PACKAGE_DIR/bounds-base.stderr"; then
+            context_gap bounds "BASE bounds unavailable; inspect bounds-base.stderr"
+        fi
+        for file in bounds-base-inputs.tsv bounds-base.txt bounds-base.stderr; do
+            inventory "$file" "BASE object-materialized inputs; installed bounds.sh"
+        done
+    fi
+    # A HEAD scope edit, stage change or deletion must not hide a BASE bound.
+    { cat "$CTX_TMP/head-bound-ids"; if [ -f "$base_bounds" ]; then awk '/^- [CNQ]-[0-9]/ { print $2 }' "$base_bounds"; fi; } |
+        LC_ALL=C sort -u > "$CTX_TMP/review-bound-ids"
+    while IFS= read -r id; do context_compare_bound "$id" "$base_material" "$base_items"; done < "$CTX_TMP/review-bound-ids"
+    for file in bounds-inputs.tsv bounds.txt bounds.stderr; do
+        [ ! -f "$PACKAGE_DIR/$file" ] || inventory "$file" "object-materialized inputs; installed bounds.sh"
+    done
+}
+
 review_context_build() {
     local path blob rev record record_rev last parent parent_field header checkpoint row count a b id location reason target anchor line entry
     CTX_TMP="$PACKAGE_SCRATCH/context"; mkdir -p "$CTX_TMP/material/.prdkit"
@@ -146,41 +292,18 @@ review_context_build() {
     # Materialize canon from H; bounds scope alone may use the recovered historical child.
     # No checkout, index, hooks or candidate helper is used.
     printf 'path\tsource_rev\tsource_blob\n' > "$PACKAGE_DIR/bounds-inputs.tsv"
-    if ! git -C "$REPO_ROOT" ls-tree -r -z --name-only "$HEAD_SHA" -- specs > "$CTX_TMP/spec-paths"; then
-        context_gap canon "cannot completely enumerate spec entries"
+    context_review_child "$record" "$record_rev"
+    if [ -n "$record_rev" ] && ! context_collect_record "$record_rev" "$record" "$CTX_TMP/material" bounds-inputs.tsv; then
+        context_gap child "unreadable child record $record_rev:$record"
+        record_rev=""
     fi
-    while IFS= read -r -d '' path; do
-        case "$path" in specs/*.md) ;; *) continue ;; esac
-        case "$path" in specs/changes/*) continue ;; esac
-        if blob="$(context_object "$HEAD_SHA" "$path")"; then
-            mkdir -p "$(dirname "$CTX_TMP/material/$path")"
-            if ! GIT_NO_LAZY_FETCH=1 git -C "$REPO_ROOT" cat-file blob "$blob" > "$CTX_TMP/material/$path" ||
-                ! review_file_without_nul "$CTX_TMP/material/$path"; then
-                context_gap canon "unreadable/non-text input $path"; rm -f "$CTX_TMP/material/$path"
-            fi
-        else context_gap canon "unsafe spec input $(printf '%q' "$path")"; fi
-    done < "$CTX_TMP/spec-paths"
-    if [ -n "$record_rev" ]; then
-        context_span "$record_rev" "$record" 1 all child "actual record (historical when source_rev differs from HEAD)"
-        mkdir -p "$CTX_TMP/material/specs/changes"
-        blob="$(context_object "$record_rev" "$record")"
-        git -C "$REPO_ROOT" cat-file blob "$blob" > "$CTX_TMP/material/$record"
-        printf '%s\t%s\t%s\n' "$record" "$record_rev" "$blob" >> "$PACKAGE_DIR/bounds-inputs.tsv"
+    context_collect_specs "$HEAD_SHA" "$CTX_TMP/material" bounds-inputs.tsv
+    if ! spec_items "$CTX_TMP/material" > "$CTX_TMP/items"; then
+        context_gap canon "HEAD spec ID inventory incomplete at $HEAD_SHA"
     fi
-    while IFS= read -r path; do
-        blob="$(context_object "$HEAD_SHA" "$path")"
-        printf '%s\t%s\t%s\n' "$path" "$HEAD_SHA" "$blob" >> "$PACKAGE_DIR/bounds-inputs.tsv"
-    done < <(spec_files "$CTX_TMP/material")
-    spec_items "$CTX_TMP/material" > "$CTX_TMP/items"
     # Reuse the actual bounds computation, including all/later-stage/exception widening.
     source "$SCRIPT_DIR/bounds.sh"
-    if [ -n "$record_rev" ] && (bounds_for_root "$CTX_TMP/material" "$CHANGE_ID") > "$PACKAGE_DIR/bounds.txt" 2> "$PACKAGE_DIR/bounds.stderr"; then
-        while IFS= read -r id; do context_id "$id" "returned by bounds.sh (later-stage limits preserved)"; done \
-            < <(awk '/^- [CNQ]-[0-9]/ { print $2 }' "$PACKAGE_DIR/bounds.txt")
-    else context_gap bounds "bounds unavailable; inspect bounds.stderr"; fi
-    for path in bounds-inputs.tsv bounds.txt bounds.stderr; do
-        [ ! -f "$PACKAGE_DIR/$path" ] || inventory "$path" "object-materialized inputs; installed bounds.sh"
-    done
+    context_review_bounds "$record" "$record_rev"
     # Policy is frozen at the trusted default; proposed policy remains in the full diff.
     for path in .prdkit/memory/constitution.md .prdkit/memory/agents.md .prdkit/memory/config.md; do
         if [ -n "$POLICY_AT" ]; then context_span "$POLICY_AT" "$path" 1 all policy "trusted default-branch policy"
@@ -282,17 +405,43 @@ review_context_build() {
 
 # Render from the same immutable artifacts the manifest binds, not from the working tree.
 # Keep whole excerpts or require the full context: never cut a rule mid-span.
+review_inline_text() ( # 0 valid, 3 invalid, other nonzero I/O failure
+    set -o pipefail
+    # Work on byte values, independent of the installed locales or awk's Unicode support.
+    # Strict UTF-8 per RFC 3629; reject C0/DEL/C1, including all CR (even in CRLF).
+    LC_ALL=C od -A n -v -t u1 < "$1" | LC_ALL=C awk '
+        { for (i=1; i<=NF; i++) {
+            b=$i+0
+            if (left) {
+                if (b<low || b>high) { bad=1; exit }
+                left--; low=128; high=191
+            } else if (b<128) {
+                if ((b<32 && b!=9 && b!=10) || b==127) { bad=1; exit }
+            } else {
+                low=128; high=191
+                if (b>=194 && b<=223) { left=1; if (b==194) low=160 }
+                else if (b>=224 && b<=239) {
+                    left=2; if (b==224) low=160; if (b==237) high=159
+                } else if (b>=240 && b<=244) {
+                    left=3; if (b==240) low=144; if (b==244) high=143
+                } else { bad=1; exit }
+            }
+        } }
+        END { if (bad || left) exit 3 }'
+)
+
 review_obligation_append() { # artifact, source label; 2 = over cap, 3 = cannot inline as text
-    local artifact="$1" label="$2" file="$PACKAGE_DIR/$1" bytes status
+    local artifact="$1" label="$2" heading="${3:-}" file="$PACKAGE_DIR/$1" bytes status
     bytes="$(wc -c < "$file")" || return 1
     [ "$((obligation_bytes + bytes))" -le "$obligation_cap" ] || return 2
-    if review_file_without_nul "$file"; then
+    if review_inline_text "$file"; then
         :
     else
         status=$?
-        [ "$status" != 1 ] || return 3
+        [ "$status" != 3 ] || return 3
         return 1
     fi
+    if [ -n "$heading" ]; then printf '**%s**\n\n' "$heading" >> "$obligation_draft" || return 1; fi
     {
         printf '    %s\n    Package artifact: %s\n\n' "$label" "$artifact" &&
         LC_ALL=C sed 's/^/    /' "$file" &&
@@ -303,18 +452,45 @@ review_obligation_append() { # artifact, source label; 2 = over cap, 3 = cannot 
 }
 
 review_obligation_capture() {
-    local artifact rev path blob first last kind reason
+    local artifact rev path blob first last kind reason heading status
     # Bounds inventory supplies applicability and later-stage status, not the bodies below.
+    if [ -f "$PACKAGE_DIR/bounds-base.txt" ]; then
+        review_obligation_append bounds-base.txt 'BASE bounds (binding scope and stage; see bounds-base-inputs.tsv)' || return $?
+    fi
     if [ -s "$PACKAGE_DIR/bounds.txt" ]; then
-        review_obligation_append bounds.txt 'Applicable bounds (scope and stage; see bounds-inputs.tsv)' || return $?
+        if [ -f "$PACKAGE_DIR/bounds-base.txt" ]; then
+            heading='Candidate bounds (for reconciliation; see bounds-inputs.tsv)'
+        else heading='Applicable bounds (unchanged scope and stage; see bounds-inputs.tsv)'; fi
+        review_obligation_append bounds.txt "$heading" || return $?
     fi
     while IFS=$'\t' read -r artifact rev path blob first last kind reason; do
-        review_obligation_append "$artifact" "Source: $path:$first-$last at $rev ($kind: $reason)" || return $?
+        heading=''
+        case "$kind" in
+            bound-base|child-base)
+                heading="$reason — BASE, binding for this review" ;;
+            bound-proposed|child-proposed)
+                heading="$reason — Proposed by this change — not yet an obligation; the reviewer must reconcile" ;;
+            bound-removed|child-removed)
+                heading="$reason — BASE, removed by this change — the reviewer must judge" ;;
+            child-historical)
+                heading='Historical child record — scope evidence only, not a substitute for BASE' ;;
+            bound-shared|child-shared)
+                heading="$reason — unchanged from BASE" ;;
+            changed-spec|bound-context) continue ;; # Supporting excerpts retained for fallback.
+            policy) ;;
+            *)
+                if [ "$rev" = "$HEAD_SHA" ] && [ "$blob" != "$(context_object "$BASE_SHA" "$path")" ]; then
+                    heading='Changed HEAD context — proposed source, not a binding rule'
+                fi ;;
+        esac
+        review_obligation_append "$artifact" "Source: $path:$first-$last at $rev ($kind: $reason)" "$heading" || return $?
     done < "$PACKAGE_SCRATCH/obligation-spans"
     if [ -s "$PACKAGE_DIR/context-gaps.txt" ]; then
         printf '### Unresolved context and verification\n\n' >> "$obligation_draft" || return 1
         review_obligation_append context-gaps.txt 'Questions to resolve before a verdict' || return $?
     fi
+    # Source labels and gaps also contain repo-supplied values. Validate the complete preview.
+    review_inline_text "$obligation_draft" || { status=$?; [ "$status" -eq 3 ] && return 3; return 1; }
 }
 
 review_context_obligations() {
@@ -335,8 +511,10 @@ review_context_obligations() {
         cat <<'EOF'
 No partial obligation list is shown. Before giving a verdict, read
 [context-manifest.tsv](context-manifest.tsv), the scope, policy and obligation excerpts it lists,
-[context-gaps.txt](context-gaps.txt), and `bounds.txt` with `bounds-inputs.tsv` if present. If
-required context is unreadable or a gap remains unresolved, mark the review pending.
+[context-gaps.txt](context-gaps.txt), and `bounds.txt` with `bounds-inputs.tsv` if present. Read
+`bounds-base.txt` with `bounds-base-inputs.tsv` when present. Use the source revisions and
+obligation labels to distinguish binding BASE from proposed HEAD. If required context is
+unreadable or a gap remains unresolved, mark the review pending.
 
 EOF
     fi

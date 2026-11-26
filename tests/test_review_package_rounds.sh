@@ -23,8 +23,8 @@ F1="$(git rev-parse HEAD)"
 first="$(bash "$SCRIPT" 001-equal "$BASE")"; PKG="$(printf '%s' "$first" | jq -r .PACKAGE_DIR)"
 ROOT="$(dirname "$PKG")"
 it "An old, otherwise valid package is regenerated without editing its files"
-# Simulate a package written before inline obligations were required.
-sed 's/^package7/package6/' "$PKG/completed.tsv" > "$P/old-binding"
+# Simulate a package written before binding BASE obligations were separated.
+sed 's/^package8/package7/' "$PKG/completed.tsv" > "$P/old-binding"
 cp "$P/old-binding" "$PKG/completed.tsv"
 old_snapshot="$(package_snapshot "$PKG")"
 run bash "$SCRIPT" 001-equal "$BASE"

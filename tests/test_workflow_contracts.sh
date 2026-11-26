@@ -75,10 +75,9 @@ assert_contains "$review" 'the full `diff.patch` first and the verified `evidenc
 it "bounds evidence prefers bound package inputs and never a mutable checkout"
 assert_contains "$review_prompt" 'Check the full body of each applicable bound' "explicitly check bound bodies"
 assert_contains "$review_prompt" 'A list of IDs and titles is not enough to judge compliance' "facts inventory does not replace bound bodies"
-assert_contains "$review_prompt" 'prefer the verified, object-bound `bounds.txt` and `bounds-inputs.tsv`' "prefer packaged bounds for applicability"
-assert_contains "$review_prompt" 'For a closing head, use only the packaged historical scope' "live fallback cannot reconstruct a deleted record"
-assert_contains "$review_prompt" 'a clean, complete materialization of `{HEAD_SHA}`' "exact head is necessary but not sufficient"
-assert_contains "$review_prompt" 'no local edits or untracked or ignored `specs/` inputs' "working-tree exclusions"
+assert_contains "$review_prompt" 'use the verified, object-bound BASE bounds and inputs' "use binding BASE applicability"
+assert_contains "$review_prompt" 'using only packaged historical scope for a closing head' "live fallback cannot reconstruct a deleted record"
+assert_contains "$review_prompt" 'Candidate or historical evidence cannot override BASE' "candidate scope cannot replace BASE"
 assert_contains "$review_prompt" 'If the scope or required bound text cannot be verified, mark the obligation unverified' "unknown remains unknown"
 
 it "mandatory obligations cannot be hidden behind optional context"
@@ -86,6 +85,8 @@ assert_contains "$review_prompt" '`index.md` → **Review obligations** (second 
 assert_contains "$review_prompt" 'Check every listed obligation' "checking the obligations is mandatory"
 assert_contains "$review_prompt" 'If the index says **Required full context**, read the indicated artifacts before giving a verdict' "overflow requires source reads"
 assert_contains "$review" 'Put any missing mandatory obligation or unresolved question inline in the dispatch prompt with its source path' "dispatch closes the capture gap"
+assert_contains "$review_prompt" "A proposed relaxation (including removal) is a finding unless the change record justifies it and the owner's approval is evidenced through the existing change process."
+assert_contains "$review" 'unless the change record justifies it and the owner approved it through the existing process'
 
 it "merged, live and validated stay distinct; status answers first and names the longest pole"
 assert_contains "$protocol" 'Merged, live (deployed) and validated (owner or user outcome) are distinct claims' "distinct claims"

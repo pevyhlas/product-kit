@@ -13,16 +13,20 @@ All input paths are repository-relative. Ordinary `--evidence` cannot use the so
 
 The package's `index.md` and the [review prompt](../templates/review-prompt-template.md) direct
 reviewers to open `diff.patch` first, then `evidence/facts/summary.md` if the coordinator verified
-the attached pair, then the **Review obligations** section of `index.md`. That section reproduces
-the captured change record, trusted policy, bound bodies, other selected context, and gaps with
-source pointers. Reviewers check every listed obligation. The facts summary is authoritative for
-the facts it lists, not for correctness or approval. Its bounds inventory does not show full bound
-bodies.
+the attached pair, then the **Review obligations** section of `index.md`. That section shows
+binding BASE text and trusted default-branch policy with source pointers. Unchanged bounds and
+the unchanged child record (including acceptance) appear once. Changed text appears directly
+below its BASE counterpart, marked proposed; new text is proposed only, and removals retain
+the BASE text marked for review. Reviewers reconcile the proposals against BASE, as described
+in the [review workflow](../workflows/review.md#review). Facts don't set obligations or grant
+approval, and their bounds inventory does not show full bound bodies.
 
 The inline excerpt budget is 16 KiB, including source labels and formatting. If the captured
-material would exceed it or cannot be inlined as text, the index shows no partial list and
+material would exceed it or is not valid UTF-8 text, the index shows no partial list and
 explicitly requires reading `context-manifest.tsv`, the relevant packaged context, the bounds
-inventory with its input bindings if present, and `context-gaps.txt`. Otherwise, reviewers open
+inventories with their input bindings if present, and `context-gaps.txt`. Inline text permits
+tab and LF but no other C0, DEL or C1 control characters. This includes rejecting CR even in
+CRLF; the original artifact stays byte-for-byte. Otherwise, reviewers open
 other files only to investigate a finding or resolve an obligation. The dispatcher still supplies
 mandatory obligations and unresolved questions that automatic capture missed.
 
@@ -32,12 +36,16 @@ The four-column `manifest.tsv` inventories artifacts. `context-manifest.tsv` add
 `artifact, source_rev, source_path, source_blob, first_line, last_line, obligation, reason`
 (tab-separated). It includes:
 
-- the actual change record, in full, or its recovered historical source on a closing head;
+- the full change record at BASE and HEAD when they differ, plus recovered historical scope on a
+  closing head when not already represented;
 - the parent's header, outcome checkpoint, actual child row and dependency/hold/limit sections,
   not a whole-parent default;
 - uniquely resolved child spec IDs and heading-linked blocks, including nested item bodies;
 - the **actual** installed `bounds.sh` output on materialized HEAD canon and the actual child's
-  scope, with all input blobs inventoried (a recovered scope record keeps its historical binding);
+  scope (a recovered scope record keeps its historical binding). When relevant inputs differ,
+  `bounds-base.txt` and `bounds-base-inputs.tsv` capture the BASE scope independently. With no
+  BASE child record, all BASE bounds are considered conservatively. The package compares bound
+  bodies by ID across both revisions, including IDs that dropped out of candidate scope;
 - trusted policy/registry/config at `policy_at`, required product/architecture canon, optional
   `specs/design.md` when present, and conservative part/cross-interface context. Proposed changes
   remain in the full diff.

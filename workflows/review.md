@@ -20,6 +20,11 @@ not CI. Send `.prdkit/templates/review-prompt-template.md` with the full `diff.p
 the verified `evidence/facts/summary.md` second, if available. Always include `index.md`, under
 **Review obligations**, as the last default read. The reviewer must check every listed obligation,
 including full bound text, trusted policy and acceptance. A bounds inventory alone is not enough.
+Judge the change against BASE's obligations and trusted default-branch policy. Check each proposed
+or removed rule against the binding text. A proposed relaxation, including removal, is a finding
+unless the change record justifies it and the owner approved it through the existing process:
+see [Spec edits and Bounds](change.md#the-record) for owner quotes and conflict disposition. Do not
+treat proposed acceptance or a candidate bounds inventory as an approved disposition.
 If the index requires full context, the reviewer must read the indicated artifacts before a
 verdict; otherwise open supporting files only to investigate a finding or resolve an obligation.
 Make `specs/` readable at the head for targeted searches when possible. Never send only the
@@ -42,7 +47,7 @@ of the raw index bytes must match the hash in `summary.md`. If they match, attac
 `evidence/facts/summary.md` and `evidence/facts/index.json`. On refusal or mismatch, omit the facts,
 never reuse the old cache, and use verified fallback evidence; rebuild without the facts if the
 copied pair fails the check. Reviewers use the bound summary as authoritative for its captured
-answers, without re-deriving them from the spec or tree. Open the verified index only for needed
+answers, not as a source of binding obligations. Open the verified index only for needed
 detail. Commands marked `maintainer-rerun-only` record provenance; shell-less reviewers must
 not try to run them. Facts are evidence, never a gate decision.
 CI may optionally recompute them with `facts.sh --verify`. See `docs/review-packages.md` in the kit
@@ -52,7 +57,7 @@ For committed work run `.prdkit/scripts/bash/build-review-package.sh <change-id>
 adding `--context <path>` for selected tracked canon/policy/record files and `--evidence <path>`
 for completed local results; ordinary evidence cannot occupy `evidence/facts/`. The helper checks
 structural accessibility, not semantic completeness. Before dispatch, check the captured obligations
-against the change record, relevant canon (including full bound bodies), the parent and dependencies
+against the BASE and HEAD change records, relevant canon (including full bound bodies), the parent and dependencies
 where applicable, trusted policy, and the required verification and prior findings. Put any missing
 mandatory obligation or unresolved question inline in the dispatch prompt with its source path.
 Every result names its command, revision, environment, completion/exit status and limits; running

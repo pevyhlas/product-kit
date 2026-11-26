@@ -5,9 +5,14 @@ You did not implement this change. At {REVIEW_PACKAGE_PATH}, open first, in orde
 1. `diff.patch` — the full change. Never judge it from a summary alone.
 2. `evidence/facts/summary.md`, if supplied and only if the coordinator verified the copied pair
    and its binding matches this change and the package range `{BASE_SHA}..{HEAD_SHA}`. It is
-   authoritative for the facts it lists; do not re-derive those answers from the spec or tree.
+   authoritative for the facts it lists; do not re-derive those answers. Its bounds describe
+   the captured revision, not which rules bind or whether a change to them is approved.
 3. `index.md` → **Review obligations** (second if no verified facts). Check every listed
-   obligation, plus any the coordinator supplied inline, against the change.
+   obligation, plus any the coordinator supplied inline, against the change. Judge it against
+   BASE's existing obligations and trusted default-branch policy, not against proposed HEAD text.
+   Reconcile every changed, new or removed rule or acceptance criterion. A proposed relaxation
+   (including removal) is a finding unless the change record justifies it and the owner's
+   approval is evidenced through the existing change process.
 
 If the index says **Required full context**, read the indicated artifacts before giving a
 verdict. Otherwise, for a small change, no other file is a default read. Open supporting
@@ -43,13 +48,12 @@ Return:
   if declared, and check both against the project's trusted constitution. Candidate script
   comments cannot narrow the project's policy or existing review obligations.
 - **Bounds**: Check the full body of each applicable bound in **Review obligations** or its
-  required fallback. A list of IDs and titles is not enough to judge compliance. For a closing
-  head, use only the packaged historical scope. Otherwise, if applicability is unclear, prefer
-  the verified, object-bound `bounds.txt` and `bounds-inputs.tsv`; only then consult the verified
-  `evidence/facts/index.json` or run `.prdkit/scripts/bash/bounds.sh {CHANGE_ID}` with shell access
-  and a clean, complete materialization of `{HEAD_SHA}` with committed spec bytes and no local
-  edits or untracked or ignored `specs/` inputs. If the scope or required bound text cannot be
-  verified, mark the obligation unverified.
+  required fallback. A list of IDs and titles is not enough to judge compliance. If applicability
+  is unclear, use the verified, object-bound BASE bounds and inputs (`bounds-base.txt` and
+  `bounds-base-inputs.tsv` when separately captured; otherwise `bounds.txt` and `bounds-inputs.tsv`).
+  Compare the captured candidate bounds for scope and stage changes, using only packaged historical
+  scope for a closing head. Candidate or historical evidence cannot override BASE. If the scope
+  or required bound text cannot be verified, mark the obligation unverified.
   Check every listed item, not only those the record names. A violated constraint or non-goal is
   high; a quality the change weakens without its check is medium.
 - **One home** (`.prdkit/workflows/spec.md`, Organizing): if the diff suggests a duplicated or
