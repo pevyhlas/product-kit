@@ -398,6 +398,14 @@ file_locally_edited() {
     [ -n "$rec" ] && [ "$cur" != "$rec" ]
 }
 
+# Do not retroactively mark Rigor in existing constitutions, even ones whose
+# content still matches the hash recorded at install.
+keep_unmarked_constitution() { # source path, install-relative path
+    [ "$2" = .prdkit/memory/constitution.md ] &&
+        grep -Fxq -- "- **Rigor**: light $PRDKIT_UNCONFIRMED_DEFAULT" "$1" &&
+        ! grep -Fxq -- "- **Rigor**: light $PRDKIT_UNCONFIRMED_DEFAULT" "$TARGET/$2"
+}
+
 # True when a command symlink points at the same-named file in the kit's commands/
 # directory, in the absolute or relative form this script writes, dangling or not.
 is_kit_command_link() {
@@ -580,7 +588,7 @@ if $CHECK; then
         kit="$(hash_file "$src")"
         [ "$cur" = "$kit" ] && continue
         rec="$(recorded_hash "$rel")"
-        if [ -n "$rec" ] && [ "$cur" = "$rec" ]; then
+        if [ -n "$rec" ] && [ "$cur" = "$rec" ] && ! keep_unmarked_constitution "$src" "$rel"; then
             OUTDATED+=("$rel")
         else
             # Memory files are seeded once and expected to be customized by
@@ -862,6 +870,10 @@ install_conffile() {
     fi
     rec="$(recorded_hash "$rel")"
     if [ -n "$rec" ] && [ "$cur" = "$rec" ]; then
+        if keep_unmarked_constitution "$src" "$rel"; then
+            echo kept
+            return 0
+        fi
         atomic_copy "$src" "$dest" true || return 1
         echo refreshed
     else
@@ -1057,9 +1069,9 @@ fi
 echo "✓ Installed workflow scripts into .prdkit/scripts/bash/"
 echo "✓ Installed neutral agent playbooks into .prdkit/workflows/"
 echo "✓ Templates: $tpl_added added, $tpl_refreshed refreshed, $tpl_current current, $tpl_kept preserved (modified)"
-echo "✓ Memory: $mem_added seeded, $mem_refreshed refreshed, $mem_current current, $mem_kept preserved (customized)"
+echo "✓ Memory: $mem_added seeded, $mem_refreshed refreshed, $mem_current current, $mem_kept preserved"
 if [ ${#CF_MODIFIED[@]} -gt 0 ]; then
-    echo "  Modified since install — preserved; review with:"
+    echo "  Preserved project-owned files; review with:"
     for entry in "${CF_MODIFIED[@]}"; do
         echo "    diff ${entry%%|*} ${entry#*|}"
     done

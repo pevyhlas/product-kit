@@ -2,8 +2,9 @@
 
 - **Name**: <project>
 - **Intent owner**: <human who owns outcomes and consequential choices>
-- **Rigor**: light
+- **Rigor**: light [prdkit:unconfirmed]
 
+When the owner chooses `light` or `full`, set that value and remove the bracketed marker.
 `Rigor: full` also makes medium review findings block and requires independent review of every
 substantive change; `light` follows the tiers in `.prdkit/workflows/protocol.md`. The review
 check reads Rigor from the trusted integration branch, so a change to it applies after it merges.

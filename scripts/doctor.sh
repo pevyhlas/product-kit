@@ -14,6 +14,7 @@ source "$SCRIPT_DIR/agent-tiers-lib.sh"
 source "$SCRIPT_DIR/spec-lib.sh"
 source "$SCRIPT_DIR/diagnostics-lib.sh"
 source "$SCRIPT_DIR/review-policy-lib.sh"
+source "$SCRIPT_DIR/template-residue-lib.sh"
 json=false; strict=false; inventory=false
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -712,6 +713,15 @@ trace change-restates "Change record restates a spec item" "cite its ID and edit
     "$(pick "$change_ids" R)"
 trace change-undefined "Change record cites an ID defined nowhere" "list it under Spec edits, define it in the spec, or fix the reference" \
     "$(pick "$change_ids" U)"
+
+# --- Seeded project text: fill-ins and policy defaults that are not owner decisions ------------
+if ! rows="$(verify_lines template_residue_rows "$root" ${spec_list[@]+"${spec_list[@]}"} \
+    ${change_files[@]+"${change_files[@]}"})"; then
+    findings+=("Could not check project files for template residue")
+    rows=""
+fi
+trace template-placeholder "Unfilled template placeholder" "replace the scaffold text with project details or remove unused slots" "$(pick "$rows" P)"
+trace unconfirmed-default "Unconfirmed init default" "have the owner choose the value, then remove $PRDKIT_UNCONFIRMED_DEFAULT" "$(pick "$rows" D)"
 
 # --- Records and inbox -----------------------------------------------------------------------
 rows="$(verify_lines spec_records "$root")"

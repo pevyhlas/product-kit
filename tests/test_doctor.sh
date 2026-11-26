@@ -10,6 +10,80 @@ DOCTOR="$PROJ/.prdkit/scripts/bash/doctor.sh"
 export PRDKIT_TODAY=2026-10-17
 cd "$PROJ" || exit 1
 
+it "a fresh installation warns about actual fill-in slots and the unconfirmed Rigor default"
+run bash "$DOCTOR"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" "advisory: Unfilled template placeholder"
+assert_contains "$OUTPUT" ".prdkit/memory/constitution.md:1 (# <Project> constitution)"
+assert_contains "$OUTPUT" "advisory: Unconfirmed init default (1): .prdkit/memory/constitution.md:5 (Rigor)"
+run bash "$DOCTOR" --strict --json
+assert_eq 1 "$STATUS"
+assert_eq '[10,1]' "$(jq -c '[.trace["template-placeholder"], .trace["unconfirmed-default"]]' <<< "$OUTPUT")"
+assert_eq 2 "$(jq '.findings | length' <<< "$OUTPUT")" "strict promotes both advisories"
+assert_eq '[]' "$(jq -c .advisories <<< "$OUTPUT")"
+
+it "ordinary syntax, examples and protected quotes are not fill-in slots"
+fill_seeded_policy "$PROJ" || exit 1
+cat >> .prdkit/memory/constitution.md <<'MD'
+
+<!-- Example: # <Project> constitution -->
+> Preserve the literal text <human who owns outcomes and consequential choices>.
+
+Use <details> for notes, with [a label]. A typed argument can be <project>.
+~~~md
+- **Rigor**: light [prdkit:unconfirmed]
+# <Project> constitution
+~~~
+MD
+run bash "$DOCTOR" --strict --json
+assert_eq 0 "$STATUS" "unmarked light and retained config examples are clean"
+assert_eq '[0,0]' "$(jq -c '[.trace["template-placeholder"], .trace["unconfirmed-default"]]' <<< "$OUTPUT")"
+
+it "an otherwise filled constitution warns on a marked value, not the value itself"
+sed -i.bak 's/^\(- \*\*Rigor\*\*: light\)$/\1 [prdkit:unconfirmed]/' .prdkit/memory/constitution.md
+run bash "$DOCTOR" --json
+assert_eq 0 "$STATUS"
+assert_eq '[0,1]' "$(jq -c '[.trace["template-placeholder"], .trace["unconfirmed-default"]]' <<< "$OUTPUT")"
+mv .prdkit/memory/constitution.md.bak .prdkit/memory/constitution.md
+run bash "$DOCTOR" --strict
+assert_eq 0 "$STATUS" "removing the marker confirms the same value"
+
+it "active config and spec fields show literal residue without needing the kit checkout"
+mv .product-kit kit-away
+cp .prdkit/memory/config.md config.saved
+sed '/^- context-budget-bytes:/a\
+- review-publishers: bot:123, bot:<numeric account id>\
+- review-owner: user:<numeric owner id>
+' config.saved > .prdkit/memory/config.md
+mkdir -p specs/changes
+cat > specs/product.md <<'MD'
+# Demo
+
+\<One sentence: who struggles with what today.>
+
+```mermaid
+flowchart LR
+  A([<persona>]) --> J1[Review order]
+```
+
+<The thesis, and the signal that would prove it wrong.>
+<The thesis, and the signal that would prove it wrong.>
+MD
+printf '# Change: Demo\n\n## State\n**Waiting on**: nothing\n**Next**: <next action>\n' > specs/changes/001-demo.md
+run bash "$DOCTOR" --json
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq 7 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" '.prdkit/memory/config.md:9 (<numeric account id>)'
+assert_contains "$OUTPUT" 'specs/product.md:3 (<One sentence: who struggles with what today.>)'
+assert_contains "$OUTPUT" 'specs/product.md:7 (([<persona>]))'
+run bash "$DOCTOR" --strict --json
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "Unfilled template placeholder (7)" "strict fails on slots alone"
+mv kit-away .product-kit
+mv config.saved .prdkit/memory/config.md
+rm specs/changes/001-demo.md specs/product.md
+rmdir specs/changes
+
 mkdir -p specs/parts specs/decisions tests .prdkit/history
 cat > specs/product.md <<'MD'
 # Demo — product
@@ -37,7 +111,7 @@ git add -A >/dev/null; git commit -qm spec >/dev/null
 it "a consistent 1.0 spec passes with no advisories"
 run bash "$DOCTOR" --json
 assert_eq 0 "$STATUS" "doctor passes"
-assert_contains "$OUTPUT" '"findings":[],"advisories":[],"trace":{"code-path":0,"planned-closed":0,"planned-unknown":0,"retired-cited":0,"unallocated":0,"part-need":0,"change-restates":0,"change-undefined":0}' "nothing to report; each trace check counted by its code"
+assert_contains "$OUTPUT" '"findings":[],"advisories":[],"trace":{"code-path":0,"planned-closed":0,"planned-unknown":0,"retired-cited":0,"unallocated":0,"part-need":0,"change-restates":0,"change-undefined":0,"template-placeholder":0,"unconfirmed-default":0}' "nothing to report; each trace check counted by its code"
 assert_contains "$OUTPUT" '"readiness":"not-evaluated"' "never a readiness claim"
 assert_eq 0 "$(printf '%s\n' "$OUTPUT" | jq '.budget_excess_reading_lines')" "no reading-budget excess"
 
@@ -1454,6 +1528,7 @@ it "the shipped example spec passes strict doctor"
 EX="$(mktemp -d)"; track_tmp "$EX"
 git -C "$EX" init -q
 bash "$PK_ROOT/scripts/init.sh" --target "$EX" --copy >/dev/null
+fill_seeded_policy "$EX" || exit 1
 cp -R "$PK_ROOT/examples/request-service/specs" "$EX/"
 run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict"
 assert_eq 0 "$STATUS" "example has no findings or advisories"

@@ -12,6 +12,9 @@ assert_not_contains "$OUTPUT" 'Git ignores history' "fresh install leaves histor
 assert_contains "$OUTPUT" 'commit the .product-kit pin' "fresh install explains the upgrade pin"
 assert_not_contains "$OUTPUT" 'submodule update --remote' "upgrades select a release instead of following a branch"
 for file in constitution.md agents.md config.md; do assert_file "$PROJ/.prdkit/memory/$file" "$file seeded"; done
+assert_contains "$(cat .prdkit/memory/constitution.md)" '- **Rigor**: light [prdkit:unconfirmed]' 'fresh Rigor carries the confirmation marker'
+assert_file .prdkit/scripts/bash/template-residue-lib.sh
+assert_contains "$(cat .prdkit/.manifest)" '.prdkit/scripts/bash/template-residue-lib.sh' 'residue library is mapped and hashed'
 memfiles=("$PROJ"/.prdkit/memory/*.md)
 assert_eq 3 "${#memfiles[@]}" "only the three memory files are seeded"
 for file in ledger-emit.sh ledger-spool-adapter.sh json-lib.sh retrospective.sh; do
@@ -344,6 +347,28 @@ assert_eq 0 "$STATUS" "plain upgrade succeeds in symlink mode"
 assert_symlink "$PROJ5/.claude/commands/prdkit.md" "plain upgrade preserves symlink mode"
 assert_contains "$(cat "$PROJ5/.prdkit/.manifest")" 'mode: symlink' "symlink mode stays recorded"
 hash_of() { (sha256sum "$1" 2>/dev/null || shasum -a 256 "$1") | cut -d' ' -f1; }
+
+it "upgrade never adds the Rigor marker to an existing unmarked constitution, even a stock seed"
+legacy="$(make_project)"; track_tmp "$legacy"
+cd "$legacy" || exit 1
+seed=.product-kit/templates/constitution-template.md
+destination=.prdkit/memory/constitution.md
+sed 's/ \[prdkit:unconfirmed\]$//; /^When the owner chooses /d' "$seed" > constitution.old
+cp constitution.old "$seed"
+run bash .product-kit/scripts/init.sh
+assert_eq 0 "$STATUS"
+assert_eq "$(hash_of constitution.old)" "$(hash_of "$destination")"
+cp "$PK_ROOT/templates/constitution-template.md" "$seed"
+snapshot_upgrade_fixture "$legacy" || exit 1
+run bash .product-kit/scripts/init.sh --upgrade
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq "$(hash_of constitution.old)" "$(hash_of "$destination")" "existing memory stays byte-identical"
+assert_contains "$(cat .prdkit/templates/constitution-template.md)" 'light [prdkit:unconfirmed]' "reusable template still refreshes"
+run bash .product-kit/scripts/init.sh --check
+assert_eq 0 "$STATUS" "the retained constitution is not classified as installation drift"
+run bash .prdkit/scripts/bash/doctor.sh --json
+assert_eq 0 "$STATUS"
+assert_eq 0 "$(jq '.trace["unconfirmed-default"]' <<< "$OUTPUT")" "legacy light is not a default diagnostic"
 
 it "upgrade retires unedited files and reports consumer follow-up"
 ZERO_HASH="$(printf '%064d' 0)"

@@ -6,7 +6,8 @@
 
 Run `.prdkit/scripts/bash/doctor.sh`; stop if it reports unsupported kit formats. Infer stack, commands and present behavior from the repository; ask only about purpose,
 authority and real constraints, each with a recommendation. Fill the constitution from its
-template without broadening the owner's instructions. Start a small product in `specs/SPEC.md`
+template without broadening the owner's instructions; remove the Rigor marker only after the
+owner chooses the value. Start a small product in `specs/SPEC.md`
 (`.prdkit/templates/spec-template.md`), a larger one in `product.md` and `architecture.md`
 (`.prdkit/templates/product-template.md`, `.prdkit/templates/architecture-template.md`),
 describing what is true now, inferred intent as `hypothesis`. Report what was created, inferred

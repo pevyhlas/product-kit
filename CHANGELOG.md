@@ -11,6 +11,15 @@ change by change.
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- Fresh installs mark seeded Rigor `light` as unconfirmed; independent reviewers must not use it
+  as owner policy. Ordinary `doctor.sh` advises on the marker and leftover fill-in slots in
+  project seeds, with JSON trace counts `unconfirmed-default` and `template-placeholder`.
+  **Fresh installs now fail `doctor.sh --strict`** until the project fills or removes the slots
+  and the owner chooses Rigor and removes the marker. Upgrades do not mark existing unmarked
+  constitutions.
+
 ## [3.2.0] — 2026-11-26 — lean review package
 
 ### Changed

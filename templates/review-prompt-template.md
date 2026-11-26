@@ -15,6 +15,7 @@ You did not implement this change. At {REVIEW_PACKAGE_PATH}, open first, in orde
    Reconcile every changed, new or removed rule or acceptance criterion. A proposed relaxation
    (including removal) is a finding unless the change record justifies it and the owner's
    approval is evidenced through the existing change process.
+   Ask the owner to confirm any policy value marked `[prdkit:unconfirmed]` instead of applying it.
 
 If the index says **Required full context**, read the indicated artifacts before giving a
 verdict. Otherwise, for a small change, no other file is a default read. Open supporting
