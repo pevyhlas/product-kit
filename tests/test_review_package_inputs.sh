@@ -163,19 +163,21 @@ for mode in "$@"; do
     case "$mode" in
         no-specs)
             no_specs='No spec files at BASE or HEAD; no spec bounds apply.'
-            it "A small committed change without specs has no spec obligations or full-context fallback"
+            it "A small committed change without specs or scope stays lean but does not claim absent bounds"
             assert_eq absent "$([ -e specs ] && echo present || echo absent)" 'no specs directory in fixture'
             # Untracked specs are not an input on either revision.
             mkdir -p specs
             printf '# Untracked\n' > specs/product.md
             if build; then
                 section="$(obligations_section)"
-                assert_contains "$section" "$no_specs"
+                assert_not_contains "$section" "$no_specs"
+                assert_contains "$section" 'HEAD bounds are unavailable'
                 assert_not_contains "$section" '**Required full context:**'
                 assert_not_contains "$section" 'mark the review pending'
-                assert_eq $'diff.patch\nindex.md\nobligations.md' "$(default_read_paths)" 'only diff, index and obligations by default'
-                assert_eq "child actual child record missing or unrecoverable: specs/changes/$ID.md" \
-                    "$(non_verification_gaps)" 'only the released missing-child warning remains'
+                assert_eq $'diff.patch\nindex.md' "$(default_read_paths)" 'missing scope and unavailable bounds stay inline'
+                assert_contains "$(non_verification_gaps)" "child actual child record missing or unrecoverable: specs/changes/$ID.md"
+                assert_eq unavailable "$(cat "$PKG/bounds-status.txt")"
+                assert_eq '' "$(cat "$PKG/bounds.txt")"
                 assert_eq '' "$(awk -F '\t' '$3 ~ /^specs\// {print}' "$PKG/context-manifest.tsv")" 'no spec obligations'
                 assert_contains "$(cat "$PKG/context-manifest.tsv")" '.prdkit/memory/constitution.md' 'required trusted policy remains'
                 integrity
@@ -209,9 +211,9 @@ for mode in "$@"; do
                 assert_contains "$section" 'C-01 — BASE, removed by this change'
                 assert_contains "$section" 'Canon (specs/product.md) — BASE, removed by this change'
                 assert_contains "$section" 'Keep the public label.'
-                assert_contains "$(cat "$PKG/bounds.txt")" 'No spec bounds apply at this revision.'
+                assert_eq unavailable "$(cat "$PKG/bounds-status.txt")"
                 assert_contains "$(non_verification_gaps)" 'child actual child record missing or unrecoverable:'
-                assert_not_contains "$(non_verification_gaps)" 'bounds unavailable'
+                assert_contains "$(non_verification_gaps)" 'bounds unavailable'
                 assert_not_contains "$(non_verification_gaps)" 'canon missing/unsafe/unreadable context'
                 released_context_retained
             fi
@@ -346,9 +348,9 @@ EOF
             git rm -q "$record" || exit 1
             advance 'close unreadable record'
             if build; then
-                assert_contains "$(obligations_section)" 'No spec files at BASE or HEAD; no spec bounds apply.'
+                assert_not_contains "$(obligations_section)" 'No spec files at BASE or HEAD; no spec bounds apply.'
                 assert_contains "$(non_verification_gaps)" "unreadable child record $historical:$record"
-                assert_not_contains "$(non_verification_gaps)" 'bounds unavailable'
+                assert_contains "$(non_verification_gaps)" 'bounds unavailable'
                 released_context_retained
             fi
 
@@ -365,7 +367,8 @@ exec "$FIXTURE_GIT" "$@"
 EOF
             chmod +x "$shim/git"
             if PATH="$shim:$PATH" build --evidence src/app.txt; then
-                assert_eq "child actual child record missing or unrecoverable: $record" "$(non_verification_gaps)"
+                assert_contains "$(non_verification_gaps)" "child actual child record missing or unrecoverable: $record"
+                assert_eq unavailable "$(cat "$PKG/bounds-status.txt")"
                 PATH="$shim:$PATH" released_context_retained --evidence src/app.txt
             fi
 
@@ -385,6 +388,7 @@ EOF
             if build; then
                 assert_contains "$(obligations_section)" '**Required full context:** A BASE obligation could not be resolved.'
                 assert_contains "$(non_verification_gaps)" 'bounds unresolved BASE obligation: shared bounds unavailable'
+                assert_contains "$(cat "$PKG/bounds-base.stderr")" 'Duplicate Parts field'
                 assert_contains "$(cat "$PKG/bounds.stderr")" 'Duplicate Parts field'
                 released_context_retained
             fi
@@ -395,7 +399,7 @@ EOF
             git rm -q "$record" || exit 1
             advance 'close change with invalid scope'
             if build; then
-                assert_contains "$(obligations_section)" 'No spec files at BASE or HEAD; no spec bounds apply.'
+                assert_not_contains "$(obligations_section)" 'No spec files at BASE or HEAD; no spec bounds apply.'
                 assert_contains "$(obligations_section)" 'Historical child record — scope evidence only, not a substitute for BASE'
                 assert_contains "$(non_verification_gaps)" 'bounds bounds unavailable; inspect bounds.stderr'
                 assert_contains "$(cat "$PKG/bounds.stderr")" "$record:5: Duplicate Parts field"
@@ -420,10 +424,10 @@ EOF
             assert_eq '' "$(git ls-tree -r --name-only HEAD -- specs)" 'HEAD has no specs'
             assert_eq '' "$(git log -1 --format=%H HEAD -- "$record")" 'default path history prunes both record commits'
             if build; then
-                assert_contains "$(obligations_section)" 'No spec files at BASE or HEAD; no spec bounds apply.'
-                assert_eq "child actual child record missing or unrecoverable: $record" "$(non_verification_gaps)"
+                assert_not_contains "$(obligations_section)" 'No spec files at BASE or HEAD; no spec bounds apply.'
+                assert_contains "$(non_verification_gaps)" "child actual child record missing or unrecoverable: $record"
                 assert_not_contains "$(cat "$PKG/context-manifest.tsv")" 'child-historical'
-                assert_contains "$(cat "$PKG/bounds.txt")" 'No spec bounds apply at this revision.'
+                assert_eq unavailable "$(cat "$PKG/bounds-status.txt")"
                 released_context_retained
             fi
 
@@ -454,9 +458,9 @@ EOF
                 args=()
                 [ "$style" != delta ] || args=(--since "$BASE")
                 if build ${args[@]+"${args[@]}"}; then
-                    assert_eq "child actual child record missing or unrecoverable: $record" "$(non_verification_gaps)" "$style: exact released child warning"
+                    assert_contains "$(non_verification_gaps)" "child actual child record missing or unrecoverable: $record"
                     assert_not_contains "$(cat "$PKG/context-manifest.tsv")" 'child-historical'
-                    assert_contains "$(obligations_section)" 'No spec files at BASE or HEAD; no spec bounds apply.'
+                    assert_not_contains "$(obligations_section)" 'No spec files at BASE or HEAD; no spec bounds apply.'
                     assert_not_contains "$(obligations_section)" '**Required full context:**'
                     released_context_retained ${args[@]+"${args[@]}"}
                 fi
@@ -496,11 +500,17 @@ EOF
         paths)
             it "Literal spec paths participate in actual bounds and changed canon, or have a named gap"
             printf '  CHANGED_LITERAL_BODY\n' >> specs/product/constraints/é.md
+            git add specs/product; git commit -qm 'change Unicode path' || exit 1
+            if build; then
+                assert_contains "$(cat "$PKG/bounds.txt")" C-77 'Unicode file included in actual bounds'
+                assert_eq collected "$(cat "$PKG/bounds-status.txt")"
+            fi
             unsafe=$'specs/product/constraints/line\nbreak.md'
             printf '# Constraint\n\n- **C-78 Rejected path** — Scope: all parts.\n' > "$unsafe"
             git add specs/product; git commit -qm 'literal path controls' || exit 1
             if build; then
-                assert_contains "$(cat "$PKG/bounds.txt")" C-77 'Unicode file included in actual bounds'
+                assert_eq unavailable "$(cat "$PKG/bounds-status.txt")" 'incomplete canon is not complete bounds'
+                assert_eq '' "$(cat "$PKG/bounds.txt")"
                 assert_contains "$(cat "$PKG/bounds-inputs.tsv")" "$(git rev-parse HEAD:specs/product/constraints/é.md)" 'literal bounds input blob'
                 assert_contains "$(cat "$PKG/context-manifest.tsv")" 'specs/product/constraints/é.md' 'literal source path provenance'
                 assert_contains "$(find "$PKG" -type f -name '*.txt' -exec cat {} \;)" CHANGED_LITERAL_BODY 'changed literal canon supplied'
@@ -565,6 +575,27 @@ EOF
                 for name in summary.md index.json; do
                     assert_file "$PKG/evidence/facts/$name"
                     assert_contains "$(cat "$PKG/manifest.tsv")" "caller-supplied:$cache/$name"
+                done
+                integrity
+            fi
+
+            it "Colliding 255-byte basenames preserve both bytes and original paths"
+            long="$(awk 'BEGIN { for (i = 0; i < 252; i++) printf "a"; print ".md" }')"
+            printf 'first long attachment\n' > "proof/$long"
+            printf 'second long attachment\n' > "other/$long"
+            # Occupy the first shortened name too; the next suffix must still fit and be unique.
+            short="$(printf '%s' "$long" | git hash-object --stdin)"
+            printf 'separate attachment\n' > "third/attachment-${short:0:8}-2"
+            if build --evidence "third/attachment-${short:0:8}-2" --evidence "proof/$long" --evidence "other/$long"; then
+                assert_eq 255 "$(printf '%s' "$long" | wc -c | tr -d ' ')" '255-byte fixture'
+                for src in "proof/$long" "other/$long" "third/attachment-${short:0:8}-2"; do
+                    row="$(awk -F '\t' -v p="caller-supplied:$src (verify producer revision/result)" '$4 == p { print $1 }' "$PKG/manifest.tsv")"
+                    case "$src" in
+                        proof/*) assert_eq "evidence/$long" "$row" ;;
+                        other/*) assert_eq "evidence/attachment-${short:0:8}-3" "$row" ;;
+                    esac
+                    run cmp "$src" "$PKG/$row"
+                    assert_eq 0 "$STATUS" "exact bytes for $row"
                 done
                 integrity
             fi ;;

@@ -19,12 +19,14 @@ import sys
 from tempfile import NamedTemporaryFile, TemporaryDirectory, TemporaryFile
 
 
-VERSION = 4
+VERSION = 5
 SUMMARY_LIMIT = 60
 CONFIG = ".prdkit/memory/review-checks.json"
 CACHE = ".prdkit/cache/evidence"
 SCRIPTS = ".prdkit/scripts/bash"
 FILES = ("index.json", "summary.md")
+BOUNDS_TOOLS = ("review-bounds-lib.sh", "bounds.sh", "review-policy-lib.sh",
+                "spec-lib.sh", "spec-navigation-lib.sh", "common.sh")
 DIFF = ("git", "diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=none",
         "--no-relative", "--no-color")
 
@@ -210,7 +212,7 @@ class Snapshot(Collector):
         # These are the external utilities used by the shipped local collectors.
         tools = {}
         for name in ("awk", "basename", "bash", "cat", "cksum", "cmp", "cut", "date", "dd",
-                     "dirname", "find", "git", "grep", "head", "mktemp", "od", "readlink",
+                     "dirname", "find", "git", "grep", "head", "mkdir", "mktemp", "od", "readlink",
                      "rm", "sed", "sha256sum", "shasum", "sort", "tail", "tr", "uniq", "wc"):
             path = shutil.which(name, path=self.env.get("PATH"))
             if path:
@@ -224,9 +226,6 @@ class Snapshot(Collector):
                 "shallow_sha256": digest(self.shallow) if self.shallow is not None else None,
                 "local_tools_sha256": digest(json_bytes(tools)),
                 "doctor_date_sha256": digest(self.env["PRDKIT_TODAY"].encode())}
-
-    def script(self, name, *args):
-        return self.fact(["bash", f"{SCRIPTS}/{name}.sh", *args])
 
     def materialize(self, head):
         blobs, links = [], []
@@ -360,35 +359,35 @@ def ci_fact(collector, snapshot, pr, head):
     return fact
 
 
-def bounds_may_be_empty(snapshot, head):
-    # A blocked canon path can disappear from the materialized helper's file scan. Do
-    # not turn that into a successful absence report; the package retains the exact gaps.
-    roots = {b"specs", b"specs/product", b"specs/architecture", b"specs/parts", b"specs/decisions"}
-    for entry in snapshot.git("ls-tree", "-rtz", head, "--", "specs").split(b"\0")[:-1]:
-        metadata, path = entry.split(b"\t", 1)
-        if path in roots and not metadata.startswith(b"040000 tree "):
-            return False
-        if (path.endswith(b".md") and not path.startswith(b"specs/changes/") and
-                not metadata.startswith((b"100644 blob ", b"100755 blob "))):
-            return False
-    return True
+def bounds_tools_stamp(collector):
+    return {name: digest(data) if (data := read_optional(collector.scripts / name)) is not None else None
+            for name in BOUNDS_TOOLS}
+
+
+def bounds_fact(collector, snapshot, change_id, head):
+    # Use the installed implementation, like the package builder, but the frozen HEAD objects.
+    command = ["bash", f"{SCRIPTS}/{BOUNDS_TOOLS[0]}", ".", head, change_id]
+    bounds, raw = snapshot.capture(command, argv=[command[0], str(collector.scripts / BOUNDS_TOOLS[0]), *command[2:]])
+    bounds["details"] = snapshot.text(raw) if raw is not None else None
+    state, _, payload = (bounds["details"] or "").partition("\n")
+    scope, _, details = payload.partition("\n")
+    bounds["scope_revision"] = scope if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", scope) else None
+    if bounds["exit_status"] == 0 and state in {"absent", "collected"} and bounds["scope_revision"] and details:
+        bounds.update(state=state, details=details, result=(
+            details if state == "absent" else "applicable bounds listed below and in index.json"))
+    else:
+        bounds.update(state="unavailable", details=None,
+                      result=f"bounds not collected ({bounds['result']})")
+    return bounds
 
 
 def collect(collector, snapshot, change_id, base, head, pr):
     inputs = snapshot.inputs(base, head)
+    bounds_tools = bounds_tools_stamp(collector)
     rules, config_stamp = load_map(snapshot.root)
     span = f"{base}..{head}"
     facts = {"doctor": local_json(snapshot, ["bash", f"{SCRIPTS}/doctor.sh", "--json"], doctor=True)}
-    allow_empty = bounds_may_be_empty(snapshot, head)
-    bounds = snapshot.script("bounds", change_id, *(("--allow-empty",) if allow_empty else ()))
-    if allow_empty and bounds["exit_status"] == 0 and bounds["details"] == "No spec bounds apply at this revision.":
-        bounds["result"] = bounds["details"]
-    elif (bounds["exit_status"] == 0 and bounds["details"].startswith(f"Bounds for {change_id} ") and
-            bounds["details"].splitlines()[-1].startswith("Mark each in the record's Bounds:")):
-        bounds["result"] = "applicable bounds listed below and in index.json"
-    else:
-        bounds["result"] = f"bounds not collected ({bounds['result']})"
-    facts["bounds"] = bounds
+    facts["bounds"] = bounds_fact(collector, snapshot, change_id, head)
     diff = snapshot.fact([*DIFF, "--check", span, "--"])
     diff["result"] = {0: "clean", 2: "whitespace or conflict-marker findings"}.get(
         diff["exit_status"], f"diff check failed ({diff['result']})")
@@ -399,7 +398,9 @@ def collect(collector, snapshot, change_id, base, head, pr):
     # Commands record collection provenance, not steps for the reviewer to execute.
     for fact in facts.values():
         fact["audience"] = "maintainer-rerun-only"
-    require(snapshot.inputs(base, head) == inputs, "runtime inputs changed while collecting facts; retry")
+    require(snapshot.inputs(base, head) == inputs and bounds_tools_stamp(collector) == bounds_tools,
+            "runtime inputs changed while collecting facts; retry")
+    inputs["installed_bounds_tools_sha256"] = bounds_tools
     return {"change_id": change_id, "key": {"version": VERSION, "base": base, "head": head},
             "inputs": {**inputs, "config": config_stamp, "ci_sha256": digest(json_bytes(facts["ci"]))},
             "facts": facts}
@@ -576,9 +577,6 @@ def main():
         head = collector.rev("HEAD")
         if args.head is not None:
             require(collector.rev(args.head) == head, "checkout HEAD does not match --head")
-        record = f"specs/changes/{args.change_id}.md"
-        require(collector.git("ls-tree", head, "--", record).startswith((b"100644 ", b"100755 ")),
-                f"unknown change id at HEAD: {record}")
         if args.base is None:
             try:
                 tip = collector.rev("refs/remotes/origin/HEAD")

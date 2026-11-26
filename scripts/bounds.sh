@@ -2,7 +2,6 @@
 # bounds.sh — The constraints, non-goals and qualities a change must respect. Read-only.
 #
 # Usage: bounds.sh <change-id> | bounds.sh --all
-# Exact-head collectors may pass --allow-empty after the scope to report absent spec bounds.
 #
 # Scope starts from the change record's header (`**Parts**: P2 · **Journeys**: J-01`) in
 # specs/changes/<change-id>.md, widened through the parts table: a named part adds the journeys
@@ -16,9 +15,9 @@
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 source "$SCRIPT_DIR/spec-lib.sh"
-bounds_for_root() { # root, scope, [complete capture allows empty bounds]
-local root="$1" allow_empty="${3:-false}"; shift
-usage='Usage: bounds.sh <change-id> | bounds.sh --all (optional trailing --allow-empty)'
+bounds_for_root() { # root, scope, [complete capture allows empty bounds], [state output path]
+local root="$1" allow_empty="${3:-false}" state_file="${4:-}"; shift
+usage='Usage: bounds.sh <change-id> | bounds.sh --all'
 case "${1:-}" in
     -h|--help) echo "$usage"; exit 0 ;;
     '') echo "$usage" >&2; exit 2 ;;
@@ -43,6 +42,7 @@ listed="$(verify_lines spec_files "$root")" || return 1
 while IFS= read -r file; do [ -z "$file" ] || files+=("$file"); done <<< "$listed"
 if [ "${#files[@]}" -eq 0 ]; then
     if [ "$allow_empty" = true ]; then
+        if [ -n "$state_file" ]; then printf 'absent\n' > "$state_file" || return 1; fi
         printf 'No spec bounds apply at this revision.\n'
         return
     fi
@@ -174,7 +174,8 @@ fi
         if (later != "") printf "Later stages (built only on owner direction; spec.md, Lifecycle):\n%s", later
     }
 ' "${files[@]}") || return 1
-echo "Mark each in the record's Bounds: holds (how), or conflict (to the owner inbox; never resolved by the agent)."
+echo "Mark each in the record's Bounds: holds (how), or conflict (to the owner inbox; never resolved by the agent)." || return 1
+if [ -n "$state_file" ]; then printf 'collected\n' > "$state_file"; fi
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
@@ -190,7 +191,5 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
             exit 2
         fi
     fi
-    allow_empty=false
-    if [ "${2:-}" = --allow-empty ]; then allow_empty=true; fi
-    bounds_for_root "$root" "${1:-}" "$allow_empty"
+    bounds_for_root "$root" "${1:-}"
 fi

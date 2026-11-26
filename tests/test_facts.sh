@@ -64,11 +64,13 @@ assert_contains "$(cat "$SUMMARY")" 'Does not answer design fit, correctness, or
 assert_contains "$(cat "$SUMMARY")" 'not a gate decision'
 assert_contains "$(cat "$SUMMARY")" '[index.json](index.json)'
 assert_eq true "$(jq --arg base "$BASE" --arg head "$HEAD_SHA" '
-    .key == {base:$base, head:$head, version:4}
+    .key == {base:$base, head:$head, version:5}
     and (.facts.doctor.details.advisories | type == "array")
     and .facts.doctor.command[-1] == "--json"
     and .facts.adoption.details.source_verification == "not-requested"
     and .facts.bounds.exit_status == 0 and (.facts.bounds.details | contains("C-01 Example limit"))
+    and .facts.bounds.state == "collected" and .facts.bounds.scope_revision == $head
+    and (.inputs.installed_bounds_tools_sha256["review-bounds-lib.sh"] | length == 64)
     and .facts.diff_check.exit_status == 0 and .facts.diff_check.result == "clean"
     and .inputs.config == {kind:"absent"} and .facts.path_checks.rules == null
     and .facts.path_checks.paths["src/deleted.txt"] == []
@@ -113,10 +115,8 @@ if [ -f "$paired/index.json" ] && [ -f "$paired/summary.md" ]; then
 fi
 
 it 'invalid IDs and refs refuse; live worktree and index edits do not affect facts'
-for bad in '../001-facts' '111-absent'; do
-    run bash "$BIN/facts.sh" "$bad"
-    assert_eq 2 "$STATUS"
-done
+run bash "$BIN/facts.sh" '../001-facts'
+assert_eq 2 "$STATUS"
 for ref in --base --head; do
     run bash "$BIN/facts.sh" --verify "$ID" "$ref" does-not-exist
     assert_eq 2 "$STATUS"
@@ -259,6 +259,7 @@ find
 git
 grep
 head
+mkdir
 mktemp
 od
 python3
@@ -510,7 +511,7 @@ run bash "$BIN/facts.sh" "$ID" --base "$BASE"
 assert_eq 0 "$STATUS" "$OUTPUT"
 empty_bounds='No spec bounds apply at this revision.'
 assert_eq true "$(jq --arg notice "$empty_bounds" '
-    .facts.bounds | .exit_status == 0 and .result == $notice and .details == $notice
+    .facts.bounds | .state == "absent" and .exit_status == 0 and .result == $notice and .details == $notice
 ' "$CACHE/index.json")"
 run bash "$BIN/build-review-package.sh" "$ID" "$BASE" --facts
 assert_eq 0 "$STATUS" "$OUTPUT"
@@ -520,6 +521,34 @@ assert_eq 1 "$(grep -Fc "$empty_bounds" "$pkg/evidence/facts/summary.md")"
 assert_not_contains "$(cat "$pkg/evidence/facts/summary.md")" 'bounds not collected'
 assert_not_contains "$(cat "$pkg/context-gaps.txt")" 'bounds unavailable'
 
+compare_bounds() { # expected state, package gap or expected output fragment, optional env command/prefix
+    local expected="$1" marker="$2" pkg details facts_state
+    shift 2
+    run "$@" bash "$BIN/facts.sh" "$ID" --base "$BASE"
+    assert_eq 0 "$STATUS" "$OUTPUT" || return
+    run "$@" bash "$BIN/build-review-package.sh" "$ID" "$BASE" --facts
+    assert_eq 0 "$STATUS" "$OUTPUT" || return
+    pkg="$(jq -er .PACKAGE_DIR <<< "$OUTPUT")"
+    facts_state="$(jq -r '.facts.bounds.state' "$pkg/evidence/facts/index.json")"
+    details="$(jq -r '.facts.bounds.details // ""' "$pkg/evidence/facts/index.json")"
+    assert_eq "$expected" "$facts_state" 'expected facts state'
+    assert_eq "$facts_state" "$(cat "$pkg/bounds-status.txt")" 'HEAD state agrees'
+    assert_eq "$details" "$(cat "$pkg/bounds.txt")" 'HEAD bounds bytes agree (ignoring final LF)'
+    if [ "$expected" = unavailable ]; then
+        assert_eq '' "$details"
+        assert_contains "$(cat "$pkg/context-gaps.txt")" "$marker"
+        assert_contains "$(cat "$pkg/context-gaps.txt")" 'bounds bounds unavailable'
+        assert_not_contains "$(cat "$pkg/evidence/facts/summary.md")" "$empty_bounds"
+        assert_not_contains "$(cat "$pkg/index.md")" 'No spec files at BASE or HEAD; no spec bounds apply.'
+    else
+        assert_contains "$details" "$marker"
+        assert_not_contains "$(cat "$pkg/context-gaps.txt")" 'bounds bounds unavailable'
+        assert_eq "$(awk -F '\t' '$1 ~ /^specs\/changes\// {print $2}' "$pkg/bounds-inputs.tsv")" \
+            "$(jq -r '.facts.bounds.scope_revision' "$pkg/evidence/facts/index.json")" 'scope is bound to the same revision'
+    fi
+    parity_pkg="$pkg"
+}
+
 it 'A malformed scope still fails collection even without spec inputs for bounds'
 printf '# Change\n\n**Tier**: T1 · **Parts**: P1 · **Parts**: P2\n' > "specs/changes/$ID.md"
 git commit -qam 'make record scope ambiguous' || exit 1
@@ -527,6 +556,7 @@ run bash "$BIN/facts.sh" "$ID" --base "$BASE"
 assert_eq 0 "$STATUS" "$OUTPUT"
 assert_contains "$(cat "$CACHE/summary.md")" 'bounds not collected (exit 1)'
 assert_not_contains "$(cat "$CACHE/summary.md")" "$empty_bounds"
+compare_bounds unavailable 'bounds bounds unavailable'
 
 it 'An unsafe canon entry cannot be mistaken for absent spec bounds'
 git show "$BASE:specs/changes/$ID.md" > "specs/changes/$ID.md"
@@ -536,5 +566,132 @@ run bash "$BIN/facts.sh" "$ID" --base "$BASE"
 assert_eq 0 "$STATUS" "$OUTPUT"
 assert_contains "$(cat "$CACHE/summary.md")" 'bounds not collected (exit 2)'
 assert_not_contains "$(cat "$CACHE/summary.md")" "$empty_bounds"
+compare_bounds unavailable 'unsafe spec input specs/product.md'
+
+record="specs/changes/$ID.md"
+for fixture in symlink-canon binary-canon binary-design control-path noncanonical-control-path \
+    plain-record empty-record binary-record unterminated-record executable-record duplicate-tier review-field \
+    collected modified-bound removed-last-bound partial-canon partial-base undefined-reference \
+    recovered-record recovered-with-bound; do
+    it "Reviewed bounds fixture: $fixture"
+    git checkout -q --detach "$BASE" || exit 1
+    expected=unavailable; marker='bounds bounds unavailable'
+    case "$fixture" in
+        symlink-canon)
+            ln -s ../label.txt specs/product.md; marker='unsafe spec input specs/product.md' ;;
+        binary-canon|binary-design)
+            spec=product; [ "$fixture" != binary-design ] || spec=design
+            printf 'bad\000bytes\n' > "specs/$spec.md"; marker="unreadable/non-text input specs/$spec.md" ;;
+        partial-canon|partial-base)
+            printf '# Product\n\n- **C-01 Known**: Scope: all.\n' > specs/product.md
+            printf 'bad\000bytes\n' > specs/design.md; marker='unreadable/non-text input specs/design.md' ;;
+        control-path|noncanonical-control-path)
+            dir=specs
+            if [ "$fixture" = control-path ]; then dir=specs/product; mkdir -p "$dir"; fi
+            printf '# Odd name\n' > "$dir/"$'odd\tname.md'; marker='unsafe spec input' ;;
+        plain-record) printf 'Plain text without a tier.\n' > "$record" ;;
+        empty-record) : > "$record" ;;
+        binary-record) printf '# Change\n\n**Tier**: T1\n\nbad\000bytes\n' > "$record"; marker='unreadable child record' ;;
+        unterminated-record) printf '**Tier**: T1' > "$record" ;;
+        executable-record) chmod +x "$record"; marker='actual child record is unsafe/unreadable' ;;
+        duplicate-tier) printf '\n<!-- **Tier**: T2 -->\n' >> "$record" ;;
+        review-field) printf '\n## State\n\n**Review**: obsolete\n' >> "$record" ;;
+        collected|modified-bound|removed-last-bound)
+            printf '# Product\n\n- **C-01 Original**: Scope: all.\n' > specs/product.md
+            expected=collected; marker='C-01 Original' ;;
+        undefined-reference)
+            printf '\n## Acceptance\n\nSee [window][missing].\n' >> "$record"
+            expected=absent; marker="$empty_bounds" ;;
+        recovered-record) git rm -q "$record"; expected=absent; marker="$empty_bounds" ;;
+        recovered-with-bound)
+            printf '# Product\n\n- **C-01 Survives**: Scope: all.\n' > specs/product.md
+            git rm -q "$record"; expected=collected; marker='C-01 Survives' ;;
+    esac
+    git add -A && git commit -qm "$fixture" || exit 1
+    parity_base="$BASE"
+    case "$fixture" in
+        modified-bound|removed-last-bound)
+            BASE="$(git rev-parse HEAD)"
+            if [ "$fixture" = removed-last-bound ]; then
+                git rm -q specs/product.md || exit 1
+                expected=absent; marker="$empty_bounds"
+            else
+                printf '# Product\n\n- **C-01 Revised**: Scope: all.\n' > specs/product.md
+                marker='C-01 Revised'
+            fi
+            git commit -qam "$fixture transition" || exit 1 ;;
+        partial-base)
+            BASE="$(git rev-parse HEAD)"
+            git rm -q specs/design.md specs/product.md && git commit -qm 'remove the BASE spec inputs' || exit 1
+            expected=absent; marker="$empty_bounds" ;;
+    esac
+    compare_bounds "$expected" "$marker"
+    case "$fixture" in
+        removed-last-bound)
+            assert_contains "$(cat "$parity_pkg/bounds-base.txt")" 'C-01 Original'
+            assert_contains "$(cat "$parity_pkg/context-manifest.tsv")" $'\tbound-removed\tC-01' ;;
+        partial-base)
+            assert_eq '' "$(cat "$parity_pkg/bounds-base.txt")" 'incomplete BASE inventory is not a bounds result'
+            assert_contains "$(cat "$parity_pkg/context-gaps.txt")" 'unresolved BASE obligation: BASE bounds unavailable'
+            assert_contains "$(cat "$parity_pkg/context-manifest.tsv")" $'\tbound-removed\tC-01' ;;
+        undefined-reference) assert_contains "$(cat "$parity_pkg/context-gaps.txt")" 'undefined reference' ;;
+        recovered-*)
+            assert_eq "$parity_base" "$(jq -r '.facts.bounds.scope_revision' "$parity_pkg/evidence/facts/index.json")" ;;
+    esac
+    BASE="$parity_base"
+done
+
+it 'An unknown change does not fall back to --all with or without HEAD specs'
+ID=111-absent
+compare_bounds unavailable 'actual child record missing or unrecoverable'
+git checkout -q --detach "$BASE" || exit 1
+printf 'after\n' > label.txt
+git commit -qam 'unknown change with no spec inputs' || exit 1
+compare_bounds unavailable 'actual child record missing or unrecoverable'
+ID=001-record-only
+
+it 'A failing, truncated, or malformed HEAD inventory is unavailable and does not erase BASE bounds'
+git checkout -q --detach "$BASE" || exit 1
+printf '# Product\n\n- **C-01 Base promise**: Scope: all.\n' > specs/product.md
+git add specs/product.md && git commit -qm 'record a BASE bound' || exit 1
+BASE="$(git rev-parse HEAD)"
+printf 'after\n' > label.txt
+git commit -qam 'enumeration failure control' || exit 1
+fault_bin="$(mktemp -d)"; track_tmp "$fault_bin"
+real_git="$(command -v git)"
+fault_head="$(git rev-parse HEAD)"
+for fault in fail truncated malformed; do
+    {
+        printf '#!/usr/bin/env bash\nreal=%q\nhead=%q\nfault=%q\n' "$real_git" "$fault_head" "$fault"
+        cat <<'EOF'
+case " $* " in
+    *" ls-tree -r -t -z $head -- specs ")
+        case "$fault" in
+            fail) exit 65 ;;
+            truncated) printf '040000 tree 0123456789abcdef\tspecs'; exit 0 ;;
+            malformed) printf 'bad record\000'; exit 0 ;;
+        esac ;;
+esac
+exec "$real" "$@"
+EOF
+    } > "$fault_bin/git"
+    chmod +x "$fault_bin/git"
+    compare_bounds unavailable 'cannot completely enumerate spec entries' env PATH="$fault_bin:$PATH"
+    assert_contains "$(cat "$parity_pkg/bounds-base.txt")" 'C-01 Base promise'
+    assert_not_contains "$(cat "$parity_pkg/context-gaps.txt")" 'unresolved BASE obligation: cannot completely enumerate'
+done
+
+it 'Unavailable scope history is not confirmed absence'
+git rm -q "$record" && git commit -qm 'remove the record before testing a history read failure' || exit 1
+{
+    printf '#!/usr/bin/env bash\nreal=%q\n' "$real_git"
+    cat <<'EOF'
+case " $* " in
+    *" log -1 --format=%H "*) exit 65 ;;
+esac
+exec "$real" "$@"
+EOF
+} > "$fault_bin/git"
+compare_bounds unavailable 'actual child record missing or unrecoverable' env PATH="$fault_bin:$PATH"
 
 finish

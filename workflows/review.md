@@ -37,7 +37,7 @@ For focused policy context, `.prdkit/scripts/bash/role-digest.sh <role>` extract
 cite the role from working-tree policy and lists the input blobs. Use it as reading evidence,
 not instead of trusted policy, the full source, or review approval.
 
-Once per round at the exact head, if the change record exists there, run
+Once per round at the exact head, run
 `.prdkit/scripts/bash/facts.sh <change-id>` with the package's `--base` and `--head`.
 Add `--pr <number>` when the PR number and host access are available. Use the verified facts
 summary for the exact-head CI observation, including failures or **not collected**. Without
@@ -62,9 +62,10 @@ for completed local results. Ordinary attachments go directly under `evidence/`;
 final names and sources in `manifest.tsv`. `evidence/facts/` remains reserved. The helper checks
 structural accessibility, not semantic completeness. Before dispatch, check the captured obligations
 against any BASE and HEAD change records, relevant canon (including full bound bodies), and the
-parents, citations, and dependencies at both revisions. If neither revision has spec files, no
-endpoint spec bounds apply, but recovered closing records and their gaps still matter. If specs
-are added or removed, reconcile them against the other revision.
+parents, citations, and dependencies at both revisions. Treat HEAD bounds as absent only when
+the checked inventory is complete and a valid scope record exists or is recovered. Unavailable
+bounds are a gap, not absence. If specs are added or removed, reconcile them against the other
+revision.
 Check trusted policy separately, along with required verification and prior findings. Put any
 missing mandatory obligation or unresolved question inline in the dispatch prompt with its source
 path.

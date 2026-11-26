@@ -67,6 +67,8 @@ set -e
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 source "$SCRIPT_DIR/spec-lib.sh"
+source "$SCRIPT_DIR/review-policy-lib.sh"
+source "$SCRIPT_DIR/review-bounds-lib.sh"
 source "$SCRIPT_DIR/review-context-lib.sh"
 export GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1
 spec_objects_local "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || {
@@ -91,7 +93,7 @@ shift 2
 HEAD_SHA=HEAD
 if [ "$#" -gt 0 ] && [[ "$1" != --* ]]; then HEAD_SHA="$1"; shift; fi
 SINCE=""; CONTEXT=(); EVIDENCE=(); ATTACH_FACTS=false
-PACKAGE_VERSION=package13
+PACKAGE_VERSION=package14
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --facts) ATTACH_FACTS=true; shift ;;
@@ -171,18 +173,6 @@ if [ -n "$SINCE" ]; then
     fi
 fi
 
-safe_path() { # relative path, with no traversal, control chars or symlinks (unless object-only)
-    local p="$1" part current="$REPO_ROOT" rest="$1" source="${2:-worktree}"
-    case "$p" in ''|/*|*/|*//*|*[[:cntrl:]]*) return 1 ;; esac
-    while [ -n "$rest" ]; do
-        part="${rest%%/*}"
-        case "$part" in .|..) return 1 ;; esac
-        current="$current/$part"
-        [ "$source" = object ] || [ ! -L "$current" ] || return 1
-        if [ "$rest" = "$part" ]; then break; fi
-        rest="${rest#*/}"
-    done
-}
 # Repeated explicit requests are one immutable snapshot, not conflicting inventory entries.
 unique_snapshot_paths() {
     local candidate previous found
@@ -288,7 +278,7 @@ verify_inventory() { # directory patch-start head
         done
     } < "$dir/manifest.tsv"
     awk -F '\t' 'NR>1 { if (NF!=4 || seen[$1]++) bad=1 }
-        END { split("commits.txt diffstat.txt diff.patch index.md context-gaps.txt context-manifest.tsv bounds-inputs.tsv", core, " ")
+        END { split("commits.txt diffstat.txt diff.patch index.md context-gaps.txt context-manifest.tsv bounds-inputs.tsv bounds-status.txt", core, " ")
               for (i in core) if (!seen[core[i]]) bad=1; exit bad }' "$dir/manifest.tsv"
 }
 ROUND=1; COMPLETED=0; COMPLETED_HEAD=""; COMPLETED_BASE=""; COMPLETED_TIP=""; COMPLETED_POLICY=""; COMPLETED_CONTEXT=""
@@ -438,18 +428,30 @@ done
 # Ordinary attachments share one directory. Fold ASCII case to also avoid overwrites on
 # case-insensitive checkouts; never rely on cp overwriting a second producer's evidence.
 evidence_keys=()
+if [ "${#EVIDENCE[@]}" -ne 0 ]; then
+    mkdir -p "$PACKAGE_DIR/evidence"
+    evidence_name_max="$(getconf NAME_MAX "$PACKAGE_DIR/evidence")"
+    [[ "$evidence_name_max" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: cannot determine evidence filename limit" >&2; exit 1; }
+fi
 evidence_destination() { # basename -> dest
-    local name="$1" stem="$1" ext="" n=1 candidate="$1" key previous taken
+    local name="$1" stem="$1" ext="" n=1 candidate="$1" key previous taken LC_ALL=C
+    local short='' # use an ASCII blob ID instead of splitting a long multibyte basename
     if [[ "$name" = *.* && -n "${name%.*}" ]]; then
         stem="${name%.*}"; ext=".${name##*.}"
     fi
     while :; do
+        if [ "${#candidate}" -gt "$evidence_name_max" ]; then
+            if [ -z "$short" ]; then short="$(printf '%s' "$name" | git -C "$REPO_ROOT" hash-object --stdin)"; fi
+            candidate="attachment-${short:0:8}-$n"
+            [ "${#candidate}" -le "$evidence_name_max" ] || candidate="${short:0:4}-$n"
+            [ "${#candidate}" -le "$evidence_name_max" ] || { echo "ERROR: evidence filename limit too small" >&2; return 1; }
+        fi
         key="$(printf '%s' "$candidate" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
         taken=false
         for previous in ${evidence_keys[@]+"${evidence_keys[@]}"}; do
             if [ "$previous" = "$key" ]; then taken=true; break; fi
         done
-        if ! $taken && [ ! -e "$PACKAGE_DIR/evidence/$candidate" ]; then
+        if ! $taken && [ ! -e "$PACKAGE_DIR/evidence/$candidate" ] && [ ! -L "$PACKAGE_DIR/evidence/$candidate" ]; then
             evidence_keys+=("$key")
             dest="evidence/$candidate"
             return

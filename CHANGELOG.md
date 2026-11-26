@@ -29,8 +29,10 @@ change by change.
 
 ### Fixed
 
-- Exact-head facts no longer report a bounds collection failure when a valid change record
-  has no spec inputs for bounds.
+- Exact-head facts and review packages share a checked bounds inventory and scope validation.
+  No spec inputs with a valid scope means absent; incomplete inputs or invalid or missing
+  scope mean unavailable. Colliding evidence names use a short hashed fallback when a
+  numeric suffix would exceed the destination's filename limit.
 - Review packages no longer require full context just because neither revision has spec bounds.
   A missing or unrecoverable child record still produces the usual warning.
   Historical records and diagnostics remain review evidence, including for same-ID follow-ups.
