@@ -730,6 +730,11 @@ for value in '[]' 'null' '""' 'Read,,Bash' 'Read, Read' 'Read(Bash *)' '*tools';
         "$P/map-least" > "$MAP"
     blocked "Claude tools must be a nonempty comma-separated allowlist"
 done
+awk '/^\| deep / { sub(/Read, Grep, Glob, New_Tool-v2/, "Read, Grep, Glob, Bash(git diff*)") } { print }' \
+    "$P/map-least" > "$MAP"
+blocked "The Claude tools column accepts tool names, not Bash(...) command restrictions"
+assert_contains "$OUTPUT" "Omit Bash from the reviewer allowlist; the review package has the diff and context."
+assert_contains "$OUTPUT" "project-wide Claude Code permissions.deny or a project-owned PreToolUse hook"
 cp "$P/map-least" "$MAP"
 for setting in 'disallowedTools: Read' $'disallowedTools:\n  - Grep' 'disallowedTools: [Glob, Other]'; do
     EXTRA="$setting" awk '/^color:/ { print ENVIRON["EXTRA"] } { print }' "$P/prior-policy" > "$C"

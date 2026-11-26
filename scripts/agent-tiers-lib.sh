@@ -159,6 +159,10 @@ at_tier_map_records() { # file [awk skip_fence(line) function]
                 print "projectionbad", NR, "Claude effort must be low, medium, high, xhigh or max"
             else if (permissions == "!")
                 print "projectionbad", NR, (scoped ? "OpenCode permission rules must be a nonempty list of {action, resource, effect} entries with a valid action, a glob string, and allow or deny" : "OpenCode permissions must be deny or a comma-separated list of distinct action names (no wildcards or placeholders)")
+            else if (tools == "!" && raw[6] ~ /(^|,)[ \t]*Bash[ \t]*\(/)
+                print "projectionbad", NR, ("The Claude tools column accepts tool names, not Bash(...) command restrictions." \
+                    " Omit Bash from the reviewer allowlist; the review package has the diff and context." \
+                    " For command limits, use project-wide Claude Code permissions.deny or a project-owned PreToolUse hook.")
             else if (tools == "!")
                 print "projectionbad", NR, "Claude tools must be a nonempty comma-separated allowlist of distinct tool names"
             else if (tier == "*" && (effort != "" || permissions != "" || tools != ""))

@@ -94,6 +94,14 @@ work. Use the **local** tier from the neutral definition, not its mapped library
   The renderer saves any previous native `tools:` in ownership comments. Keep those comments
   intact: on opt-out it restores the original field, or removes `tools:` if it was absent.
   It still applies any active skill declaration to the restored tools.
+  For reviewers, keep the allowlist but omit `Bash`: the review package carries the diff
+  and context. `Bash(...)` in `tools:` is not a supported command limit, and a scoped entry
+  in `disallowedTools:` removes the whole tool. For command-level limits, use
+  [`permissions.deny`](https://code.claude.com/docs/en/permissions.md#bash) in project settings
+  (applies to the main session and all subagents), or add a project-owned
+  [`PreToolUse` hook](https://code.claude.com/docs/en/sub-agents.md#hooks-in-subagent-frontmatter)
+  to the agent's `hooks:` with matcher `Bash`. Use an executable script that exits `2` to
+  block a command, and verify the hook runs in the trusted workspace. The kit does not generate hooks.
 - **OpenCode permissions** opts that tier into **OpenCode V2**. `deny` blocks all actions.
   A comma-separated list adds allows for those exact action names, for **all** their resources.
   Names use lowercase letters, digits and underscores and start with a letter. No wildcards.
@@ -125,6 +133,18 @@ For example, this **OpenCode permissions** cell grants `read` except for `.env` 
 
 Project-owned agent definitions on a shared tier inherit its permissions and tools. Put an
 agent that needs to edit or run shell commands on a maker tier that grants those operations.
+To bound a maker tier's shell in OpenCode V2, put a shell deny-all before any shell allows
+in its **OpenCode permissions** cell. Replace the placeholder commands with patterns your
+project chooses and include any other permissions the maker needs in the same list:
+
+```text
+[{action: shell, resource: "*", effect: deny}, {action: shell, resource: "your-check-command", effect: allow}, {action: shell, resource: "your-build-command *", effect: allow}]
+```
+
+[OpenCode matches](https://opencode.ai/docs/permissions#matching) each command extracted by
+its shell scanner. The exact pattern allows only that command with no arguments; the
+trailing ` *` pattern also matches the command with no arguments. The kit does not install a
+maker allowlist, and Claude's tier tool list cannot scope commands per agent (see above).
 Tools and permission patterns are not a sandbox; in particular, Claude's `Bash` can modify files.
 
 When opting into effort, tools or permissions, use a simple YAML block mapping and replace any
