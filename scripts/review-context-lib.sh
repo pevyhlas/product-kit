@@ -308,15 +308,6 @@ context_compare_bound() {
     fi
 }
 
-context_bounds_for_root() { # material-root scope capture-complete
-    local listed
-    if "$3" && listed="$(verify_lines spec_files "$1")" && [ -z "$listed" ]; then
-        printf 'No spec bounds apply at this revision.\n'
-    else
-        bounds_for_root "$1" "$2"
-    fi
-}
-
 context_review_bounds() { # record path and resolution at HEAD (possibly historical)
     local path="$1" rev="$2"
     local base_bounds="$PACKAGE_DIR/bounds.txt" base_scope="$CHANGE_ID" head_scope="$CHANGE_ID"
@@ -324,7 +315,7 @@ context_review_bounds() { # record path and resolution at HEAD (possibly histori
     [ -n "$rev" ] || head_scope=--all
     : > "$CTX_TMP/head-bound-ids"
     if { [ -n "$rev" ] || $head_unscoped; } &&
-        (context_bounds_for_root "$CTX_TMP/material" "$head_scope" "$head_capture") > "$PACKAGE_DIR/bounds.txt" 2> "$PACKAGE_DIR/bounds.stderr"; then
+        (bounds_for_root "$CTX_TMP/material" "$head_scope" "$head_capture") > "$PACKAGE_DIR/bounds.txt" 2> "$PACKAGE_DIR/bounds.stderr"; then
         awk '/^- [CNQ]-[0-9]/ { print $2 }' "$PACKAGE_DIR/bounds.txt" > "$CTX_TMP/head-bound-ids"
     else head_bounds_ok=false; context_gap bounds "bounds unavailable; inspect bounds.stderr"; fi
     # Fast path: identical relevant spec tree and child. If the child did not yet exist at
@@ -344,7 +335,7 @@ context_review_bounds() { # record path and resolution at HEAD (possibly histori
             reference_side=BASE context_gap bounds "BASE spec ID inventory incomplete at $BASE_SHA"
             base_capture=false
         fi
-        if ! (context_bounds_for_root "$base_material" "$base_scope" "$base_capture") > "$base_bounds" 2> "$PACKAGE_DIR/bounds-base.stderr"; then
+        if ! (bounds_for_root "$base_material" "$base_scope" "$base_capture") > "$base_bounds" 2> "$PACKAGE_DIR/bounds-base.stderr"; then
             reference_side=BASE context_gap bounds "BASE bounds unavailable; inspect bounds-base.stderr"
         fi
         for file in bounds-base-inputs.tsv bounds-base.txt bounds-base.stderr; do
@@ -563,7 +554,7 @@ context_emit_references() {
 review_context_build() {
     local path blob base_blob record record_rev last count a entry base_material base_items hist_material reference_side
     local shared_inputs=false explicit_kind explicit_rev spec_presence base_specs head_specs
-    local head_capture=true head_unscoped=false history_ok=true
+    local head_capture=true head_unscoped=false
     base_reference_gap=false
     undefined_link_gap=false
     no_spec_files=false
@@ -580,33 +571,34 @@ review_context_build() {
     head_specs="$spec_presence"
     if [ "$base_specs" = absent ] && [ "$head_specs" = absent ]; then no_spec_files=true; fi
     record="specs/changes/$CHANGE_ID.md"; record_rev="$HEAD_SHA"
-    if $no_spec_files; then
+    if ! context_object "$record_rev" "$record" >/dev/null; then
         record_rev=""
-    elif ! context_object "$record_rev" "$record" >/dev/null; then
         entry="$(git -C "$REPO_ROOT" ls-tree "$HEAD_SHA" -- ":(literal)$record" 2>/dev/null)" || entry=unreadable
         if [ -n "$entry" ]; then
-            record_rev=""; context_gap child "actual child record is unsafe/unreadable at HEAD: $record; no historical substitution"
-        else
-            last="$(git -C "$REPO_ROOT" log -1 --format=%H "$HEAD_SHA" -- "$record" 2>/dev/null)" || history_ok=false
-            if [ -n "$last" ] && context_object "$last^" "$record" >/dev/null; then
-                record_rev="$(git -C "$REPO_ROOT" rev-parse "$last^")"
-            else
+            context_gap child "actual child record is unsafe/unreadable at HEAD: $record; no historical substitution"
+        elif ! last="$(git -C "$REPO_ROOT" log -1 --format=%H "$HEAD_SHA" -- "$record" 2>/dev/null)"; then
+            context_gap child "cannot inspect child record history at $HEAD_SHA:$record"
+        elif [ -n "$last" ]; then
+            # Even with two empty endpoint trees, a closing change may have historical scope.
+            if ! record_rev="$(git -C "$REPO_ROOT" rev-parse --verify "$last^" 2>/dev/null)" ||
+                ! context_object "$record_rev" "$record" >/dev/null; then
                 record_rev=""
-                # With no specs on one side, a canon-only addition/removal needs no invented
-                # acceptance record. A known record that cannot be recovered is still a gap.
-                if ! $history_ok || [ -n "$last" ] || { [ "$base_specs" != absent ] && [ "$head_specs" != absent ]; }; then
-                    context_gap child "actual child record missing or unrecoverable: $record"
-                else
-                    head_unscoped=true
-                fi
+                context_gap child "actual child record missing or unrecoverable: $record"
             fi
+        elif [ "$base_specs" != absent ] && [ "$head_specs" != absent ]; then
+            context_gap child "actual child record missing or unrecoverable: $record"
+        else
+            # A canon-only addition/removal needs no invented acceptance record.
+            head_unscoped=true
         fi
     fi
     # Materialize canon from H; bounds scope alone may use the recovered historical child.
     # No checkout, index, hooks or candidate helper is used.
     printf 'path\tsource_rev\tsource_blob\n' > "$PACKAGE_DIR/bounds-inputs.tsv"
-    if ! $no_spec_files; then context_review_child "$record" "$record_rev"; fi
-    if [ -n "$record_rev" ] && ! context_collect_record "$record_rev" "$record" "$CTX_TMP/material" bounds-inputs.tsv; then
+    if ! $no_spec_files || [ -n "$record_rev" ]; then context_review_child "$record" "$record_rev"; fi
+    # With two empty endpoints, the recovered record feeds historical references only.
+    if ! $no_spec_files && [ -n "$record_rev" ] &&
+        ! context_collect_record "$record_rev" "$record" "$CTX_TMP/material" bounds-inputs.tsv; then
         context_gap child "unreadable child record $record_rev:$record"
         record_rev=""
     fi
@@ -662,7 +654,7 @@ review_context_build() {
         fi
         if context_collect_record "$record_rev" "$record" "$hist_material" ""; then
             context_reference_record "$record_rev" "$hist_material" "$CTX_TMP/historical-items" "$record"
-        else context_gap child "cannot materialize historical references at $record_rev:$record"
+        else context_gap child "unreadable child record $record_rev:$record; cannot materialize historical references"
         fi
     fi
     reference_side=

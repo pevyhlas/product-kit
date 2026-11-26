@@ -32,11 +32,11 @@ CRLF; the original artifact stays byte-for-byte. Otherwise, reviewers open
 other files only to investigate a finding or resolve an obligation. The dispatcher still supplies
 mandatory obligations and unresolved questions that automatic capture missed.
 
-If neither BASE nor HEAD has spec files, including change records, the index states that no spec
-bounds apply. Missing spec context does not force extra reads in that case. Present but unsafe or
-unreadable inputs still produce gaps, as do spec references that cannot be resolved. When a change
-introduces the first specs or removes the last ones, the populated side is still captured: new
-specs are proposed, and removed BASE specs remain binding evidence for the review.
+If neither BASE nor HEAD has spec files, the index states that no endpoint spec bounds apply.
+Absence alone does not force extra reads. A closing change can still supply historical scope
+and reference gaps, not binding BASE acceptance. Present but unsafe or unreadable inputs still
+produce gaps. When a change introduces the first specs or removes the last ones, new specs are
+proposed and removed BASE specs remain binding evidence for the review.
 
 ## What is automatic
 
@@ -60,11 +60,13 @@ The four-column `manifest.tsv` inventories artifacts. `context-manifest.tsv` add
   scope when bounds inputs exist (a recovered scope record keeps its historical binding). When
   relevant inputs differ, `bounds-base.txt` and `bounds-base-inputs.tsv` capture the BASE scope
   independently. With no BASE child record, all BASE bounds are considered conservatively. An
-  empty side has no spec bounds. The package compares bound bodies by ID across both revisions,
-  including IDs that dropped out of candidate scope;
+  empty side has no spec bounds, but any scoped record header is still validated. The package
+  compares bound bodies by ID across both revisions, including IDs that dropped out of
+  candidate scope;
 - trusted constitution and any registry/config at `policy_at`; BASE and HEAD product/architecture
   canon and `specs/design.md` where present, and conservative part/cross-interface context. The
-  full diff remains authoritative for what changed.
+  full diff remains authoritative for what changed. Absent conventional canon and optional
+  registry/config files are not gaps, even if other specs exist.
 
 Ambiguous IDs/headings, missing/unsafe objects, unsupported links and unverified verification
 are recorded in `context-gaps.txt`, not silently discarded. Explicit snapshots keep their
@@ -80,9 +82,12 @@ retaining each obligation's provenance. Final artifact bytes/hashes are checked 
 Spec enumeration uses literal NUL-delimited Git paths; rejected entries remain named gaps.
 
 A clean full package can be reused only for the same head, range, trusted base and policy
-after checking its artifact inventory. Extra context, evidence or a focused delta needs a fresh package. A different
-head can be packaged even if only the record changed. Interrupted rounds retain their number
-and evidence. A completion binding is written last by same-directory rename.
+after checking its artifact inventory. This builder can create a fresh round for a head
+packaged with the older format. Old rounds and evidence are preserved; no migration is
+needed, and rebuilding is not an approval. Extra context, evidence or a focused delta needs
+a fresh package. A different head can be packaged even if only the record changed.
+Interrupted rounds retain their number and evidence. A completion binding is written last
+by same-directory rename.
 
 All existing guard leaves (regular, directory, FIFO or symlink, including dangling/nonregular
 targets) refuse without opening or reclaiming them. Directory creation and a same-filesystem

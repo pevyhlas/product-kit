@@ -60,7 +60,8 @@ for completed local results; ordinary evidence cannot occupy `evidence/facts/`. 
 structural accessibility, not semantic completeness. Before dispatch, check the captured obligations
 against any BASE and HEAD change records, relevant canon (including full bound bodies), and the
 parents, citations, and dependencies at both revisions. If neither revision has spec files, no
-spec bounds apply; if specs are added or removed, reconcile them against the other revision.
+endpoint spec bounds apply, but recovered closing records and their gaps still matter. If specs
+are added or removed, reconcile them against the other revision.
 Check trusted policy separately, along with required verification and prior findings. Put any
 missing mandatory obligation or unresolved question inline in the dispatch prompt with its source
 path.

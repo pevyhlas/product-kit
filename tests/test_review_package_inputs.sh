@@ -112,11 +112,11 @@ reject_reserved() {
     assert_contains "$OUTPUT" "conflicting --evidence $path"
 }
 
-[ "$#" -gt 0 ] || set -- context paths facts obligations no-specs reconcile references reference-style plain-brackets edge-blanks nontext
+[ "$#" -gt 0 ] || set -- context paths facts obligations no-specs empty-endpoints reconcile references reference-style plain-brackets edge-blanks nontext
 for mode in "$@"; do
     case "$mode" in
         obligations|reconcile|references|reference-style|plain-brackets|edge-blanks|nontext) setup_small ;;
-        no-specs) setup_no_specs ;;
+        no-specs|empty-endpoints) setup_no_specs ;;
         *) setup ;;
     esac
     # The default exercises installed behavior; the override supports replay against a prior builder.
@@ -216,6 +216,78 @@ EOF
                 assert_not_contains "$(obligations_section)" "$no_specs"
                 assert_contains "$(obligations_section)" '**Required full context:** A BASE obligation could not be resolved.'
                 assert_contains "$(non_verification_gaps)" 'canon unresolved BASE obligation: cannot completely enumerate spec entries'
+            fi ;;
+        empty-endpoints)
+            record="specs/changes/$ID.md"
+            it "Closing with two spec-free endpoints keeps historical scope and references, not endpoint bounds"
+            mkdir -p specs/changes
+            printf '# Product\n\n## Contract\n\nHistorical contract body.\n' > specs/product.md
+            printf '# Change\n\n**Tier**: T1\n\n## Acceptance\n\nHistorical acceptance. See [contract](../product.md#contract).\n' > "$record"
+            git add specs && git commit -qm 'open selected record' || exit 1
+            historical="$(git rev-parse HEAD)"
+            git rm -q "$record" specs/product.md || exit 1
+            advance 'close selected record'
+            assert_eq '' "$(git ls-tree -r --name-only "$BASE" -- specs)" 'BASE has no specs'
+            assert_eq '' "$(git ls-tree -r --name-only HEAD -- specs)" 'HEAD has no specs'
+            if build; then
+                section="$(obligations_section)"
+                assert_contains "$section" 'No spec files at BASE or HEAD; no spec bounds apply.'
+                assert_contains "$section" 'Historical child record — scope evidence only, not a substitute for BASE'
+                assert_contains "$section" 'Historical acceptance.'
+                assert_contains "$section" 'Historical contract body.'
+                assert_contains "$(cat "$PKG/context-manifest.tsv")" "$historical"$'\t'"$record"
+                assert_eq '' "$(non_verification_gaps)" 'clean history requires no extra reads'
+                assert_not_contains "$section" '**Required full context:**'
+                assert_eq absent "$([ -e "$PKG/bounds.txt" ] || [ -e "$PKG/bounds-base.txt" ] && echo present || echo absent)" 'no endpoint bounds inventories'
+                assert_eq 1 "$(wc -l < "$PKG/bounds-inputs.tsv" | tr -d ' ')" 'historical record is not an endpoint bounds input'
+            fi
+
+            it "A non-text historical child remains a gap with two spec-free endpoints"
+            mkdir -p specs/changes
+            printf '# Change\n\nUnreadable\000record.\n' > "$record"
+            git add "$record" && git commit -qm 'record unreadable scope' || exit 1
+            historical="$(git rev-parse HEAD)"
+            git rm -q "$record" || exit 1
+            advance 'close unreadable record'
+            if build; then
+                assert_contains "$(obligations_section)" 'No spec files at BASE or HEAD; no spec bounds apply.'
+                assert_contains "$(non_verification_gaps)" "unreadable child record $historical:$record"
+                assert_not_contains "$(non_verification_gaps)" 'bounds unavailable'
+            fi
+
+            it "A failed history lookup with empty endpoints remains a gap"
+            shim="$(mktemp -d)"; track_tmp "$shim"
+            export FIXTURE_GIT
+            FIXTURE_GIT="$(command -v git)"
+            cat > "$shim/git" <<'EOF'
+#!/usr/bin/env bash
+if [ "${3:-}" = log ] && [ "${4:-}" = -1 ] && [ "${5:-}" = --format=%H ]; then
+    exit 1
+fi
+exec "$FIXTURE_GIT" "$@"
+EOF
+            chmod +x "$shim/git"
+            if PATH="$shim:$PATH" build --evidence src/app.txt; then
+                assert_contains "$(non_verification_gaps)" "cannot inspect child record history at $(git rev-parse HEAD):$record"
+                assert_not_contains "$(non_verification_gaps)" 'bounds unavailable'
+            fi
+
+            it "An empty bounds inventory does not bypass validation of a record header"
+            mkdir -p specs/changes
+            printf '# Change\n\n**Tier**: T1\n**Parts**: P1\n**Parts**: P2\n\n## Acceptance\n\nKeep the public label.\n' > "$record"
+            git add "$record" && git commit -qm 'record ambiguous scope' || exit 1
+            if build; then
+                assert_contains "$(obligations_section)" 'Child record — Proposed by this change'
+                assert_contains "$(non_verification_gaps)" 'bounds bounds unavailable; inspect bounds.stderr'
+                assert_contains "$(cat "$PKG/bounds.stderr")" 'Duplicate Parts field'
+                assert_not_contains "$(cat "$PKG/bounds.txt")" 'No spec bounds apply'
+            fi
+            BASE="$(git rev-parse HEAD)"
+            advance 'change code with the same invalid scope'
+            if build; then
+                assert_contains "$(obligations_section)" '**Required full context:** A BASE obligation could not be resolved.'
+                assert_contains "$(non_verification_gaps)" 'bounds unresolved BASE obligation: shared bounds unavailable'
+                assert_contains "$(cat "$PKG/bounds.stderr")" 'Duplicate Parts field'
             fi ;;
         context)
             it "Generated context cannot overwrite explicit whole-file context"

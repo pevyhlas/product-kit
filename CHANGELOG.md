@@ -20,7 +20,11 @@ change by change.
 
 ### Fixed
 
-- Small changes in repositories with no spec files at either revision no longer require full review context for nonexistent bounds or canon. The package says no spec bounds apply, while retaining unreadable spec inputs as gaps and preserving the obligations from specs added or removed by the change.
+- Review packages no longer require full context just because neither revision has spec bounds.
+  Closing records and their diagnostics are still captured, and added or removed specs are still
+  reviewed. Absent conventional canon and optional trusted registry/config files no longer create
+  gaps, even in repositories with specs. Rebuild an already-packaged head to get a fresh round
+  without updating or losing earlier evidence; no migration is needed.
 
 ## [3.2.0] — 2026-11-26 — lean review package
 
