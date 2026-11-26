@@ -11,6 +11,10 @@ change by change.
 
 ## [Unreleased]
 
+### Changed
+
+- The adoption guide explains how to bootstrap the review gate and when default-branch policy changes take effect.
+
 ## [3.2.0] — 2026-11-26 — lean review package
 
 ### Changed
