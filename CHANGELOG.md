@@ -18,6 +18,16 @@ change by change.
   The customization guide also shows how to opt into scoped OpenCode V2 maker shell rules.
 - The adoption guide explains how to bootstrap the review gate and when default-branch policy changes take effect.
 
+### Fixed
+
+- Review packages no longer require full context just because neither revision has spec bounds.
+  A missing or unrecoverable child record still produces the usual warning.
+  Historical records and diagnostics remain review evidence, including for same-ID follow-ups.
+  Absent conventional canon and optional trusted registry/config no longer create gaps, even
+  in repositories with specs. Heads packaged in the older format can get a fresh
+  round without migrating or changing earlier evidence. Identical rebuilds of a clean,
+  matching current-format round are still refused.
+
 ## [3.2.0] — 2026-11-26 — lean review package
 
 ### Changed
