@@ -318,6 +318,15 @@ assert_eq 1 "$STATUS"
 assert_contains "$OUTPUT" 'list findings in Critical, High, Medium, Low order'
 assert_not_contains "$OUTPUT" 'last line must match the findings' "the count can still match"
 
+it "the installed lean prompt preserves report format and never equates unverified facts with PASS"
+prompt="$PROJ/.prdkit/templates/review-prompt-template.md"
+assert_contains "$(tr '\n' ' ' < "$prompt")" 'Unresolved context and unverified evidence remain gaps, never PASS'
+# shellcheck disable=SC2016 # Literal Markdown path.
+assert_contains "$(cat "$prompt")" 'Open `evidence/facts/index.json` only for needed detail'
+{ report; sed -n '/^Verdict: PASS$/p; /^Counts: 0 critical, 0 high, 0 medium, 0 low$/p' "$prompt"; } > "$INPUT"
+run lint --strict --rigor full
+assert_eq 0 "$STATUS" 'the prompt trailer example still lints against the scaffold format'
+
 it "lint diagnoses each malformed field and reconciles actual finding counts"
 {
     report

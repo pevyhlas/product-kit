@@ -81,7 +81,7 @@ integrity() {
     assert_eq 0 "$(cut -f1 "$PKG/manifest.tsv" | LC_ALL=C sort | uniq -d | wc -l | tr -d ' ')" 'no conflicting artifact names'
 }
 
-[ "$#" -gt 0 ] || set -- context paths
+[ "$#" -gt 0 ] || set -- context paths facts
 for mode in "$@"; do
     setup
     case "$mode" in
@@ -129,6 +129,42 @@ for mode in "$@"; do
                 assert_contains "$(cat "$PKG/context-manifest.tsv")" 'specs/product/constraints/é.md' 'literal source path provenance'
                 assert_contains "$(find "$PKG" -type f -name '*.txt' -exec cat {} \;)" CHANGED_LITERAL_BODY 'changed literal canon supplied'
                 assert_contains "$(cat "$PKG/context-gaps.txt")" 'unsafe spec input' 'unsupported control path has explicit rejection gap'
+                integrity
+            fi ;;
+        facts)
+            it "Only copied facts get a spot in the default reading list"
+            if build; then
+                assert_eq '1. [diff.patch](diff.patch) — the full change, not just a summary.' \
+                    "$(sed -n '/^## Open first/,/^## Open only/{
+                        /^[0-9][0-9]*\. /p
+                    }' "$PKG/index.md")" \
+                    'no default read of absent facts or bundled context'
+                assert_contains "$(cat "$PKG/index.md")" '## Open only if a finding needs it'
+            fi
+            cache=".prdkit/cache/evidence/$ID/facts"
+            mkdir -p "$cache" facts proof
+            printf 'Example summary\n' > "$cache/summary.md"
+            run bash "$BUILD" "$ID" "$BASE" --facts
+            assert_eq 1 "$STATUS" 'a partial pair cannot be attached'
+            assert_contains "$OUTPUT" "$cache/index.json"
+            printf 'Example index\n' > "$cache/index.json"
+            printf 'Other evidence\n' > proof/result.txt
+            printf 'Conflicting evidence\n' > facts/summary.md
+            run bash "$BUILD" "$ID" "$BASE" --facts --evidence facts/summary.md
+            assert_eq 1 "$STATUS" 'ordinary evidence cannot overwrite the reserved pair'
+            assert_contains "$OUTPUT" 'conflicting --evidence facts/summary.md'
+            if build --facts --evidence proof/result.txt; then
+                assert_eq 2 "$(jq .ROUND <<<"$OUTPUT")" 'validation failures do not allocate a round'
+                assert_eq $'diff.patch\nevidence/facts/summary.md' "$(sed -n '/^## Open first/,/^## Open only/s/^[0-9][0-9]*\. \[\([^]]*\)\].*/\1/p' "$PKG/index.md")" 'exact default read order'
+                assert_contains "$(cat "$PKG/index.md")" 'no other file is a default read'
+                assert_file "$PKG/evidence/proof/result.txt"
+                assert_file "$PKG/bounds.txt"
+                assert_file "$PKG/bounds-inputs.tsv"
+                assert_contains "$(cat "$PKG/context-manifest.tsv")" 'trusted default-branch policy'
+                for name in summary.md index.json; do
+                    assert_file "$PKG/evidence/facts/$name"
+                    assert_contains "$(cat "$PKG/manifest.tsv")" "caller-supplied:$cache/$name"
+                done
                 integrity
             fi ;;
         *) echo "unknown fixture group: $mode" >&2; exit 2 ;;

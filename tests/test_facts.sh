@@ -41,12 +41,11 @@ it 'installed help names both evidence files and verification'
 run bash "$BIN/facts.sh" --help
 assert_eq 0 "$STATUS"
 assert_contains "$OUTPUT" '--verify'
-assert_contains "$OUTPUT" "build-review-package.sh \"\$id\" \"\$base\" \"\$head\" --evidence"
-assert_contains "$OUTPUT" '/facts/index.json'
+assert_contains "$OUTPUT" "build-review-package.sh \"\$id\" \"\$base\" \"\$head\" --facts"
+assert_contains "$OUTPUT" 'evidence/facts/{summary.md,index.json}'
 run bash "$BIN/build-review-package.sh" --help
 assert_eq 0 "$STATUS"
-assert_contains "$OUTPUT" '/facts/summary.md'
-assert_contains "$OUTPUT" '/facts/index.json'
+assert_contains "$OUTPUT" 'evidence/facts/{summary.md,index.json}'
 
 it 'verify reports an absent pack as drift without creating it'
 run bash "$BIN/facts.sh" --verify "$ID"
@@ -65,7 +64,7 @@ assert_contains "$(cat "$SUMMARY")" 'Does not answer design fit, correctness, or
 assert_contains "$(cat "$SUMMARY")" 'not a gate decision'
 assert_contains "$(cat "$SUMMARY")" '[index.json](index.json)'
 assert_eq true "$(jq --arg base "$BASE" --arg head "$HEAD_SHA" '
-    .key == {base:$base, head:$head, version:3}
+    .key == {base:$base, head:$head, version:4}
     and (.facts.doctor.details.advisories | type == "array")
     and .facts.doctor.command[-1] == "--json"
     and .facts.adoption.details.source_verification == "not-requested"
@@ -74,6 +73,7 @@ assert_eq true "$(jq --arg base "$BASE" --arg head "$HEAD_SHA" '
     and .inputs.config == {kind:"absent"} and .facts.path_checks.rules == null
     and .facts.path_checks.paths["src/deleted.txt"] == []
     and .facts.ci.result == "not collected: no --pr supplied" and .facts.ci.exit_status == null
+    and ([.facts[] | select(has("command"))] | length == 6 and all(.audience == "maintainer-rerun-only"))
 ' "$INDEX")"
 assert_eq '' "$(cat "$GH_STUB_DIR/requests")" 'no host call without --pr'
 
@@ -95,14 +95,22 @@ cp -R "$PROJ/." "$relocated/" || exit 1
 run bash "$relocated/$BIN/facts.sh" --verify "$ID"
 assert_eq 0 "$STATUS" "$OUTPUT"
 
-it 'both pack files attach byte-for-byte through ordinary package evidence'
-run bash "$BIN/build-review-package.sh" "$ID" "$BASE" "$HEAD_SHA" --evidence "$SUMMARY" --evidence "$INDEX"
+it 'the round attaches the bound facts pair at shallow, relative paths'
+run bash "$BIN/build-review-package.sh" "$ID" "$BASE" "$HEAD_SHA" --facts
 assert_eq 0 "$STATUS" "$OUTPUT"
-pkg="$(jq -r '.PACKAGE_DIR' <<< "$OUTPUT")"
+pkg="$(jq -r '.PACKAGE_DIR' <<< "$OUTPUT")"; paired="$pkg/evidence/facts"
 for file in "$SUMMARY" "$INDEX"; do
-    run cmp "$file" "$pkg/evidence/$file"
+    run cmp "$file" "$paired/${file##*/}"
     assert_eq 0 "$STATUS" "attached $file: $OUTPUT"
+    assert_eq absent "$([ -e "$pkg/evidence/$file" ] || echo absent)" "no nested duplicate for $file"
 done
+if [ -f "$paired/index.json" ] && [ -f "$paired/summary.md" ]; then
+    assert_eq true "$(jq --arg id "$ID" --arg base "$BASE" --arg head "$HEAD_SHA" '
+        .change_id == $id and .key.base == $base and .key.head == $head
+    ' "$paired/index.json")" "copied pair binds the exact change and range"
+    copied_hash="$(python3 -I -B -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$paired/index.json")"
+    assert_contains "$(cat "$paired/summary.md")" "SHA-256 \`$copied_hash\`" "summary binds raw copied index bytes"
+fi
 
 it 'invalid IDs and refs refuse; live worktree and index edits do not affect facts'
 for bad in '../001-facts' '111-absent'; do

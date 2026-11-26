@@ -22,12 +22,24 @@ sed 's/line 15/changed fifteen/' src/app.txt > src/new; mv src/new src/app.txt; 
 F1="$(git rev-parse HEAD)"
 first="$(bash "$SCRIPT" 001-equal "$BASE")"; PKG="$(printf '%s' "$first" | jq -r .PACKAGE_DIR)"
 ROOT="$(dirname "$PKG")"
+it "An old, otherwise valid package is regenerated without editing its files"
+# Simulate a package written before the lean navigation contract.
+sed 's/^package6/package5/' "$PKG/completed.tsv" > "$P/old-binding"
+cp "$P/old-binding" "$PKG/completed.tsv"
+old_snapshot="$(package_snapshot "$PKG")"
+run bash "$SCRIPT" 001-equal "$BASE"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq 2 "$(jq .ROUND <<<"$OUTPUT")" 'same source may get the new package format'
+assert_eq "$old_snapshot" "$(package_snapshot "$PKG")" 'old round left byte-exact'
+run bash "$SCRIPT" 001-equal "$BASE"
+assert_eq 1 "$STATUS" 'current format retains exact-head duplicate refusal'
+assert_contains "$OUTPUT" 'no round needed'
 it "A new exact head can be packaged even when only the record changed"
 printf '\nrecord note\n' >> specs/changes/001-equal.md; git commit -qam metadata
 TIP="$BASE"
 run bash "$SCRIPT" 001-equal "$TIP" --since "$F1"
 assert_eq 0 "$STATUS" "$OUTPUT"
-assert_eq 2 "$(printf '%s' "$OUTPUT" | jq .ROUND)" 'new review head packaged'
+assert_eq 3 "$(printf '%s' "$OUTPUT" | jq .ROUND)" 'new review head packaged'
 it "Incomplete rounds retain evidence/numbering but do not prove completion"
 printf 'fix\n' >> src/app.txt; git commit -qam fix
 mkdir "$ROOT/round-7"; printf 'interrupted evidence\n' > "$ROOT/round-7/failed.txt"

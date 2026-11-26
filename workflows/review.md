@@ -16,11 +16,13 @@ description lists it on a `Drops: <change-id> T004, T005` line. Do not check off
 or log delivered tasks.
 
 The reviewer is a fresh context that did not implement the change. Reviews are run by the worker,
-not CI. Send `.prdkit/templates/review-prompt-template.md`, the change record, the spec sections
-it touches (plus a readable `specs/` at the head, to search), the PR's context and the full diff,
-never only the implementer's summary. Before dispatch, confirm the reviewer's allowed read paths,
-shell/network access and report channel; without shell access, supply the captured `bounds.sh`
-output with its input revision/hashes.
+not CI. Send `.prdkit/templates/review-prompt-template.md` with the full `diff.patch` first and
+the verified `evidence/facts/summary.md` second, if available. For a small change, no other file
+is a default read. Keep the change record, relevant spec sections, trusted policy and PR context
+available: open only if a finding needs it or an obligation remains unresolved. Make `specs/`
+readable at the head for targeted searches when possible. Never send only the implementer's summary.
+Before dispatch, confirm the reviewer's allowed read paths, shell/network access and report channel;
+without shell access, supply the captured `bounds.sh` output with its input revision/hashes.
 
 For focused policy context, `.prdkit/scripts/bash/role-digest.sh <role>` extracts sections that
 cite the role from working-tree policy and lists the input blobs. Use it as reading evidence,
@@ -33,10 +35,13 @@ stays explicit.
 Only after collection exits 0, verify the pair before attaching: `index.json` fields `change_id`,
 `key.base` and `key.head` must match this round's ID and full base and head SHAs, and the SHA-256
 of the raw index bytes must match the hash in `summary.md`. If they match, attach both files via
-`--evidence` and recheck the copied pair before dispatch. On refusal or mismatch, omit the facts,
+`--facts`. Before dispatch, repeat the change/range and SHA-256 checks on the copies at
+`evidence/facts/summary.md` and `evidence/facts/index.json`. On refusal or mismatch, omit the facts,
 never reuse the old cache, and use verified fallback evidence; rebuild without the facts if the
 copied pair fails the check. Reviewers use the bound summary as authoritative for its captured
-answers, without re-deriving them from the spec or tree. Facts are evidence, never a gate decision.
+answers, without re-deriving them from the spec or tree. Open the verified index only for needed
+detail. Commands marked `maintainer-rerun-only` record provenance; shell-less reviewers must
+not try to run them. Facts are evidence, never a gate decision.
 CI may optionally recompute them with `facts.sh --verify`. See `docs/review-packages.md` in the kit
 source for details and `facts.sh --help` for attachment syntax.
 

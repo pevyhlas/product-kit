@@ -11,6 +11,10 @@ change by change.
 
 ## [Unreleased]
 
+### Changed
+
+- Review packages open with the full diff and the verified facts summary. The facts pair now sits under `evidence/facts/`; other evidence remains available on demand, and collector commands are marked for maintainer reruns only.
+
 ## [3.1.4] — 2026-11-26 — agent skill projection
 
 ### Added

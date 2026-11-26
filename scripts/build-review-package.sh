@@ -31,9 +31,11 @@
 #                     base as BASE to leave the base out
 #   --context PATH    Snapshot a repo-relative tracked file at HEAD (repeatable)
 #   --evidence PATH   Copy a completed repo-relative evidence file (repeatable)
+#   --facts           Copy the cached facts pair to evidence/facts/{summary.md,index.json}.
+#                     The caller must verify the pair and its binding before and after copying.
 #
 # Attach a facts.sh pack (set id, base and head to the values in the pack):
-#   bash .prdkit/scripts/bash/build-review-package.sh "$id" "$base" "$head" --evidence ".prdkit/cache/evidence/$id/facts/summary.md" --evidence ".prdkit/cache/evidence/$id/facts/index.json"
+#   bash .prdkit/scripts/bash/build-review-package.sh "$id" "$base" "$head" --facts
 #
 # ARGUMENTS:
 #   CHANGE_ID     Change id (e.g. 004-export-csv)
@@ -85,9 +87,11 @@ BASE_SHA="$2"
 shift 2
 HEAD_SHA=HEAD
 if [ "$#" -gt 0 ] && [[ "$1" != --* ]]; then HEAD_SHA="$1"; shift; fi
-SINCE=""; CONTEXT=(); EVIDENCE=()
+SINCE=""; CONTEXT=(); EVIDENCE=(); ATTACH_FACTS=false
+PACKAGE_VERSION=package6
 while [ "$#" -gt 0 ]; do
     case "$1" in
+        --facts) ATTACH_FACTS=true; shift ;;
         --since|--context|--evidence)
             [ "$#" -ge 2 ] && [ -n "$2" ] || { echo "ERROR: $1 needs a value" >&2; exit 1; }
             case "$1" in
@@ -188,6 +192,15 @@ unique_snapshot_paths() {
     done
 }
 unique_snapshot_paths ${CONTEXT[@]+"${CONTEXT[@]}"}; CONTEXT=(${SNAPSHOT_PATHS[@]+"${SNAPSHOT_PATHS[@]}"})
+FACTS_CACHE=".prdkit/cache/evidence/$CHANGE_ID/facts"
+if $ATTACH_FACTS; then
+    for p in ${EVIDENCE[@]+"${EVIDENCE[@]}"}; do
+        case "$p" in
+            facts|facts/*) echo "ERROR: --facts reserves evidence/facts/: conflicting --evidence $p" >&2; exit 1 ;;
+        esac
+    done
+    EVIDENCE+=("$FACTS_CACHE/summary.md" "$FACTS_CACHE/index.json")
+fi
 unique_snapshot_paths ${EVIDENCE[@]+"${EVIDENCE[@]}"}; EVIDENCE=(${SNAPSHOT_PATHS[@]+"${SNAPSHOT_PATHS[@]}"})
 for p in ${CONTEXT[@]+"${CONTEXT[@]}"}; do
     safe_path "$p" || { echo "ERROR: unsafe context path: $p" >&2; exit 1; }
@@ -290,7 +303,7 @@ for d in "$REVIEW_DIR"/round-*/; do
         if review_file_without_nul "$d/completed.tsv" &&
             awk -F '\t' 'NR!=1 || NF!=10 { bad=1 } END { exit (bad || NR!=1) }' "$d/completed.tsv" &&
             IFS=$'\t' read -r version bound_id bound_head bound_base bound_tip bound_policy bound_comparison bound_context bound_start bound_inventory < "$d/completed.tsv" &&
-            [ "$version" = package5 ] && [ "$bound_id" = "$CHANGE_ID" ] && [ "$bound_comparison" = known ] &&
+            [ "$version" = "$PACKAGE_VERSION" ] && [ "$bound_id" = "$CHANGE_ID" ] && [ "$bound_comparison" = known ] &&
             [[ "$bound_start" =~ ^[0-9a-f]{40}$ && "$bound_inventory" =~ ^[0-9a-f]{40}$ ]] &&
             [[ "$bound_head" =~ ^[0-9a-f]{40}$ && "$bound_tip" =~ ^[0-9a-f]{40}$ && "$bound_policy" =~ ^[0-9a-f]{40}$ ]] &&
             [[ "$bound_base" == refs/remotes/* && ( "$bound_context" = full || "$bound_context" = custom ) ]]; then
@@ -416,23 +429,58 @@ for p in ${CONTEXT[@]+"${CONTEXT[@]}"}; do
     inventory "context/$p" "$HEAD_SHA:$p"
 done
 for p in ${EVIDENCE[@]+"${EVIDENCE[@]}"}; do
+    dest="evidence/$p"
+    if $ATTACH_FACTS; then
+        case "$p" in
+            "$FACTS_CACHE/summary.md"|"$FACTS_CACHE/index.json") dest="evidence/facts/${p##*/}" ;;
+        esac
+    fi
     before="$(git -C "$REPO_ROOT" hash-object --no-filters "$REPO_ROOT/$p")"
-    mkdir -p "$(dirname "$PACKAGE_DIR/evidence/$p")"
-    cp "$REPO_ROOT/$p" "$PACKAGE_DIR/evidence/$p"
-    copied="$(git -C "$REPO_ROOT" hash-object --no-filters "$PACKAGE_DIR/evidence/$p")"
+    mkdir -p "$(dirname "$PACKAGE_DIR/$dest")"
+    cp "$REPO_ROOT/$p" "$PACKAGE_DIR/$dest"
+    copied="$(git -C "$REPO_ROOT" hash-object --no-filters "$PACKAGE_DIR/$dest")"
     after="$(git -C "$REPO_ROOT" hash-object --no-filters "$REPO_ROOT/$p")"
     if [ "$before" != "$copied" ] || [ "$before" != "$after" ]; then
         echo "ERROR: evidence changed while copying: $p; incomplete round retained" >&2; exit 1
     fi
-    inventory "evidence/$p" "caller-supplied:$p (verify producer revision/result)"
+    inventory "$dest" "caller-supplied:$p (verify producer revision/result)"
 done
 review_context_build
 inventory context-gaps.txt "unresolved required context and verification"
 inventory context-manifest.tsv "immutable object/blob/span provenance; gaps are explicit"
 
-cat > "$PACKAGE_DIR/index.md" <<EOF
-# Review package: $CHANGE_ID
+{
+    printf '# Review package: %s\n\n' "$CHANGE_ID"
+    cat <<'EOF'
+## Open first (in order)
 
+1. [diff.patch](diff.patch) — the full change, not just a summary.
+EOF
+    if $ATTACH_FACTS; then
+        cat <<'EOF'
+2. [evidence/facts/summary.md](evidence/facts/summary.md) — authoritative for the facts it lists
+   only after the coordinator verifies the copied pair for this change and range. Do not
+   re-derive those answers.
+EOF
+    fi
+    cat <<'EOF'
+
+For a small change, no other file is a default read.
+
+## Open only if a finding needs it
+
+Use the remaining files to investigate a finding or resolve a review obligation the first reads
+do not answer. Use `manifest.tsv` to locate artifacts and `context-manifest.tsv` for source
+bindings. This includes the change record, spec and policy excerpts, parent obligations, bounds
+and their inputs, other verification evidence, and `context-gaps.txt`. The facts index (if
+attached) supplies detail beyond the summary, not commands for shell-less reviewers to run.
+`commits.txt`, `diffstat.txt`, and any `delta.patch` are available for focused investigation or
+re-review. Completion and inventory metadata are for coordination, not required reviewer reads.
+
+## Package bindings
+
+EOF
+    cat <<EOF
 - Full range: $BASE_SHA..$HEAD_SHA
 - Focused delta (delta.patch): $DELTA
 - Review commit: $HEAD_SHA (only an approval on this exact PR head counts).
@@ -443,7 +491,6 @@ cat > "$PACKAGE_DIR/index.md" <<EOF
 
 ## Before dispatch
 
-Start at the index, context manifest and full diff, not the whole programme parent.
 Read the inventory. Supply the change/acceptance record, applicable canon and review policy,
 bounds output with its input revision, prior findings for re-review, and completed verification
 results (command, revision, environment, exit/result and limitations). Explicitly identify missing
@@ -454,6 +501,7 @@ this package inside that access boundary; local sibling paths are not portable e
 reviewer consumes captured bounds/results and returns its report as text when it cannot write.
 Full diff remains available; use the focused delta and affected obligations for a re-review.
 EOF
+} > "$PACKAGE_DIR/index.md"
 inventory index.md "package navigation and limitations"
 # Validate final artifacts, not just hashes recorded before later assembly steps.
 verify_inventory "$PACKAGE_DIR" "$BASE_SHA" "$HEAD_SHA"
@@ -461,7 +509,7 @@ verify_inventory "$PACKAGE_DIR" "$BASE_SHA" "$HEAD_SHA"
 # approval: reuse requires identical head, range, context, policy and intact inventory.
 comparison=unknown; [ -z "$BASE_REF" ] || comparison=known
 manifest_oid="$(git -C "$REPO_ROOT" hash-object --no-filters "$PACKAGE_DIR/manifest.tsv")"
-printf 'package5\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$CHANGE_ID" "$HEAD_SHA" "$BASE_REF" "$BASE_AT" "$POLICY_AT" "$comparison" "$reuse_context" "$BASE_SHA" "$manifest_oid" > "$PACKAGE_DIR/completed.pending"
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$PACKAGE_VERSION" "$CHANGE_ID" "$HEAD_SHA" "$BASE_REF" "$BASE_AT" "$POLICY_AT" "$comparison" "$reuse_context" "$BASE_SHA" "$manifest_oid" > "$PACKAGE_DIR/completed.pending"
 mv "$PACKAGE_DIR/completed.pending" "$PACKAGE_DIR/completed.tsv"
 
 printf '{"ROUND":%d,"BASE_SHA":"%s","HEAD_SHA":"%s","PACKAGE_DIR":"%s","REPORT_PATH":"%s","INDEX_PATH":"%s","SINCE_SHA":"%s"}\n' "$ROUND" "$BASE_SHA" "$HEAD_SHA" "$(json_escape "$PACKAGE_DIR")" "$(json_escape "$PACKAGE_DIR/report.md")" "$(json_escape "$PACKAGE_DIR/index.md")" "$SINCE"

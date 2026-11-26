@@ -4,7 +4,18 @@
 binary diff. `--since REV` adds a focused delta using the existing trusted merge-base and
 automatic-merge/fallback rules; it never replaces the full diff. `--context PATH` snapshots a
 whole tracked regular file at HEAD; `--evidence PATH` copies stable local evidence without
-certifying its revision, completion or applicability. All paths are repository-relative.
+certifying its revision, completion or applicability. `--facts` copies the exact change's
+cached pair to `evidence/facts/{summary.md,index.json}` without certifying its binding.
+All input paths are repository-relative.
+
+## Read order
+
+The package's `index.md` and the [review prompt](../templates/review-prompt-template.md) direct
+reviewers to open `diff.patch` first, then `evidence/facts/summary.md` if the coordinator verified
+the attached pair. The summary is authoritative for the facts it lists, not for correctness or
+approval. For a small change these are the only default reads. Open other files only if a finding
+needs them or a review obligation remains unanswered. Use `manifest.tsv` to find an artifact and
+`context-manifest.tsv` to check its source. The facts index is for detail omitted from the summary.
 
 ## What is automatic
 
@@ -114,13 +125,17 @@ other temporary files. The new pack can differ in size from the consumer's exist
 
 The cache contains a `summary.md` of at most 60 lines and the full `index.json`; excess detail
 is linked from the summary. The key is facts script version, base SHA, and head SHA. The index
-records commands, exit statuses and results, base/head tree IDs (which bind the committed
-files), and hashes of the path map, collector, local tools, shallow boundaries if present, and
-CI observation. Doctor evaluates the snapshot on the effective UTC date (`PRDKIT_TODAY` can
-override it); the date is hashed as an input. Unchanged inputs produce byte-identical output;
-no collection timestamp is stored. The summary contains the SHA-256 of the raw index bytes to
-detect a mixed pair. The package builder copies both files as ordinary `--evidence`; it does
-not validate their binding or make a review decision.
+records commands as provenance, each marked `"audience": "maintainer-rerun-only"`. Shell-less
+reviewers must not try to run them. The index also records exit statuses and results, base/head
+tree IDs (which bind the committed files), and hashes of the path map, collector, local tools,
+shallow boundaries if present, and CI observation. Doctor evaluates the snapshot on the effective
+UTC date (`PRDKIT_TODAY` can override it); the date is hashed as an input. Unchanged inputs
+produce byte-identical output; no collection timestamp is stored. The SHA-256 of the raw index
+bytes in the summary detects a mixed pair. Collect and check the pair, attach it with `--facts`,
+then check the copied pair at `evidence/facts/summary.md` and `evidence/facts/index.json` before
+dispatch. The builder checks copy integrity, not the pair's binding or review readiness.
+Regenerate older facts packs and review packages when preparing a package in the new layout;
+no migration is needed.
 
 The summary covers captured collector results. The bounds collector lists constraints, non-goals
 and qualities; it does not assess compliance, spec or design fit, or correctness.

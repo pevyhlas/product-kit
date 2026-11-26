@@ -19,7 +19,7 @@ import sys
 from tempfile import NamedTemporaryFile, TemporaryDirectory, TemporaryFile
 
 
-VERSION = 3
+VERSION = 4
 SUMMARY_LIMIT = 60
 CONFIG = ".prdkit/memory/review-checks.json"
 CACHE = ".prdkit/cache/evidence"
@@ -379,6 +379,9 @@ def collect(collector, snapshot, change_id, base, head, pr):
     facts["adoption"] = local_json(snapshot, ["bash", f"{SCRIPTS}/check-adoption.sh", "--json"], doctor=False)
     facts["ci"] = ci_fact(collector, snapshot, pr, head)
     facts["path_checks"] = map_paths(snapshot, span, rules, facts["ci"])
+    # Commands record collection provenance, not steps for the reviewer to execute.
+    for fact in facts.values():
+        fact["audience"] = "maintainer-rerun-only"
     require(snapshot.inputs(base, head) == inputs, "runtime inputs changed while collecting facts; retry")
     return {"change_id": change_id, "key": {"version": VERSION, "base": base, "head": head},
             "inputs": {**inputs, "config": config_stamp, "ci_sha256": digest(json_bytes(facts["ci"]))},
@@ -533,9 +536,9 @@ def main():
         prog="facts.sh", allow_abbrev=False, description="Exact-head review facts; never a gate decision.",
         formatter_class=argparse.RawDescriptionHelpFormatter, epilog=(
             f"Output: {CACHE}/<change-id>/facts/{{summary.md,index.json}}\n"
-            "Attach both files (id, base and head must match the pack):\n"
-            '  bash .prdkit/scripts/bash/build-review-package.sh "$id" "$base" "$head" '
-            f'--evidence "{CACHE}/$id/facts/summary.md" --evidence "{CACHE}/$id/facts/index.json"\n'
+            "Verify the pair for the change and range before attaching to evidence/facts/{summary.md,index.json}:\n"
+            '  bash .prdkit/scripts/bash/build-review-package.sh "$id" "$base" "$head" --facts\n'
+            "Recheck the copied pair before dispatch.\n"
             "Exit: 0 pack written or verified, 1 verification drift, 2 refusal."))
     parser.add_argument("change_id")
     parser.add_argument("--base", metavar="REV", help="base commit (default: unique merge base with origin/HEAD)")
