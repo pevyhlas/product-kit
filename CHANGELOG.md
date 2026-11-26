@@ -31,9 +31,12 @@ change by change.
   with `facts.sh` before verifying, attaching or restoring them.
 - `context-manifest.tsv` keeps its eight columns, but rows now carry BASE and HEAD provenance.
   `source_rev` is `BASE` for unchanged or binding base text, not always `HEAD`, and the
-  `obligation` labels changed (for example, an explicit `--context` snapshot that 3.1.5 labelled
-  `whole-file` or `canon` now gets a `reference-*` label). Tools that read the manifest should find explicit snapshots by `source_path` and
-  `source_blob` and read `source_rev` for provenance, not match HEAD-only rows or 3.1 labels.
+  `obligation` labels changed: an explicit `--context` snapshot, always `whole-file` in 3.1.5, is
+  now `reference-shared`, `reference-proposed` or `explicit-snapshot`, and automatic canon rows
+  labelled `canon` can become `reference-*` rows. Excerpt rows can share a snapshot's
+  `source_path` and `source_blob`. Tools that read the manifest should select an explicit snapshot
+  by its exact `artifact` path (`context/<repo-relative-path>`), then check `source_blob` and read
+  `source_rev`, not match HEAD-only rows or 3.1 labels.
 
 ## [3.1.5] — 2026-11-26 — tier least privilege
 
