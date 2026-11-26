@@ -90,7 +90,7 @@ mv config.saved .prdkit/memory/config.md
 rm specs/changes/001-demo.md specs/product.md
 rmdir specs/changes
 
-it "whole skeletons catch each slot of a partly filled line, including split spec rows"
+it "local anchors find each slot of a partly filled line, including split spec rows"
 mkdir -p specs/architecture specs/product specs/parts
 printf '# Request Service — <topic>\n' > specs/architecture/operations.md
 printf '# P<n> <part name>\n' > specs/parts/draft.md
@@ -108,7 +108,7 @@ assert_contains "$OUTPUT" 'specs/architecture/operations.md:1 (<Product>)'
 rm specs/architecture/operations.md specs/product/requirements.md specs/parts/draft.md
 rmdir specs/architecture specs/product specs/parts
 
-it "combined SPEC.md uses split skeletons only in the corresponding sections"
+it "combined SPEC.md uses split slot contexts only in the corresponding sections"
 cat > specs/SPEC.md <<'MD'
 # Request Service — spec
 
@@ -212,6 +212,110 @@ assert_contains "$OUTPUT" 'specs/product.md:5 (<assumed, desk research, observed
 assert_contains "$OUTPUT" 'specs/product.md:9 (<journey>)'
 rm specs/architecture.md specs/parts/p2.1-index.md specs/product.md
 rmdir specs/parts
+
+it "parts and journey-stage anchors ignore other columns and count each link, in either layout"
+cat > architecture.slots <<'MD'
+| Maturity | Part | Why it exists | Components | Spec |
+|----------|------|---------------|------------|------|
+| validated | P1 <name> | J-01 to J-08; R-01 to R-13 | <components> | none yet |
+| validated | P2 Client | J-01: one owner of request state (R-01, R-02, Q-01) | <components> | none yet |
+MD
+cat > journeys.slots <<'MD'
+| Area | Idea (now) | MVP |
+|------|------------|-----|
+| Requests | | [J-01 <journey>](product/journeys/j-01-submit.md) |
+| Requests | [J-01 <journey>](product/journeys/j-01-submit.md); [J-02 <journey>](product/journeys/j-02-track.md) | |
+| Requests | [J-01 Submit](product/journeys/j-01-submit.md); [J-02 Track](product/journeys/j-02-track.md) | |
+
+| Area | Idea (now) | MVP | GA |
+|------|------------|-----|----|
+| <area> | [J-01 Submit](product/journeys/j-01-submit.md) | [J-02 Track](product/journeys/j-02-track.md) | [J-03 <journey>](product/journeys/j-03-resolve.md) |
+
+| Area | Notes |
+|------|-------|
+| <area> | A literal example of <journey>. |
+
+Area | MVP
+-----|----
+Requests | [J-01 <journey>](product/journeys/j-01-submit.md)
+MD
+for layout in split combined; do
+    if [ "$layout" = split ]; then
+        { printf '# Request Service — architecture\n\n'; cat architecture.slots; } > specs/architecture.md
+        run bash "$DOCTOR" --json
+        assert_eq 3 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")" "split: three parts slots"
+        assert_contains "$OUTPUT" '(<name>)' "Part column located by name after reordering"
+        assert_contains "$OUTPUT" '(<components>)' "unrelated maturity and citation text do not hide slots"
+        { printf '# Request Service\n\n## Journeys\n\n'; cat journeys.slots; } > specs/product.md
+    else
+        {
+            printf '# Request Service — spec\n\n## Shape and parts\n\n'
+            cat architecture.slots
+            printf '\n## Journeys\n\n'
+            cat journeys.slots
+        } > specs/SPEC.md
+    fi
+    run bash "$DOCTOR" --json
+    assert_eq 9 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")" "$layout: three parts slots, six stage slots"
+    if [ "$layout" = combined ]; then
+        assert_contains "$OUTPUT" '(<name>)' "$layout: Part column located by name after reordering"
+        assert_contains "$OUTPUT" '(<components>)' "$layout: unrelated maturity and citation text do not hide slots"
+    fi
+    assert_contains "$OUTPUT" '(<journey>)' "$layout: stock token in a link caption"
+    if [ "$layout" = split ]; then rm specs/architecture.md specs/product.md; else rm specs/SPEC.md; fi
+done
+rm architecture.slots journeys.slots
+
+it "distinctive occurrences are counted in active prose but not in protected Markdown"
+cat > specs/architecture.md <<'MD'
+# Request Service — architecture
+
+Keep <components> separately from <components> in the release plan. Ignore <path> here.
+
+`<components>` and ``literal `<components>` with another tick`` are examples.
+This span wraps `over the
+next line with <components>` and then closes.
+
+<!-- <components> -->
+Prose <!-- beginning of a longer comment
+<components>
+closing --> after the comment, still <components>.
+
+> <components> belongs to a quote.
+So does <components> on a lazy continuation.
+
+~~~md
+<components>
+~~~
+
+    <components>
+MD
+run bash "$DOCTOR" --strict --json
+assert_eq 1 "$STATUS" "$OUTPUT"
+assert_eq 3 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" 'specs/architecture.md:3 (<components>), specs/architecture.md:3 (<components>)'
+rm specs/architecture.md
+
+it "only stock Mermaid nodes and edges match diagram slots"
+cat > specs/product.md <<'MD'
+# Request Service
+
+```mermaid
+flowchart LR
+  A([Requester]) -->|<surface>| J1[J-01 <journey>]
+  B([Operator]) -->|<surface>| J2[J-02 Resolve]
+  %% A([Requester]) -->|<surface>| J1[J-01 <journey>]
+```
+
+```text
+flowchart LR
+  A([Requester]) -->|<surface>| J1[J-01 <journey>]
+```
+MD
+run bash "$DOCTOR" --json
+assert_eq 2 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" 'specs/product.md:5 (<surface>), specs/product.md:5 (<journey>)'
+rm specs/product.md
 
 it "record reasons count only when the whole field is still the stock slot"
 cat > specs/records.md <<'MD'
@@ -1674,6 +1778,16 @@ cp -R "$PK_ROOT/examples/request-service/specs" "$EX/"
 run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict"
 assert_eq 0 "$STATUS" "example has no findings or advisories"
 
+it "an untouched caption in the kit's two-stage journey table fails strict doctor"
+product="$EX/specs/product.md"
+sed -i.bak 's/^\(| Requests | | \)\[J-01\]/\1[J-01 <journey>]/' "$product"
+run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
+assert_eq 1 "$STATUS" "$OUTPUT"
+assert_eq 1 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_eq 1 "$(jq '.findings | length' <<< "$OUTPUT")" "the caption is the only finding"
+assert_contains "$OUTPUT" '(<journey>)'
+mv "$product.bak" "$product"
+
 it "a filled spec with bracket notation and non-stock Mermaid lines still passes strict doctor"
 cat >> "$EX/specs/architecture.md" <<'MD'
 
@@ -1738,7 +1852,7 @@ run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
 assert_eq 0 "$STATUS" "$OUTPUT"
 assert_eq 0 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
 
-it "the generated catalog detects stale and missing skeletons after a template edit"
+it "the generated catalog detects a new slot and a stale slot independently"
 generator="$PK_ROOT/scripts/maintainer/generate-template-residue.py"
 catalog="$PK_ROOT/scripts/template-residue.tsv"
 MUTANT="$(mktemp -d)"; track_tmp "$MUTANT"
@@ -1746,13 +1860,15 @@ python3 "$generator" > "$MUTANT/fresh.tsv" || exit 1
 run cmp -s "$catalog" "$MUTANT/fresh.tsv"
 assert_eq 0 "$STATUS" "checked-in catalog must equal regeneration byte-for-byte"
 cp -R "$PK_ROOT/templates" "$MUTANT/"
-sed -i.bak 's/<observable criteria>/<measurable rollout criteria>/' "$MUTANT/templates/lifecycle-template.md"
 printf '\n- **Rollout when**: <owner-visible rollout conditions>.\n' >> "$MUTANT/templates/lifecycle-template.md"
 python3 "$generator" "$MUTANT/templates" > "$MUTANT/mutated.tsv" || exit 1
 run cmp -s "$catalog" "$MUTANT/mutated.tsv"
-assert_eq 1 "$STATUS" "mutation fails the same equality check"
-assert_not_contains "$(cat "$MUTANT/mutated.tsv")" '<observable criteria>' "renaming removes the orphaned token"
-assert_contains "$(cat "$MUTANT/mutated.tsv")" '<measurable rollout criteria>' "renaming adds the replacement"
+assert_eq 1 "$STATUS" "an addition fails the same equality check"
 assert_contains "$(cat "$MUTANT/mutated.tsv")" '<owner-visible rollout conditions>' "new slots enter the catalog"
+sed 's/<observable criteria>/filled criteria/' "$PK_ROOT/templates/lifecycle-template.md" > "$MUTANT/templates/lifecycle-template.md"
+python3 "$generator" "$MUTANT/templates" > "$MUTANT/mutated.tsv" || exit 1
+run cmp -s "$catalog" "$MUTANT/mutated.tsv"
+assert_eq 1 "$STATUS" "a removal fails the same equality check"
+assert_not_contains "$(cat "$MUTANT/mutated.tsv")" '<observable criteria>' "removing a slot drops the orphaned token"
 
 finish
