@@ -11,6 +11,8 @@ change by change.
 
 ## [Unreleased]
 
+## [3.1.6] — 2026-11-26 — lean review package
+
 ### Changed
 
 - Review packages open with the full diff, verified facts summary when available, and a required obligations section. It keeps trusted policy separate and retains binding base obligations even if the change drops a parent or citation. Oversized or non-text excerpts and unresolved base sources require the full packaged context. `evidence/facts/` is reserved for the facts pair; collector commands are marked for maintainer reruns only.
