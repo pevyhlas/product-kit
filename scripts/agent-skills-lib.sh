@@ -7,9 +7,9 @@
 # separators; diagnostic labels are display-only. Use the tier library's lexical scan
 # to distinguish top-level keys from unrelated multiline values. Use the C locale
 # so the scanner can walk bytes; only split text at ASCII syntax boundaries.
-as_records() { # neutral|metadata|claude file
-    LC_ALL=C awk -v mode="$1" "$AT_DELIMITER_AWK$AT_YAML_SCAN_AWK"'
-        BEGIN { OFS = "\037" }
+as_records() { # neutral|metadata|claude|opencode file [projected skills line or "1" for OpenCode]
+    LC_ALL=C awk -v mode="$1" -v projected="${3:-}" "$AT_DELIMITER_AWK$AT_YAML_SCAN_AWK"'
+        BEGIN { OFS = "\037"; mark = "# prdkit-skill-projection: "; active = projected != "" }
         function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
         function report(ln, label, msg) {
             gsub(/[[:cntrl:]]/, "?", label); print "error", ln, label, msg
@@ -17,6 +17,7 @@ as_records() { # neutral|metadata|claude file
         function unreadable(ln) {
             if (mode == "metadata") report(ln, "", "unreadable metadata; use a simple map of single-line values")
             else if (mode == "claude") report(ln, "", "unreadable Claude tools/frontmatter; use a simple mapping and a list of tool names")
+            else if (mode == "opencode") report(ln, "", "unreadable OpenCode frontmatter; use a simple mapping")
             else report(ln, "", "unreadable skills: declaration; use a single-line bracketed list")
         }
         # Read a simple key and its value. Escaped, explicit and merge keys are not
@@ -68,8 +69,7 @@ as_records() { # neutral|metadata|claude file
         }
         function tool_name(s, ln) {
             if (s !~ /^[A-Za-z][A-Za-z0-9_.-]*$/) { unreadable(ln); return }
-            if (s == "Bash") bash_tool = 1
-            if (s == "Skill") skill_tool = 1
+            if (s == "Skill") skill_tool++
         }
         function tool(s, ln) {
             if (!scalar(s) || tolower(s) ~ /^(true|false|null)$/) unreadable(ln)
@@ -128,7 +128,87 @@ as_records() { # neutral|metadata|claude file
             s = trim(substr(a[1], 2, length(a[1])-2)); n = cells(s, ",", a) # awk-bytes-ok: remove the verified ASCII brackets
             if (n > 1 && a[n] == "") n--
             if (n < 0 || s == "") { unreadable(ln); return }
+            if (n > 32) { report(ln, "", "declare at most 32 skills"); return }
             for (i = 1; i <= n; i++) skill(a[i], ln)
+        }
+        function ownership_error(ln) {
+            report(ln, "", "cannot establish Claude skill projection ownership; restore the generated comments and fields from a known-good projection before rendering")
+        }
+        function marker(s) {
+            if (s ~ /^begin [1-4]$/ && !mark_from) { mark_from = NR; mark_count = $NF + 0 }
+            else if (!mark_from || mark_to || NR != mark_last + 1) ownership_error(NR)
+            else if (s == "end") mark_to = NR
+            else if (index(s, "generated-skills ") == 1 && NR == mark_from + 1)
+                generated_skills = substr(s, length("generated-skills ") + 1) # awk-bytes-ok: strip the verified ASCII record prefix
+            else if (index(s, "prior-skills ") == 1 && prior_skills == "" && prior_tool == "" && generated_tool == "")
+                prior_skills = substr(s, length("prior-skills ") + 1) # awk-bytes-ok: strip the verified ASCII record prefix
+            else if (index(s, "prior-tool ") == 1 && prior_tool == "" && generated_tool == "")
+                prior_tool = substr(s, length("prior-tool ") + 1) # awk-bytes-ok: strip the verified ASCII record prefix
+            else if (index(s, "generated-tool ") == 1 && generated_tool == "")
+                generated_tool = substr(s, length("generated-tool ") + 1) # awk-bytes-ok: strip the verified ASCII record prefix
+            else ownership_error(NR)
+            mark_last = NR
+        }
+        function flow_list(s,   a) { return cells(s, "", a) >= 0 && a[1] ~ /^\[.*\]$/ }
+        function saved_skills(s) { return pair(s) && key == "skills" && flow_list(value) }
+        # A saved inline edit is reversible only if it is the same edit we would
+        # derive from the original line. Do not trust comment text as YAML to replay.
+        function valid_inline_record(   saved_edit,saved_skill,ok) {
+            if (!pair(prior_tool) || key != "tools") return 0
+            saved_edit = tool_edit; saved_skill = skill_tool
+            tool_edit = ""; skill_tool = 0
+            tools(value, mark_from)
+            ok = !block_tools && !skill_tool && tool_edit == generated_tool && tool_edit != ""
+            tool_edit = saved_edit; skill_tool = saved_skill; block_tools = 0
+            return ok
+        }
+        function claude_plan(   i,hit,action,line,edit) {
+            if (mark_last && (!mark_from || !mark_to || mark_to - mark_from - 1 != mark_count ||
+                !saved_skills(generated_skills) || (prior_skills != "" && !saved_skills(prior_skills)))) {
+                ownership_error(mark_last); return
+            }
+            if (!active && skills_line && (skills_line != mark_to + 1 ||
+                (raw_skills != generated_skills && raw_skills != prior_skills))) {
+                ownership_error(skills_line); return
+            }
+            if (prior_tool != "" && !valid_inline_record()) {
+                ownership_error(mark_from); return
+            }
+            if (generated_tool != "") {
+                if (!block_tool_list && prior_tool != "" && tools_line &&
+                    (raw_tools == prior_tool || raw_tools == generated_tool)) {
+                    if (active && raw_tools == prior_tool) { action = "replace"; line = tools_line; edit = generated_tool }
+                    if (!active && raw_tools == generated_tool) { action = "replace"; line = tools_line; edit = prior_tool }
+                } else if (block_tool_list && prior_tool == "" && generated_tool ~ /^ *- Skill$/) { # awk-bytes-ok: record sliced only after an ASCII prefix
+                    for (i in tool_rows) if (tool_rows[i] == generated_tool) hit = i
+                    if (skill_tool == 1 && hit) {
+                        if (!active) {
+                            if (tool_count == 1) { ownership_error(hit); return }
+                            action = "delete"; line = hit
+                        }
+                    } else if (!skill_tool && tool_line && tool_edit == generated_tool) {
+                        if (active) { action = "insert"; line = tool_line; edit = generated_tool }
+                    } else { ownership_error(mark_from); return }
+                } else { ownership_error(mark_from); return }
+            } else if (active && !skill_tool && tool_edit != "") {
+                action = (tool_line ? "insert" : "replace"); line = (tool_line ? tool_line : tools_line); edit = tool_edit
+                generated_tool = edit
+                if (action == "replace") prior_tool = raw_tools
+            }
+            if (index(prior_skills prior_tool generated_tool, "\037")) { ownership_error(mark_from ? mark_from : NR); return }
+            if (action != "") print "tool", line, action, edit
+            if (mark_from || skills_line) print "state", mark_from+0, mark_to+0, skills_line+0
+            if (active) {
+                if (!mark_from) prior_skills = raw_skills
+                if (index(prior_skills, "\037")) { ownership_error(skills_line); return }
+                print "save", mark "begin " (1 + (prior_skills != "") + (prior_tool != "") + (generated_tool != ""))
+                print "save", mark "generated-skills " projected
+                if (prior_skills != "") print "save", mark "prior-skills " prior_skills
+                if (prior_tool != "") print "save", mark "prior-tool " prior_tool
+                if (generated_tool != "") print "save", mark "generated-tool " generated_tool
+                print "save", mark "end"
+                print "save", projected
+            } else if (prior_skills != "") print "restore", prior_skills
         }
         function finish_entry() {
             if (block_metadata && !child_indent) unreadable(entry)
@@ -148,12 +228,19 @@ as_records() { # neutral|metadata|claude file
                 if ($0 != "---" && !header_bad) header_bad = NR
                 closed = 1; exit
             }
+            if (mode == "claude" && !quote && !flow && index($0, "# prdkit-skill-projection:") == 1) {
+                marked = 1
+                if (index($0, mark) == 1) marker(substr($0, length(mark) + 1)) # awk-bytes-ok: strip the verified ASCII marker prefix
+                else ownership_error(NR)
+                next
+            }
             if (!quote && !flow && /^[ \t]*(#|$)/) next
             if (entry && (/^[ \t]/ || /^-[ \t]/)) {
                 if (block_metadata && /^ +[^ \t]/ && (!child_indent || child_indent == indent($0))) {
                     child_indent = indent($0); metadata_entry(trim($0), NR)
                 } else if (block_tools && /^ *-[ \t]+/ && (!tool_line || child_indent == indent($0))) {
                     child_indent = indent($0); tool_line = NR
+                    tool_rows[NR] = $0; tool_count++
                     tool_edit = substr($0, 1, child_indent) "- Skill"
                     item = trim($0); sub(/^-[ \t]+/, "", item)
                     if (cells(item, "", piece) < 0) unreadable(NR); else tool(piece[1], NR)
@@ -162,17 +249,26 @@ as_records() { # neutral|metadata|claude file
             }
             if (entry) finish_entry()
             if (quote || flow || /^[ \t]/ || /^-[ \t]/) {
+                if (!unsafe && (((quote || flow) && /^[^ \t]/) ||
+                    (single_line && !(block && root_key == "description")))) unsafe = NR
                 if (mode == "neutral" && !mapping && !quote && !flow && pair(trim($0)) && key == "skills") {
                     seen = 1; unreadable(NR)
                 }
                 if (!mapping && !bad_root) bad_root = NR
                 scan_yaml($0); next
             }
-            if (!pair($0)) {
+            if (!pair($0) || (mode != "metadata" && $0 !~ /^[-A-Za-z0-9_.\057]+:([ \t]|$)/)) {
                 if (!bad_root) bad_root = NR
                 scan_yaml($0); next
             }
             mapping = 1
+            root_key = key
+            single_line = key ~ /^(name|description|tier|harnesses|model|variant|domain|source|library-ref|library-agent)$/
+            if (mode == "claude" && key == "skills") {
+                if (skills_line || !flow_list(value)) unreadable(NR)
+                skills_line = NR; raw_skills = $0; entry = NR
+                next
+            }
             if ((mode == "neutral" && key == "skills") || (mode == "metadata" && key == "metadata") ||
                 (mode == "claude" && key == "tools")) {
                 if (seen++) { unreadable(NR); next }
@@ -180,22 +276,25 @@ as_records() { # neutral|metadata|claude file
                 print "entry", NR
                 if (mode == "neutral") skills(value, NR)
                 else if (mode == "metadata") metadata(value, NR)
-                else { tools_line = NR; tools(value, NR) }
-            } else scan_yaml($0)
+                else { tools_line = NR; raw_tools = $0; tools(value, NR); block_tool_list = block_tools }
+            } else {
+                scan_yaml($0)
+                if ((quote || flow) && single_line && !unsafe) unsafe = NR
+            }
         }
         END {
             if (entry) finish_entry()
+            if (mode == "neutral" && bad_root)
+                report(bad_root, "", "unsupported neutral frontmatter key; use unquoted, unescaped top-level keys")
             if (mode == "neutral" && !seen) exit
-            if (opening != "absent" && (!closed || quote || flow || header_bad || bad_root))
+            if (mode == "claude" && marked) print "marked"
+            if (mode == "claude" && !active && !marked) exit
+            if (opening != "absent" && (!closed || quote || flow || header_bad || (bad_root && mode != "neutral")))
                 unreadable(header_bad ? header_bad : (bad_root ? bad_root : (NR ? NR : 1)))
+            if (unsafe && mode != "metadata")
+                report(unsafe, "", "unsafe multiline frontmatter for skill projection; indent unrelated continuations and keep projected fields on one line")
             if (mode == "metadata" && needs != "") print "needs", needs
-            if (mode == "claude") {
-                if (!seen || bash_tool) print "shell"
-                if (seen && !skill_tool && tool_edit != "") {
-                    if (index(tool_edit, "\037")) { unreadable(tools_line); exit }
-                    print (tool_line ? "insert" : "replace"), tool_line ? tool_line : tools_line, tool_edit
-                }
-            }
+            if (mode == "claude") claude_plan()
         }
     ' "$2"
 }
@@ -309,59 +408,67 @@ EOF
 }
 
 # The V2 action list passed here is exactly the one used to emit the role rules.
-# Claude inherits all tools without a restriction; otherwise Bash must be listed.
-# Claude preloads all declarations even when a restricted agent has no Bash; the
-# runnable subset is only used by the OpenCode allowlist and evidence notes.
+# Claude receives all declarations independent of shell availability.
 as_projection() { # harness proj permissions
-    local has_shell=false runnable="" list="" records kind field label msg id needs blockers
-    AS_FINDINGS=""; AS_OC=""; AS_NOTES=""; AS_CLAUDE=""; AS_TOOL_ACTION=""; AS_TOOL_LINE=""; AS_TOOL_EDIT=""
-    [ -n "$AS_SKILLS" ] || return 0
+    local has_shell=false runnable="" list="" records kind field label msg id needs blockers active=""
+    AS_FINDINGS=""; AS_OC=""; AS_NOTES=""; AS_CLAUDE=""; AS_CLAUDE_STATE=""; AS_TOOL_ACTION=""; AS_TOOL_LINE=""; AS_TOOL_EDIT=""
+    [ -z "$AS_SKILLS" ] || active=1
     if [ "$1" = opencode ]; then
+        [ -n "$active" ] || return 0
         if [ -z "$3" ]; then
             as_finding "$AS_DEF" "$AS_LINE" "$AS_FIRST" "OpenCode permissions are not renderer-owned; set the local tier's OpenCode permissions cell to opt into V2, or exclude OpenCode in harnesses:"
             return 0
         fi
         case " $3 " in *" shell "*) has_shell=true ;; esac
     else
-        if [ -z "$AS_PREFIX" ]; then
+        if [ -n "$active" ] && [ -z "$AS_PREFIX" ]; then
             as_finding "$AS_DEF" "$AS_LINE" "$AS_FIRST" "set 'Claude skill prefix:' to the plugin name in .prdkit/memory/agents.md"
             return 0
         fi
+        if [ -n "$active" ]; then
+            while read -r id needs; do
+                [ -n "$id" ] || continue
+                list="$list${list:+, }$AS_PREFIX:$id"
+            done <<< "$AS_SKILLS"
+            active="skills: [$list]"
+        fi
     fi
     if [ -f "$2" ]; then
+        if [ -z "$active" ] && ! grep -q '^# prdkit-skill-projection:' "$2"; then return 0; fi
+        records="$(as_records "$1" "$2" "$active")" || return 1
+        if [ -z "$active" ]; then
+            case $'\n'"$records"$'\n' in *$'\nmarked\n'*) ;; *) return 0 ;; esac
+        fi
         blockers="$(at_native_projection_findings "$2" "$3")" || return 1
         while IFS= read -r msg; do
-            [ -z "$msg" ] || as_finding "$AS_DEF" "$AS_LINE" "$AS_FIRST" "$msg"
+            [ -z "$msg" ] || as_finding "$AS_DEF" "${AS_LINE:-1}" "$AS_FIRST" "$msg"
         done <<EOF
 $blockers
 EOF
-    fi
-    if [ "$1" = claude ]; then
-        if [ -f "$2" ]; then
-            records="$(as_records claude "$2")" || return 1
-            while IFS=$'\037' read -r kind field label msg; do
-                case "$kind" in
-                    shell) has_shell=true ;;
-                    insert|replace) AS_TOOL_ACTION="$kind"; AS_TOOL_LINE="$field"; AS_TOOL_EDIT="$label" ;;
-                    error) as_finding "${2#"$AT_ROOT"/}" "$field" "$AS_FIRST" "$msg" ;;
-                esac
-            done <<EOF
+        while IFS=$'\037' read -r kind field label msg; do
+            case "$kind" in
+                state) AS_CLAUDE_STATE="$field $label $msg" ;;
+                save) AS_CLAUDE="$AS_CLAUDE$field"$'\n' ;;
+                restore) AS_CLAUDE="$field"$'\n' ;;
+                tool) AS_TOOL_LINE="$field"; AS_TOOL_ACTION="$label"; AS_TOOL_EDIT="$msg" ;;
+                error) as_finding "${2#"$AT_ROOT"/}" "$field" "$AS_FIRST" "$msg" ;;
+            esac
+        done <<EOF
 $records
 EOF
-        else
-            has_shell=true
-        fi
+    elif [ "$1" = claude ] && [ -n "$active" ]; then
+        AS_CLAUDE="$(printf '# prdkit-skill-projection: begin 1\n# prdkit-skill-projection: generated-skills %s\n# prdkit-skill-projection: end\n%s' "$active" "$active")"$'\n'
     fi
+    [ "$1" = opencode ] && [ -n "$active" ] || return 0
     while read -r id needs; do
         [ -n "$id" ] || continue
         if $has_shell || [ -z "$needs" ]; then runnable="$runnable $id"
-        elif [ "$1" = opencode ]; then
+        else
             # shellcheck disable=SC2016 # Literal Markdown code spans.
             AS_NOTES="$AS_NOTES$(printf 'Skill `%s` needs a shell (%s), which you cannot run here. When the review package carries its output (`%s.json`, `%s.md`), read the facts there; otherwise list them as unverified.' "$id" "$needs" "$id" "$id")"$'\n'
         fi
-        list="$list${list:+, }$AS_PREFIX:$id"
     done <<EOF
 $AS_SKILLS
 EOF
-    if [ "$1" = opencode ]; then AS_OC="deny$runnable"; else AS_CLAUDE="skills: [$list]"; fi
+    AS_OC="deny$runnable"
 }

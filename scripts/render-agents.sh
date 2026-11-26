@@ -230,7 +230,7 @@ updated_frontmatter() { # proj harness model variant desc_line desc
 
 # Canonicalize opted-in frontmatter before applying the original field updates.
 projection_frontmatter() { # proj harness model variant desc_line desc
-    if [ -n "$AT_P_EFFORT$AT_P_PERMISSIONS$AS_CLAUDE" ]; then
+    if [ -n "$AT_P_EFFORT$AT_P_PERMISSIONS$AS_CLAUDE$AS_CLAUDE_STATE" ]; then
         at_native_frontmatter "$1" "$AT_P_EFFORT" "$AT_P_PERMISSIONS" "$3" | updated_frontmatter - "${@:2}"
     else
         updated_frontmatter "$@"
@@ -263,7 +263,7 @@ new_projection() { # def harness name model variant body
     printf 'model: %s\n' "$model"
     [ "$harness" != opencode ] || [ -z "$variant" ] || printf 'variant: %s\n' "$variant"
     at_native_fields "$AT_P_EFFORT" "$AT_P_PERMISSIONS" "$AS_OC"
-    [ -z "$AS_CLAUDE" ] || printf '%s\n' "$AS_CLAUDE"
+    printf '%s' "$AS_CLAUDE"
     printf -- '---\n\n'
     [ -z "$body" ] || printf '%s\n' "$body"
 }
@@ -339,7 +339,7 @@ EOF
         FINDINGS+=("Could not verify projection frontmatter delimiters or model references")
     fi
 fi
-plan=() as_oc=() as_notes=() as_claude=() as_tool_action=() as_tool_line=() as_tool_edit=()
+plan=() as_oc=() as_notes=() as_claude=() as_claude_state=() as_tool_action=() as_tool_line=() as_tool_edit=()
 has_skills=false
 for def in "$root"/.prdkit/agents/*.md; do
     [ -f "$def" ] || continue
@@ -369,13 +369,14 @@ for def in "$root"/.prdkit/agents/*.md; do
                 while IFS= read -r f; do [ -z "$f" ] || FINDINGS+=("$f"); done <<< "$AS_FINDINGS"
                 continue
             fi
+            [ -z "$AS_CLAUDE_STATE" ] || has_skills=true
         fi
         if at_resolve "$name" "$tier" "$harness"; then
             if [ -n "$AT_P_PERMISSIONS" ] && ! at_native_model_valid "$AT_R_MODEL" "$AT_R_VARIANT"; then
                 FINDINGS+=("Agent '$name': OpenCode V2 projection requires a provider/model id and an optional separate variant token")
                 continue
             fi
-            if [ "$mode" = write ] && [ -z "$AS_LINE" ] && [ -n "$AT_P_EFFORT$AT_P_PERMISSIONS" ] && [ -f "$proj" ]; then
+            if [ "$mode" = write ] && [ -z "$AS_LINE$AS_CLAUDE_STATE" ] && [ -n "$AT_P_EFFORT$AT_P_PERMISSIONS" ] && [ -f "$proj" ]; then
                 if blockers="$(at_native_projection_findings "$proj" "$AT_P_PERMISSIONS")"; then
                     while IFS= read -r f; do [ -z "$f" ] || FINDINGS+=("$f"); done <<EOF
 $blockers
@@ -386,6 +387,7 @@ EOF
             fi
             if [ "$mode" = write ]; then
                 as_oc+=("$AS_OC"); as_notes+=("$AS_NOTES"); as_claude+=("$AS_CLAUDE")
+                as_claude_state+=("$AS_CLAUDE_STATE")
                 as_tool_action+=("$AS_TOOL_ACTION"); as_tool_line+=("$AS_TOOL_LINE"); as_tool_edit+=("$AS_TOOL_EDIT")
             fi
             plan+=("$name"$'\037'"$harness"$'\037'"$tier"$'\037'"$AT_R_MODEL"$'\037'"$AT_R_VARIANT"$'\037'"$AT_R_SOURCE")
@@ -444,6 +446,7 @@ for entry in ${plan[@]+"${plan[@]}"}; do
 $entry
 EOF
     AS_OC="${as_oc[$i]}" AS_NOTES="${as_notes[$i]}" AS_CLAUDE="${as_claude[$i]}"
+    AS_CLAUDE_STATE="${as_claude_state[$i]}"
     AS_TOOL_ACTION="${as_tool_action[$i]}" AS_TOOL_LINE="${as_tool_line[$i]}" AS_TOOL_EDIT="${as_tool_edit[$i]}"
     i=$((i + 1))
     if ! render_projection "$root/.prdkit/agents/$name.md" "$harness" "$name" "$model" "$variant" "$tier"; then

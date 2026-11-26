@@ -116,9 +116,10 @@ OpenCode format, restore the previous `permission:` block and remove `permission
 ### Optional skill projection
 
 Declare `skills: [example-skill, another-skill]` in a neutral agent's frontmatter. Use a
-nonempty, single-line bracketed list (not a block list) of distinct lowercase IDs, each at
-most 64 characters, with digits and single hyphens between segments. Omit the key to leave
-native skill configuration untouched.
+nonempty, single-line bracketed list (not a block list) of at most 32 distinct lowercase IDs,
+each at most 64 characters, with digits and single hyphens between segments. Use plain,
+unquoted top-level keys in neutral frontmatter. An agent that never opts in keeps its
+native skill configuration.
 
 In `.prdkit/memory/agents.md`, add the applicable settings outside code fences and HTML
 comments. `Skill roots:` is optional and replaces both default search locations:
@@ -167,16 +168,24 @@ For a declaring agent:
   them under `evidence/<repo-relative-path>` and lists them in its inventory. Without
   evidence the reviewer should report the facts as unverified.
 - **Claude Code:** The renderer owns `skills:` and writes all declared IDs as
-  `<plugin>:<id>`. It preserves the native tool restriction, adding `Skill` if needed.
-  Use a comma-separated value, a single-line bracketed list or a block list of tool names. Without
-  `tools:`, the agent inherits all tools; with a list it has shell access only if `Bash`
-  is listed. Skill projection does not grant `Bash`.
+  `<plugin>:<id>`. Claude skips missing, disabled or non-model-invocable skills. The
+  renderer preserves native tool restrictions, adding `Skill` if needed to a comma-separated
+  value, single-line bracketed list or block list of tool names. Claude applies
+  `disallowedTools` before `tools`; shell availability does not affect the Claude projection.
+  Skill projection does not grant `Bash`.
 
-Removing the neutral `skills:` key hands Claude's native `skills:` and `tools:` back to the
-project; remove old references or the added `Skill` tool by hand. OpenCode still regenerates
-the tier's permission rules if that tier remains opted in. The renderer does not install,
-copy or run skill files; make them discoverable in each target harness and validate with
-its native loader.
+Removing the neutral `skills:` key makes the next render undo its generated Claude entries:
+it restores a prior single-line `skills:` list (or removes the added field) and removes only
+the renderer-added `Skill` tool. Keep the generated `# prdkit-skill-projection:` comments;
+`--check` reports stale entries and render refuses to guess if those comments are damaged
+or a field no longer matches its recorded values for cleanup. To change a managed inline
+tools list, first remove the declaration and render, then edit the native list and opt back
+in. Files rendered before ownership comments existed (or with all markers removed) cannot be distinguished from
+hand-owned files; reconcile them against a known-good pre-opt-in version before re-rendering.
+Skill-managed frontmatter that cannot be rewritten safely is rejected (for example, a
+multiline quoted description). OpenCode regenerates the tier's permissions if that tier
+remains opted in. The renderer does not install, copy or run skill files; make them
+discoverable in each target harness and validate with its native loader.
 
 ## Rigor and proportion
 

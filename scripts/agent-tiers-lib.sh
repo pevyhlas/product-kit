@@ -675,12 +675,20 @@ at_native_frontmatter() { # existing file effort permissions projected-model (pl
     fields="$(at_native_fields "$2" "$3" "${AS_OC:-}")" || return 1
     AT_NATIVE_FIELDS="$fields" AS_CLAUDE="${AS_CLAUDE:-}" AS_TOOL_EDIT="${AS_TOOL_EDIT:-}" \
         awk -v effort="$2" -v permissions="$3" -v model="$4" -v oc_skills="${AS_OC:-}" \
-        -v tool_line="${AS_TOOL_LINE:-0}" -v tool_action="${AS_TOOL_ACTION:-}" '
+        -v tool_line="${AS_TOOL_LINE:-0}" -v tool_action="${AS_TOOL_ACTION:-}" -v state="${AS_CLAUDE_STATE:-}" '
+        BEGIN { split(state, owned, " ") }
         function key(s) {
             if (!match(s, /^([a-z]+|"[a-z]+"|\047[a-z]+\047)[ \t]*:/)) return ""
             s = substr(s, 1, RLENGTH - 1); gsub(/["\047 \t]/, "", s); return s
         }
         NR == 1 { if ($0 != "---") exit; print; next }
+        owned[1] && NR >= owned[1] && NR <= owned[2] {
+            if (NR == owned[1] && !owned[3]) {
+                printf "%s", ENVIRON["AS_CLAUDE"]
+                wrote_skills = 1
+            }
+            next
+        }
         skipping && /^[ \t]*$/ { blanks = blanks $0 "\n"; next }
         skipping && (/^[ \t]+[^ \t]/ || /^-[ \t]/ || /^[}\]]/) { blanks = ""; next }
         skipping { printf "%s", blanks; blanks = ""; if (!/^#/) skipping = 0 }
@@ -688,12 +696,14 @@ at_native_frontmatter() { # existing file effort permissions projected-model (pl
             k = key($0)
             if (tool_line == NR) {
                 if (tool_action == "insert") print
-                print ENVIRON["AS_TOOL_EDIT"]
+                if (tool_action != "delete") print ENVIRON["AS_TOOL_EDIT"]
                 next
             }
-            if (k == "skills" && (oc_skills != "" || ENVIRON["AS_CLAUDE"] != "")) {
-                if (!wrote_skills && ENVIRON["AS_CLAUDE"] != "") print ENVIRON["AS_CLAUDE"]
-                wrote_skills = skipping = 1; next
+            if (owned[3] == NR || (k == "skills" && oc_skills != "")) {
+                printf "%s", ENVIRON["AS_CLAUDE"]
+                wrote_skills = 1
+                if (oc_skills != "") skipping = 1
+                next
             }
             if (permissions != "" && k == "model") {
                 if (!wrote_model) print "model: " model
@@ -708,7 +718,7 @@ at_native_frontmatter() { # existing file effort permissions projected-model (pl
         $0 == "---" {
             if (permissions != "" && !wrote_model) print "model: " model
             if (!wrote && ENVIRON["AT_NATIVE_FIELDS"] != "") print ENVIRON["AT_NATIVE_FIELDS"]
-            if (!wrote_skills && ENVIRON["AS_CLAUDE"] != "") print ENVIRON["AS_CLAUDE"]
+            if (!wrote_skills) printf "%s", ENVIRON["AS_CLAUDE"]
             print; closed = 1; exit
         }
         { print }
@@ -1048,7 +1058,6 @@ at_projection_findings() { # include_missing delimiters_checked [skills-only]
         name="$(basename "$def" .md)"
         as_definition "$def" || return 1
         if [ -n "$AS_FINDINGS" ]; then printf '%s' "$AS_FINDINGS"; continue; fi
-        if $skills_only && [ -z "$AS_LINE" ]; then continue; fi
         tier="$(at_fm_value "$def" tier)" || return 1
         targets="$(at_targets "$AT_ROOT" "$def")" || return 1
         for harness in $targets; do
@@ -1056,6 +1065,10 @@ at_projection_findings() { # include_missing delimiters_checked [skills-only]
             at_projection_options "$tier" "$harness" || return 1
             as_projection "$harness" "$proj" "$AT_P_PERMISSIONS" || return 1
             if [ -n "$AS_FINDINGS" ]; then printf '%s' "$AS_FINDINGS"; continue; fi
+            if [ -z "$AS_LINE" ] && [ -n "$AS_CLAUDE_STATE" ]; then
+                printf "Agent '%s': .claude/agents/%s.md has stale generated Claude skill entries; run render-agents.sh\n" "$name" "$name"
+                continue
+            fi
             if $skills_only; then continue; fi
             if ! at_resolve "$name" "$tier" "$harness"; then
                 printf "Agent '%s': no %s model resolves (%s)\n" "$name" "$harness" "$AT_R_ERR"

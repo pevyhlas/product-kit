@@ -207,7 +207,7 @@ for who in review make; do
 done
 assert_contains "$(cat .claude/agents/review.md)" 'tools: Read, Grep, Skill # review tools'
 assert_contains "$(cat .claude/agents/review.md)" 'color: blue'
-assert_not_contains "$(cat .claude/agents/review.md)" 'hand-owned-skill'
+assert_not_contains "$(grep '^skills:' .claude/agents/review.md)" 'hand-owned-skill'
 assert_not_contains "$(cat .claude/agents/make.md)" 'tools:' "unrestricted Claude inherits tools; do not add a list"
 bytes "$P/plain-claude" .claude/agents/plain.md "undeclared Claude file untouched"
 bytes "$P/plain-opencode" .opencode/agents/plain.md "undeclared OpenCode file untouched"
@@ -217,6 +217,7 @@ run bash "$R"
 assert_contains "$OUTPUT" "0 created, 0 updated" "idempotent render"
 
 it "Claude preserves native list forms, adds Skill once, and never grants Bash"
+cp "$P/no-settings/claude-review.md" .claude/agents/review.md
 for tools in 'tools: [Read, Bash]' 'tools: [Read, Skill]' 'tools: "Read, Bash" # quoted scalar' \
     $'tools:\n  - Read  # preserve\n  - Bash' $'tools:\n- Read\n- Bash\n# Neighbor comment' 'tools: []'; do
     sed '/^tools:/d' .claude/agents/review.md | TOOLS="$tools" awk '/^color:/ { print ENVIRON["TOOLS"] } { print }' > "$P/new-tools"
@@ -252,7 +253,7 @@ run bash "$R"
 assert_eq 0 "$STATUS"
 
 it "check and diagnostics detect skill/tool, permission and fallback text drift"
-sed -e 's/^skills:.*/skills: [example-plugin:stale]/' -e 's/, Skill//' "$P/claude-ok" > .claude/agents/review.md
+sed -e 's/^skills:.*/skills: [example-plugin:stale]/' -e '/^tools:/s/, Skill//' "$P/claude-ok" > .claude/agents/review.md
 sed -e 's/"example-read"/"example-shell"/' -e '/^Skill .*needs a shell/d' "$P/oc-ok" > .opencode/agents/review.md
 for checker in "$R" "$S/doctor.sh" "$S/check-adoption.sh"; do
     if [ "$checker" = "$R" ]; then run bash "$R" --check --json; else run bash "$checker" --json; fi
@@ -289,7 +290,7 @@ def review deep 'skills: [example-read,, example-shell]'
 blocked "line 4: skill '<empty>': invalid skill id"
 def review deep 'skills: [example-read, example-read]'
 blocked "line 4: skill 'example-read': duplicate skill id"
-def review deep '"skills": [example-missing, Example-invalid]'
+def review deep 'skills: [example-missing, Example-invalid]'
 blocked "line 4: skill 'example-missing': no vendored skill directory containing SKILL.md"
 blocked "line 4: skill 'Example-invalid': invalid skill id"
 def review deep $'skills:\n  - example-read'
@@ -364,5 +365,115 @@ blocked ".opencode/agents/unowned.md is unowned"
 rm .opencode/agents/unowned.md
 run bash "$R" --check
 assert_eq 0 "$STATUS" "clean after restoring the valid fixture"
+
+it "unsafe multiline native headers are refused before any projection is touched"
+cp .prdkit/agents/review.md "$P/review-round2"
+cp .claude/agents/review.md "$P/claude-round2"
+cat > .prdkit/agents/review.md <<'EOF'
+---
+tier: deep
+skills: [example-read]
+---
+
+Prompt for review.
+EOF
+cat > .claude/agents/review.md <<'EOF'
+---
+name: review
+model: example-deep
+description: "Notes for the reviewer
+skills: [reading]
+and a project-owned summary."
+tools: Read, Grep
+color: blue
+---
+
+Prompt for review.
+EOF
+blocked "line 4: skill 'example-read': unsafe multiline frontmatter"
+cp "$P/claude-round2" .claude/agents/review.md
+cp "$P/review-round2" .prdkit/agents/review.md
+
+it "quoted, escaped and explicit root keys cannot silently opt out"
+for key in '"skills": [example-read]' "'skills': [example-read]" \
+    '"sk\u0069lls": [example-read]' $'? skills\n: [example-read]' '"unrelated": value'; do
+    def review deep "$key"
+    blocked "line 4: skill '<list>': unsupported neutral frontmatter key"
+done
+def review deep $'notes: "unrelated\nskills: [example-not-a-skill]\nend of notes."'
+run bash "$R"
+assert_eq 0 "$STATUS" "a key-shaped line in an unrelated neutral value does not opt in"
+run bash "$R" --check
+assert_eq 0 "$STATUS"
+cp "$P/review-round2" .prdkit/agents/review.md
+
+it "cleanup restores the project-owned preloads and only undoes the generated tool addition"
+for tools in 'tools: Read, Grep # retain comment' 'tools: [Read, Skill]' 'tools: []' \
+    $'tools:\n  - Read # retain comment\n  - Bash'; do
+    # Export only to awk to preserve embedded newlines in block lists on BWK.
+    TOOLS="$tools" awk '/^tools:/ { print ENVIRON["TOOLS"]; next } { print }' \
+        "$P/no-settings/claude-review.md" > "$P/cleanup-fixture"
+    cp "$P/cleanup-fixture" .claude/agents/review.md
+    def review deep "$ids"
+    run bash "$R"
+    assert_eq 0 "$STATUS" "render with $tools"
+    def review deep
+    run bash "$R" --check --json
+    assert_eq 1 "$STATUS" "removing the declaration creates drift"
+    assert_contains "$OUTPUT" "stale generated Claude skill entries"
+    run bash "$R"
+    assert_eq 0 "$STATUS" "clean up after declaration removal"
+    bytes "$P/cleanup-fixture" .claude/agents/review.md "restore exact project tools and preload"
+    run bash "$R" --check --json
+    assert_eq 0 "$STATUS" "cleanup is clean"
+done
+def review deep "$ids"
+sed '/^skills:/d; /^tools:/d' "$P/no-settings/claude-review.md" > .claude/agents/review.md
+cp .claude/agents/review.md "$P/cleanup-inherited"
+run bash "$R"
+assert_eq 0 "$STATUS"
+def review deep
+run bash "$R"
+assert_eq 0 "$STATUS"
+bytes "$P/cleanup-inherited" .claude/agents/review.md "remove an added preload from an agent with inherited tools"
+
+it "cleanup preserves edits to neighboring block tools and agent fields"
+TOOLS=$'tools:\n  - Read' awk '/^tools:/ { print ENVIRON["TOOLS"]; next } { print }' \
+    "$P/no-settings/claude-review.md" > .claude/agents/review.md
+def review deep "$ids"
+run bash "$R"
+assert_eq 0 "$STATUS"
+awk '/^  - Skill$/ { print "  - Grep # project addition" } { print }' \
+    .claude/agents/review.md > "$P/block-edit"
+sed 's/^color: blue$/color: green/' "$P/block-edit" > .claude/agents/review.md
+def review deep
+run bash "$R"
+assert_eq 0 "$STATUS"
+assert_contains "$(cat .claude/agents/review.md)" '  - Grep # project addition'
+assert_contains "$(cat .claude/agents/review.md)" 'color: green'
+assert_not_contains "$(cat .claude/agents/review.md)" '  - Skill'
+
+it "damaged ownership and changed inline tools fail closed even after the declaration is removed"
+cp "$P/no-settings/claude-review.md" .claude/agents/review.md
+def review deep "$ids"
+run bash "$R"
+assert_eq 0 "$STATUS"
+cp .claude/agents/review.md "$P/marked-claude"
+def review deep
+sed '/^# prdkit-skill-projection: prior-skill/d' "$P/marked-claude" > .claude/agents/review.md
+blocked "cannot establish Claude skill projection ownership"
+sed 's/^tools: Read, Grep, Skill/tools: Read, Bash, Skill/' "$P/marked-claude" > .claude/agents/review.md
+blocked "cannot establish Claude skill projection ownership"
+sed 's/^skills:.*/skills: [project-edited]/' "$P/marked-claude" > .claude/agents/review.md
+blocked "cannot establish Claude skill projection ownership"
+cp "$P/marked-claude" .claude/agents/review.md
+run bash "$R"
+assert_eq 0 "$STATUS"
+bytes "$P/plain-claude" .claude/agents/plain.md "cleanup never touches a Claude agent that never declared skills"
+
+it "more than 32 declarations are refused before vendored skill lookup"
+many="$(awk 'BEGIN { printf "skills: ["; for (i=1; i<=33; i++) printf "%sexample-%d", (i==1 ? "" : ", "), i; print "]" }')"
+def review deep "$many"
+blocked "line 4: skill '<list>': declare at most 32 skills"
 
 finish
