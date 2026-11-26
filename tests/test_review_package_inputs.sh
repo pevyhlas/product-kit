@@ -72,11 +72,25 @@ setup_small() {
     package_small_obligation_fixture "$ID" || exit 1
     BASE="$(git rev-parse HEAD^)"
 }
+setup_no_specs() {
+    P="$(make_inited_project)" || exit 1
+    track_tmp "$P"; cd "$P" || exit 1
+    ID=001-no-specs
+    rm -f .prdkit/memory/config.md .prdkit/memory/agents.md
+    mkdir src
+    printf 'before\n' > src/app.txt
+    snapshot_upgrade_fixture "$P" || exit 1
+    BASE="$(git rev-parse HEAD)"
+    git checkout -qb "$ID" || exit 1
+    advance after
+}
 advance() { printf '%s\n' "$1" >> src/app.txt; git add src/app.txt; git commit -qm "$1" || exit 1; }
 build() {
     run bash "$BUILD" "$ID" "$BASE" "$@"
     if [ "$STATUS" != 0 ]; then _no 'package assembly' "$OUTPUT"; PKG=""; return 1; fi
-    PKG="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
+    if ! PKG="$(printf '%s' "$OUTPUT" | jq -er .PACKAGE_DIR)"; then
+        _no 'package JSON' "$OUTPUT"; return 1
+    fi
 }
 integrity() {
     local file bytes oid source
@@ -90,6 +104,7 @@ integrity() {
 
 default_reads() { awk '/^## Open first/{ open=1; next } /^## /{ open=0 } open && /^[0-9]+\. /' "$PKG/index.md"; }
 obligations_section() { sed -n '/^## Review obligations$/,/^## Open only if/p' "$PKG/index.md"; }
+non_verification_gaps() { sed '/^verification /d' "$PKG/context-gaps.txt"; }
 reject_reserved() {
     local path="$1"; shift
     run bash "$BUILD" "$ID" "$BASE" "$@" --evidence "$path"
@@ -97,12 +112,111 @@ reject_reserved() {
     assert_contains "$OUTPUT" "conflicting --evidence $path"
 }
 
-[ "$#" -gt 0 ] || set -- context paths facts obligations reconcile references reference-style plain-brackets edge-blanks nontext
+[ "$#" -gt 0 ] || set -- context paths facts obligations no-specs reconcile references reference-style plain-brackets edge-blanks nontext
 for mode in "$@"; do
-    case "$mode" in obligations|reconcile|references|reference-style|plain-brackets|edge-blanks|nontext) setup_small ;; *) setup ;; esac
+    case "$mode" in
+        obligations|reconcile|references|reference-style|plain-brackets|edge-blanks|nontext) setup_small ;;
+        no-specs) setup_no_specs ;;
+        *) setup ;;
+    esac
     # The default exercises installed behavior; the override supports replay against a prior builder.
     BUILD="${PACKAGE_TEST_BUILDER:-$P/.prdkit/scripts/bash/build-review-package.sh}"
     case "$mode" in
+        no-specs)
+            no_specs='No spec files at BASE or HEAD; no spec bounds apply.'
+            it "A small committed change without specs has no spec obligations or full-context fallback"
+            assert_eq absent "$([ -e specs ] && echo present || echo absent)" 'no specs directory in fixture'
+            # Untracked specs are not an input on either revision.
+            mkdir -p specs
+            printf '# Untracked\n' > specs/product.md
+            if build; then
+                section="$(obligations_section)"
+                assert_contains "$section" "$no_specs"
+                assert_not_contains "$section" '**Required full context:**'
+                assert_not_contains "$section" 'mark the review pending'
+                assert_eq 2 "$(default_reads | wc -l | tr -d ' ')" 'only diff and inline obligations by default'
+                assert_eq '' "$(non_verification_gaps)" 'no spec or optional policy gaps'
+                assert_eq '' "$(awk -F '\t' '$3 ~ /^specs\// {print}' "$PKG/context-manifest.tsv")" 'no spec obligations'
+                assert_contains "$(cat "$PKG/context-manifest.tsv")" '.prdkit/memory/constitution.md' 'required trusted policy remains'
+                integrity
+            fi
+
+            it "Adding the first spec includes its canon and bounds as proposed, not binding"
+            printf '# Product\n\n- **C-01 New bound**: Scope: all.\n  Keep the public label.\n' > specs/product.md
+            git add specs/product.md && git commit -qm 'add first spec' || exit 1
+            if build; then
+                section="$(obligations_section)"
+                assert_not_contains "$section" "$no_specs"
+                assert_not_contains "$section" '**Required full context:**'
+                assert_contains "$section" 'C-01 — Proposed by this change'
+                assert_contains "$section" 'Canon (specs/product.md) — Proposed by this change'
+                assert_not_contains "$section" 'C-01 — BASE'
+                assert_contains "$(cat "$PKG/bounds-base.txt")" 'No spec bounds apply at this revision.'
+                assert_eq '' "$(non_verification_gaps)" 'no fictitious absent BASE bounds or HEAD canon gaps'
+            fi
+
+            it "Deleting the last spec keeps its BASE canon and bounds for review"
+            BASE="$(git rev-parse HEAD)"
+            git rm -q specs/product.md && git commit -qm 'remove last spec' || exit 1
+            if build; then
+                section="$(obligations_section)"
+                assert_not_contains "$section" "$no_specs"
+                assert_not_contains "$section" '**Required full context:**'
+                assert_contains "$section" 'C-01 — BASE, removed by this change'
+                assert_contains "$section" 'Canon (specs/product.md) — BASE, removed by this change'
+                assert_contains "$section" 'Keep the public label.'
+                assert_contains "$(cat "$PKG/bounds.txt")" 'No spec bounds apply at this revision.'
+                assert_eq '' "$(non_verification_gaps)" 'no fictitious missing HEAD canon'
+            fi
+
+            it "An unreadable committed BASE spec does not count as absent"
+            shim="$(mktemp -d)"; track_tmp "$shim"
+            export FIXTURE_GIT FIXTURE_UNREADABLE
+            FIXTURE_GIT="$(command -v git)"
+            FIXTURE_UNREADABLE="$(git rev-parse "$BASE:specs/product.md")"
+            cat > "$shim/git" <<'EOF'
+#!/usr/bin/env bash
+if [ "${3:-}" = cat-file ] && [ "${4:-}" = blob ] && [ "${5:-}" = "$FIXTURE_UNREADABLE" ]; then
+    exit 1
+fi
+exec "$FIXTURE_GIT" "$@"
+EOF
+            chmod +x "$shim/git"
+            if PATH="$shim:$PATH" build --evidence src/app.txt; then
+                section="$(obligations_section)"
+                assert_not_contains "$section" "$no_specs"
+                assert_contains "$section" '**Required full context:** A BASE obligation could not be resolved.'
+                assert_contains "$(cat "$PKG/context-gaps.txt")" 'canon unresolved BASE obligation: unreadable/non-text input specs/product.md'
+                assert_not_contains "$(cat "$PKG/bounds-base.txt")" 'No spec bounds apply'
+            fi
+
+            it "A committed non-text HEAD spec is a gap, not a no-specs package"
+            mkdir -p specs
+            printf 'not\000text\n' > specs/product.md
+            git add specs/product.md && git commit -qm 'unreadable spec at HEAD' || exit 1
+            if build; then
+                section="$(obligations_section)"
+                assert_not_contains "$section" "$no_specs"
+                assert_contains "$section" 'C-01 — BASE, binding for this review'
+                assert_contains "$section" 'Canon (specs/product.md) — BASE, binding for this review'
+                assert_contains "$(non_verification_gaps)" 'canon unreadable/non-text input specs/product.md'
+                assert_not_contains "$(cat "$PKG"/bounds*.txt)" 'No spec bounds apply'
+            fi
+
+            it "Failure to enumerate the BASE tree is not proof of no specs"
+            BASE="$(git rev-parse HEAD^)"
+            cat > "$shim/git" <<'EOF'
+#!/usr/bin/env bash
+if [ "${3:-}" = ls-tree ] && [ "${4:-}" = -r ] && [ "${7:-}" = "$FIXTURE_BASE" ]; then
+    exit 1
+fi
+exec "$FIXTURE_GIT" "$@"
+EOF
+            if FIXTURE_BASE="$BASE" PATH="$shim:$PATH" build --evidence src/app.txt; then
+                assert_not_contains "$(obligations_section)" "$no_specs"
+                assert_contains "$(obligations_section)" '**Required full context:** A BASE obligation could not be resolved.'
+                assert_contains "$(non_verification_gaps)" 'canon unresolved BASE obligation: cannot completely enumerate spec entries'
+            fi ;;
         context)
             it "Generated context cannot overwrite explicit whole-file context"
             mkdir -p sections; printf 'EXPLICIT_SOURCE_BYTES\n' > sections/1.txt

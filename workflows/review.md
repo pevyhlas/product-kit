@@ -58,10 +58,12 @@ For committed work run `.prdkit/scripts/bash/build-review-package.sh <change-id>
 adding `--context <path>` for selected tracked canon/policy/record files and `--evidence <path>`
 for completed local results; ordinary evidence cannot occupy `evidence/facts/`. The helper checks
 structural accessibility, not semantic completeness. Before dispatch, check the captured obligations
-against the BASE and HEAD change records, relevant canon (including full bound bodies), and the
-parents, citations, and dependencies at both revisions. Check trusted policy separately, along
-with required verification and prior findings. Put any missing
-mandatory obligation or unresolved question inline in the dispatch prompt with its source path.
+against any BASE and HEAD change records, relevant canon (including full bound bodies), and the
+parents, citations, and dependencies at both revisions. If neither revision has spec files, no
+spec bounds apply; if specs are added or removed, reconcile them against the other revision.
+Check trusted policy separately, along with required verification and prior findings. Put any
+missing mandatory obligation or unresolved question inline in the dispatch prompt with its source
+path.
 Every result names its command, revision, environment, completion/exit status and limits; running
 logs are not completed evidence. Copy required sibling/remote evidence into the
 checkout first with original source provenance, then attach or place the package inside the

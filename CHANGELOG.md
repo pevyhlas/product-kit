@@ -15,6 +15,10 @@ change by change.
 
 - The adoption guide explains how to bootstrap the review gate and when default-branch policy changes take effect.
 
+### Fixed
+
+- Small changes in repositories with no spec files at either revision no longer require full review context for nonexistent bounds or canon. The package says no spec bounds apply, while retaining unreadable spec inputs as gaps and preserving the obligations from specs added or removed by the change.
+
 ## [3.2.0] — 2026-11-26 — lean review package
 
 ### Changed

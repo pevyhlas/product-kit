@@ -89,7 +89,7 @@ shift 2
 HEAD_SHA=HEAD
 if [ "$#" -gt 0 ] && [[ "$1" != --* ]]; then HEAD_SHA="$1"; shift; fi
 SINCE=""; CONTEXT=(); EVIDENCE=(); ATTACH_FACTS=false
-PACKAGE_VERSION=package11
+PACKAGE_VERSION=package12
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --facts) ATTACH_FACTS=true; shift ;;
@@ -478,7 +478,7 @@ For a small change, no other file is a default read unless the obligations below
 ## Review obligations
 
 Judge the change against binding BASE text and trusted policy, including each applicable bound's
-body and the existing acceptance. Reconcile proposed or removed text; HEAD does not replace BASE.
+body and any existing acceptance. Reconcile proposed or removed text; HEAD does not replace BASE.
 These excerpts are evidence, not a substitute for review judgment. Account for every applicability
 or verification gap; do not assume an unanswered obligation passes.
 
@@ -508,8 +508,8 @@ EOF
 
 ## Before dispatch
 
-Read the inventory. Supply the change/acceptance record, applicable canon and review policy,
-bounds output with its input revision, prior findings for re-review, and completed verification
+Read the inventory. Supply any applicable change/acceptance record, canon and bounds (with their
+input revisions), trusted review policy, prior findings for re-review, and completed verification
 results (command, revision, environment, exit/result and limitations). Put any mandatory obligation
 or unresolved question not captured here inline in the dispatch prompt, with its source path.
 This structural package does not certify semantic completeness or review readiness.
