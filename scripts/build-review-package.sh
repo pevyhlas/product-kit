@@ -256,8 +256,23 @@ if ! acquire_review_lock; then
 fi
 # Only a clean, ordinary full package can be reused automatically. Caller snapshots,
 # focused deltas and evidence can differ even on the same head.
+CTX_TMP="$PACKAGE_SCRATCH/context"; mkdir -p "$CTX_TMP"
+head_capture=true
+bounds_spec_presence=unknown; bounds_has_gitlinks=false
+review_bounds_list "$HEAD_SHA" "$CTX_TMP/spec-paths-head" review_bounds_note \
+    2> "$CTX_TMP/head-inventory.stderr" || head_capture=false
+# shellcheck disable=SC2034 # Consumed by review_context_build.
+head_specs="$bounds_spec_presence"
+head_has_gitlinks="$bounds_has_gitlinks"
+base_list_ok=true
+review_bounds_list "$BASE_SHA" "$CTX_TMP/spec-paths-base" review_bounds_note \
+    2> "$CTX_TMP/base-inventory.stderr" || base_list_ok=false
+# shellcheck disable=SC2034 # Consumed by review_context_build.
+base_specs="$bounds_spec_presence"
+base_has_gitlinks="$bounds_has_gitlinks"
 reuse_context=full
 if [ -n "$SINCE" ] || [ "${#CONTEXT[@]}" -ne 0 ] || [ "${#EVIDENCE[@]}" -ne 0 ] ||
+    ! $head_capture || ! $base_list_ok || $head_has_gitlinks || $base_has_gitlinks ||
     ! git -C "$REPO_ROOT" diff --quiet --ignore-submodules=none "$HEAD_SHA" --; then
     reuse_context=custom
 fi
@@ -421,6 +436,7 @@ if [ -n "$SINCE" ]; then
     inventory delta.patch "$source_label"
 fi
 for p in ${CONTEXT[@]+"${CONTEXT[@]}"}; do
+    if review_bounds_blocked "$CTX_TMP/spec-paths-head.aliases" "$p"; then continue; fi
     mkdir -p "$(dirname "$PACKAGE_DIR/context/$p")"
     git -C "$REPO_ROOT" show "$HEAD_SHA:$p" > "$PACKAGE_DIR/context/$p"
     inventory "context/$p" "$HEAD_SHA:$p"

@@ -186,7 +186,6 @@ class Snapshot(Collector):
         require(self.run(("git", "merge-base", "--is-ancestor", base, head)).returncode == 0,
                 "base is not in the snapshot's available HEAD history")
         self.git("read-tree", head)
-        self.materialize(head)
 
     def freeze_objects(self, source, scratch, head):
         # Use the consumer store only to build a self-contained pack. In particular,
@@ -227,10 +226,17 @@ class Snapshot(Collector):
                 "local_tools_sha256": digest(json_bytes(tools)),
                 "doctor_date_sha256": digest(self.env["PRDKIT_TODAY"].encode())}
 
-    def materialize(self, head):
+    def materialize(self, head, aliases):
         blobs, links = [], []
         for entry in self.git("ls-tree", "-rz", head).split(b"\0")[:-1]:
             metadata, name = entry.split(b"\t", 1)
+            if aliases:
+                # Same line-safe path encoding as review_bounds_path_key.
+                key = name.replace(b"%", b"%25").replace(b"\n", b"%0a").replace(b"\r", b"%0d")
+                while key and key not in aliases:
+                    key = key.rpartition(b"/")[0]
+                if key:
+                    continue
             perms, kind, oid = metadata.split()
             parts = os.fsdecode(name).split("/")
             require(all(part.casefold() not in {"", ".", "..", ".git"} for part in parts),
@@ -364,10 +370,11 @@ def bounds_tools_stamp(collector):
             for name in BOUNDS_TOOLS}
 
 
-def bounds_fact(collector, snapshot, change_id, head):
+def bounds_fact(collector, snapshot, change_id, head, aliases_path):
     # Use the installed implementation, like the package builder, but the frozen HEAD objects.
     command = ["bash", f"{SCRIPTS}/{BOUNDS_TOOLS[0]}", ".", head, change_id]
-    bounds, raw = snapshot.capture(command, argv=[command[0], str(collector.scripts / BOUNDS_TOOLS[0]), *command[2:]])
+    bounds, raw = snapshot.capture(command, argv=[
+        command[0], str(collector.scripts / BOUNDS_TOOLS[0]), *command[2:], str(aliases_path)])
     bounds["details"] = snapshot.text(raw) if raw is not None else None
     state, _, payload = (bounds["details"] or "").partition("\n")
     scope, _, details = payload.partition("\n")
@@ -384,15 +391,26 @@ def bounds_fact(collector, snapshot, change_id, head):
 def collect(collector, snapshot, change_id, base, head, pr):
     inputs = snapshot.inputs(base, head)
     bounds_tools = bounds_tools_stamp(collector)
+    aliases_path = Path(snapshot.env["TMPDIR"]) / "spec-aliases"
+    bounds = bounds_fact(collector, snapshot, change_id, head, aliases_path)
+    aliases = set((read_optional(aliases_path) or b"").splitlines())
+    snapshot.materialize(head, aliases)
     rules, config_stamp = load_map(snapshot.root)
     span = f"{base}..{head}"
-    facts = {"doctor": local_json(snapshot, ["bash", f"{SCRIPTS}/doctor.sh", "--json"], doctor=True)}
-    facts["bounds"] = bounds_fact(collector, snapshot, change_id, head)
+
+    def worktree_fact(script, *, doctor):
+        command = ["bash", f"{SCRIPTS}/{script}", "--json"]
+        if aliases:
+            return {"command": command, "exit_status": None, "details": None,
+                    "result": "not collected: HEAD spec paths collide under ASCII case folding"}
+        return local_json(snapshot, command, doctor=doctor)
+
+    facts = {"doctor": worktree_fact("doctor.sh", doctor=True), "bounds": bounds}
     diff = snapshot.fact([*DIFF, "--check", span, "--"])
     diff["result"] = {0: "clean", 2: "whitespace or conflict-marker findings"}.get(
         diff["exit_status"], f"diff check failed ({diff['result']})")
     facts["diff_check"] = diff
-    facts["adoption"] = local_json(snapshot, ["bash", f"{SCRIPTS}/check-adoption.sh", "--json"], doctor=False)
+    facts["adoption"] = worktree_fact("check-adoption.sh", doctor=False)
     facts["ci"] = ci_fact(collector, snapshot, pr, head)
     facts["path_checks"] = map_paths(snapshot, span, rules, facts["ci"])
     # Commands record collection provenance, not steps for the reviewer to execute.

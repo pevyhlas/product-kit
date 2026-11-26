@@ -654,6 +654,7 @@ it 'A failing, truncated, or malformed HEAD inventory is unavailable and does no
 git checkout -q --detach "$BASE" || exit 1
 printf '# Product\n\n- **C-01 Base promise**: Scope: all.\n' > specs/product.md
 git add specs/product.md && git commit -qm 'record a BASE bound' || exit 1
+record_only_base="$BASE"
 BASE="$(git rev-parse HEAD)"
 printf 'after\n' > label.txt
 git commit -qam 'enumeration failure control' || exit 1
@@ -693,5 +694,49 @@ exec "$real" "$@"
 EOF
 } > "$fault_bin/git"
 compare_bounds unavailable 'actual child record missing or unrecoverable' env PATH="$fault_bin:$PATH"
+
+it 'ASCII case aliases are rejected before copying either HEAD path, preserving BASE'
+git checkout -q --detach "$BASE" || exit 1
+upper=specs/product/Guides.md
+lower=specs/product/guides.md
+# Create both names in the Git tree without relying on a case-sensitive checkout.
+upper_blob="$(printf '# Upper\n\n- **C-11 Upper**: Scope: all.\n  Keep the original upper body.\n' | git hash-object -w --stdin)" || exit 1
+git update-index --add --cacheinfo "100644,$upper_blob,$upper" &&
+    git commit -qm 'add binding upper path' || exit 1
+BASE="$(git rev-parse HEAD)"
+lower_blob="$(printf '# Lower\n\n- **C-12 Lower**: Scope: all.\n' | git hash-object -w --stdin)" || exit 1
+git -c core.ignoreCase=false update-index --add --cacheinfo "100644,$lower_blob,$lower" &&
+    git commit -qm 'add case-alias path' || exit 1
+compare_bounds unavailable 'ASCII case-fold collision'
+assert_contains "$(jq -r '.facts.bounds.stderr' "$CACHE/index.json")" 'ASCII case-fold collision'
+assert_not_contains "$(cat "$parity_pkg/bounds-inputs.tsv")" "$upper"
+assert_not_contains "$(cat "$parity_pkg/bounds-inputs.tsv")" "$lower"
+assert_contains "$(cat "$parity_pkg/bounds-base.txt")" 'C-11 Upper'
+assert_contains "$(cat "$parity_pkg/bounds-base-inputs.tsv")" "$upper"
+assert_contains "$(cat "$parity_pkg"/context-sections/*.txt)" 'Keep the original upper body.'
+run bash "$BIN/build-review-package.sh" "$ID" "$BASE" --context "$upper" --context "$lower"
+assert_eq 0 "$STATUS" "$OUTPUT"
+pkg="$(jq -er .PACKAGE_DIR <<< "$OUTPUT")"
+assert_eq unavailable "$(cat "$pkg/bounds-status.txt")"
+assert_eq '' "$([ ! -e "$pkg/context/specs" ] || printf present)" 'explicit context must not materialize either alias'
+
+for path in specs/product/group specs/parts/group vendor/group; do
+    it "An opaque gitlink is a bounds gap only under the spec root: $path"
+    git checkout -q --detach "$record_only_base" || exit 1
+    # A gitlink to an unavailable object, with no submodule worktree to read.
+    git update-index --add --cacheinfo "160000,$(printf '%0*d' "${#record_only_base}" 1),$path" &&
+        git commit -qm "add gitlink at $path" || exit 1
+    BASE="$(git rev-parse HEAD)"
+    printf 'gitlink control\n' > label.txt
+    git add label.txt && git commit -qm 'keep gitlink unchanged' || exit 1
+    if [ "$path" = vendor/group ]; then
+        compare_bounds absent "$empty_bounds"
+        assert_not_contains "$(cat "$parity_pkg/context-gaps.txt")" 'unsafe spec input'
+    else
+        compare_bounds unavailable "unsafe spec input $path"
+        assert_contains "$(jq -r '.facts.bounds.stderr' "$CACHE/index.json")" "unsafe spec input $path"
+        assert_contains "$(cat "$parity_pkg/context-gaps.txt")" "unresolved BASE obligation: unsafe spec input $path"
+    fi
+done
 
 finish

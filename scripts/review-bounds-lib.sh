@@ -37,13 +37,34 @@ review_bounds_spec_entry() { # include obstructions at normal spec directories
         specs/*.md) return 0 ;;
         specs|specs/product|specs/architecture|specs/parts|specs/decisions|specs/changes)
             [[ "$1" != '040000 tree '* ]] ;;
+        specs/*)
+            case "$1" in '040000 tree '*|'100644 blob '*|'100755 blob '*) return 1 ;; *) return 0 ;; esac ;;
         *) return 1 ;;
     esac
 }
 
-review_bounds_list() { # rev, spool, diagnostic callback; sets bounds_spec_presence
-    local rev="$1" paths="$2" note="$3" entry path count=0 expected presence=absent
+review_bounds_path_key() { # encode line delimiters without losing any Git path bytes
+    bounds_path_key="${1//%/%25}"
+    bounds_path_key="${bounds_path_key//$'\n'/%0a}"
+    bounds_path_key="${bounds_path_key//$'\r'/%0d}"
+}
+
+review_bounds_blocked() { # alias list, path; reject exact aliases and descendants
+    [ -s "$1" ] || return 1
+    local bounds_path_key alias
+    review_bounds_path_key "$2"
+    while IFS= read -r alias; do
+        case "$bounds_path_key" in "$alias"|"$alias"/*) return 0 ;; esac
+    done < "$1"
+    return 1
+}
+
+review_bounds_list() { # rev, spool, diagnostic callback; sets presence and gitlink flag
+    local rev="$1" paths="$2" note="$3" entry path count=0 expected presence=absent bounds_path_key
     bounds_spec_presence=unknown
+    bounds_has_gitlinks=false
+    : > "$paths.aliases" || return 1
+    # Git is trusted: its exit status and successful output are trusted; these checks only validate transport framing.
     if git -C "$REPO_ROOT" ls-tree -r -t -z "$rev" -- specs > "$paths" &&
         expected="$(verify_nul_count "$paths")"; then
         while IFS= read -r -d '' entry; do
@@ -51,10 +72,25 @@ review_bounds_list() { # rev, spool, diagnostic callback; sets bounds_spec_prese
             [[ "${entry%%$'\t'*}" =~ ^[0-7]{6}\ (tree|blob|commit)\ ([0-9a-f]{40}|[0-9a-f]{64})$ &&
                 "$entry" != "$path" ]] || break
             case "$path" in specs|specs/*) ;; *) break ;; esac
+            if review_bounds_spec_entry "$entry" "$path"; then
+                presence=present
+                case "$entry" in '160000 commit '*) bounds_has_gitlinks=true ;; esac
+            fi
+            review_bounds_path_key "$path"
+            printf '%s\n' "$bounds_path_key" || break
             count=$((count+1))
-            if review_bounds_spec_entry "$entry" "$path"; then presence=present; fi
-        done < "$paths"
-        if [ "$count" -eq "$expected" ]; then bounds_spec_presence="$presence"; return; fi
+        done < "$paths" > "$paths.names" || count=-1
+        if [ "$count" -eq "$expected" ] && LC_ALL=C awk '
+            { paths[NR] = $0; count[tolower($0)]++ }
+            END { for (i = 1; i <= NR; i++) if (count[tolower(paths[i])] > 1) print paths[i] }
+        ' "$paths.names" > "$paths.aliases"; then
+            bounds_spec_presence="$presence"
+            if [ ! -s "$paths.aliases" ]; then return 0; fi
+            while IFS= read -r path; do
+                "$note" canon "ASCII case-fold collision: $path at $rev"
+            done < "$paths.aliases"
+            return 1
+        fi
     fi
     : > "$paths"
     "$note" canon "cannot completely enumerate spec entries at $rev"
@@ -72,7 +108,11 @@ review_bounds_specs() { # rev, material dir, optional input TSV, checked spool, 
     if [ -n "$inputs" ]; then : > "$paths.captured" || return 1; fi
     while IFS= read -r -d '' entry; do
         path="${entry#*$'\t'}"
-        case "$path" in specs/changes/*) continue ;; esac
+        if review_bounds_blocked "$paths.aliases" "$path"; then status=1; continue; fi
+        case "$path" in
+            specs/changes/*)
+                case "$entry" in '040000 tree '*|'100644 blob '*|'100755 blob '*) continue ;; esac ;;
+        esac
         review_bounds_spec_entry "$entry" "$path" || continue
         if [[ "$path" = specs/*.md ]] && safe_path "$path" object &&
             blob="$(review_bounds_entry_blob "$entry")"; then
@@ -126,8 +166,9 @@ review_bounds_record_rev() { # HEAD and path -> scope revision
     return 1
 }
 
-review_bounds_record() { # rev, path, material dir, optional input TSV
+review_bounds_record() { # rev, path, material dir, optional input TSV, checked spool
     local rev="$1" path="$2" material="$3" inputs="$4" entry blob
+    ! review_bounds_blocked "$5.aliases" "$path" || return 1
     entry="$(git -C "$REPO_ROOT" ls-tree "$rev" -- ":(literal)$path")" &&
         blob="$(review_bounds_entry_blob "$entry" plain)" &&
         mkdir -p "$(dirname "$material/$path")" || return 1
@@ -146,11 +187,10 @@ review_bounds_items() { # material dir, output, description, diagnostic callback
     fi
 }
 
-review_bounds_capture_head() { # HEAD, material dir, input TSV, spool, spec IDs, diagnostic callback
+review_bounds_capture_head() { # HEAD, material dir, input TSV, checked spool, spec IDs, diagnostic callback
     local rev="$1" material="$2" inputs="$3" paths="$4" items="$5" note="$6" ok=true
     local LC_ALL=C
     export LC_ALL
-    review_bounds_list "$rev" "$paths" "$note" || ok=false
     review_bounds_specs "$rev" "$material" "$inputs" "$paths" "$note" || ok=false
     review_bounds_items "$material" "$items" "HEAD spec ID inventory incomplete at $rev" "$note" || ok=false
     "$ok"
@@ -198,8 +238,16 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     trap 'rm -rf "$work"' EXIT
     scope=''; complete=true
     path="specs/changes/$id.md"
+    review_bounds_list "$head" "$work/specs" review_bounds_note || complete=false
+    if [ -s "$work/specs.aliases" ] && [ -n "${4:-}" ]; then cat "$work/specs.aliases" > "$4"; fi
     if rev="$(review_bounds_record_rev "$head" "$path")"; then
-        if review_bounds_record "$rev" "$path" "$work/material" ""; then scope="$id"
+        spool="$work/specs"
+        if [ "$rev" != "$head" ]; then
+            spool="$work/historical"
+            review_bounds_list "$rev" "$spool" review_bounds_note || :
+        fi
+        if ! review_bounds_blocked "$work/specs.aliases" "$path" &&
+            review_bounds_record "$rev" "$path" "$work/material" "" "$spool"; then scope="$id"
         else review_bounds_note child "unreadable child record $rev:$path"; fi
     fi
     review_bounds_capture_head "$head" "$work/material" "$work/inputs" "$work/specs" "$work/items" review_bounds_note || complete=false

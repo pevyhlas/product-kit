@@ -26,6 +26,8 @@ change by change.
 - Ordinary `--evidence` files now sit at `evidence/<basename>` (numbered for collisions),
   not `evidence/<repo-relative-path>`. Find the copied name and source in `manifest.tsv`.
   `evidence/facts/` remains reserved. Existing rounds are retained; rebuild to use the new layout.
+- The facts cache key moves from 4 to 5. Regenerate version 4 packs with `facts.sh`
+  before verifying or attaching them; retained review rounds do not need migration.
 
 ### Fixed
 
