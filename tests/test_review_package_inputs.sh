@@ -97,9 +97,9 @@ reject_reserved() {
     assert_contains "$OUTPUT" "conflicting --evidence $path"
 }
 
-[ "$#" -gt 0 ] || set -- context paths facts obligations reconcile references reference-style edge-blanks nontext
+[ "$#" -gt 0 ] || set -- context paths facts obligations reconcile references reference-style plain-brackets edge-blanks nontext
 for mode in "$@"; do
-    case "$mode" in obligations|reconcile|references|reference-style|edge-blanks|nontext) setup_small ;; *) setup ;; esac
+    case "$mode" in obligations|reconcile|references|reference-style|plain-brackets|edge-blanks|nontext) setup_small ;; *) setup ;; esac
     # The default exercises installed behavior; the override supports replay against a prior builder.
     BUILD="${PACKAGE_TEST_BUILDER:-$P/.prdkit/scripts/bash/build-review-package.sh}"
     case "$mode" in
@@ -524,10 +524,11 @@ EOF
                 assert_contains "$(cat "$PKG/context-gaps.txt")" "undefined reference label multi\\ word at $(git rev-parse HEAD):$parent:$use_line"
             fi
 
-            it "HEAD cannot erase an undefined BASE shortcut by detaching the child"
-            sed 's/\[ UpStream   Ready \]/[unbound-shortcut]/' "$parent" > .git/parent
+            it "HEAD cannot erase an undefined BASE collapsed reference by detaching the child"
+            git checkout -qb undefined-collapsed "$BASE" || exit 1
+            sed 's/\[STRASSE   Check\]\[\]/[unbound-collapsed][]/' "$parent" > .git/parent
             cp .git/parent "$parent"
-            git commit -qam 'establish a parent with an unresolved shortcut' || exit 1
+            git commit -qam 'establish a parent with an unresolved collapsed reference' || exit 1
             BASE="$(git rev-parse HEAD)"
             git update-ref refs/remotes/origin/main "$BASE"
             sed 's/Parent\*\*: 900-programme/Parent**: —/' "$record" > .git/record
@@ -535,9 +536,83 @@ EOF
             git commit -qam 'remove the parent reference' || exit 1
             if build; then
                 section="$(obligations_section)"
-                use_line="$(awk '/\[unbound-shortcut\]/ { print NR }' "$parent")"
+                use_line="$(awk '/\[unbound-collapsed\]/ { print NR }' "$parent")"
                 assert_contains "$section" '**Required full context:** A BASE obligation could not be resolved.'
-                assert_contains "$(cat "$PKG/context-gaps.txt")" "unresolved BASE obligation: undefined reference label unbound-shortcut at $BASE:$parent:$use_line"
+                assert_contains "$(cat "$PKG/context-gaps.txt")" "unresolved BASE obligation: undefined reference label unbound-collapsed at $BASE:$parent:$use_line"
+            fi ;;
+        plain-brackets)
+            it "Undefined bare brackets in child prose do not suppress inline BASE obligations"
+            record="specs/changes/$ID.md"
+            prose='Retries are clamped to [0, 1]; keep the [optional] indicator localized.'
+            printf '\n%s\n' "$prose" >> "$record"
+            git commit -qam 'bind acceptance with literal bracket notation' || exit 1
+            BASE="$(git rev-parse HEAD)"
+            git update-ref refs/remotes/origin/main "$BASE"
+            printf 'implementation with literal brackets\n' > label.txt
+            git commit -qam 'implementation-only change' || exit 1
+            if build; then
+                section="$(obligations_section)"
+                assert_contains "$section" "$prose"
+                assert_contains "$section" 'Acceptance: Preserve the exported public label.'
+                assert_contains "$section" 'Keep the published label stable for automated clients.'
+                assert_not_contains "$section" '**Required full context:**'
+                assert_not_contains "$(cat "$PKG/context-gaps.txt")" 'undefined reference label'
+                assert_not_contains "$(cat "$PKG/diff.patch")" "$prose"
+            fi
+
+            it "Selected parent checklists stay inline for unordered and ordered task markers"
+            git checkout -qb parent-tasks "$BASE^" || exit 1
+            parent=specs/changes/900-programme.md
+            sed 's/\*\*Tier\*\*: T1/**Tier**: T1 · **Parent**: 900-programme/' "$record" > .git/record
+            cp .git/record "$record"
+            cat > "$parent" <<'EOF'
+# Programme
+
+## Outcome checkpoint
+
+Keep the rollout compatible.
+
+## Children
+
+| Child | Outcome |
+|---|---|
+| 001-small | Keep the existing interface. |
+
+## Dependencies
+
+- [x] The owner approved the rollout window.
+- [ ] Keep the old label available.
+* [X] Confirm support handover.
++ [x] Confirm documentation handover.
+1. [X] Record the approval.
+2) [x] Check the rollout.
+EOF
+            git add specs && git commit -qm 'bind a selected parent checklist' || exit 1
+            BASE="$(git rev-parse HEAD)"
+            git update-ref refs/remotes/origin/main "$BASE"
+            printf 'implementation with parent checklist\n' > label.txt
+            git commit -qam 'implementation-only change with unchanged checklist' || exit 1
+            if build; then
+                section="$(obligations_section)"
+                assert_contains "$section" '[x] The owner approved the rollout window.'
+                assert_contains "$section" '[x] Check the rollout.'
+                assert_contains "$section" 'Acceptance: Preserve the exported public label.'
+                assert_not_contains "$section" '**Required full context:**'
+                assert_eq 'verification no verification evidence supplied; dispatch pending' "$(cat "$PKG/context-gaps.txt")" 'the parent checklist adds no context gap'
+            fi
+
+            it "Task markers are not shortcuts even if the document defines x"
+            printf '\n## References\n\n[x]: missing.md#not-a-task-destination\n' >> "$parent"
+            git commit -qam 'add an unused definition matching a task marker' || exit 1
+            BASE="$(git rev-parse HEAD)"
+            git update-ref refs/remotes/origin/main "$BASE"
+            printf 'implementation with unused definition\n' > label.txt
+            git commit -qam 'implementation-only change with unchanged definition' || exit 1
+            if build; then
+                section="$(obligations_section)"
+                assert_contains "$section" '[x] The owner approved the rollout window.'
+                assert_not_contains "$section" '**Required full context:**'
+                assert_not_contains "$(cat "$PKG/context-gaps.txt")" 'missing.md'
             fi ;;
         edge-blanks)
             it "A moved bound without the separator blank line renders once from BASE"

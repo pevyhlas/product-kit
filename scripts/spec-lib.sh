@@ -962,7 +962,8 @@ function link_label(s,    out,i,c,b,n,k,v) {
 # count when the destination looks like a path, footnotes never. URLs (`//host` too) and targets
 # leaving the repository are not printed by default. --with-destinations reports links at the
 # usage (not definition) line, followed by target, status, and destination including fragment.
-# It keeps local anchors and emits undefined labels with empty target and status "undefined".
+# It keeps local anchors and emits undefined full or collapsed references with empty target and
+# status "undefined". Bare brackets without a definition and task-list markers are literal text.
 spec_links() { # root [--with-destinations] [file...]
     local root="$1" files=() file listed destinations=0; shift
     if [ "${1:-}" = --with-destinations ]; then destinations=1; shift; fi
@@ -1057,7 +1058,7 @@ spec_links() { # root [--with-destinations] [file...]
             if (!(label in definition)) definition[label]=t
             return j
         }
-        function link_scan(s, row,    i,j,k,c,next_ch,skip,text,label,raw,line,lead) {
+        function link_scan(s, row,    i,j,k,c,next_ch,skip,text,label,raw,line,lead,explicit) {
             for (i=1; i<=length(s); i++) {
                 c=substr(s,i,1)
                 if (c=="\\" && link_punct(substr(s,i+1,1))) { i++; continue }
@@ -1066,11 +1067,16 @@ spec_links() { # root [--with-destinations] [file...]
                 j=link_close(s,i,"[","]",1); if (!j) continue
                 text=substr(s,i+1,j-i-1) # awk-bytes-ok: between verified ASCII brackets
                 next_ch=substr(s,j+1,1)
-                lead=substr(s,1,i-1); line=row+gsub(/\n/,"",lead) # awk-bytes-ok: prefix ending before the ASCII opening bracket
+                lead=substr(s,1,i-1) # awk-bytes-ok: prefix ending before the ASCII opening bracket
+                if (j==i+2 && (text==" " || text=="\t" || text=="x" || text=="X") &&
+                    (next_ch=="" || index(" \t\r\n",next_ch)) &&
+                    lead ~ /(^|\n)[ \t]*([-+*]|[0-9]+[.)])[ \t]+$/) { i=j; continue }
+                line=row+gsub(/\n/,"",lead)
                 if (next_ch=="(" && (k=link_close(s,j+1,"(",")",1))) {
                     emit(target(substr(s,j+2,k-j-2)),doc,line); i=k; continue # awk-bytes-ok: between verified ASCII parentheses
                 }
-                if (next_ch=="[" && (k=link_close(s,j+1,"[","]",0))) {
+                explicit=(next_ch=="[" && (k=link_close(s,j+1,"[","]",0)))
+                if (explicit) {
                     raw=(k==j+2 ? text : substr(s,j+2,k-j-2)); j=k # awk-bytes-ok: between verified ASCII brackets
                 } else {
                     # A shortcut uses a label, not arbitrary nested link text.
@@ -1079,7 +1085,7 @@ spec_links() { # root [--with-destinations] [file...]
                 }
                 label=link_label(raw); if (label=="") continue
                 if (label in definition) emit(definition[label],doc,line)
-                else print doc "\037" line "\037\037undefined\037" label
+                else if (explicit) print doc "\037" line "\037\037undefined\037" label
                 i=j
             }
         }
