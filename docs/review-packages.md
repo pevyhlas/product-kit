@@ -3,18 +3,25 @@
 `build-review-package.sh CHANGE BASE [HEAD]` retains the full BASE..HEAD commits, diffstat and
 binary diff. `--since REV` adds a focused delta using the existing trusted merge-base and
 automatic-merge/fallback rules; it never replaces the full diff. `--context PATH` snapshots a
-whole tracked regular file at HEAD; `--evidence PATH` copies stable local evidence without
-certifying its revision, completion or applicability. `--facts` copies the exact change's
+whole tracked regular file at HEAD; `--evidence PATH` copies stable local evidence to
+`evidence/<basename>` without certifying its revision, completion or applicability. Duplicate
+source paths are copied once. Basename collisions (including ASCII case variants) get the next
+available numeric suffix (`ci.md`, `ci-2.md`, etc.) in attachment order. Use `manifest.tsv` for
+the exact name, repo-relative source, and copied blob. `--facts` copies the exact change's
 cached pair to `evidence/facts/{summary.md,index.json}` without certifying its binding.
 All input paths are repository-relative. Ordinary `--evidence` cannot use the source paths
-`facts` or `facts/*`, including ASCII case variants, even in a package without `--facts`.
+`facts` or `facts/*`, or a file whose basename is `facts`, including ASCII case variants,
+even in a package without `--facts`.
 
 ## Read order
 
 The package's `index.md` and the [review prompt](../templates/review-prompt-template.md) direct
 reviewers to open `diff.patch` first, then `evidence/facts/summary.md` if the coordinator verified
-the attached pair, then the **Review obligations** section of `index.md`. That section shows
-binding BASE text and trusted default-branch policy with source pointers. Unchanged obligations
+the attached pair, then the **Review obligations** section of `index.md`. Read `obligations.md`
+next if linked there as required. This keeps the normal path to at most four package reads.
+The index shows a compact obligation list inline when it fits; the companion holds the same
+text when it doesn't. It includes binding BASE text and trusted default-branch policy with
+source pointers. Unchanged obligations
 appear once. Comparisons ignore leading and trailing blank lines, but leave captured bytes
 untouched and preserve every other whitespace difference. Changed text appears directly below
 its BASE counterpart, marked proposed; new text is proposed only, and removals retain the
@@ -22,8 +29,9 @@ BASE text marked for review. Reviewers reconcile the proposals against BASE, as 
 in the [review workflow](../workflows/review.md#review). Facts don't set obligations or grant
 approval, and their bounds inventory does not show full bound bodies.
 
-The inline excerpt budget is 16 KiB, including source labels and formatting. If the captured
-material would exceed it, is not valid UTF-8 text, a BASE obligation cannot be resolved, or a
+The index shows at most 2 KiB of excerpts. The excerpt budget for the obligation list as a
+whole is 16 KiB, including source labels and formatting. If the captured material would
+exceed that budget, is not valid UTF-8 text, a BASE obligation cannot be resolved, or a
 selected full or collapsed reference has no definition, the index shows no partial list and
 explicitly requires reading `context-manifest.tsv`, the relevant packaged context, the bounds
 inventories with their input bindings if present, and `context-gaps.txt`. Inline text permits
@@ -145,6 +153,9 @@ It never fetches. The change record must exist at `HEAD`. Python 3.11+ (stdlib o
 `jq` isn't. Only `--pr` with `gh` available triggers a host read through `pr-state.sh`. A missing,
 failed or mismatched PR snapshot is **not collected**, never green. Check names and links from
 the snapshot are preserved exactly. The PR's base tip can differ from the local diff's merge base.
+With verified facts, that summary is the place to read the collected status; without facts the
+package index states that it did not collect exact-head CI. Do not investigate missing optional
+CI evidence by default. When policy requires that evidence, it still must be verified.
 
 The local collectors run against a private, detached snapshot of committed `HEAD`, with its own
 Git index, metadata and object store. They see only objects reachable from `HEAD` within the
@@ -180,6 +191,8 @@ no migration is needed.
 
 The summary covers captured collector results. The bounds collector lists constraints, non-goals
 and qualities; it does not assess compliance, spec or design fit, or correctness.
+With a valid record but no spec inputs for bounds at HEAD, it reports that no spec bounds apply
+at that revision. It does not waive binding BASE bounds.
 Collector failures are recorded in a successfully written pack. Exit 2 is a refusal (such as
 bad inputs, head mismatch, unsafe snapshot links, changed inputs during collection or unsafe cache).
 

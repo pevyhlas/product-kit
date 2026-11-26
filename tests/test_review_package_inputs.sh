@@ -69,7 +69,7 @@ setup_small() {
     P="$(make_inited_project)" || exit 1
     track_tmp "$P"; cd "$P" || exit 1
     ID=001-small
-    package_small_obligation_fixture "$ID" || exit 1
+    package_small_obligation_fixture "$ID" "${1:-}" || exit 1
     BASE="$(git rev-parse HEAD^)"
 }
 setup_no_specs() {
@@ -103,7 +103,11 @@ integrity() {
 }
 
 default_reads() { awk '/^## Open first/{ open=1; next } /^## /{ open=0 } open && /^[0-9]+\. /' "$PKG/index.md"; }
-obligations_section() { sed -n '/^## Review obligations$/,/^## Open only if/p' "$PKG/index.md"; }
+default_read_paths() { default_reads | sed -e 's/^[0-9][0-9]*\. \[\([^]]*\)\].*/\1/' -e 's/^[0-9][0-9]*\. `\([^`]*\)`.*/\1/'; }
+obligations_section() {
+    sed -n '/^## Review obligations$/,/^## Evidence status/p' "$PKG/index.md"
+    if [ -f "$PKG/obligations.md" ]; then cat "$PKG/obligations.md"; fi
+}
 non_verification_gaps() { sed '/^verification /d' "$PKG/context-gaps.txt"; }
 released_context_retained() { # opt-in with a local v3.2.0 builder; named exceptions follow
     [ -n "${PACKAGE_TEST_REFERENCE_BUILDER:-}" ] || return 0
@@ -146,10 +150,11 @@ reject_reserved() {
     assert_contains "$OUTPUT" "conflicting --evidence $path"
 }
 
-[ "$#" -gt 0 ] || set -- context paths facts obligations no-specs empty-endpoints merged-history reconcile references reference-style plain-brackets edge-blanks nontext
+[ "$#" -gt 0 ] || set -- context paths facts lean obligations no-specs empty-endpoints merged-history reconcile references reference-style plain-brackets edge-blanks nontext
 for mode in "$@"; do
     case "$mode" in
         obligations|reconcile|references|reference-style|plain-brackets|edge-blanks|nontext) setup_small ;;
+        lean) setup_small installed-policy ;;
         no-specs|empty-endpoints|merged-history) setup_no_specs ;;
         *) setup ;;
     esac
@@ -168,7 +173,7 @@ for mode in "$@"; do
                 assert_contains "$section" "$no_specs"
                 assert_not_contains "$section" '**Required full context:**'
                 assert_not_contains "$section" 'mark the review pending'
-                assert_eq 2 "$(default_reads | wc -l | tr -d ' ')" 'only diff and inline obligations by default'
+                assert_eq $'diff.patch\nindex.md\nobligations.md' "$(default_read_paths)" 'only diff, index and obligations by default'
                 assert_eq "child actual child record missing or unrecoverable: specs/changes/$ID.md" \
                     "$(non_verification_gaps)" 'only the released missing-child warning remains'
                 assert_eq '' "$(awk -F '\t' '$3 ~ /^specs\// {print}' "$PKG/context-manifest.tsv")" 'no spec obligations'
@@ -505,11 +510,13 @@ EOF
         facts)
             it "Only copied facts get a spot in the default reading list"
             if build; then
-                assert_eq 2 "$(default_reads | wc -l | tr -d ' ')" 'diff and obligations without facts'
+                assert_eq $'diff.patch\nindex.md' "$(default_read_paths)" 'diff and inline obligations without facts'
                 assert_contains "$(default_reads)" '2. `index.md`, [Review obligations]'
                 assert_not_contains "$(default_reads)" 'evidence/facts/'
                 assert_eq absent "$([ -e "$PKG/evidence/facts" ] || echo absent)"
                 assert_contains "$(cat "$PKG/index.md")" '## Open only if a finding needs it'
+                assert_eq 1 "$(grep -Fc 'Exact-head CI: not collected' "$PKG/index.md")"
+                assert_not_contains "$(cat "$PKG/context-gaps.txt")" 'CI'
             fi
             cache=".prdkit/cache/evidence/$ID/facts"
             mkdir -p "$cache" proof
@@ -527,19 +534,60 @@ EOF
             reject_reserved facts/summary.md
             reject_reserved facts/summary.md --facts
             reject_reserved Facts/summary.md
-            if build --facts --evidence proof/result.txt; then
+            printf 'Conflicting nested leaf\n' > proof/Facts
+            reject_reserved proof/Facts
+            mkdir -p other third
+            printf 'Cached CI note\n' > "${cache%/facts}/ci.md"
+            printf 'Existing numbered note\n' > proof/CI-2.MD
+            printf 'Second CI note\n' > other/ci.md
+            printf 'Third CI note\n' > third/CI.md
+            if build --facts --evidence proof/result.txt --evidence "${cache%/facts}/ci.md" \
+                --evidence proof/CI-2.MD --evidence other/ci.md --evidence third/CI.md --evidence other/ci.md; then
                 assert_eq 2 "$(jq .ROUND <<<"$OUTPUT")" 'validation failures do not allocate a round'
-                assert_eq $'diff.patch\nevidence/facts/summary.md\nindex.md' \
-                    "$(default_reads | sed -e 's/^[0-9][0-9]*\. \[\([^]]*\)\].*/\1/' -e 's/^[0-9][0-9]*\. `\([^`]*\)`.*/\1/')" \
-                    'exact default read order'
+                assert_eq $'diff.patch\nevidence/facts/summary.md\nindex.md' "$(default_read_paths)" 'exact default read order'
                 assert_contains "$(cat "$PKG/index.md")" 'no other file is a default read'
-                assert_file "$PKG/evidence/proof/result.txt"
+                assert_file "$PKG/evidence/result.txt"
+                assert_eq absent "$([ -e "$PKG/evidence/.prdkit" ] && echo present || echo absent)"
+                for mapping in "ci.md:${cache%/facts}/ci.md" 'CI-2.MD:proof/CI-2.MD' 'ci-3.md:other/ci.md' 'CI-4.md:third/CI.md'; do
+                    name="${mapping%%:*}"; source="${mapping#*:}"
+                    run cmp "$PKG/evidence/$name" "$source"
+                    assert_eq 0 "$STATUS" "shallow copy of $source"
+                    assert_eq "caller-supplied:$source (verify producer revision/result)" \
+                        "$(awk -F '\t' -v path="evidence/$name" '$1 == path { print $4 }' "$PKG/manifest.tsv")"
+                done
+                assert_eq 1 "$(grep -Fc 'caller-supplied:other/ci.md ' "$PKG/manifest.tsv")" 'repeated source is copied once'
+                assert_not_contains "$(cat "$PKG/index.md")" 'Exact-head CI: not collected'
+                assert_contains "$(cat "$PKG/index.md")" 'Exact-head CI: see the facts summary'
+                assert_not_contains "$(cat "$PKG/context-gaps.txt")" 'CI'
                 assert_file "$PKG/bounds.txt"
                 assert_file "$PKG/bounds-inputs.tsv"
                 assert_contains "$(cat "$PKG/context-manifest.tsv")" 'trusted default-branch policy'
                 for name in summary.md index.json; do
                     assert_file "$PKG/evidence/facts/$name"
                     assert_contains "$(cat "$PKG/manifest.tsv")" "caller-supplied:$cache/$name"
+                done
+                integrity
+            fi ;;
+        lean)
+            it "One line of source change with installed policy stays below 4 KiB and four default reads"
+            assert_eq $'1\t1\tlabel.txt' "$(git diff --numstat "$BASE" HEAD)"
+            run env PRDKIT_TODAY=2026-01-02 bash .prdkit/scripts/bash/facts.sh "$ID" --base "$BASE"
+            assert_eq 0 "$STATUS" "$OUTPUT"
+            if build --facts; then
+                bytes="$(wc -c < "$PKG/index.md")"
+                if [ "$bytes" -le 4096 ]; then _ok "index is $bytes bytes"; else _no 'index exceeds 4 KiB' "$bytes"; fi
+                assert_eq $'diff.patch\nevidence/facts/summary.md\nindex.md\nobligations.md' "$(default_read_paths)"
+                assert_not_contains "$(cat "$PKG/index.md")" '**Required full context:**'
+                assert_not_contains "$(cat "$PKG/index.md")" 'Release-label edits require the application smoke check.'
+                assert_contains "$(cat "$PKG/obligations.md")" 'Release-label edits require the application smoke check.'
+                assert_contains "$(cat "$PKG/obligations.md")" 'Acceptance: Preserve the exported public label.'
+                assert_contains "$(cat "$PKG/obligations.md")" 'Keep the published label stable for automated clients.'
+                assert_contains "$(cat "$PKG/obligations.md")" 'coordinator must verify the copied facts pair'
+                assert_contains "$(cat "$PKG/manifest.tsv")" $'obligations.md\t'
+                for source in .prdkit/memory/{constitution,agents,config}.md; do
+                    artifact="$(awk -F '\t' -v p="$source" '$3 == p && $7 == "policy" {print $1}' "$PKG/context-manifest.tsv")"
+                    run cmp "$PKG/$artifact" "$source"
+                    assert_eq 0 "$STATUS" "trusted $source remains byte-exact"
                 done
                 integrity
             fi ;;
@@ -551,7 +599,7 @@ EOF
             assert_eq 0 "$STATUS" "$OUTPUT"
             if build --facts; then
                 assert_contains "$(default_reads)" '3. `index.md`, [Review obligations]' 'required default read'
-                section="$(sed -n '/^## Review obligations$/,/^## Open only if/p' "$PKG/index.md")"
+                section="$(obligations_section)"
                 assert_contains "$section" 'Acceptance: Preserve the exported public label.'
                 assert_contains "$section" 'Release-label edits require the application smoke check.'
                 assert_contains "$section" 'Keep the published label stable for automated clients.'
@@ -563,7 +611,7 @@ EOF
                 assert_contains "$section" 'Source: .prdkit/memory/constitution.md:'
                 assert_contains "$section" 'Source: specs/product/constraints.md:'
                 assert_contains "$section" '### Unresolved context and verification'
-                assert_contains "$section" 'caller-supplied evidence requires revision/result/applicability verification'
+                assert_contains "$section" 'coordinator must verify the copied facts pair'
                 assert_not_contains "$section" '**Required full context:**'
                 integrity
             fi
@@ -579,11 +627,11 @@ EOF
             git add first.md second.md; git commit -qm 'add two long explicit obligations'
             if build --context first.md; then
                 assert_not_contains "$(cat "$PKG/index.md")" '**Required full context:**'
-                assert_contains "$(cat "$PKG/index.md")" 'EXPLICIT_END first.md'
+                assert_contains "$(cat "$PKG/obligations.md")" 'EXPLICIT_END first.md'
             fi
             if build --context first.md --context second.md; then
-                section="$(sed -n '/^## Review obligations$/,/^## Open only if/p' "$PKG/index.md")"
-                assert_contains "$section" 'captured obligations exceed the 16384-byte inline cap'
+                section="$(obligations_section)"
+                assert_contains "$section" 'captured obligations exceed the 16384-byte excerpt cap'
                 assert_contains "$section" 'No partial obligation list is shown'
                 assert_contains "$section" '[context-manifest.tsv](context-manifest.tsv)'
                 assert_contains "$section" '[context-gaps.txt](context-gaps.txt)'

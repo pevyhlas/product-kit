@@ -692,12 +692,20 @@ review_context_build() {
         printf 'context/%s\t%s\t%s\t%s\t%s\t%s\t%s\tExplicit context (%s)\n' \
             "$path" "$explicit_rev" "$path" "$blob" "$a" "$count" "$explicit_kind" "$path" >> "$PACKAGE_DIR/context-manifest.tsv"
     done
-    if [ "${#EVIDENCE[@]}" -eq 0 ]; then context_gap verification "no verification evidence supplied; dispatch pending"
-    else context_gap verification "caller-supplied evidence requires revision/result/applicability verification; no semantic inference"; fi
+    if $ATTACH_FACTS; then
+        context_gap verification "coordinator must verify the copied facts pair and its change/range binding before use"
+        if [ "${#EVIDENCE[@]}" -gt 2 ]; then
+            context_gap verification "other caller-supplied evidence requires revision/result/applicability verification; no semantic inference"
+        fi
+    elif [ "${#EVIDENCE[@]}" -eq 0 ]; then
+        context_gap verification "no verification evidence supplied; dispatch pending"
+    else
+        context_gap verification "caller-supplied evidence requires revision/result/applicability verification; no semantic inference"
+    fi
 }
 
 # Render from the same immutable artifacts the manifest binds, not from the working tree.
-# Keep whole excerpts or require the full context: never cut a rule mid-span.
+# Keep whole excerpts inline or in one companion, or require the full context. Never cut a rule mid-span.
 review_inline_text() ( # 0 valid, 3 invalid, other nonzero I/O failure
     set -o pipefail
     # Work on byte values, independent of the installed locales or awk's Unicode support.
@@ -776,37 +784,50 @@ review_obligation_capture() {
     done < "$PACKAGE_SCRATCH/obligation-spans"
     if [ -s "$PACKAGE_DIR/context-gaps.txt" ]; then
         printf '### Unresolved context and verification\n\n' >> "$obligation_draft" || return 1
-        review_obligation_append context-gaps.txt 'Questions to resolve before a verdict' || return $?
+        review_obligation_append context-gaps.txt 'Context gaps and evidence limits; resolve applicable requirements before a verdict' || return $?
     fi
     # Source labels and gaps also contain repo-supplied values. Validate the complete preview.
     review_inline_text "$obligation_draft" || { status=$?; [ "$status" -eq 3 ] && return 3; return 1; }
 }
 
-review_context_obligations() {
-    local obligation_cap=16384 obligation_bytes=0 obligation_draft="$PACKAGE_SCRATCH/obligations" status
+review_context_prepare_obligations() {
+    local obligation_cap=16384 obligation_bytes=0 obligation_draft="$PACKAGE_SCRATCH/obligations"
     # Multiple obligations can cite the same excerpt. Include its body just once.
     awk -F '\t' '
         NR>1 && $1!="-" && $7!~/^(changed-spec|bound-context|explicit-snapshot)$/ &&
         !seen[$2 FS $3 FS $4 FS $5 FS $6]++' "$PACKAGE_DIR/context-manifest.tsv" \
         > "$PACKAGE_SCRATCH/obligation-spans"
     : > "$obligation_draft"
-    if $no_spec_files; then printf 'No spec files at BASE or HEAD; no spec bounds apply.\n\n'; fi
+    obligation_status=0
     if $base_reference_gap; then
-        status=4
+        obligation_status=4
     elif $undefined_link_gap; then
-        status=5
+        obligation_status=5
     elif review_obligation_capture; then
-        cat "$obligation_draft"
-        return
+        if [ "$obligation_bytes" -gt 2048 ]; then
+            { printf '# Review obligations\n\n'; cat "$obligation_draft"; } > "$PACKAGE_DIR/obligations.md"
+            inventory obligations.md "required review obligations and unresolved context"
+        fi
     else
-        status=$?
+        obligation_status=$?
     fi
-    case "$status" in
-        2) printf '**Required full context:** The captured obligations exceed the %s-byte inline cap.\n\n' "$obligation_cap" ;;
+}
+
+review_context_obligations() {
+    if $no_spec_files; then printf 'No spec files at BASE or HEAD; no spec bounds apply.\n\n'; fi
+    case "$obligation_status" in
+        0)
+            if [ -f "$PACKAGE_DIR/obligations.md" ]; then
+                printf '**Required:** Read [obligations.md](obligations.md) for binding text, proposed changes, and any gaps.\n\n'
+            else
+                cat "$PACKAGE_SCRATCH/obligations"
+            fi
+            return ;;
+        2) printf '**Required full context:** The captured obligations exceed the 16384-byte excerpt cap.\n\n' ;;
         3) printf '**Required full context:** A captured artifact cannot be included as inline text.\n\n' ;;
         4) printf '**Required full context:** A BASE obligation could not be resolved. See [context-gaps.txt](context-gaps.txt) for the exact gap.\n\n' ;;
         5) printf '**Required full context:** A reference label is undefined. See [context-gaps.txt](context-gaps.txt) for the exact gap.\n\n' ;;
-        *) return "$status" ;;
+        *) return "$obligation_status" ;;
     esac
     cat <<'EOF'
 No partial obligation list is shown. Before giving a verdict, read

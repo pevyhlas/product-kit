@@ -118,8 +118,8 @@ assert_not_contains "$(cat "$prepared/delta.patch")" 'second change' "delta excl
 assert_contains "$(cat "$prepared/delta.patch")" '+fix' "delta contains fix"
 assert_eq "$(git -C "$dir" show HEAD:alpha.txt)" "$(cat "$prepared/context/alpha.txt")" "context ignores dirty worktree"
 printf 'overwritten\n' > "$dir/results/check.txt"
-assert_contains "$(cat "$prepared/evidence/results/check.txt")" 'exit: 0; PASS' "evidence remains the packaged copy"
-assert_contains "$(cat "$prepared/manifest.tsv")" "$(git -C "$dir" hash-object --no-filters "$prepared/evidence/results/check.txt")" "inventory binds exact copied bytes"
+assert_contains "$(cat "$prepared/evidence/check.txt")" 'exit: 0; PASS' "evidence remains the packaged copy"
+assert_contains "$(cat "$prepared/manifest.tsv")" "$(git -C "$dir" hash-object --no-filters "$prepared/evidence/check.txt")" "inventory binds exact copied bytes"
 assert_contains "$(cat "$prepared/index.md")" 'not proof of completion' "preflight does not claim semantic readiness"
 
 it "optional design context is read from the reviewed commit, not the worktree"

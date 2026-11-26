@@ -17,9 +17,20 @@ change by change.
   of reviewer tiers or restrict commands with Claude Code settings or project hooks.
   The customization guide also shows how to opt into scoped OpenCode V2 maker shell rules.
 - The adoption guide explains how to bootstrap the review gate and when default-branch policy changes take effect.
+- The review package index links one required companion for larger obligation lists rather
+  than inlining bulky policy and excerpts. Missing optional exact-head CI is reported as
+  not collected, not as an open question.
+
+### Changed (breaking)
+
+- Ordinary `--evidence` files now sit at `evidence/<basename>` (numbered for collisions),
+  not `evidence/<repo-relative-path>`. Find the copied name and source in `manifest.tsv`.
+  `evidence/facts/` remains reserved. Existing rounds are retained; rebuild to use the new layout.
 
 ### Fixed
 
+- Exact-head facts no longer report a bounds collection failure when a valid change record
+  has no spec inputs for bounds.
 - Review packages no longer require full context just because neither revision has spec bounds.
   A missing or unrecoverable child record still produces the usual warning.
   Historical records and diagnostics remain review evidence, including for same-ID follow-ups.

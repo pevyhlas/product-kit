@@ -360,13 +360,30 @@ def ci_fact(collector, snapshot, pr, head):
     return fact
 
 
+def bounds_may_be_empty(snapshot, head):
+    # A blocked canon path can disappear from the materialized helper's file scan. Do
+    # not turn that into a successful absence report; the package retains the exact gaps.
+    roots = {b"specs", b"specs/product", b"specs/architecture", b"specs/parts", b"specs/decisions"}
+    for entry in snapshot.git("ls-tree", "-rtz", head, "--", "specs").split(b"\0")[:-1]:
+        metadata, path = entry.split(b"\t", 1)
+        if path in roots and not metadata.startswith(b"040000 tree "):
+            return False
+        if (path.endswith(b".md") and not path.startswith(b"specs/changes/") and
+                not metadata.startswith((b"100644 blob ", b"100755 blob "))):
+            return False
+    return True
+
+
 def collect(collector, snapshot, change_id, base, head, pr):
     inputs = snapshot.inputs(base, head)
     rules, config_stamp = load_map(snapshot.root)
     span = f"{base}..{head}"
     facts = {"doctor": local_json(snapshot, ["bash", f"{SCRIPTS}/doctor.sh", "--json"], doctor=True)}
-    bounds = snapshot.script("bounds", change_id)
-    if (bounds["exit_status"] == 0 and bounds["details"].startswith(f"Bounds for {change_id} ") and
+    allow_empty = bounds_may_be_empty(snapshot, head)
+    bounds = snapshot.script("bounds", change_id, *(("--allow-empty",) if allow_empty else ()))
+    if allow_empty and bounds["exit_status"] == 0 and bounds["details"] == "No spec bounds apply at this revision.":
+        bounds["result"] = bounds["details"]
+    elif (bounds["exit_status"] == 0 and bounds["details"].startswith(f"Bounds for {change_id} ") and
             bounds["details"].splitlines()[-1].startswith("Mark each in the record's Bounds:")):
         bounds["result"] = "applicable bounds listed below and in index.json"
     else:
@@ -417,7 +434,7 @@ def summary(pack, index):
         f"# Review facts: {pack['change_id']}", "",
         f"Authoritative evidence for base `{key['base']}` and head `{key['head']}` only.",
         "Answers: What did doctor and adoption report? Is the range free of `git diff --check` findings?",
-        "Which bounds apply to the diff? Which checks does the path map require, and are required CI checks green at this head?",
+        "Also reports the HEAD bounds, the path-to-check map, and the exact-head CI observation.",
         "Use these captured facts; do not rerun the collectors or reread the spec to derive these answers.",
         "Does not answer design fit, correctness, or spec fit, including whether the diff respects the listed bounds. Those are the reviewer's job.",
         "Evidence only — not a gate decision, approval, or merge authorization.", "",
@@ -430,17 +447,23 @@ def summary(pack, index):
         lines.append(f"- **{label}:** {one_line(facts[name]['result'])}")
 
     detail = []
-    for name in ("bounds", "ci", "path_checks", "doctor", "diff_check", "adoption"):
+    for name in ("ci", "bounds", "path_checks", "doctor", "diff_check", "adoption"):
         label = labels[name]
         fact = facts[name]
         data = fact.get("details")
         if name in {"doctor", "adoption"} and isinstance(data, dict):
             rows = data["findings"] + [f"Advisory: {line}" for line in data.get("advisories", [])]
-        elif name == "ci" and data:
+        elif name == "ci":
+            # Missing CI and its reason are already reported once above. Full diagnostics stay in JSON.
+            if data is None:
+                continue
             rows = [f"{row['name']}: {row['conclusion'] or row['status']}" for row in data["required_checks"]]
+        elif name == "bounds" and data == fact["result"]:
+            continue
         elif name == "path_checks":
-            rows = [f"{path} → " + ", ".join(f"{row['name']}: {row['conclusion'] or row['status'] or row['state']}"
-                                            for row in checks)
+            rows = [f"{path} → " + ", ".join(
+                row["name"] if row["state"] == "not collected" else
+                f"{row['name']}: {row['conclusion'] or row['status'] or row['state']}" for row in checks)
                     for path, checks in fact["paths"].items() if checks]
         else:
             rows = data.splitlines() if isinstance(data, str) else []

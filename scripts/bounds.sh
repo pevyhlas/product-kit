@@ -2,6 +2,7 @@
 # bounds.sh — The constraints, non-goals and qualities a change must respect. Read-only.
 #
 # Usage: bounds.sh <change-id> | bounds.sh --all
+# Exact-head collectors may pass --allow-empty after the scope to report absent spec bounds.
 #
 # Scope starts from the change record's header (`**Parts**: P2 · **Journeys**: J-01`) in
 # specs/changes/<change-id>.md, widened through the parts table: a named part adds the journeys
@@ -17,7 +18,7 @@ source "$SCRIPT_DIR/common.sh"
 source "$SCRIPT_DIR/spec-lib.sh"
 bounds_for_root() { # root, scope, [complete capture allows empty bounds]
 local root="$1" allow_empty="${3:-false}"; shift
-usage='Usage: bounds.sh <change-id> | bounds.sh --all'
+usage='Usage: bounds.sh <change-id> | bounds.sh --all (optional trailing --allow-empty)'
 case "${1:-}" in
     -h|--help) echo "$usage"; exit 0 ;;
     '') echo "$usage" >&2; exit 2 ;;
@@ -189,5 +190,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
             exit 2
         fi
     fi
-    bounds_for_root "$root" "${1:-}"
+    allow_empty=false
+    if [ "${2:-}" = --allow-empty ]; then allow_empty=true; fi
+    bounds_for_root "$root" "${1:-}" "$allow_empty"
 fi

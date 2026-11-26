@@ -318,6 +318,14 @@ assert_eq true "$(jq --arg head "$NEXT_SHA" '
        {name:"Verify",state:"reported",status:"COMPLETED",conclusion:"FAILURE"}]
 ' "$INDEX")"
 assert_contains "$(cat "$SUMMARY")" '1/4 required check(s) green'
+run bash "$BIN/build-review-package.sh" "$ID" "$BASE" "$NEXT_SHA" --facts
+assert_eq 0 "$STATUS" "$OUTPUT"
+pkg="$(jq -r .PACKAGE_DIR <<<"$OUTPUT")"
+assert_contains "$(cat "$pkg/index.md")" 'Exact-head CI: see the facts summary'
+assert_not_contains "$(cat "$pkg/index.md")" 'not collected'
+assert_not_contains "$(cat "$pkg/context-gaps.txt")" 'CI'
+assert_contains "$(cat "$pkg/evidence/facts/summary.md")" '1/4 required check(s) green'
+assert_contains "$(cat "$pkg/evidence/facts/summary.md")" 'Verify: FAILURE'
 cp "$INDEX" "$saved/online.json"
 sleep 1
 run bash "$BIN/facts.sh" --verify "$ID" --pr 7
@@ -363,6 +371,8 @@ run env GH_STUB_OFFLINE=true bash "$BIN/facts.sh" "$ID" --pr 7
 assert_eq 0 "$STATUS" "$OUTPUT"
 assert_eq true "$(jq '.facts.ci.exit_status == 2 and .facts.ci.details == null
     and (.facts.ci.result | startswith("not collected: "))' "$INDEX")"
+assert_eq 1 "$(grep -Fc 'not collected' "$SUMMARY")" 'missing CI is stated once, not repeated per path or diagnostic'
+assert_not_contains "$(cat "$SUMMARY")" 'check(s) green'
 
 it 'hydrating an unreachable archive proof cannot change facts without changing HEAD history'
 proof_repo="$(mktemp -d)"; track_tmp "$proof_repo"
@@ -484,4 +494,47 @@ run bash "$BIN/facts.sh" "$ID"
 assert_eq 2 "$STATUS"
 assert_contains "$OUTPUT" 'unsafe facts file: summary.md'
 assert_symlink "$SUMMARY"
+it 'A record-only specs tree has no spec bounds in either the snapshot or the package'
+P="$(make_inited_project)" || exit 1
+track_tmp "$P"; cd "$P" || exit 1
+ID=001-record-only
+CACHE=".prdkit/cache/evidence/$ID/facts"
+mkdir -p specs/changes
+printf '# Change\n\n**Tier**: T1\n' > "specs/changes/$ID.md"
+printf 'before\n' > label.txt
+snapshot_upgrade_fixture "$P" || exit 1
+BASE="$(git rev-parse HEAD)"
+printf 'after\n' > label.txt
+git commit -qam 'edit label without spec inputs' || exit 1
+run bash "$BIN/facts.sh" "$ID" --base "$BASE"
+assert_eq 0 "$STATUS" "$OUTPUT"
+empty_bounds='No spec bounds apply at this revision.'
+assert_eq true "$(jq --arg notice "$empty_bounds" '
+    .facts.bounds | .exit_status == 0 and .result == $notice and .details == $notice
+' "$CACHE/index.json")"
+run bash "$BIN/build-review-package.sh" "$ID" "$BASE" --facts
+assert_eq 0 "$STATUS" "$OUTPUT"
+pkg="$(jq -r .PACKAGE_DIR <<<"$OUTPUT")"
+assert_eq "$empty_bounds" "$(cat "$pkg/bounds.txt")"
+assert_eq 1 "$(grep -Fc "$empty_bounds" "$pkg/evidence/facts/summary.md")"
+assert_not_contains "$(cat "$pkg/evidence/facts/summary.md")" 'bounds not collected'
+assert_not_contains "$(cat "$pkg/context-gaps.txt")" 'bounds unavailable'
+
+it 'A malformed scope still fails collection even without spec inputs for bounds'
+printf '# Change\n\n**Tier**: T1 · **Parts**: P1 · **Parts**: P2\n' > "specs/changes/$ID.md"
+git commit -qam 'make record scope ambiguous' || exit 1
+run bash "$BIN/facts.sh" "$ID" --base "$BASE"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_contains "$(cat "$CACHE/summary.md")" 'bounds not collected (exit 1)'
+assert_not_contains "$(cat "$CACHE/summary.md")" "$empty_bounds"
+
+it 'An unsafe canon entry cannot be mistaken for absent spec bounds'
+git show "$BASE:specs/changes/$ID.md" > "specs/changes/$ID.md"
+ln -s missing.md specs/product.md
+git add specs && git commit -qm 'add an unresolved spec link' || exit 1
+run bash "$BIN/facts.sh" "$ID" --base "$BASE"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_contains "$(cat "$CACHE/summary.md")" 'bounds not collected (exit 2)'
+assert_not_contains "$(cat "$CACHE/summary.md")" "$empty_bounds"
+
 finish
