@@ -1884,6 +1884,159 @@ assert_eq 0 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
 mv "$arch.saved" "$arch"
 rm "$EX/specs/components"
 
+it "residue cannot leak out of an inline construct in a filled spec"
+printf 'Delivery and tooling are documented here.\n' > "$EX/specs/delivery, tooling"
+cp "$arch" "$arch.saved"
+for boundary in link-comment link-backtick html-comment html-backtick ordered-marker empty-bullet \
+        reference-definition inline-unclosed block-comment table-block-comment; do
+    cp "$arch.saved" "$arch"
+    printf '\n## Markdown boundaries\n\n' >> "$arch"
+    expected=1
+    case "$boundary" in
+        link-comment)
+            cat >> "$arch" <<'MD'
+[Guide](https://example.org "The <!-- delimiter").
+
+Architecture still needs <delivery, tooling>.
+MD
+            ;;
+        link-backtick)
+            cat >> "$arch" <<'MD'
+[Guide](https://example.org "A ` delimiter"). Architecture still needs <delivery, tooling>. Then a literal `.
+MD
+            ;;
+        html-comment)
+            cat >> "$arch" <<'MD'
+The <span title="The <!-- delimiter">guide</span> is deployed.
+
+Architecture still needs <delivery, tooling>.
+MD
+            ;;
+        html-backtick)
+            cat >> "$arch" <<'MD'
+The <span title="A ` delimiter">guide</span> is deployed. Architecture still needs <delivery, tooling>. Then a literal `.
+MD
+            ;;
+        ordered-marker)
+            expected=0
+            cat >> "$arch" <<'MD'
+Example `raw
+2. <delivery, tooling> text`.
+MD
+            ;;
+        empty-bullet)
+            expected=0
+            cat >> "$arch" <<'MD'
+Example `raw
+*
+<delivery, tooling> text`.
+MD
+            ;;
+        reference-definition)
+            cat >> "$arch" <<'MD'
+[Guide][docs], [the local notes][local], [the overview][overview], and [the API][api].
+
+[docs]: https://example.org "<delivery, tooling>"
+[local]: <delivery, tooling>
+[overview]: https://example.org '<delivery, tooling> <!--'
+[api]: https://example.org (A ` delimiter and <delivery, tooling>)
+
+Architecture still needs <delivery, tooling>. Then a literal `.
+MD
+            ;;
+        inline-unclosed)
+            cat >> "$arch" <<'MD'
+Example <!-- raw.
+
+Architecture still needs <delivery, tooling>.
+
+Close here -->.
+MD
+            ;;
+        block-comment)
+            cat >> "$arch" <<'MD'
+Architecture note with an unmatched `.
+<!-- This genuine comment starts on its own line, even with a ` and <delivery, tooling> here.
+
+## Not a heading
+The hidden example was <delivery, tooling>.
+
+--> Architecture still needs <delivery, tooling>.
+MD
+            ;;
+        table-block-comment)
+            cat >> "$arch" <<'MD'
+| Topic | Notes |
+|-------|-------|
+| First | Details |
+<!-- A genuine comment with a pipe | <delivery, tooling>.
+
+More hidden text: <delivery, tooling>.
+
+--> Architecture still needs <delivery, tooling>.
+MD
+            ;;
+    esac
+    run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
+    assert_eq "$expected" "$STATUS" "$boundary: $OUTPUT"
+    assert_eq "[$expected,$expected]" "$(jq -c '[.trace["template-placeholder"], (.findings | length)]' <<< "$OUTPUT")" "$boundary: $OUTPUT"
+done
+mv "$arch.saved" "$arch"
+rm "$EX/specs/delivery, tooling"
+
+it "the real Parts table resolves backticks, comments and escaped pipes within each cell"
+cp "$arch" "$arch.saved"
+for boundary in code paired-comment open-comment escaped-pipe; do
+    case "$boundary" in
+        code) before='`'; after='`' ;;
+        paired-comment) before='<!--'; after='-->' ;;
+        open-comment) before='<!--'; after='example' ;;
+        escaped-pipe)
+            # shellcheck disable=SC2016 # backticks are literal Markdown
+            before='`A\|B`'; after='example'
+            ;;
+    esac
+    ROW_BEFORE="$before" ROW_AFTER="$after" awk '
+        function replace_cell(row, col, value,   cells,n,i,out) {
+            n = split(row, cells, /\|/)
+            cells[col] = value
+            for (i = 1; i <= n; i++) out = out (i > 1 ? "|" : "") cells[i]
+            return out
+        }
+        /^\| Part \|/ && /\| Components \|/ {
+            n = split($0, columns, /\|/)
+            for (c = 1; c <= n; c++) if (columns[c] == " Components ") col = c
+            sub(/\| Components \|/, "| Before | Components | After |")
+            print
+            getline; print replace_cell($0, col, " --- | --- | --- ")
+            getline; print replace_cell($0, col, " " ENVIRON["ROW_BEFORE"] " | <components> | " ENVIRON["ROW_AFTER"] " ")
+            next
+        }
+        { print }
+    ' "$arch.saved" > "$arch"
+    if [ "$boundary" = open-comment ]; then
+        cat >> "$arch" <<'MD'
+
+## Markdown boundaries
+
+| Topic | Notes |
+|-------|-------|
+| First | <!-- example |
+| Second | <delivery, tooling> |
+
+Architecture still needs <delivery, tooling>.
+MD
+        expected=3
+    else
+        expected=1
+    fi
+    run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
+    assert_eq 1 "$STATUS" "$boundary: $OUTPUT"
+    assert_eq "[$expected,1]" "$(jq -c '[.trace["template-placeholder"], (.findings | length)]' <<< "$OUTPUT")" "$boundary: $OUTPUT"
+    assert_contains "$OUTPUT" '(<components>)'
+done
+mv "$arch.saved" "$arch"
+
 it "an untouched caption in the kit's two-stage journey table fails strict doctor"
 product="$EX/specs/product.md"
 sed -i.bak 's/^\(| Requests | | \)\[J-01\]/\1[J-01 <journey>]/' "$product"

@@ -23,6 +23,8 @@ change by change.
 - Fresh installs mark seeded Rigor `light` as unconfirmed; independent reviewers must not use it
   as owner policy. Ordinary `doctor.sh` advises on the marker and leftover fill-in slots in
   project seeds, with JSON trace counts `unconfirmed-default` and `template-placeholder`.
+  Residue checking skips link destinations and titles and keeps inline parsing within each block
+  or table cell, so a stray delimiter cannot hide placeholders farther down a spec.
   **Fresh installs now fail `doctor.sh --strict`** until the project fills or removes the slots
   and the owner chooses Rigor and removes the marker. Existing projects with leftover scaffold
   can also fail strict doctor after upgrading, even with unmarked Rigor. Plain upgrade preserves

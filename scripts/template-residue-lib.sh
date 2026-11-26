@@ -175,15 +175,15 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
             gsub(/[^\n]+/, ignored, text)
             return text
         }
-        # Resolve each block in source order. A code opener looks ahead for its
-        # exact closing run before any comment bytes in the span can be seen.
-        # Conversely a real comment owns all bytes through its closing marker.
-        function mask_text(text,   out,at,n,rest,tmp,token) {
-            while (match(text, /\\[[:punct:]]|`+|<!--|</)) {
+        # Consume inline syntax in source order, within one block or cell.
+        # An opener owns its matched payload; nothing inside is scanned again.
+        function mask_inline(text,   out,at,n,rest,tmp,token,ch,depth,link,span,tag) {
+            while (match(text, /\\[[:punct:]]|`+|<!--|[][]|</)) {
                 at = RSTART
                 n = RLENGTH
                 out = out substr(text, 1, at - 1); text = substr(text, at)
-                if (substr(text, 1, 1) == "`") {
+                ch = substr(text, 1, 1)
+                if (ch == "`") {
                     rest = substr(text, n + 1)
                     if ((at = code_end(rest, n))) {
                         out = out masked(substr(text, 1, n + at))
@@ -191,11 +191,25 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
                     }
                 } else if (substr(text, 1, n) == "<!--") {
                     rest = substr(text, 5); at = index(rest, "-->")
-                    if (!at) { comment = 1; return out masked(text) }
-                    n = at + 6
-                    out = out masked(substr(text, 1, n)); text = substr(text, n + 1); continue
-                } else if (substr(text, 1, 1) == "<") {
-                    # One stock prompt contains literal Markdown code itself.
+                    if (at) {
+                        n = at + 6
+                        out = out masked(substr(text, 1, n)); text = substr(text, n + 1); continue
+                    }
+                } else if (ch == "[") depth++
+                else if (ch == "]" && depth) {
+                    depth--
+                    if (substr(text, 2, 1) == "(" && (at = link_end(substr(text, 3), link))) {
+                        span = link[1]
+                        # Keep the destination visible only to explicit stock link anchors.
+                        gsub(/</, destination, span)
+                        out = out "](" span (link[2] == "" ? "" : masked(link[2])) ")"
+                        text = substr(text, at + 3); continue
+                    }
+                } else if (ch == "<") {
+                    if ((tag = markup_prefix(text)) != "") {
+                        out = out masked(tag); text = substr(text, length(tag) + 1); continue
+                    }
+                    # A stock prompt can itself contain literal Markdown code.
                     tmp = text; gsub(/\n/, " ", tmp)
                     if (match(tmp, angle) && RSTART == 1) {
                         token = normalize(substr(tmp, 1, RLENGTH))
@@ -218,32 +232,46 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
             }
             return 0
         }
-        # Start just past ](. Balanced bare destinations and angle destinations
-        # may end with a quoted link title. Return the position of the final ).
-        function link_end(s,   i,ch,depth,gap,delimiter) {
-            match(s, /^[[:space:]]*/); i = RLENGTH + 1
+        # Return the first character after the bare or angle-delimited destination.
+        function destination_end(s, i,   ch,depth,at) {
             if (substr(s, i, 1) == "<") {
-                if (!(i = quoted_end(s, i, ">"))) return 0
-                i++
-            } else {
-                for (; i <= length(s); i++) {
-                    ch = substr(s, i, 1)
-                    if (escaped(s, i)) i++
-                    else if (ch == "(") depth++
-                    else if (ch == ")") { if (!depth) return i; depth-- }
-                    else if (index(" \t\n\r\f\v", ch)) break
-                }
-                if (depth) return 0
+                at = quoted_end(s, i, ">")
+                return at ? at + 1 : 0
             }
-            if (substr(s, i, 1) == ")") return i
-            match(substr(s, i), /^[[:space:]]+/); gap = RLENGTH
-            if (gap <= 0) return 0
+            for (; i <= length(s); i++) {
+                ch = substr(s, i, 1)
+                if (escaped(s, i)) i++
+                else if (ch == "(") depth++
+                else if (ch == ")") { if (!depth) return i; depth-- }
+                else if (index(" \t\n\r\f\v", ch)) break
+            }
+            return depth ? 0 : i
+        }
+        # After a destination, consume an optional whitespace-separated title.
+        # An inline link must end at ), a reference definition at end of line.
+        function link_tail(s, i, terminal,   gap,ch,at) {
+            match(substr(s, i), /^[[:space:]]*/); gap = RLENGTH
             i += gap; ch = substr(s, i, 1)
-            if (ch == ")") return i
-            delimiter = (ch == "(" ? ")" : ch)
-            if (ch == "" || !index("\"\047(", ch) || !(i = quoted_end(s, i, delimiter))) return 0
-            match(substr(s, i + 1), /^[[:space:]]*\)/)
-            return (RLENGTH > 0 ? i + RLENGTH : 0)
+            if (ch == terminal) return i
+            if (!gap || ch == "" || !index("\"\047(", ch)) return 0
+            at = quoted_end(s, i, (ch == "(" ? ")" : ch))
+            if (!at) return 0
+            match(substr(s, at + 1), /^[[:space:]]*/)
+            i = at + RLENGTH + 1
+            return substr(s, i, 1) == terminal ? i : 0
+        }
+        function link_end(s, parts,   start,stop,end) {
+            match(s, /^[[:space:]]*/); start = RLENGTH + 1
+            if (!(stop = destination_end(s, start)) || !(end = link_tail(s, stop, ")"))) return 0
+            parts[1] = substr(s, 1, stop - 1)
+            parts[2] = substr(s, stop, end - stop)
+            return end
+        }
+        function reference_definition(s,   start,stop) {
+            if (!match(s, /^ ? ? ?\[(\\[[:punct:]]|[^][\\])+\]:[[:blank:]]*/)) return 0
+            start = RLENGTH + 1
+            stop = destination_end(s, start)
+            return stop > start && link_tail(s, stop, "")
         }
         function markup_prefix(s,   n,tag,name,flat) {
             if (match(s, /^<([A-Za-z][A-Za-z0-9+.-]+:[^<>[:space:][:cntrl:]]*|[A-Za-z0-9.!#$%&*+\/=?^_`{|}~-]+@[A-Za-z0-9][A-Za-z0-9.-]*)>/) ||
@@ -263,55 +291,42 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
             flat = tag; gsub(/\n/, " ", flat)
             return (normalize(flat) in stock) ? "" : tag
         }
-        function mask_markup(text,   out,at,n,lead,depth,span,ch,tag) {
-            while (match(text, /\\[[:punct:]]|[][]|</)) {
-                at = RSTART; n = RLENGTH
-                out = out substr(text, 1, at - 1); text = substr(text, at)
-                ch = substr(text, 1, 1)
-                if (ch == "[") depth++
-                else if (ch == "]" && depth) {
-                    depth--
-                    if (substr(text, 2, 1) == "(" && (lead = link_end(substr(text, 3)))) {
-                        n = lead + 2; span = substr(text, 1, n)
-                        gsub(/</, destination, span)
-                        out = out span; text = substr(text, n + 1); continue
-                    }
-                } else if (ch == "<" && (tag = markup_prefix(text)) != "") {
-                    out = out masked(tag); text = substr(text, length(tag) + 1); continue
-                }
-                out = out substr(text, 1, n); text = substr(text, n + 1)
+        function split_cells(line, cells,   out,sep,pipe,n) {
+            while (match(line, /\\[\\|]/)) {
+                sep = substr(line, RSTART, RLENGTH)
+                out = out substr(line, 1, RSTART - 1) (sep == "\\|" ? ignored : sep)
+                line = substr(line, RSTART + RLENGTH)
             }
-            return out text
-        }
-        function split_cells(line, cells) {
-            gsub(/\\\|/, ignored, line)
-            sub(/^\|/, "", line); sub(/\|$/, "", line)
-            return split(line, cells, /\|/)
+            line = out line
+            pipe = index(line, "|")
+            sub(/^ *\|/, "", line); sub(/\| *$/, "", line)
+            n = split(line, cells, /\|/)
+            cells[0] = pipe
+            return n
         }
         function table_ahead(line, row, base,   divider,k,n,parts) {
             if (row >= last || line !~ /\|/ || line ~ /^    /) return 0
             divider = relative(src[row + 1], base)
             if (divider !~ /\|/ || divider ~ /^    /) return 0
             n = split_cells(normalize(divider), parts)
+            if (!parts[0]) return 0
             for (k = 1; k <= n; k++)
                 if (parts[k] !~ /^ *:?-+:? *$/) return 0
-            return n
+            return (split_cells(line, parts) == n && parts[0]) ? n : 0
         }
-        function start_table(line, expected,   k,n,name) {
-            n = split_cells(line, columns)
-            if (n != expected) return 0
+        function start_table(parts, n,   k,name) {
             for (k = 1; k <= n; k++) {
-                name = tolower(normalize(columns[k]))
+                parts[k] = normalize(mask_inline(parts[k]))
+                name = tolower(parts[k])
                 columns[k] = name; headers[name] = 1
                 if (name ~ / \(now\)$/ || name ~ /^<(now|next|later) stage>$/ ||
                     (section == "journeys" && name in stage_name)) stage_columns[name] = 1
             }
-            return n
         }
         function end_table(   key) {
             for (key in headers) delete headers[key]
             for (key in stage_columns) delete stage_columns[key]
-            stage_table = width = 0
+            stage_table = 0
         }
         function scan_plain(names, line, nr,   groups,n,g,k,i,token,at) {
             n = split(names, groups, " ")
@@ -348,7 +363,7 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
             if (group == "constitution" && section == "commands") group_names = group " " group "@commands"
         }
         function body(text, first, item, heading,   a,n,i,j,nr,tail,value) {
-            n = split(mask_markup(mask_text(text)), a, "\n")
+            n = split(mask_inline(text), a, "\n")
             for (i = 1; i <= n; i++) a[i] = normalize(a[i])
             if (heading && a[1] ~ /^##?( |$)/) set_section(a[1])
             for (i = 1; i <= n; i++) {
@@ -376,38 +391,33 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
             comment = 0
             return ignored substr(text, at + 3)
         }
-        function table_text(text) {
-            if (comment) text = comment_tail(text)
-            return normalize(mask_markup(mask_text(text)))
-        }
-        function table(first, base, text, expected,   rows,i,j,k,m,parts) {
-            rows[first] = table_text(text)
-            width = start_table(rows[first], expected)
-            for (i = first + 2; i <= last; i++) {
-                text = relative(src[i], base)
-                if (text !~ /\|/ || text ~ /^    / || interrupts(text)) break
-                rows[i] = table_text(text)
-            }
+        function table(first, base, text, width,   values,counts,i,j,k,n,parts) {
+            split_cells(text, parts)
+            start_table(parts, width)
+            counts[first] = width
+            for (k = 1; k <= width; k++) values[first,k] = parts[k]
             if ("area" in headers) {
                 for (k in stage_columns) { stage_table = 1; break }
-                # A journey link identifies a custom stage column, without
-                # treating every column in a journey table as a stage.
-                if (section == "journeys" || stage_table)
-                    for (j = first + 2; j < i; j++) {
-                        m = split_cells(rows[j], parts)
-                        for (k = 1; k <= m && k <= width; k++)
-                            if (columns[k] != "area" && parts[k] ~ /\]\(product\/journeys\//) {
-                                stage_columns[columns[k]] = 1
-                                stage_table = 1
-                            }
+            }
+            for (i = first + 2; i <= last; i++) {
+                text = relative(src[i], base)
+                if (text !~ /\|/ || text ~ /^    / || interrupts(text) || reference_definition(text)) break
+                n = split_cells(text, parts)
+                if (!parts[0]) break
+                counts[i] = n
+                for (k = 1; k <= n; k++) {
+                    values[i,k] = normalize(mask_inline(parts[k]))
+                    # A journey link identifies a custom stage column.
+                    if ("area" in headers && (section == "journeys" || stage_table) &&
+                        k <= width && columns[k] != "area" && values[i,k] ~ /\]\(product\/journeys\//) {
+                        stage_columns[columns[k]] = 1
+                        stage_table = 1
                     }
+                }
             }
             for (j = first; j < i; j++) {
-                if (j == first + 1) continue
-                if (!width) { scan(group_names, rows[j], "", j, 0, "body"); continue }
-                m = split_cells(rows[j], parts)
-                for (k = 1; k <= m; k++)
-                    scan(group_names, normalize(parts[k]), "", j, 0,
+                for (k = 1; k <= counts[j]; k++)
+                    scan(group_names, values[j,k], "", j, 0,
                         (j == first ? "body-header" : "body-cell"), (k <= width ? columns[k] : ""))
             }
             end_table()
@@ -442,8 +452,15 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
         function atx(text) {
             return text ~ /^ ? ? ?##?#?#?#?#?( |$)/
         }
-        function interrupts(text) {
-            return (atx(text) || text ~ /^ ? ? ?>/ || fence_run(text) != "" || list_prefix(text) != "" || thematic(text))
+        function comment_prefix(text) {
+            return match(text, /^ ? ? ?<!--/) ? RLENGTH : 0
+        }
+        function interrupts(text, in_paragraph,   prefix) {
+            if (atx(text) || text ~ /^ ? ? ?>/ || fence_run(text) != "" ||
+                thematic(text) || comment_prefix(text)) return 1
+            prefix = list_prefix(text)
+            if (!in_paragraph || prefix == "") return prefix != ""
+            return (length(prefix) < length(text) && prefix ~ /^ *([-*+]|0*1[.)])/)
         }
         function paragraph(first, base, text, item,   i,line) {
             for (i = first + 1; i <= last; i++) {
@@ -451,7 +468,8 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
                 # A setext underline ends the heading; a backtick in its text
                 # cannot pair with a run in the paragraph that follows.
                 if (indent(src[i]) >= base && line ~ /^ ? ? ?(=+|-+) *$/) { i++; break }
-                if (line ~ /^[[:blank:]]*$/ || interrupts(line) || table_ahead(line, i, base)) break
+                if (line ~ /^[[:blank:]]*$/ || interrupts(line, !(item && indent(src[i]) < base)) ||
+                    table_ahead(line, i, base)) break
                 text = text "\n" line
             }
             body(text, first, item, 0)
@@ -477,8 +495,8 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
                 else text = text (i > first + 1 ? "\n" : "") (line ~ /^ *%%/ ? "" : line)
             }
             if (info == "mermaid" && names != "") {
-                n = split(mask_text(text), rows, "\n")
-                comment = 0; diagram = ""
+                n = split(mask_inline(text), rows, "\n")
+                diagram = ""
                 for (j = 1; j <= n; j++) {
                     line = normalize(rows[j])
                     if (line ~ /^(flowchart |sequenceDiagram$)/) { diagram = line; sub(/ .*/, "", diagram) }
@@ -487,7 +505,7 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
             }
             return i
         }
-        function document(   i,text,line,lead,base,depth,indents,items,item,marker_len,prefix,pad,mark,columns_n,quote) {
+        function document(   i,text,line,lead,base,depth,indents,items,item,marker_len,prefix,pad,mark,columns_n,quote,n) {
             group_names = group; section = ""; comment = 0
             i = 1
             if (group == "agent-definition" && src[i] == "---") {
@@ -499,14 +517,16 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
                 line = src[i]
                 if (comment) {
                     line = comment_tail(line)
-                    if (comment) { i++; continue }
+                    if (!comment) body(line, i, 0, 0)
+                    i++
+                    continue
                 }
                 lead = indent(line)
                 while (depth && lead < indents[depth] && line ~ /[^[:blank:]]/) depth--
                 base = (depth ? indents[depth] : 0)
                 text = relative(line, base)
-                if (quote && text !~ /^ *<!--/ && text ~ /[^[:blank:]]/ &&
-                    !interrupts(text) && !table_ahead(text, i, base)) { i++; continue }
+                if (quote && text ~ /[^[:blank:]]/ &&
+                    !interrupts(text, 1) && !table_ahead(text, i, base)) { i++; continue }
                 quote = 0
                 if (text !~ /[^[:blank:]]/ || thematic(text)) { i++; continue }
                 prefix = list_prefix(text)
@@ -522,8 +542,13 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
                     indents[++depth] = base; items[depth] = i
                 }
                 item = (depth ? items[depth] : 0)
-                if (text ~ /^    / || text !~ /[^[:blank:]]/) i++
-                else if (text ~ /^ ? ? ?>/) {
+                if (text ~ /^    / || text !~ /[^[:blank:]]/ || reference_definition(text)) i++
+                else if ((n = comment_prefix(text))) {
+                    comment = 1
+                    text = comment_tail(substr(text, n + 1))
+                    if (!comment) body(text, i, 0, 0)
+                    i++
+                } else if (text ~ /^ ? ? ?>/) {
                     sub(/^([[:blank:]]*>)+[[:blank:]]*/, "", text)
                     quote = (text != "" && text !~ /^<!--/ && !interrupts(text))
                     i++
