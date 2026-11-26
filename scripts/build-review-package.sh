@@ -89,7 +89,7 @@ shift 2
 HEAD_SHA=HEAD
 if [ "$#" -gt 0 ] && [[ "$1" != --* ]]; then HEAD_SHA="$1"; shift; fi
 SINCE=""; CONTEXT=(); EVIDENCE=(); ATTACH_FACTS=false
-PACKAGE_VERSION=package8
+PACKAGE_VERSION=package9
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --facts) ATTACH_FACTS=true; shift ;;
@@ -169,13 +169,14 @@ if [ -n "$SINCE" ]; then
     fi
 fi
 
-safe_path() { # relative path, with no traversal, control characters or symlink components
-    local p="$1" part current="$REPO_ROOT" rest="$1"
+safe_path() { # relative path, with no traversal, control chars or symlinks (unless object-only)
+    local p="$1" part current="$REPO_ROOT" rest="$1" source="${2:-worktree}"
     case "$p" in ''|/*|*/|*//*|*[[:cntrl:]]*) return 1 ;; esac
     while [ -n "$rest" ]; do
         part="${rest%%/*}"
         case "$part" in .|..) return 1 ;; esac
-        current="$current/$part"; [ ! -L "$current" ] || return 1
+        current="$current/$part"
+        [ "$source" = object ] || [ ! -L "$current" ] || return 1
         if [ "$rest" = "$part" ]; then break; fi
         rest="${rest#*/}"
     done
@@ -502,7 +503,7 @@ EOF
 - Review commit: $HEAD_SHA (only an approval on this exact PR head counts).
 - Inventory: manifest.tsv (bytes and Git blob object IDs of exact packaged content).
 - Context: context-manifest.tsv (immutable source revisions, blobs and complete spans; gaps named).
-- Tracked context is read from the named HEAD, never the working copy.
+- Tracked context is read from the named source revision, never the working copy.
 - Evidence is a stable copy, not proof of completion or applicability to HEAD.
 
 ## Before dispatch

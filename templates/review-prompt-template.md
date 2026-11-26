@@ -10,6 +10,8 @@ You did not implement this change. At {REVIEW_PACKAGE_PATH}, open first, in orde
 3. `index.md` → **Review obligations** (second if no verified facts). Check every listed
    obligation, plus any the coordinator supplied inline, against the change. Judge it against
    BASE's existing obligations and trusted default-branch policy, not against proposed HEAD text.
+   This includes BASE parent checkpoints and holds, and cited obligations even when HEAD drops
+   the reference. Do not treat an unresolved BASE source as a removed obligation that can pass.
    Reconcile every changed, new or removed rule or acceptance criterion. A proposed relaxation
    (including removal) is a finding unless the change record justifies it and the owner's
    approval is evidenced through the existing change process.

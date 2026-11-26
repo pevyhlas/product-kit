@@ -20,7 +20,7 @@ for kind in legacy earlier unbound empty unterminated malformed multiline nul; d
     mkdir -p "$ROOT/round-3"
     printf 'interrupted evidence\n' > "$ROOT/round-3/report.txt"
     prior="package3"$'\t'"$ID"$'\t'"$HEAD_SHA"$'\t'"$REF"$'\t'"$BASE"$'\t'"$BASE"$'\tknown\tfull'
-    binding="${prior/package3/package8}"$'\t'"$BASE"$'\t'"$(git hash-object --stdin </dev/null)"
+    binding="${prior/package3/package9}"$'\t'"$BASE"$'\t'"$(git hash-object --stdin </dev/null)"
     case "$kind" in
         legacy) printf '%s\n' "${prior/package3/package1}" > "$ROOT/round-3/completed.tsv" ;;
         earlier) printf '%s\n' "${prior%$'\t'full}" | sed 's/^package3/package2/' > "$ROOT/round-3/completed.tsv" ;;

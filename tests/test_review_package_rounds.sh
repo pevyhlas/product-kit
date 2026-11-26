@@ -23,8 +23,8 @@ F1="$(git rev-parse HEAD)"
 first="$(bash "$SCRIPT" 001-equal "$BASE")"; PKG="$(printf '%s' "$first" | jq -r .PACKAGE_DIR)"
 ROOT="$(dirname "$PKG")"
 it "An old, otherwise valid package is regenerated without editing its files"
-# Simulate a package written before binding BASE obligations were separated.
-sed 's/^package8/package7/' "$PKG/completed.tsv" > "$P/old-binding"
+# Simulate a package written before BASE references were resolved.
+sed 's/^package9/package8/' "$PKG/completed.tsv" > "$P/old-binding"
 cp "$P/old-binding" "$PKG/completed.tsv"
 old_snapshot="$(package_snapshot "$PKG")"
 run bash "$SCRIPT" 001-equal "$BASE"
@@ -166,10 +166,9 @@ for gap in canon historical; do
     cp specs/changes/001-equal.md "specs/changes/$id.md"
     git add "specs/changes/$id.md"; git commit -qm 'add context record'
     if [ "$gap" = historical ]; then
+        historical_blob="$(git rev-parse "HEAD:specs/changes/$id.md")"
         git rm -q "specs/changes/$id.md"; git commit -qm 'retire context record'
-        ln -s 001-equal.md "specs/changes/$id.md"
-        run bash "$SCRIPT" "$id" "$TIP"
-        rm "specs/changes/$id.md"
+        run env DENIED_BLOB="$historical_blob" PATH="$BADGIT:$PATH" bash "$SCRIPT" "$id" "$TIP"
     else
         run env DENIED_BLOB="$(git rev-parse HEAD:specs/architecture.md)" PATH="$BADGIT:$PATH" bash "$SCRIPT" "$id" "$TIP"
     fi

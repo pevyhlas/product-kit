@@ -14,15 +14,17 @@ All input paths are repository-relative. Ordinary `--evidence` cannot use the so
 The package's `index.md` and the [review prompt](../templates/review-prompt-template.md) direct
 reviewers to open `diff.patch` first, then `evidence/facts/summary.md` if the coordinator verified
 the attached pair, then the **Review obligations** section of `index.md`. That section shows
-binding BASE text and trusted default-branch policy with source pointers. Unchanged bounds and
-the unchanged child record (including acceptance) appear once. Changed text appears directly
-below its BASE counterpart, marked proposed; new text is proposed only, and removals retain
-the BASE text marked for review. Reviewers reconcile the proposals against BASE, as described
+binding BASE text and trusted default-branch policy with source pointers. Unchanged obligations
+appear once. Comparisons ignore leading and trailing blank lines, but leave captured bytes
+untouched and preserve every other whitespace difference. Changed text appears directly below
+its BASE counterpart, marked proposed; new text is proposed only, and removals retain the
+BASE text marked for review. Reviewers reconcile the proposals against BASE, as described
 in the [review workflow](../workflows/review.md#review). Facts don't set obligations or grant
 approval, and their bounds inventory does not show full bound bodies.
 
 The inline excerpt budget is 16 KiB, including source labels and formatting. If the captured
-material would exceed it or is not valid UTF-8 text, the index shows no partial list and
+material would exceed it, is not valid UTF-8 text, or a BASE obligation cannot be resolved,
+the index shows no partial list and
 explicitly requires reading `context-manifest.tsv`, the relevant packaged context, the bounds
 inventories with their input bindings if present, and `context-gaps.txt`. Inline text permits
 tab and LF but no other C0, DEL or C1 control characters. This includes rejecting CR even in
@@ -38,21 +40,24 @@ The four-column `manifest.tsv` inventories artifacts. `context-manifest.tsv` add
 
 - the full change record at BASE and HEAD when they differ, plus recovered historical scope on a
   closing head when not already represented;
-- the parent's header, outcome checkpoint, actual child row and dependency/hold/limit sections,
-  not a whole-parent default;
-- uniquely resolved child spec IDs and heading-linked blocks, including nested item bodies;
+- the union of the BASE and HEAD parents' headers, outcome checkpoints, actual child rows, and
+  dependency/hold/limit sections, not whole parent records;
+- spec IDs and heading links cited by the child and selected parent text, resolved at each
+  source revision and including nested item bodies. Dropping a citation or parent reference
+  does not drop the BASE target; a closing record's historical context is labeled separately;
 - the **actual** installed `bounds.sh` output on materialized HEAD canon and the actual child's
   scope (a recovered scope record keeps its historical binding). When relevant inputs differ,
   `bounds-base.txt` and `bounds-base-inputs.tsv` capture the BASE scope independently. With no
   BASE child record, all BASE bounds are considered conservatively. The package compares bound
   bodies by ID across both revisions, including IDs that dropped out of candidate scope;
-- trusted policy/registry/config at `policy_at`, required product/architecture canon, optional
-  `specs/design.md` when present, and conservative part/cross-interface context. Proposed changes
-  remain in the full diff.
+- trusted policy/registry/config at `policy_at`; BASE and HEAD product/architecture canon, optional
+  `specs/design.md`, and conservative part/cross-interface context. The full diff remains
+  authoritative for what changed.
 
 Ambiguous IDs/headings, missing/unsafe objects, unsupported links and unverified verification
-are recorded in `context-gaps.txt`, not silently discarded. Whole-file explicit selections
-remain available. Selections are structural context, never proof of semantic completeness.
+are recorded in `context-gaps.txt`, not silently discarded. Explicit snapshots keep their
+HEAD bytes; when different, the BASE counterpart is also packaged. Selections are structural
+context, not a recursive link crawl or proof of semantic completeness.
 The reviewer needs no shell or network when the package is inside its allowed read boundary.
 The builder does not render the review prompt. The dispatcher sends it and makes the
 [spec review rules](../workflows/review.md#review) readable when reviewing spec edits.

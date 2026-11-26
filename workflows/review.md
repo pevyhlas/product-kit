@@ -21,7 +21,8 @@ the verified `evidence/facts/summary.md` second, if available. Always include `i
 **Review obligations**, as the last default read. The reviewer must check every listed obligation,
 including full bound text, trusted policy and acceptance. A bounds inventory alone is not enough.
 Judge the change against BASE's obligations and trusted default-branch policy. Check each proposed
-or removed rule against the binding text. A proposed relaxation, including removal, is a finding
+or removed rule against the binding text, including BASE parent holds and cited obligations even
+when HEAD drops those references. A proposed relaxation, including removal, is a finding
 unless the change record justifies it and the owner approved it through the existing process:
 see [Spec edits and Bounds](change.md#the-record) for owner quotes and conflict disposition. Do not
 treat proposed acceptance or a candidate bounds inventory as an approved disposition.
@@ -57,8 +58,9 @@ For committed work run `.prdkit/scripts/bash/build-review-package.sh <change-id>
 adding `--context <path>` for selected tracked canon/policy/record files and `--evidence <path>`
 for completed local results; ordinary evidence cannot occupy `evidence/facts/`. The helper checks
 structural accessibility, not semantic completeness. Before dispatch, check the captured obligations
-against the BASE and HEAD change records, relevant canon (including full bound bodies), the parent and dependencies
-where applicable, trusted policy, and the required verification and prior findings. Put any missing
+against the BASE and HEAD change records, relevant canon (including full bound bodies), and the
+parents, citations, and dependencies at both revisions. Check trusted policy separately, along
+with required verification and prior findings. Put any missing
 mandatory obligation or unresolved question inline in the dispatch prompt with its source path.
 Every result names its command, revision, environment, completion/exit status and limits; running
 logs are not completed evidence. Copy required sibling/remote evidence into the

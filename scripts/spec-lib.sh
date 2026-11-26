@@ -837,16 +837,19 @@ spec_files() { # root
 # an unbalanced ")", so a title is dropped; %20 is a space; a leading / starts at the repository
 # root. Inline code, fenced blocks and comments are skipped; reference definitions (`[x]: path`)
 # count when the destination looks like a path, footnotes never. URLs (`//host` too) and targets
-# leaving the repository are not printed.
-spec_links() { # root [file...]
-    local root="$1" files=() file listed; shift
+# leaving the repository are not printed by default. --with-destinations appends the parsed
+# destination (including its fragment), keeps local anchors, and emits unresolved destinations
+# with an empty target so a caller can report a gap.
+spec_links() { # root [--with-destinations] [file...]
+    local root="$1" files=() file listed destinations=0; shift
+    if [ "${1:-}" = --with-destinations ]; then destinations=1; shift; fi
     if [ "$#" -gt 0 ]; then files=("$@")
     else
         listed="$(verify_lines spec_files "$root")" || return 1
         while IFS= read -r file; do [ -z "$file" ] || files+=("$file"); done <<< "$listed"
     fi
     [ "${#files[@]}" -gt 0 ] || return 0
-    (cd "$root" && awk "$SPEC_SKIP_AWK"'
+    (cd "$root" && awk -v destinations="$destinations" "$SPEC_SKIP_AWK"'
         function norm(p,   n, a, i, k, st, out) {
             n = split(p, a, "/"); k = 0
             for (i = 1; i <= n; i++) {
@@ -872,11 +875,16 @@ spec_links() { # root [file...]
             }
             return t
         }
-        function emit(t,   r, base) {
-            if (t ~ /^[A-Za-z][A-Za-z+.-]*:/ || t ~ /^#/ || t ~ /^\/\//) return
-            sub(/[#?].*/, "", t); gsub(/%20/, " ", t); if (t == "") return
-            base = (substr(t, 1, 1) == "/") ? "" : dir
-            r = norm(base t); if (r != "") print FILENAME "\037" FNR "\037" r
+        function emit(t,   r, base, raw) {
+            raw = t; r = ""
+            if (t !~ /^[A-Za-z][A-Za-z+.-]*:/ && t !~ /^\/\//) {
+                sub(/[#?].*/, "", t); gsub(/%20/, " ", t)
+                base = (substr(t, 1, 1) == "/") ? "" : dir
+                if (t != "") r = norm(base t)
+                else if (destinations && raw ~ /^#/) r = FILENAME
+            }
+            if (destinations) print FILENAME "\037" FNR "\037" r "\037" raw
+            else if (r != "") print FILENAME "\037" FNR "\037" r
         }
         FNR == 1 { fence = 0; comment = 0; dir = FILENAME; sub(/[^\/]*$/, "", dir) }
         { if (spec_skip($0)) next }

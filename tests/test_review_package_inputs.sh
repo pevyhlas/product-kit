@@ -97,9 +97,9 @@ reject_reserved() {
     assert_contains "$OUTPUT" "conflicting --evidence $path"
 }
 
-[ "$#" -gt 0 ] || set -- context paths facts obligations reconcile nontext
+[ "$#" -gt 0 ] || set -- context paths facts obligations reconcile references edge-blanks nontext
 for mode in "$@"; do
-    case "$mode" in obligations|reconcile|nontext) setup_small ;; *) setup ;; esac
+    case "$mode" in obligations|reconcile|references|edge-blanks|nontext) setup_small ;; *) setup ;; esac
     # The default exercises installed behavior; the override supports replay against a prior builder.
     BUILD="${PACKAGE_TEST_BUILDER:-$P/.prdkit/scripts/bash/build-review-package.sh}"
     case "$mode" in
@@ -300,6 +300,152 @@ for mode in "$@"; do
                 assert_contains "$section" 'A new proposed expectation.'
                 assert_contains "$section" 'Retain the public alias.'
                 assert_contains "$(cat "$PKG/bounds-base.txt")" 'Bounds for every change'
+            fi ;;
+        references)
+            it "Removing Parent and child references retains binding BASE obligations"
+            record="specs/changes/$ID.md"
+            parent=specs/changes/900-programme.md
+            hold='Owner hold: Do not rename the legacy partner endpoint until integration signs off.'
+            sed 's/\*\*Tier\*\*: T1/**Tier**: T1 · **Parent**: 900-programme/' "$record" > .git/record
+            cp .git/record "$record"
+            printf '\nR-11; [contract](../decisions/guidance.md#contract).\n' >> "$record"
+            mkdir -p specs/decisions
+            printf '# Guidance\n\n## Contract\n\nOriginal linked contract.\n' > specs/decisions/guidance.md
+            printf '# Rules\n\n- **R-11 Rule**: Original cited rule.\n- **R-12 Rule**: Parent-only cited rule.\n' > specs/decisions/rules.md
+            printf '# Design\n\nOriginal design direction.\n' > specs/design.md
+            printf 'Original requested context.\n' > requested.txt
+            cat > "$parent" <<'EOF'
+# Programme
+
+## Outcome checkpoint
+
+Follow the published target before expanding visibility.
+
+## Children
+
+| Child | Outcome |
+|---|---|
+| 001-small | Keep the public contract. |
+| 002-unrelated | Not a selected obligation. |
+
+## Holds and lane limits
+
+Owner hold: Do not rename the legacy partner endpoint until integration signs off.
+R-12; [parent terms](#parent-terms).
+
+## Parent terms
+
+Original linked parent terms.
+EOF
+            git add specs requested.txt && git commit -qm 'binding parent, references and targets' || exit 1
+            BASE="$(git rev-parse HEAD)"
+            git update-ref refs/remotes/origin/main "$BASE"
+            parent_blob="$(git rev-parse "$BASE:$parent")"
+            sed '/^R-11;/d; s/Parent\*\*: 900-programme/Parent**: —/' "$record" > .git/record
+            cp .git/record "$record"
+            printf 'revised label\n' > label.txt
+            printf 'Proposed requested context.\n' > requested.txt
+            git rm -q specs/design.md
+            git commit -qam 'remove parent reference and change the label' || exit 1
+            if build --context requested.txt; then
+                section="$(obligations_section)"
+                assert_not_contains "$section" '**Required full context:**'
+                assert_contains "$section" "$hold"
+                assert_not_contains "$(cat "$PKG/diff.patch")" "$hold" 'hold can only come from committed BASE context'
+                assert_contains "$section" 'Follow the published target before expanding visibility.'
+                assert_contains "$section" 'Keep the public contract.'
+                assert_contains "$section" '| Child | Outcome |'
+                assert_not_contains "$section" 'Not a selected obligation.'
+                assert_contains "$section" 'Original cited rule.'
+                assert_contains "$section" 'Parent-only cited rule.'
+                assert_contains "$section" 'Original linked contract.'
+                assert_contains "$section" 'Original linked parent terms.'
+                assert_contains "$section" 'Original design direction.'
+                assert_contains "$section" 'Canon (specs/design.md) — BASE, removed by this change'
+                assert_contains "$section" 'Explicit context (requested.txt) — BASE, binding for this review'
+                assert_contains "$section" 'Explicit context (requested.txt) — Proposed by this change'
+                assert_eq 'Proposed requested context.' "$(cat "$PKG/context/requested.txt")" 'explicit HEAD snapshot unchanged'
+                assert_contains "$section" 'Parent obligation (900-programme): Holds and lane limits — BASE, removed by this change'
+                assert_contains "$(cat "$PKG/context-manifest.tsv")" "$BASE"$'\t'"$parent"$'\t'"$parent_blob"
+            fi
+
+            it "A worktree symlink cannot mask the unchanged BASE parent object"
+            rm "$parent"
+            ln -s "$ID.md" "$parent"
+            if build --context requested.txt; then
+                section="$(obligations_section)"
+                assert_contains "$section" "$hold"
+                assert_not_contains "$section" '**Required full context:**'
+                assert_contains "$(cat "$PKG/context-manifest.tsv")" "$BASE"$'\t'"$parent"$'\t'"$parent_blob"
+            fi
+            rm "$parent"
+            git show "$BASE:$parent" > "$parent"
+
+            it "Keeping references compares their targets at both revisions"
+            git show "$BASE:$record" > "$record"
+            git show "$BASE:$parent" | sed 's/until integration signs off/without integration sign-off/' > "$parent"
+            sed 's/Original linked contract/Proposed linked contract/' specs/decisions/guidance.md > .git/guidance
+            cp .git/guidance specs/decisions/guidance.md
+            git commit -qam 'change parent hold and linked contract in place' || exit 1
+            if build; then
+                section="$(obligations_section)"
+                assert_contains "$section" 'Parent outcome checkpoint (900-programme) — unchanged from BASE'
+                assert_contains "$section" 'Parent obligation (900-programme): Holds and lane limits — BASE, binding for this review'
+                assert_contains "$section" 'Parent obligation (900-programme): Holds and lane limits — Proposed by this change'
+                assert_contains "$section" 'Linked context (specs/decisions/guidance.md#contract) — BASE, binding for this review'
+                assert_contains "$section" 'Linked context (specs/decisions/guidance.md#contract) — Proposed by this change'
+                assert_contains "$section" 'Proposed linked contract.'
+                assert_eq 1 "$(printf '%s\n' "$section" | grep -Fc 'Follow the published target')" 'unchanged checkpoint only once'
+            fi
+
+            it "An unresolved BASE reference requires full context even after HEAD drops it"
+            git rm -q "$parent" specs/decisions/guidance.md
+            printf '\nR-99.\n' >> "$record"
+            git commit -qam 'binding references to unavailable targets' || exit 1
+            BASE="$(git rev-parse HEAD)"
+            git update-ref refs/remotes/origin/main "$BASE"
+            sed '/^R-/d; s/Parent\*\*: 900-programme/Parent**: —/' "$record" > .git/record
+            cp .git/record "$record"
+            git commit -qam 'remove unresolved references from candidate' || exit 1
+            if build; then
+                section="$(obligations_section)"
+                gaps="$(cat "$PKG/context-gaps.txt")"
+                assert_contains "$section" '**Required full context:** A BASE obligation could not be resolved.'
+                assert_not_contains "$section" 'Preserve the exported public label'
+                assert_contains "$gaps" "parent unresolved BASE obligation: missing/unsafe parent $BASE:$parent"
+                assert_contains "$gaps" "unresolved BASE obligation: missing/unsafe context $BASE:specs/decisions/guidance.md"
+                assert_contains "$gaps" "unresolved BASE obligation: missing/ambiguous spec ID R-99 at $BASE"
+            fi ;;
+        edge-blanks)
+            it "A moved bound without the separator blank line renders once from BASE"
+            rule='- **C-05 Moving bound**: Scope: all.'
+            original=specs/product/constraints.md
+            moved=specs/product/constraints/labels.md
+            printf '\n%s\n  Keep the move sentinel.\n\n' "$rule" >> "$original"
+            git add specs && git commit -qm 'bind a rule with trailing separator' || exit 1
+            BASE="$(git rev-parse HEAD)"
+            git update-ref refs/remotes/origin/main "$BASE"
+            sed '/C-05 Moving bound/,$d' "$original" > .git/constraints
+            cp .git/constraints "$original"
+            mkdir -p specs/product/constraints
+            printf '# Moved rules\n\n%s\n  Keep the move sentinel.\n' "$rule" > "$moved"
+            git add specs && git commit -qm 'move the bound and drop separator blank' || exit 1
+            if build; then
+                section="$(obligations_section)"
+                assert_contains "$section" 'C-05 — unchanged from BASE'
+                assert_not_contains "$section" 'C-05 — Proposed by this change'
+                assert_eq 1 "$(printf '%s\n' "$section" | grep -Fc 'Keep the move sentinel.')" 'move renders once'
+                artifact="$(awk -F '\t' '$7 == "bound-shared" && $8 == "C-05" {print $1}' "$PKG/context-manifest.tsv")"
+                run cmp "$PKG/$artifact" <(printf '%s\n  Keep the move sentinel.\n\n' "$rule")
+                assert_eq 0 "$STATUS" 'the binding excerpt retains the original separator bytes'
+            fi
+            it "Other whitespace changes are not normalized"
+            printf '# Moved rules\n\n%s\n  Keep the move sentinel. \n' "$rule" > "$moved"
+            git commit -qam 'edit nonblank line whitespace' || exit 1
+            if build; then
+                section="$(obligations_section)"
+                assert_contains "$section" 'C-05 — BASE, binding for this review'
+                assert_contains "$section" 'C-05 — Proposed by this change'
             fi ;;
         nontext)
             it "Invalid UTF-8 and controls never enter the required index, and source bytes are retained"
