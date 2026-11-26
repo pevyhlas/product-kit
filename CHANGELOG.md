@@ -29,6 +29,16 @@ change by change.
   an existing constitution without adding the marker; `--force` reseeds it. The review gate still
   reads marked `light` as `light`; the marker tells reviewers to ask the owner.
 
+### Fixed
+
+- Review packages no longer require full context just because neither revision has spec bounds.
+  A missing or unrecoverable child record still produces the usual warning.
+  Historical records and diagnostics remain review evidence, including for same-ID follow-ups.
+  Absent conventional canon and optional trusted registry/config no longer create gaps, even
+  in repositories with specs. Heads packaged in the older format can get a fresh
+  round without migrating or changing earlier evidence. Identical rebuilds of a clean,
+  matching current-format round are still refused.
+
 ## [3.2.0] — 2026-11-26 — lean review package
 
 ### Changed

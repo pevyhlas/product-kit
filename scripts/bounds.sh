@@ -15,8 +15,8 @@
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 source "$SCRIPT_DIR/spec-lib.sh"
-bounds_for_root() { # materialized immutable inputs; same computation as the installed command
-local root="$1"; shift
+bounds_for_root() { # root, scope, [complete capture allows empty bounds]
+local root="$1" allow_empty="${3:-false}"; shift
 usage='Usage: bounds.sh <change-id> | bounds.sh --all'
 case "${1:-}" in
     -h|--help) echo "$usage"; exit 0 ;;
@@ -40,7 +40,14 @@ now="$SPEC_STAGE_NOW"
 files=()
 listed="$(verify_lines spec_files "$root")" || return 1
 while IFS= read -r file; do [ -z "$file" ] || files+=("$file"); done <<< "$listed"
-[ "${#files[@]}" -gt 0 ] || { echo "No spec files under specs/" >&2; exit 2; }
+if [ "${#files[@]}" -eq 0 ]; then
+    if [ "$allow_empty" = true ]; then
+        printf 'No spec bounds apply at this revision.\n'
+        return
+    fi
+    echo "No spec files under specs/" >&2
+    exit 2
+fi
 
 (cd "$root" && awk -v header="$scope" -v now="$now" -v what="${1/--all/every change}" \
     -v stage_order="$SPEC_STAGE_ORDER" -v stage_custom="$SPEC_STAGE_CUSTOM" "$SPEC_SKIP_AWK $SPEC_STAGE_AWK"'
@@ -182,5 +189,5 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
             exit 2
         fi
     fi
-    bounds_for_root "$root" "$@"
+    bounds_for_root "$root" "${1:-}"
 fi
