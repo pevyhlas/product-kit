@@ -21,9 +21,9 @@ change by change.
 ### Fixed
 
 - Review packages no longer require full context just because neither revision has spec bounds.
-  Closing records and their diagnostics are still captured, and added or removed specs are still
-  reviewed. Absent conventional canon and optional trusted registry/config files no longer create
-  gaps, even in repositories with specs. Heads packaged in the older format can get a fresh
+  Historical records and diagnostics remain review evidence, including for same-ID follow-ups.
+  Absent conventional canon and optional trusted registry/config no longer create gaps, even
+  in repositories with specs. Heads packaged in the older format can get a fresh
   round without migrating or changing earlier evidence. Identical rebuilds of a clean,
   matching current-format round are still refused.
 
