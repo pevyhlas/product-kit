@@ -22,12 +22,24 @@ sed 's/line 15/changed fifteen/' src/app.txt > src/new; mv src/new src/app.txt; 
 F1="$(git rev-parse HEAD)"
 first="$(bash "$SCRIPT" 001-equal "$BASE")"; PKG="$(printf '%s' "$first" | jq -r .PACKAGE_DIR)"
 ROOT="$(dirname "$PKG")"
+it "An old, otherwise valid package is regenerated without editing its files"
+# Simulate a package written before literal brackets were distinguished from references.
+sed 's/^package11/package10/' "$PKG/completed.tsv" > "$P/old-binding"
+cp "$P/old-binding" "$PKG/completed.tsv"
+old_snapshot="$(package_snapshot "$PKG")"
+run bash "$SCRIPT" 001-equal "$BASE"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq 2 "$(jq .ROUND <<<"$OUTPUT")" 'same source may get the new package format'
+assert_eq "$old_snapshot" "$(package_snapshot "$PKG")" 'old round left byte-exact'
+run bash "$SCRIPT" 001-equal "$BASE"
+assert_eq 1 "$STATUS" 'current format retains exact-head duplicate refusal'
+assert_contains "$OUTPUT" 'no round needed'
 it "A new exact head can be packaged even when only the record changed"
 printf '\nrecord note\n' >> specs/changes/001-equal.md; git commit -qam metadata
 TIP="$BASE"
 run bash "$SCRIPT" 001-equal "$TIP" --since "$F1"
 assert_eq 0 "$STATUS" "$OUTPUT"
-assert_eq 2 "$(printf '%s' "$OUTPUT" | jq .ROUND)" 'new review head packaged'
+assert_eq 3 "$(printf '%s' "$OUTPUT" | jq .ROUND)" 'new review head packaged'
 it "Incomplete rounds retain evidence/numbering but do not prove completion"
 printf 'fix\n' >> src/app.txt; git commit -qam fix
 mkdir "$ROOT/round-7"; printf 'interrupted evidence\n' > "$ROOT/round-7/failed.txt"
@@ -154,10 +166,9 @@ for gap in canon historical; do
     cp specs/changes/001-equal.md "specs/changes/$id.md"
     git add "specs/changes/$id.md"; git commit -qm 'add context record'
     if [ "$gap" = historical ]; then
+        historical_blob="$(git rev-parse "HEAD:specs/changes/$id.md")"
         git rm -q "specs/changes/$id.md"; git commit -qm 'retire context record'
-        ln -s 001-equal.md "specs/changes/$id.md"
-        run bash "$SCRIPT" "$id" "$TIP"
-        rm "specs/changes/$id.md"
+        run env DENIED_BLOB="$historical_blob" PATH="$BADGIT:$PATH" bash "$SCRIPT" "$id" "$TIP"
     else
         run env DENIED_BLOB="$(git rev-parse HEAD:specs/architecture.md)" PATH="$BADGIT:$PATH" bash "$SCRIPT" "$id" "$TIP"
     fi
@@ -172,7 +183,7 @@ for gap in canon historical; do
     pkg="$(printf '%s' "$OUTPUT" | jq -r .PACKAGE_DIR)"
     assert_file "$pkg/bounds.txt"
 done
-for damage in missing-patch changed-section manifest; do
+for damage in missing-patch changed-section changed-obligations manifest; do
     id="009-$damage"
     cp specs/changes/001-equal.md "specs/changes/$id.md"
     git add "specs/changes/$id.md"; git commit -qm 'prepare complete context'
@@ -180,6 +191,7 @@ for damage in missing-patch changed-section manifest; do
     case "$damage" in
         missing-patch) rm "$pkg/diff.patch" ;;
         changed-section) printf 'changed artifact\n' >> "$pkg/context-sections/1.txt" ;;
+        changed-obligations) printf 'changed obligations\n' >> "$pkg/index.md" ;;
         manifest) rm "$pkg/manifest.tsv" ;;
     esac
     run bash "$SCRIPT" "$id" "$TIP"

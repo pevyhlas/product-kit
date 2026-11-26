@@ -48,4 +48,13 @@ else
     _no "no relative links found — extraction pattern or file list is broken"
 fi
 
+it "review package read order links to the reviewer prompt, not generated artifacts"
+review_doc="$(cat docs/review-packages.md)"
+# Runtime package paths should be code spans, not checkout-relative Markdown links.
+# shellcheck disable=SC2016
+assert_contains "$review_doc" '[review prompt](../templates/review-prompt-template.md)'
+# shellcheck disable=SC2016
+assert_contains "$review_doc" '`evidence/facts/summary.md`'
+assert_not_contains "$review_doc" '](evidence/facts/' "package artifacts are not repo docs"
+
 finish

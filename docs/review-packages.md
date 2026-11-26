@@ -4,7 +4,33 @@
 binary diff. `--since REV` adds a focused delta using the existing trusted merge-base and
 automatic-merge/fallback rules; it never replaces the full diff. `--context PATH` snapshots a
 whole tracked regular file at HEAD; `--evidence PATH` copies stable local evidence without
-certifying its revision, completion or applicability. All paths are repository-relative.
+certifying its revision, completion or applicability. `--facts` copies the exact change's
+cached pair to `evidence/facts/{summary.md,index.json}` without certifying its binding.
+All input paths are repository-relative. Ordinary `--evidence` cannot use the source paths
+`facts` or `facts/*`, including ASCII case variants, even in a package without `--facts`.
+
+## Read order
+
+The package's `index.md` and the [review prompt](../templates/review-prompt-template.md) direct
+reviewers to open `diff.patch` first, then `evidence/facts/summary.md` if the coordinator verified
+the attached pair, then the **Review obligations** section of `index.md`. That section shows
+binding BASE text and trusted default-branch policy with source pointers. Unchanged obligations
+appear once. Comparisons ignore leading and trailing blank lines, but leave captured bytes
+untouched and preserve every other whitespace difference. Changed text appears directly below
+its BASE counterpart, marked proposed; new text is proposed only, and removals retain the
+BASE text marked for review. Reviewers reconcile the proposals against BASE, as described
+in the [review workflow](../workflows/review.md#review). Facts don't set obligations or grant
+approval, and their bounds inventory does not show full bound bodies.
+
+The inline excerpt budget is 16 KiB, including source labels and formatting. If the captured
+material would exceed it, is not valid UTF-8 text, a BASE obligation cannot be resolved, or a
+selected full or collapsed reference has no definition, the index shows no partial list and
+explicitly requires reading `context-manifest.tsv`, the relevant packaged context, the bounds
+inventories with their input bindings if present, and `context-gaps.txt`. Inline text permits
+tab and LF but no other C0, DEL or C1 control characters. This includes rejecting CR even in
+CRLF; the original artifact stays byte-for-byte. Otherwise, reviewers open
+other files only to investigate a finding or resolve an obligation. The dispatcher still supplies
+mandatory obligations and unresolved questions that automatic capture missed.
 
 ## What is automatic
 
@@ -12,19 +38,31 @@ The four-column `manifest.tsv` inventories artifacts. `context-manifest.tsv` add
 `artifact, source_rev, source_path, source_blob, first_line, last_line, obligation, reason`
 (tab-separated). It includes:
 
-- the actual change record, in full, or its recovered historical source on a closing head;
-- the parent's header, outcome checkpoint, actual child row and dependency/hold/limit sections,
-  not a whole-parent default;
-- uniquely resolved child spec IDs and heading-linked blocks, including nested item bodies;
+- the full change record at BASE and HEAD when they differ, plus recovered historical scope on a
+  closing head when not already represented;
+- the union of the BASE and HEAD parents' headers, outcome checkpoints, actual child rows, and
+  dependency/hold/limit sections, not whole parent records;
+- spec IDs and heading links cited by the child and selected parent text, resolved at each
+  source revision and including nested item bodies. Full, collapsed, and shortcut Markdown
+  reference links use definitions in the same document, even outside the selected excerpt.
+  Label matching folds case and collapses whitespace. Bare brackets without a matching
+  definition are literal text; task-list markers are never references. Undefined full or
+  collapsed references name their usage in `context-gaps.txt`. Dropping a citation or
+  parent reference does not drop the BASE target; a closing record's historical context
+  is labeled separately;
 - the **actual** installed `bounds.sh` output on materialized HEAD canon and the actual child's
-  scope, with all input blobs inventoried (a recovered scope record keeps its historical binding);
-- trusted policy/registry/config at `policy_at`, required product/architecture canon, optional
-  `specs/design.md` when present, and conservative part/cross-interface context. Proposed changes
-  remain in the full diff.
+  scope (a recovered scope record keeps its historical binding). When relevant inputs differ,
+  `bounds-base.txt` and `bounds-base-inputs.tsv` capture the BASE scope independently. With no
+  BASE child record, all BASE bounds are considered conservatively. The package compares bound
+  bodies by ID across both revisions, including IDs that dropped out of candidate scope;
+- trusted policy/registry/config at `policy_at`; BASE and HEAD product/architecture canon, optional
+  `specs/design.md`, and conservative part/cross-interface context. The full diff remains
+  authoritative for what changed.
 
 Ambiguous IDs/headings, missing/unsafe objects, unsupported links and unverified verification
-are recorded in `context-gaps.txt`, not silently discarded. Whole-file explicit selections
-remain available. Selections are structural context, never proof of semantic completeness.
+are recorded in `context-gaps.txt`, not silently discarded. Explicit snapshots keep their
+HEAD bytes; when different, the BASE counterpart is also packaged. Selections are structural
+context, not a recursive link crawl or proof of semantic completeness.
 The reviewer needs no shell or network when the package is inside its allowed read boundary.
 The builder does not render the review prompt. The dispatcher sends it and makes the
 [spec review rules](../workflows/review.md#review) readable when reviewing spec edits.
@@ -114,13 +152,17 @@ other temporary files. The new pack can differ in size from the consumer's exist
 
 The cache contains a `summary.md` of at most 60 lines and the full `index.json`; excess detail
 is linked from the summary. The key is facts script version, base SHA, and head SHA. The index
-records commands, exit statuses and results, base/head tree IDs (which bind the committed
-files), and hashes of the path map, collector, local tools, shallow boundaries if present, and
-CI observation. Doctor evaluates the snapshot on the effective UTC date (`PRDKIT_TODAY` can
-override it); the date is hashed as an input. Unchanged inputs produce byte-identical output;
-no collection timestamp is stored. The summary contains the SHA-256 of the raw index bytes to
-detect a mixed pair. The package builder copies both files as ordinary `--evidence`; it does
-not validate their binding or make a review decision.
+records commands as provenance, each marked `"audience": "maintainer-rerun-only"`. Shell-less
+reviewers must not try to run them. The index also records exit statuses and results, base/head
+tree IDs (which bind the committed files), and hashes of the path map, collector, local tools,
+shallow boundaries if present, and CI observation. Doctor evaluates the snapshot on the effective
+UTC date (`PRDKIT_TODAY` can override it); the date is hashed as an input. Unchanged inputs
+produce byte-identical output; no collection timestamp is stored. The SHA-256 of the raw index
+bytes in the summary detects a mixed pair. Collect and check the pair, attach it with `--facts`,
+then check the copied pair at `evidence/facts/summary.md` and `evidence/facts/index.json` before
+dispatch. The builder checks copy integrity, not the pair's binding or review readiness.
+Regenerate older facts packs and review packages when preparing a package in the new layout;
+no migration is needed.
 
 The summary covers captured collector results. The bounds collector lists constraints, non-goals
 and qualities; it does not assess compliance, spec or design fit, or correctness.

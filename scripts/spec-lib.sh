@@ -832,21 +832,149 @@ spec_files() { # root
     return 0
 }
 
+# CommonMark link-label folding, independent of awk's locale/Unicode support. Unicode 16.0
+# CaseFolding.txt (C and F entries): non-ASCII code points with a one-to-one mapping are
+# compressed into start:end:step:delta ranges; the remainder are source:output[:output...].
+#
+# UNICODE LICENSE V3 — COPYRIGHT AND PERMISSION NOTICE
+# Copyright © 1991-2026 Unicode, Inc.
+#
+# NOTICE TO USER: Carefully read the following legal agreement. BY
+# DOWNLOADING, INSTALLING, COPYING OR OTHERWISE USING DATA FILES, AND/OR
+# SOFTWARE, YOU UNEQUIVOCALLY ACCEPT, AND AGREE TO BE BOUND BY, ALL OF THE
+# TERMS AND CONDITIONS OF THIS AGREEMENT. IF YOU DO NOT AGREE, DO NOT
+# DOWNLOAD, INSTALL, COPY, DISTRIBUTE OR USE THE DATA FILES OR SOFTWARE.
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of data files and any associated documentation (the "Data Files") or
+# software and any associated documentation (the "Software") to deal in the
+# Data Files or Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, and/or sell
+# copies of the Data Files or Software, and to permit persons to whom the
+# Data Files or Software are furnished to do so, provided that either (a)
+# this copyright and permission notice appear with all copies of the Data
+# Files or Software, or (b) this copyright and permission notice appear in
+# associated Documentation.
+#
+# THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+# KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF
+# THIRD PARTY RIGHTS.
+#
+# IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS NOTICE
+# BE LIABLE FOR ANY CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL DAMAGES,
+# OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+# WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+# ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THE DATA
+# FILES OR SOFTWARE.
+#
+# Except as contained in this notice, the name of a copyright holder shall
+# not be used in advertising or otherwise to promote the sale, use or other
+# dealings in these Data Files or Software without prior written
+# authorization of the copyright holder.
+SPEC_LINK_FOLD_AWK='
+function link_fold_init(    ranges,singles,a,b,i,j,n,k,code) {
+    for (i=128; i<256; i++) byte[sprintf("%c", i)]=i
+    ranges = "192:214:1:32 216:222:1:32 256:302:2:1 306:310:2:1 313:327:2:1 330:374:2:1 377:381:2:1 386:388:2:1"
+    ranges = ranges " 393:394:1:205 416:420:2:1 433:434:1:217 435:437:2:1 459:475:2:1 478:494:2:1 498:500:2:1 504:542:2:1"
+    ranges = ranges " 546:562:2:1 582:590:2:1 880:882:2:1 904:906:1:37 910:911:1:63 913:929:1:32 931:939:1:32 984:1006:2:1"
+    ranges = ranges " 1021:1023:1:-130 1024:1039:1:80 1040:1071:1:32 1120:1152:2:1 1162:1214:2:1 1217:1229:2:1 1232:1326:2:1"
+    ranges = ranges " 1329:1366:1:48 4256:4293:1:7264 5112:5117:1:-8 7299:7300:1:-6210 7312:7354:1:-3008 7357:7359:1:-3008"
+    ranges = ranges " 7680:7828:2:1 7840:7934:2:1 7944:7951:1:-8 7960:7965:1:-8 7976:7983:1:-8 7992:7999:1:-8 8008:8013:1:-8"
+    ranges = ranges " 8025:8031:2:-8 8040:8047:1:-8 8120:8121:1:-8 8122:8123:1:-74 8136:8139:1:-86 8152:8153:1:-8"
+    ranges = ranges " 8154:8155:1:-100 8168:8169:1:-8 8170:8171:1:-112 8184:8185:1:-128 8186:8187:1:-126 8544:8559:1:16"
+    ranges = ranges " 9398:9423:1:26 11264:11311:1:48 11367:11371:2:1 11390:11391:1:-10815 11392:11490:2:1 11499:11501:2:1"
+    ranges = ranges " 42560:42604:2:1 42624:42650:2:1 42786:42798:2:1 42802:42862:2:1 42873:42875:2:1 42878:42886:2:1"
+    ranges = ranges " 42896:42898:2:1 42902:42920:2:1 42932:42946:2:1 42951:42953:2:1 42966:42970:2:1 43888:43967:1:-38864"
+    ranges = ranges " 65313:65338:1:32 66560:66599:1:40 66736:66771:1:40 66928:66938:1:39 66940:66954:1:39 66956:66962:1:39"
+    ranges = ranges " 66964:66965:1:39 68736:68786:1:64 68944:68965:1:32 71840:71871:1:32 93760:93791:1:32 125184:125217:1:34"
+    singles = "181:956 223:115:115 304:105:775 329:700:110 376:255 383:115 385:595 390:596 391:392 395:396 398:477"
+    singles = singles " 399:601 400:603 401:402 403:608 404:611 406:617 407:616 408:409 412:623 413:626 415:629 422:640 423:424"
+    singles = singles " 425:643 428:429 430:648 431:432 439:658 440:441 444:445 452:454 453:454 455:457 456:457 458:460"
+    singles = singles " 496:106:780 497:499 502:405 503:447 544:414 570:11365 571:572 573:410 574:11366 577:578 579:384 580:649"
+    singles = singles " 581:652 837:953 886:887 895:1011 902:940 908:972 912:953:776:769 944:965:776:769 962:963 975:983 976:946"
+    singles = singles " 977:952 981:966 982:960 1008:954 1009:961 1012:952 1013:949 1015:1016 1017:1010 1018:1019 1216:1231"
+    singles = singles " 1415:1381:1410 4295:11559 4301:11565 7296:1074 7297:1076 7298:1086 7301:1090 7302:1098 7303:1123"
+    singles = singles " 7304:42571 7305:7306 7830:104:817 7831:116:776 7832:119:778 7833:121:778 7834:97:702 7835:7777"
+    singles = singles " 7838:115:115 8016:965:787 8018:965:787:768 8020:965:787:769 8022:965:787:834 8064:7936:953 8065:7937:953"
+    singles = singles " 8066:7938:953 8067:7939:953 8068:7940:953 8069:7941:953 8070:7942:953 8071:7943:953 8072:7936:953"
+    singles = singles " 8073:7937:953 8074:7938:953 8075:7939:953 8076:7940:953 8077:7941:953 8078:7942:953 8079:7943:953"
+    singles = singles " 8080:7968:953 8081:7969:953 8082:7970:953 8083:7971:953 8084:7972:953 8085:7973:953 8086:7974:953"
+    singles = singles " 8087:7975:953 8088:7968:953 8089:7969:953 8090:7970:953 8091:7971:953 8092:7972:953 8093:7973:953"
+    singles = singles " 8094:7974:953 8095:7975:953 8096:8032:953 8097:8033:953 8098:8034:953 8099:8035:953 8100:8036:953"
+    singles = singles " 8101:8037:953 8102:8038:953 8103:8039:953 8104:8032:953 8105:8033:953 8106:8034:953 8107:8035:953"
+    singles = singles " 8108:8036:953 8109:8037:953 8110:8038:953 8111:8039:953 8114:8048:953 8115:945:953 8116:940:953"
+    singles = singles " 8118:945:834 8119:945:834:953 8124:945:953 8126:953 8130:8052:953 8131:951:953 8132:942:953 8134:951:834"
+    singles = singles " 8135:951:834:953 8140:951:953 8146:953:776:768 8147:953:776:769 8150:953:834 8151:953:776:834"
+    singles = singles " 8162:965:776:768 8163:965:776:769 8164:961:787 8166:965:834 8167:965:776:834 8172:8165 8178:8060:953"
+    singles = singles " 8179:969:953 8180:974:953 8182:969:834 8183:969:834:953 8188:969:953 8486:969 8490:107 8491:229 8498:8526"
+    singles = singles " 8579:8580 11360:11361 11362:619 11363:7549 11364:637 11373:593 11374:625 11375:592 11376:594 11378:11379"
+    singles = singles " 11381:11382 11506:11507 42877:7545 42891:42892 42893:613 42922:614 42923:604 42924:609 42925:620"
+    singles = singles " 42926:618 42928:670 42929:647 42930:669 42931:43859 42948:42900 42949:642 42950:7566 42955:612"
+    singles = singles " 42956:42957 42960:42961 42972:411 42997:42998 64256:102:102 64257:102:105 64258:102:108 64259:102:102:105"
+    singles = singles " 64260:102:102:108 64261:115:116 64262:115:116 64275:1396:1398 64276:1396:1381 64277:1396:1387"
+    singles = singles " 64278:1406:1398 64279:1396:1389"
+    n=split(ranges,a," ")
+    for (i=1; i<=n; i++) {
+        split(a[i],b,":")
+        for (j=b[1]+0; j<=b[2]+0; j+=b[3]) fold[j]=link_utf8(j+b[4])
+    }
+    n=split(singles,a," ")
+    for (i=1; i<=n; i++) {
+        k=split(a[i],b,":"); code=b[1]+0
+        for (j=2; j<=k; j++) fold[code]=fold[code] link_utf8(b[j]+0)
+    }
+    fold_ready=1
+}
+function link_utf8(n,    rest) {
+    if (n<128) return sprintf("%c",n)
+    rest=sprintf("%c",128+n%64); n=int(n/64)
+    if (n<32) return sprintf("%c",192+n) rest
+    rest=sprintf("%c",128+n%64) rest; n=int(n/64)
+    if (n<16) return sprintf("%c",224+n) rest
+    rest=sprintf("%c",128+n%64) rest; return sprintf("%c",240+int(n/64)) rest
+}
+function link_label(s,    out,i,c,b,n,k,v) {
+    gsub(/[ \t\r\n]+/, " ", s); sub(/^ /,"",s); sub(/ $/,"",s)
+    if (s !~ /[\200-\377]/) return tolower(s)
+    if (!fold_ready) link_fold_init()
+    for (i=1; i<=length(s); i++) {
+        c=substr(s,i,1); b=byte[c]
+        if (!b) { out=out tolower(c); continue } # awk-bytes-ok: the byte table contains every non-ASCII byte
+        if (b>=194 && b<=223) { n=2; v=b-192 }
+        else if (b>=224 && b<=239) { n=3; v=b-224 }
+        else if (b>=240 && b<=244) { n=4; v=b-240 }
+        else { out=out c; continue }
+        for (k=1; k<n; k++) {
+            b=byte[substr(s,i+k,1)]; if (b<128 || b>191) break
+            v=64*v+b-128
+        }
+        if (k==n) { out=out ((v in fold) ? fold[v] : substr(s,i,n)); i+=n-1 }
+        else out=out c
+    }
+    return out
+}'
+
 # Relative links in spec files (or the files given): file, line, target, resolved from the
 # repository root without its #anchor. A target in <...> runs to ">", otherwise to whitespace or
 # an unbalanced ")", so a title is dropped; %20 is a space; a leading / starts at the repository
 # root. Inline code, fenced blocks and comments are skipped; reference definitions (`[x]: path`)
 # count when the destination looks like a path, footnotes never. URLs (`//host` too) and targets
-# leaving the repository are not printed.
-spec_links() { # root [file...]
-    local root="$1" files=() file listed; shift
+# leaving the repository are not printed by default. --with-destinations reports links at the
+# usage (not definition) line, followed by target, status, and destination including fragment.
+# It keeps local anchors and emits undefined full or collapsed references with empty target and
+# status "undefined". Bare brackets without a definition and task-list markers are literal text.
+spec_links() { # root [--with-destinations] [file...]
+    local root="$1" files=() file listed destinations=0; shift
+    if [ "${1:-}" = --with-destinations ]; then destinations=1; shift; fi
     if [ "$#" -gt 0 ]; then files=("$@")
     else
         listed="$(verify_lines spec_files "$root")" || return 1
         while IFS= read -r file; do [ -z "$file" ] || files+=("$file"); done <<< "$listed"
     fi
     [ "${#files[@]}" -gt 0 ] || return 0
-    (cd "$root" && awk "$SPEC_SKIP_AWK"'
+    # Parse ASCII Markdown delimiters and decode UTF-8 case folding explicitly in the byte locale.
+    (cd "$root" && LC_ALL=C awk -v destinations="$destinations" "$SPEC_SKIP_AWK $SPEC_LINK_FOLD_AWK"'
         function norm(p,   n, a, i, k, st, out) {
             n = split(p, a, "/"); k = 0
             for (i = 1; i <= n; i++) {
@@ -859,7 +987,7 @@ spec_links() { # root [file...]
         }
         function target(s,   t, c, i, d, part) {
             sub(/^[[:space:]]+/, "", s)
-            if (substr(s, 1, 1) == "<") { t = substr(s, 2); sub(/>.*/, "", t); return t }
+            if (substr(s, 1, 1) == "<") { t = substr(s, 2); sub(/>.*/, "", t); return t } # awk-bytes-ok: remove the verified ASCII angle bracket
             # Cut at the first space by a regex over the whole string, not over one character
             # (see SPEC_ID_AWK); split(), unlike match(), leaves the caller its RSTART.
             if (split(s, part, /[[:space:]]/) > 1) s = part[1]
@@ -872,23 +1000,137 @@ spec_links() { # root [file...]
             }
             return t
         }
-        function emit(t,   r, base) {
-            if (t ~ /^[A-Za-z][A-Za-z+.-]*:/ || t ~ /^#/ || t ~ /^\/\//) return
-            sub(/[#?].*/, "", t); gsub(/%20/, " ", t); if (t == "") return
-            base = (substr(t, 1, 1) == "/") ? "" : dir
-            r = norm(base t); if (r != "") print FILENAME "\037" FNR "\037" r
+        function emit(t, file, row,   r, base, raw) {
+            raw = t; r = ""
+            if (t !~ /^[A-Za-z][A-Za-z+.-]*:/ && t !~ /^\/\//) {
+                sub(/[#?].*/, "", t); gsub(/%20/, " ", t)
+                base = (substr(t, 1, 1) == "/") ? "" : dir
+                if (t != "") r = norm(base t)
+                else if (destinations && raw ~ /^#/) r = file
+            }
+            if (destinations) print file "\037" row "\037" r "\037resolved\037" raw
+            else if (r != "") print file "\037" row "\037" r
         }
-        FNR == 1 { fence = 0; comment = 0; dir = FILENAME; sub(/[^\/]*$/, "", dir) }
+        # Code spans close with a run of the same length. Return 0 for a literal backtick.
+        function code_end(s, at,   rest,n) {
+            rest=substr(s,at); match(rest,/^`+/); n=RLENGTH; at+=n
+            rest=substr(s,at)
+            while (match(rest,/`+/)) {
+                if (RLENGTH==n) return at+RSTART+RLENGTH-2
+                at+=RSTART+RLENGTH-1; rest=substr(s,at)
+            }
+            return 0
+        }
+        function link_punct(c) {
+            return c != "" && index("!\042#$%&\047()*+,-./:;<=>?@[\\]^_`{|}~",c)
+        }
+        function link_close(s, start, open, close_ch, nested,   i,c,n,skip) {
+            for (i=start+1; i<=length(s); i++) {
+                c=substr(s,i,1)
+                if (c=="\\" && link_punct(substr(s,i+1,1))) { i++; continue }
+                if (nested && c=="`" && (skip=code_end(s,i))) { i=skip; continue }
+                if (c==open) { if (!nested) return 0; n++ }
+                if (c==close_ch) { if (!n) return i; n-- }
+            }
+            return 0
+        }
+        function unquote(s) {
+            while (s ~ /^ ? ? ?>/) sub(/^ ? ? ?>[ \t]?/,"",s)
+            return s
+        }
+        function link_definition(i,    s,j,k,label,tail,t,rest) {
+            s=unquote(src[i]); sub(/^ ? ? ?([-+*]|[0-9]+[.)])[ \t]+/,"",s)
+            if (s !~ /^ ? ? ?\[/) return i-1
+            sub(/^ */,"",s); if (s ~ /^\[\^/) return i-1
+            j=i
+            while (!(k=link_close(s,1,"[","]",0)) && length(s)<4000 && src[j+1] ~ /[^[:space:]]/) {
+                s=s "\n" unquote(src[++j])
+            }
+            if (!k || substr(s,k+1,1)!=":") return i-1
+            label=link_label(substr(s,2,k-2)); if (label=="") return i-1 # awk-bytes-ok: between verified ASCII brackets
+            tail=substr(s,k+2); sub(/^[[:space:]]+/,"",tail)
+            if (tail=="" && src[j+1] ~ /[^[:space:]]/) { tail=unquote(src[++j]); sub(/^[[:space:]]+/,"",tail) }
+            t=target(tail); if (t=="") return i-1
+            rest=substr(tail,length(t)+(substr(tail,1,1)=="<" ? 3 : 1))
+            sub(/^[[:space:]]+/,"",rest); sub(/[[:space:]]+$/,"",rest)
+            if (rest!="" && rest !~ /^(".*"|\(.*\))$/ &&
+                (substr(rest,1,1)!=sprintf("%c",39) || substr(rest,length(rest),1)!=sprintf("%c",39))) return i-1
+            if (!(label in definition)) definition[label]=t
+            return j
+        }
+        function link_scan(s, row,    i,j,k,c,next_ch,skip,text,label,raw,line,lead,explicit) {
+            for (i=1; i<=length(s); i++) {
+                c=substr(s,i,1)
+                if (c=="\\" && link_punct(substr(s,i+1,1))) { i++; continue }
+                if (c=="`" && (skip=code_end(s,i))) { i=skip; continue }
+                if (c!="[" || substr(s,i+1,1)=="^") continue
+                j=link_close(s,i,"[","]",1); if (!j) continue
+                text=substr(s,i+1,j-i-1) # awk-bytes-ok: between verified ASCII brackets
+                next_ch=substr(s,j+1,1)
+                lead=substr(s,1,i-1) # awk-bytes-ok: prefix ending before the ASCII opening bracket
+                if (j==i+2 && (text==" " || text=="\t" || text=="x" || text=="X") &&
+                    (next_ch=="" || index(" \t\r\n",next_ch)) &&
+                    lead ~ /(^|\n)[ \t]*([-+*]|[0-9]+[.)])[ \t]+$/) { i=j; continue }
+                line=row+gsub(/\n/,"",lead)
+                if (next_ch=="(" && (k=link_close(s,j+1,"(",")",1))) {
+                    emit(target(substr(s,j+2,k-j-2)),doc,line); i=k; continue # awk-bytes-ok: between verified ASCII parentheses
+                }
+                explicit=(next_ch=="[" && (k=link_close(s,j+1,"[","]",0)))
+                if (explicit) {
+                    raw=(k==j+2 ? text : substr(s,j+2,k-j-2)); j=k # awk-bytes-ok: between verified ASCII brackets
+                } else {
+                    # A shortcut uses a label, not arbitrary nested link text.
+                    if (link_close(s,i,"[","]",0)!=j) continue
+                    raw=text
+                }
+                label=link_label(raw); if (label=="") continue
+                if (label in definition) emit(definition[label],doc,line)
+                else if (explicit) print doc "\037" line "\037\037undefined\037" label
+                i=j
+            }
+        }
+        function link_document(    i,j,k,s,label) {
+            for (i=1; i<=last; i++) if (index(src[i],"[")) {
+                j=link_definition(i)
+                for (k=i; k<=j; k++) delete src[k]
+                if (j>=i) i=j
+            }
+            for (i=1; i<=last; i++) if (src[i] ~ /[^[:space:]]/) {
+                j=i; s=unquote(src[i])
+                while (unquote(src[j+1]) ~ /[^[:space:]]/) s=s "\n" unquote(src[++j])
+                if (index(s,"[")) link_scan(s,i)
+                i=j
+            }
+            for (i in src) delete src[i]
+            for (label in definition) delete definition[label]
+        }
+        FNR == 1 {
+            if (destinations && doc!="") link_document()
+            doc=FILENAME; last=0; fence=0; comment=0; fence_len=0; dir=FILENAME; sub(/[^\/]*$/, "", dir)
+        }
+        destinations && !comment {
+            logical=unquote($0)
+            if (match(logical,/^ ? ? ?(```+|~~~+)/)) {
+                marker=substr(logical,1,RLENGTH); sub(/^ */,"",marker)
+                if (!fence_len) { fence_len=length(marker); fence_ch=substr(marker,1,1) }
+                else if (substr(marker,1,1)==fence_ch && length(marker)>=fence_len &&
+                    substr(logical,RLENGTH+1) ~ /^[ \t]*$/) fence_len=0
+                next
+            }
+            if (fence_len) next
+        }
         { if (spec_skip($0)) next }
+        destinations { src[FNR]=$0; last=FNR; next }
         {
             line = $0; gsub(/`[^`]*`/, "", line)
             if (match(line, /^[[:space:]]*\[[^]]+\]:[[:space:]]*/)) {
                 # A footnote or a label over prose is no link: a destination looks like a path.
                 t = target(substr(line, RSTART + RLENGTH))
-                if (line !~ /^[[:space:]]*\[\^/ && (t ~ /[\/.]/ || substr(line, RSTART + RLENGTH, 1) == "<")) emit(t)
+                if (line !~ /^[[:space:]]*\[\^/ && (t ~ /[\/.]/ || substr(line, RSTART + RLENGTH, 1) == "<")) emit(t,FILENAME,FNR)
             }
-            else while ((at = index(line, "](")) > 0) { line = substr(line, at + 2); emit(target(line)) }
+            else while ((at = index(line, "](")) > 0) { line = substr(line, at + 2); emit(target(line),FILENAME,FNR) }
         }
+        END { if (destinations && doc!="") link_document() }
     ' "${files[@]}")
 }
 

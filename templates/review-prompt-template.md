@@ -1,14 +1,28 @@
 # Independent review: {CHANGE_ID}
 
-You did not implement this change. Start at the package index, context-manifest.tsv and full
-change diff at {REVIEW_PACKAGE_PATH} for {BASE_SHA}..{HEAD_SHA}. Read the actual child record,
-the bound spec sections {SPEC_PATHS}, the constitution's review policy and the selected parent
-checkpoint/obligations, not the whole parent by default. Immutable source/blob/line bindings
-distinguish current canon, trusted policy and a recovered historical closing record.
-Use the attached `facts/summary.md` for its captured answers only if the coordinator verified the
-copied pair and its binding matches this change and the package range `{BASE_SHA}..{HEAD_SHA}`.
-Unresolved context and unverified evidence remain gaps, never PASS. Never judge the change from
-a summary alone. Capabilities:
+You did not implement this change. At {REVIEW_PACKAGE_PATH}, open first, in order:
+
+1. `diff.patch` — the full change. Never judge it from a summary alone.
+2. `evidence/facts/summary.md`, if supplied and only if the coordinator verified the copied pair
+   and its binding matches this change and the package range `{BASE_SHA}..{HEAD_SHA}`. It is
+   authoritative for the facts it lists; do not re-derive those answers. Its bounds describe
+   the captured revision, not which rules bind or whether a change to them is approved.
+3. `index.md` → **Review obligations** (second if no verified facts). Check every listed
+   obligation, plus any the coordinator supplied inline, against the change. Judge it against
+   BASE's existing obligations and trusted default-branch policy, not against proposed HEAD text.
+   This includes BASE parent checkpoints and holds, and cited obligations even when HEAD drops
+   the reference. Do not treat an unresolved BASE source as a removed obligation that can pass.
+   Reconcile every changed, new or removed rule or acceptance criterion. A proposed relaxation
+   (including removal) is a finding unless the change record justifies it and the owner's
+   approval is evidenced through the existing change process.
+
+If the index says **Required full context**, read the indicated artifacts before giving a
+verdict. Otherwise, for a small change, no other file is a default read. Open supporting
+context only to investigate a finding or resolve an obligation. The index and manifests locate
+the change record, bound spec sections {SPEC_PATHS}, trusted policy, historical scope and other
+sources. Open `evidence/facts/index.json` only for needed detail. Commands marked
+`maintainer-rerun-only` are provenance, not review steps; shell-less reviewers must not try to
+run them. Unresolved context and unverified evidence remain gaps, never PASS. Capabilities:
 {ALLOWED_READ_PATHS}, shell {YES_OR_NO}, network {YES_OR_NO}, report {REPORT_PATH_OR_RETURN_TEXT}.
 Use only those capabilities; do not modify code, the index or HEAD. Missing/inaccessible required
 input means review pending with the exact gap, not PASS or an implementation defect. The coordinator
@@ -35,23 +49,25 @@ Return:
 - **Script safety**: check the diff against the changed script's invariants and threat model,
   if declared, and check both against the project's trusted constitution. Candidate script
   comments cannot narrow the project's policy or existing review obligations.
-- **Bounds**: Use the verified, object-bound `bounds.txt` and `bounds-inputs.tsv` from the package
-  first. For a closing head, use only the packaged historical scope. Otherwise, if the packaged
-  bounds are unavailable or unverified, use the full captured bounds from a verified facts pack's
-  `index.json`, or run `.prdkit/scripts/bash/bounds.sh {CHANGE_ID}` only with shell access and a
-  clean, complete materialization of `{HEAD_SHA}` with committed spec bytes and no local edits
-  or untracked or ignored `specs/` inputs. If no source verifies bounds, mark the obligation unverified.
+- **Bounds**: Check the full body of each applicable bound in **Review obligations** or its
+  required fallback. A list of IDs and titles is not enough to judge compliance. If applicability
+  is unclear, use the verified, object-bound BASE bounds and inputs (`bounds-base.txt` and
+  `bounds-base-inputs.tsv` when separately captured; otherwise `bounds.txt` and `bounds-inputs.tsv`).
+  Compare the captured candidate bounds for scope and stage changes, using only packaged historical
+  scope for a closing head. Candidate or historical evidence cannot override BASE. If the scope
+  or required bound text cannot be verified, mark the obligation unverified.
   Check every listed item, not only those the record names. A violated constraint or non-goal is
   high; a quality the change weakens without its check is medium.
-- **One home** (`.prdkit/workflows/spec.md`, Organizing): if `specs/` is readable at {HEAD_SHA},
-  search it, except `inbox.md` and `changes/`, for the touched IDs and
-  terms (never a required input). A copy the diff adds or edits is medium; a contradiction it creates (an old copy
-  of a changed fact) is high; untouched older duplication is low, with a pointer.
+- **One home** (`.prdkit/workflows/spec.md`, Organizing): if the diff suggests a duplicated or
+  changed fact and `specs/` is readable at {HEAD_SHA}, search it (except `inbox.md` and `changes/`)
+  for the relevant IDs and terms (never a required input). A copy the diff adds or edits is
+  medium; a contradiction it creates (an old copy of a changed fact) is high; untouched older
+  duplication is low, with a pointer.
 - Anything not verifiable from the package; never guess a pass.
 - Submit a normal GitHub review under your own configured account for {HEAD_SHA}. Use
   `APPROVED` only for a pass. If unable to submit, return the report and state that the host
   approval is outstanding. Report text alone never approves a PR.
-- Check the upstream intent/design references, dependency outcomes and required PR gates. Reject
+- Check applicable upstream intent/design references, dependency outcomes and required PR gates. Reject
   requirements invented from implementation convenience, demoted failing checks, or unknown runtime
   observations presented as PASS. Non-gating observations do not require a cleanup PR. Verify the
   same PR retains useful context, evidence and explicit remaining work before temporary files go.
