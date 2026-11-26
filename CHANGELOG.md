@@ -13,6 +13,9 @@ change by change.
 
 ### Changed
 
+- Rejected `Bash(...)` entries in Claude tier tool lists now explain how to keep Bash out
+  of reviewer tiers or restrict commands with Claude Code settings or project hooks.
+  The customization guide also shows how to opt into scoped OpenCode V2 maker shell rules.
 - The adoption guide explains how to bootstrap the review gate and when default-branch policy changes take effect.
 
 ### Fixed
