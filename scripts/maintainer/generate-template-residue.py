@@ -43,10 +43,9 @@ PLAIN_SLOTS = {
 SLOT = re.compile(r"<(?:[^<>]|<[^<>]*>)+>")
 COMMENT = re.compile(r"<!--(.*?)-->", re.S)
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
-# Single-word/symbol tokens are generic by default. The few exceptions are
+# Single-word/symbol tokens are generic by default. The exceptions are
 # here, not in the runtime. Record evidence must be the entire reason field;
 # the stage labels are common notation even though they contain spaces.
-DISTINCTIVE = {"<components>"}
 GENERIC = {"<evidence link>", "<Now stage>", "<Next stage>", "<Later stage>"}
 MARK = "@slot@"
 ITEM = "[0-9][0-9]+"
@@ -140,7 +139,7 @@ def slot_spans(group, row):
 
 
 def generic(token):
-    return token not in DISTINCTIVE and (token in GENERIC or " " not in token)
+    return token in GENERIC or " " not in token
 
 
 def link_anchor(before, after):

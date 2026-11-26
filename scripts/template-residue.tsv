@@ -25,7 +25,7 @@ architecture	<L1 decisions intentionally not made; agents choose them without as
 architecture	<One sentence: the shape of the system and why it fits the core loop.>	prose		.*	.*
 architecture	<Product>	line		^# $	^ —[ ]
 architecture	<The riskiest assumption and what breaks if it is wrong, in a line: [why it works](architecture/why-it-works.md).>	prose		.*	.*
-architecture	<components>	prose		.*	.*
+architecture	<components>	table	part:components	^$	^$
 architecture	<delivery, tooling>	prose		.*	.*
 architecture	<each environment, what it is for, where it is provisioned>	prose		.*	.*
 architecture	<name>	table	part:part	^P[0-9]+(\.[0-9]+)? $	^$

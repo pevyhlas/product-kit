@@ -219,6 +219,7 @@ cat > architecture.slots <<'MD'
 |----------|------|---------------|------------|------|
 | validated | P1 <name> | J-01 to J-08; R-01 to R-13 | <components> | none yet |
 | validated | P2 Client | J-01: one owner of request state (R-01, R-02, Q-01) | <components> | none yet |
+| validated | P3 Service | Unrelated free text <components> | scheduler | none yet |
 MD
 cat > journeys.slots <<'MD'
 | Area | Idea (now) | MVP |
@@ -270,31 +271,120 @@ it "distinctive occurrences are counted in active prose but not in protected Mar
 cat > specs/architecture.md <<'MD'
 # Request Service — architecture
 
-Keep <components> separately from <components> in the release plan. Ignore <path> here.
+Keep <delivery, tooling> separately from <delivery, tooling> in the release plan. Ignore <path> here.
 
-`<components>` and ``literal `<components>` with another tick`` are examples.
+`<delivery, tooling>` and ``literal `<delivery, tooling>` with another tick`` are examples.
 This span wraps `over the
-next line with <components>` and then closes.
+next line with <delivery, tooling>` and then closes.
 
-<!-- <components> -->
+<!-- <delivery, tooling> -->
 Prose <!-- beginning of a longer comment
-<components>
-closing --> after the comment, still <components>.
+<delivery, tooling>
+closing --> after the comment, still <delivery, tooling>.
 
-> <components> belongs to a quote.
-So does <components> on a lazy continuation.
+> <delivery, tooling> belongs to a quote.
+So does <delivery, tooling> on a lazy continuation.
 
 ~~~md
-<components>
+<delivery, tooling>
 ~~~
 
-    <components>
+    <delivery, tooling>
 MD
 run bash "$DOCTOR" --strict --json
 assert_eq 1 "$STATUS" "$OUTPUT"
 assert_eq 3 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
-assert_contains "$OUTPUT" 'specs/architecture.md:3 (<components>), specs/architecture.md:3 (<components>)'
+assert_contains "$OUTPUT" 'specs/architecture.md:3 (<delivery, tooling>), specs/architecture.md:3 (<delivery, tooling>)'
 rm specs/architecture.md
+
+it "link destinations and XML tags are not stock slots, including inside the Components column"
+cat > specs/architecture.md <<'MD'
+# Request Service — architecture
+
+[Component definitions](<components>)
+The manifest stores component identifiers in the `<id>` children of <components></components>.
+The manifest uses <components format="xml" example="<delivery, tooling>">.
+[Further details](<delivery, tooling>)
+[Workflow notes](workflow<components>(v2).md "Examples of <delivery, tooling>")
+
+| Part | Components |
+|------|------------|
+| P1 Service | <components enabled="true"></components> |
+| P2 Client | [Component definitions](<components>) |
+MD
+run bash "$DOCTOR" --json
+assert_eq 0 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")" "$OUTPUT"
+rm specs/architecture.md
+
+it "Markdown blocks keep list text and escaped ticks active after multiline inline code"
+cat > specs/architecture.md <<'MD'
+# Request Service — architecture
+
+An example uses the delimiter `raw
+text <!--` without opening a comment.
+
+This line is still active: <delivery, tooling>.
+
+<!-- A genuine multiline comment starts here.
+
+## This heading is not active
+```text
+<delivery, tooling>
+--> The comment ends here.
+
+1. Inventory the part's major pieces:
+    <delivery, tooling>.
+
+       <delivery, tooling>
+
+    ~~~text
+    <delivery, tooling>
+    ~~~
+
+After the list, a literal \` leaves <delivery, tooling> active before another literal \`.
+Actual code still closes at the next equal run, even after a literal backslash: `\<delivery, tooling>\`.
+MD
+run bash "$DOCTOR" --strict --json
+assert_eq 1 "$STATUS" "$OUTPUT"
+assert_eq 3 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" 'specs/architecture.md:6 (<delivery, tooling>)'
+assert_contains "$OUTPUT" 'specs/architecture.md:15 (<delivery, tooling>)'
+assert_contains "$OUTPUT" 'specs/architecture.md:24 (<delivery, tooling>)'
+rm specs/architecture.md
+
+it "headings and table rows do not lend closing backticks to another block"
+cat > specs/architecture.md <<'MD'
+# Request Service — architecture
+
+Literal ` in a heading
+----------------------
+The paragraph has <delivery, tooling> before its own literal `.
+
+| Format | Example |
+|--------|---------|
+| Literal ` | First row |
+| Active prompt | <delivery, tooling> and a literal ` |
+MD
+run bash "$DOCTOR" --json
+assert_eq 2 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" 'specs/architecture.md:5 (<delivery, tooling>)'
+assert_contains "$OUTPUT" 'specs/architecture.md:10 (<delivery, tooling>)'
+rm specs/architecture.md
+
+it "stock destination anchors still match even though ordinary destinations are skipped"
+cat > specs/product.md <<'MD'
+# Request Service
+
+## Journeys
+
+| Area | Idea (now) | MVP |
+|------|------------|-----|
+| Requests | [J-01 <journey>](product/journeys/j-01-<slug>.md) | |
+MD
+run bash "$DOCTOR" --json
+assert_eq 2 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" 'specs/product.md:7 (<journey>), specs/product.md:7 (<slug>)'
+rm specs/product.md
 
 it "only stock Mermaid nodes and edges match diagram slots"
 cat > specs/product.md <<'MD'
@@ -1777,6 +1867,22 @@ fill_seeded_policy "$EX" || exit 1
 cp -R "$PK_ROOT/examples/request-service/specs" "$EX/"
 run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict"
 assert_eq 0 "$STATUS" "example has no findings or advisories"
+
+it "ordinary link destinations and paired tags in the filled example pass strict doctor"
+arch="$EX/specs/architecture.md"
+cp "$arch" "$arch.saved"
+printf 'Component definitions are versioned here.\n' > "$EX/specs/components"
+cat >> "$arch" <<'MD'
+
+[Component definitions](<components>)
+
+The manifest stores component identifiers in the `<id>` children of <components></components>.
+MD
+run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq 0 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+mv "$arch.saved" "$arch"
+rm "$EX/specs/components"
 
 it "an untouched caption in the kit's two-stage journey table fails strict doctor"
 product="$EX/specs/product.md"
