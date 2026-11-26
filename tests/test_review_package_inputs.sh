@@ -112,11 +112,11 @@ reject_reserved() {
     assert_contains "$OUTPUT" "conflicting --evidence $path"
 }
 
-[ "$#" -gt 0 ] || set -- context paths facts obligations no-specs empty-endpoints reconcile references reference-style plain-brackets edge-blanks nontext
+[ "$#" -gt 0 ] || set -- context paths facts obligations no-specs empty-endpoints merged-history reconcile references reference-style plain-brackets edge-blanks nontext
 for mode in "$@"; do
     case "$mode" in
         obligations|reconcile|references|reference-style|plain-brackets|edge-blanks|nontext) setup_small ;;
-        no-specs|empty-endpoints) setup_no_specs ;;
+        no-specs|empty-endpoints|merged-history) setup_no_specs ;;
         *) setup ;;
     esac
     # The default exercises installed behavior; the override supports replay against a prior builder.
@@ -261,14 +261,14 @@ EOF
             FIXTURE_GIT="$(command -v git)"
             cat > "$shim/git" <<'EOF'
 #!/usr/bin/env bash
-if [ "${3:-}" = log ] && [ "${4:-}" = -1 ] && [ "${5:-}" = --format=%H ]; then
+if [ "${3:-}" = rev-list ] && [ "${4:-}" = --full-history ]; then
     exit 1
 fi
 exec "$FIXTURE_GIT" "$@"
 EOF
             chmod +x "$shim/git"
             if PATH="$shim:$PATH" build --evidence src/app.txt; then
-                assert_contains "$(non_verification_gaps)" "cannot inspect child record history at $(git rev-parse HEAD):$record"
+                assert_contains "$(non_verification_gaps)" "cannot inspect child record history in $BASE..$(git rev-parse HEAD):$record"
                 assert_not_contains "$(non_verification_gaps)" 'bounds unavailable'
             fi
 
@@ -288,6 +288,54 @@ EOF
                 assert_contains "$(obligations_section)" '**Required full context:** A BASE obligation could not be resolved.'
                 assert_contains "$(non_verification_gaps)" 'bounds unresolved BASE obligation: shared bounds unavailable'
                 assert_contains "$(cat "$PKG/bounds.stderr")" 'Duplicate Parts field'
+            fi
+
+            it "A historical-only record still validates its header without endpoint bounds"
+            historical="$(git rev-parse HEAD)"
+            BASE="$(git rev-parse "$BASE^")"
+            git rm -q "$record" || exit 1
+            advance 'close change with invalid scope'
+            if build; then
+                assert_contains "$(obligations_section)" 'No spec files at BASE or HEAD; no spec bounds apply.'
+                assert_contains "$(obligations_section)" 'Historical child record — scope evidence only, not a substitute for BASE'
+                assert_contains "$(non_verification_gaps)" "invalid or unreadable historical child header $historical:$record; inspect historical-child.stderr"
+                assert_contains "$(cat "$PKG/historical-child.stderr")" "$record:5: Duplicate Parts field"
+                assert_contains "$(cat "$PKG/manifest.tsv")" "$historical:$record header diagnostics"
+                assert_eq '' "$(find "$PKG" -name 'bounds*.txt' -o -name 'bounds*.stderr')" 'no endpoint bounds artifacts'
+            fi ;;
+        merged-history)
+            record="specs/changes/$ID.md"
+            it "A no-ff merge does not hide a side branch's closing record or unresolved link"
+            git checkout -qb closing "$BASE" || exit 1
+            mkdir -p specs/changes
+            printf '# Change\n\n**Tier**: T1\n\n## Acceptance\n\nMerged acceptance. See [contract](../missing.md#contract).\n' > "$record"
+            git add "$record" && git commit -qm 'open selected record on side branch' || exit 1
+            historical="$(git rev-parse HEAD)"
+            git rm -q "$record" && git commit -qm 'close selected record on side branch' || exit 1
+            git checkout -q "$ID" && git merge -q --no-ff -m 'merge closing branch' closing || exit 1
+            assert_eq "$BASE" "$(git merge-base origin/HEAD HEAD)" 'BASE is the trusted merge base'
+            assert_eq '' "$(git ls-tree -r --name-only "$BASE" -- specs)" 'BASE has no specs'
+            assert_eq '' "$(git ls-tree -r --name-only HEAD -- specs)" 'HEAD has no specs'
+            assert_eq '' "$(git log -1 --format=%H HEAD -- "$record")" 'default path history prunes both record commits'
+            if build; then
+                assert_contains "$(obligations_section)" 'No spec files at BASE or HEAD; no spec bounds apply.'
+                assert_contains "$(obligations_section)" 'Merged acceptance.'
+                assert_contains "$(cat "$PKG/context-manifest.tsv")" "$historical"$'\t'"$record"$'\t'"$(git rev-parse "$historical:$record")"$'\t1\t7\tchild-historical'
+                assert_contains "$(non_verification_gaps)" "link missing/unsafe context $historical:specs/missing.md"
+                assert_eq '' "$(find "$PKG" -name 'bounds*.txt' -o -name 'bounds*.stderr')" 'no endpoint bounds artifacts'
+            fi
+
+            it "Incomparable closures produce a child gap rather than an arbitrary revision"
+            git checkout -qb another-closing "$BASE" || exit 1
+            mkdir -p specs/changes
+            printf '# Another scope\n' > "$record"
+            git add "$record" && git commit -qm 'open another record with the same path' || exit 1
+            git rm -q "$record" && git commit -qm 'close the other record' || exit 1
+            git checkout -q "$ID" && git merge -q --no-ff -m 'merge another closing branch' another-closing || exit 1
+            if build; then
+                assert_contains "$(non_verification_gaps)" "actual child record missing or unrecoverable: $record; competing history"
+                assert_not_contains "$(cat "$PKG/context-manifest.tsv")" 'child-historical'
+                assert_contains "$(obligations_section)" 'No spec files at BASE or HEAD; no spec bounds apply.'
             fi ;;
         context)
             it "Generated context cannot overwrite explicit whole-file context"

@@ -230,6 +230,37 @@ context_bodies_equal() {
         cmp -s "$CTX_TMP/body-key-base" "$CTX_TMP/body-key-head"
 }
 
+context_recover_child() { # path -> record_rev, or a child gap; success with no rev means no history
+    local path="$1" range="$BASE_SHA..$HEAD_SHA" last other entry parents commit parent extra
+    # Default path simplification can prune a merged side whose closing tree matches HEAD.
+    if [ "$(git -C "$REPO_ROOT" rev-parse --is-shallow-repository 2>/dev/null)" != false ] ||
+        ! last="$(git -C "$REPO_ROOT" rev-list --full-history --topo-order -1 "$range" -- ":(literal)$path" 2>/dev/null)"; then
+        context_gap child "cannot inspect child record history in $range:$path"
+        return 1
+    fi
+    [ -n "$last" ] || return 0
+    # A topo-order tie across independent histories is not provenance. Check for changes
+    # outside the candidate's ancestry, and only recover a proven single-parent deletion.
+    if ! other="$(git -C "$REPO_ROOT" rev-list --full-history -1 "$range" "^$last" -- ":(literal)$path" 2>/dev/null)"; then
+        context_gap child "cannot inspect child record history in $range:$path"
+        return 1
+    fi
+    if [ -n "$other" ]; then
+        context_gap child "actual child record missing or unrecoverable: $path; competing history at $last and $other"
+        return 1
+    fi
+    if entry="$(git -C "$REPO_ROOT" ls-tree "$last" -- ":(literal)$path" 2>/dev/null)" && [ -z "$entry" ] &&
+        parents="$(git -C "$REPO_ROOT" rev-list --parents -1 "$last" 2>/dev/null)" &&
+        IFS=' ' read -r commit parent extra <<< "$parents" &&
+        [ "$commit" = "$last" ] && [ -n "$parent" ] && [ -z "$extra" ] &&
+        context_object "$parent" "$path" >/dev/null; then
+        record_rev="$parent"
+    else
+        context_gap child "actual child record missing or unrecoverable: $path; cannot prove pre-deletion record at $last"
+        return 1
+    fi
+}
+
 context_review_child() { # record path, usable HEAD or historical record revision
     local path="$1" rev="$2" base_blob head_blob entry
     base_blob="$(context_object "$BASE_SHA" "$path")" || {
@@ -552,7 +583,7 @@ context_emit_references() {
 }
 
 review_context_build() {
-    local path blob base_blob record record_rev last count a entry base_material base_items hist_material reference_side
+    local path blob base_blob record record_rev count a entry base_material base_items hist_material reference_side
     local shared_inputs=false explicit_kind explicit_rev spec_presence base_specs head_specs
     local head_capture=true head_unscoped=false
     base_reference_gap=false
@@ -576,20 +607,13 @@ review_context_build() {
         entry="$(git -C "$REPO_ROOT" ls-tree "$HEAD_SHA" -- ":(literal)$record" 2>/dev/null)" || entry=unreadable
         if [ -n "$entry" ]; then
             context_gap child "actual child record is unsafe/unreadable at HEAD: $record; no historical substitution"
-        elif ! last="$(git -C "$REPO_ROOT" log -1 --format=%H "$HEAD_SHA" -- "$record" 2>/dev/null)"; then
-            context_gap child "cannot inspect child record history at $HEAD_SHA:$record"
-        elif [ -n "$last" ]; then
-            # Even with two empty endpoint trees, a closing change may have historical scope.
-            if ! record_rev="$(git -C "$REPO_ROOT" rev-parse --verify "$last^" 2>/dev/null)" ||
-                ! context_object "$record_rev" "$record" >/dev/null; then
-                record_rev=""
+        elif context_recover_child "$record" && [ -z "$record_rev" ]; then
+            if [ "$base_specs" != absent ] && [ "$head_specs" != absent ]; then
                 context_gap child "actual child record missing or unrecoverable: $record"
+            else
+                # A canon-only addition/removal needs no invented acceptance record.
+                head_unscoped=true
             fi
-        elif [ "$base_specs" != absent ] && [ "$head_specs" != absent ]; then
-            context_gap child "actual child record missing or unrecoverable: $record"
-        else
-            # A canon-only addition/removal needs no invented acceptance record.
-            head_unscoped=true
         fi
     fi
     # Materialize canon from H; bounds scope alone may use the recovered historical child.
@@ -653,6 +677,13 @@ review_context_build() {
             context_gap canon "Historical spec ID inventory incomplete at $record_rev"
         fi
         if context_collect_record "$record_rev" "$record" "$hist_material" ""; then
+            # Without endpoint bounds there is no scoped bounds run to validate this header.
+            if $no_spec_files && ! (cd "$hist_material" && spec_change_metadata "$record" tags >/dev/null) \
+                2> "$CTX_TMP/historical-child.stderr"; then
+                mv "$CTX_TMP/historical-child.stderr" "$PACKAGE_DIR/historical-child.stderr"
+                inventory historical-child.stderr "$record_rev:$record header diagnostics"
+                context_gap child "invalid or unreadable historical child header $record_rev:$record; inspect historical-child.stderr"
+            fi
             context_reference_record "$record_rev" "$hist_material" "$CTX_TMP/historical-items" "$record"
         else context_gap child "unreadable child record $record_rev:$record; cannot materialize historical references"
         fi

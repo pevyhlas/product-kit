@@ -23,8 +23,9 @@ change by change.
 - Review packages no longer require full context just because neither revision has spec bounds.
   Closing records and their diagnostics are still captured, and added or removed specs are still
   reviewed. Absent conventional canon and optional trusted registry/config files no longer create
-  gaps, even in repositories with specs. Rebuild an already-packaged head to get a fresh round
-  without updating or losing earlier evidence; no migration is needed.
+  gaps, even in repositories with specs. Heads packaged in the older format can get a fresh
+  round without migrating or changing earlier evidence. Identical rebuilds of a clean,
+  matching current-format round are still refused.
 
 ## [3.2.0] — 2026-11-26 — lean review package
 

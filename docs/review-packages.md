@@ -33,10 +33,11 @@ other files only to investigate a finding or resolve an obligation. The dispatch
 mandatory obligations and unresolved questions that automatic capture missed.
 
 If neither BASE nor HEAD has spec files, the index states that no endpoint spec bounds apply.
-Absence alone does not force extra reads. A closing change can still supply historical scope
-and reference gaps, not binding BASE acceptance. Present but unsafe or unreadable inputs still
-produce gaps. When a change introduces the first specs or removes the last ones, new specs are
-proposed and removed BASE specs remain binding evidence for the review.
+Absence alone does not force extra reads. A closing change, including on a merged branch,
+can still supply historical scope, not binding BASE acceptance. Unrecoverable history,
+malformed headers, unsafe or unreadable inputs, and unresolved references are reported as gaps.
+When a change introduces the first specs or removes the last ones, new specs are proposed and
+removed BASE specs remain binding evidence for the review.
 
 ## What is automatic
 
