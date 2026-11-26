@@ -317,7 +317,8 @@ list_kit_files() {
     local src
     for src in "$PK_ROOT"/commands/prdkit*.md "$PK_ROOT"/workflows/*.md \
         "$PK_ROOT"/scripts/*.sh "$PK_ROOT"/scripts/{pr-facts,facts}.py \
-        "$PK_ROOT"/scripts/{agents-section,outcome-checkpoint}.md "$PK_ROOT"/templates/*.md; do
+        "$PK_ROOT"/scripts/{agents-section,outcome-checkpoint}.md "$PK_ROOT"/scripts/template-residue.tsv \
+        "$PK_ROOT"/templates/*.md; do
         [ -e "$src" ] || continue
         install_file_targets "${src#"$PK_ROOT"/}" "$HARNESSES" "$OPTIONS" "$src"$'\t' || return 1
     done

@@ -14,7 +14,7 @@ it "a fresh installation warns about actual fill-in slots and the unconfirmed Ri
 run bash "$DOCTOR"
 assert_eq 0 "$STATUS"
 assert_contains "$OUTPUT" "advisory: Unfilled template placeholder"
-assert_contains "$OUTPUT" ".prdkit/memory/constitution.md:1 (# <Project> constitution)"
+assert_contains "$OUTPUT" ".prdkit/memory/constitution.md:1 (<Project>)"
 assert_contains "$OUTPUT" "advisory: Unconfirmed init default (1): .prdkit/memory/constitution.md:5 (Rigor)"
 run bash "$DOCTOR" --strict --json
 assert_eq 1 "$STATUS"
@@ -50,9 +50,12 @@ assert_eq 0 "$STATUS" "removing the marker confirms the same value"
 
 it "active config and spec fields show literal residue without needing the kit checkout"
 mv .product-kit kit-away
+consumer_template=.prdkit/templates/product-template.md
+cp "$consumer_template" product-template.saved
+printf '<Local template slot>\n' > "$consumer_template"
 cp .prdkit/memory/config.md config.saved
 sed '/^- context-budget-bytes:/a\
-- review-publishers: bot:123, bot:<numeric account id>\
+- review-publishers: bot:123, bot:<numeric account id>, user:<numeric account id>\
 - review-owner: user:<numeric owner id>
 ' config.saved > .prdkit/memory/config.md
 mkdir -p specs/changes
@@ -63,26 +66,99 @@ cat > specs/product.md <<'MD'
 
 ```mermaid
 flowchart LR
-  A([<persona>]) --> J1[Review order]
+  A([<persona>]) -->|web| J1[J-01 Review order]
 ```
 
 <The thesis, and the signal that would prove it wrong.>
 <The thesis, and the signal that would prove it wrong.>
+<Local template slot>
 MD
 printf '# Change: Demo\n\n## State\n**Waiting on**: nothing\n**Next**: <next action>\n' > specs/changes/001-demo.md
 run bash "$DOCTOR" --json
 assert_eq 0 "$STATUS" "$OUTPUT"
-assert_eq 7 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_eq 8 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
 assert_contains "$OUTPUT" '.prdkit/memory/config.md:9 (<numeric account id>)'
 assert_contains "$OUTPUT" 'specs/product.md:3 (<One sentence: who struggles with what today.>)'
-assert_contains "$OUTPUT" 'specs/product.md:7 (([<persona>]))'
+assert_contains "$OUTPUT" 'specs/product.md:7 (<persona>)'
+assert_not_contains "$OUTPUT" '(<Local template slot>)'
 run bash "$DOCTOR" --strict --json
 assert_eq 1 "$STATUS"
-assert_contains "$OUTPUT" "Unfilled template placeholder (7)" "strict fails on slots alone"
+assert_contains "$OUTPUT" "Unfilled template placeholder (8)" "strict fails on slots alone"
 mv kit-away .product-kit
+mv product-template.saved "$consumer_template"
 mv config.saved .prdkit/memory/config.md
 rm specs/changes/001-demo.md specs/product.md
 rmdir specs/changes
+
+it "whole skeletons catch each slot of a partly filled line, including split spec rows"
+mkdir -p specs/architecture specs/product specs/parts
+printf '# Request Service — <topic>\n' > specs/architecture/operations.md
+printf '# P<n> <part name>\n' > specs/parts/draft.md
+printf '# Request Service — requirements\n\n- **R-17 Display status** (hypothesis): <what must be true>.\n' > specs/product/requirements.md
+run bash "$DOCTOR" --json
+assert_eq 4 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" 'specs/architecture/operations.md:1 (<topic>)'
+assert_contains "$OUTPUT" 'specs/parts/draft.md:1 (<n>)'
+assert_contains "$OUTPUT" 'specs/parts/draft.md:1 (<part name>)'
+assert_contains "$OUTPUT" 'specs/product/requirements.md:3 (<what must be true>)'
+printf '# <Product> — <topic>\n' > specs/architecture/operations.md
+run bash "$DOCTOR" --json
+assert_eq 5 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")" "both unfilled heading slots count"
+assert_contains "$OUTPUT" 'specs/architecture/operations.md:1 (<Product>)'
+rm specs/architecture/operations.md specs/product/requirements.md specs/parts/draft.md
+rmdir specs/architecture specs/product specs/parts
+
+it "combined SPEC.md uses split skeletons only in the corresponding sections"
+cat > specs/SPEC.md <<'MD'
+# Request Service — spec
+
+## Problem and users
+
+- **R-17 Display status** (hypothesis): <what must be true>.
+
+## Requirements and qualities
+
+- **R-18 Show the outcome** (hypothesis): <what must be true>.
+- **Q-07 Respond promptly** (validated): <band and method>. Journeys: J-02. Enforced by: <test, metric,
+  owner review or unenforced>.
+
+## Shape and parts
+
+```mermaid
+sequenceDiagram
+  P1->>P2: <request>
+```
+
+### P3 <part name>
+
+## Constraints and non-goals
+
+- **N-03 Skip notifications**: <what it does not do>. Why: email is out of scope. Revisit when: validated.
+
+## Decisions and why it works
+
+- **Mechanism**: <how the parts achieve it>
+MD
+run bash "$DOCTOR" --json
+assert_eq 7 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" 'specs/SPEC.md:9 (<what must be true>)'
+assert_not_contains "$OUTPUT" 'specs/SPEC.md:5 (<what must be true>)'
+assert_contains "$OUTPUT" 'specs/SPEC.md:10 (<test, metric, owner review or unenforced>)'
+assert_contains "$OUTPUT" 'specs/SPEC.md:17 (<request>)'
+assert_contains "$OUTPUT" 'specs/SPEC.md:20 (<part name>)'
+rm specs/SPEC.md
+
+it "record reasons count only when the whole field is still the stock slot"
+cat > specs/records.md <<'MD'
+# Records
+
+ATTEST A-1 by=agent what=checked env=test version=abc date=2026-10-17 — copied syntax — <evidence link>
+ATTEST A-2 by=agent what=checked env=test version=abc date=2026-10-17 — <evidence link>
+MD
+run bash "$DOCTOR" --json
+assert_eq 1 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" 'specs/records.md:4 (<evidence link>)'
+rm specs/records.md
 
 mkdir -p specs/parts specs/decisions tests .prdkit/history
 cat > specs/product.md <<'MD'
@@ -1532,5 +1608,65 @@ fill_seeded_policy "$EX" || exit 1
 cp -R "$PK_ROOT/examples/request-service/specs" "$EX/"
 run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict"
 assert_eq 0 "$STATUS" "example has no findings or advisories"
+
+it "a filled spec with bracket notation and non-stock Mermaid lines still passes strict doctor"
+cat >> "$EX/specs/architecture.md" <<'MD'
+
+An identifier can look like `<request>` or [status]. [The identifiers part](parts/p9-identifiers.md) serves J-01.
+
+| Format | Example |
+|--------|---------|
+| Type | `Queue<Entry>` |
+
+```text
+P1->>P2: <request>
+```
+
+```mermaid
+flowchart LR
+  C[Client] -->|"Queue&lt;Entry&gt;"| S["Store [active]"]
+```
+
+```mermaid
+sequenceDiagram
+  Client->>Service: <request>
+  Client->>Service: <request> (the caller's variable)
+  P1->>P2: <request> (the caller's variable)
+```
+MD
+mkdir -p "$EX/specs/parts" || exit 1
+cat > "$EX/specs/parts/p9-identifiers.md" <<'MD'
+# P9 Identifiers
+
+**What it is**: Formatting conventions for identifiers seen by users in J-01.
+
+## Why it exists
+
+Readers need to recognize identifiers in J-01.
+
+An alert shows `P<n>` as the generic identifier notation when the part index is hidden.
+
+    Code: <path> (a sample line of indented CLI help)
+MD
+run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq 0 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+
+it "the generated catalog detects stale and missing skeletons after a template edit"
+generator="$PK_ROOT/scripts/maintainer/generate-template-residue.py"
+catalog="$PK_ROOT/scripts/template-residue.tsv"
+MUTANT="$(mktemp -d)"; track_tmp "$MUTANT"
+python3 "$generator" > "$MUTANT/fresh.tsv" || exit 1
+run cmp -s "$catalog" "$MUTANT/fresh.tsv"
+assert_eq 0 "$STATUS" "checked-in catalog must equal regeneration byte-for-byte"
+cp -R "$PK_ROOT/templates" "$MUTANT/"
+sed -i.bak 's/<observable criteria>/<measurable rollout criteria>/' "$MUTANT/templates/lifecycle-template.md"
+printf '\n- **Rollout when**: <owner-visible rollout conditions>.\n' >> "$MUTANT/templates/lifecycle-template.md"
+python3 "$generator" "$MUTANT/templates" > "$MUTANT/mutated.tsv" || exit 1
+run cmp -s "$catalog" "$MUTANT/mutated.tsv"
+assert_eq 1 "$STATUS" "mutation fails the same equality check"
+assert_not_contains "$(cat "$MUTANT/mutated.tsv")" '<observable criteria>' "renaming removes the orphaned token"
+assert_contains "$(cat "$MUTANT/mutated.tsv")" '<measurable rollout criteria>' "renaming adds the replacement"
+assert_contains "$(cat "$MUTANT/mutated.tsv")" '<owner-visible rollout conditions>' "new slots enter the catalog"
 
 finish

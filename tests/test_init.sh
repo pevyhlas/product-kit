@@ -15,6 +15,9 @@ for file in constitution.md agents.md config.md; do assert_file "$PROJ/.prdkit/m
 assert_contains "$(cat .prdkit/memory/constitution.md)" '- **Rigor**: light [prdkit:unconfirmed]' 'fresh Rigor carries the confirmation marker'
 assert_file .prdkit/scripts/bash/template-residue-lib.sh
 assert_contains "$(cat .prdkit/.manifest)" '.prdkit/scripts/bash/template-residue-lib.sh' 'residue library is mapped and hashed'
+assert_file .prdkit/scripts/bash/template-residue.tsv
+assert_contains "$(cat .prdkit/.manifest)" '.prdkit/scripts/bash/template-residue.tsv' 'generated data is mapped and hashed'
+assert_not_contains "$(cat .prdkit/.manifest)" 'generate-template-residue.py' 'generator is maintainer-only'
 memfiles=("$PROJ"/.prdkit/memory/*.md)
 assert_eq 3 "${#memfiles[@]}" "only the three memory files are seeded"
 for file in ledger-emit.sh ledger-spool-adapter.sh json-lib.sh retrospective.sh; do
@@ -143,7 +146,8 @@ assert_contains "$(cat "$PROJ/.prdkit/.manifest")" "version: $(cat "$PK_ROOT/VER
 expected=0
 for file in "$PROJ"/.product-kit/commands/*.md "$PROJ"/.product-kit/workflows/*.md "$PROJ"/.product-kit/templates/*.md \
     "$PROJ"/.product-kit/scripts/*.sh "$PROJ"/.product-kit/scripts/{pr-facts,facts}.py \
-    "$PROJ"/.product-kit/scripts/{agents-section,outcome-checkpoint}.md; do
+    "$PROJ"/.product-kit/scripts/{agents-section,outcome-checkpoint}.md \
+    "$PROJ"/.product-kit/scripts/template-residue.tsv; do
     case "$(basename "$file")" in
         init.sh|render-agents.sh|agent-definition-template.md) ;;   # bootstrap; optional agent tiers
         *) expected=$((expected + 1)) ;;

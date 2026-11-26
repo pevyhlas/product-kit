@@ -24,8 +24,10 @@ change by change.
   as owner policy. Ordinary `doctor.sh` advises on the marker and leftover fill-in slots in
   project seeds, with JSON trace counts `unconfirmed-default` and `template-placeholder`.
   **Fresh installs now fail `doctor.sh --strict`** until the project fills or removes the slots
-  and the owner chooses Rigor and removes the marker. Upgrades do not mark existing unmarked
-  constitutions.
+  and the owner chooses Rigor and removes the marker. Existing projects with leftover scaffold
+  can also fail strict doctor after upgrading, even with unmarked Rigor. Plain upgrade preserves
+  an existing constitution without adding the marker; `--force` reseeds it. The review gate still
+  reads marked `light` as `light`; the marker tells reviewers to ask the owner.
 
 ## [3.2.0] — 2026-11-26 — lean review package
 
