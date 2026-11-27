@@ -15,8 +15,12 @@ change by change.
 
 ### Fixed
 
-- Under `owner-approval: per-pr`, changes to the review policy surface after a T3 owner approval
-  require fresh approval on the exact head. The gate identifies the first policy commit and path.
+- Under `owner-approval: per-pr`, a carried T3 owner approval no longer counts when the net diff
+  from the approved commit to the head touches `.prdkit`, `.product-kit` (including the gitlink)
+  or `.github/workflows/`, contains a path Git quotes (such as a non-ASCII filename), or cannot be
+  read; the PR then needs a fresh owner approval on the exact head. A policy edit later reverted
+  in full still carries. The gate names the first policy commit and path
+  ([Per-PR owner approval](docs/ci-gates.md#per-pr-owner-approval)).
 
 ## [3.3.1] — 2026-11-27 — optional per-PR owner approval
 
