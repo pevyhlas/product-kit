@@ -11,6 +11,8 @@ change by change.
 
 ## [Unreleased]
 
+## [3.3.1] — 2026-11-27 — optional per-PR owner approval
+
 ### Added
 
 - Trusted `owner-approval: per-pr` lets a T3 owner approval carry forward on the same PR from an
