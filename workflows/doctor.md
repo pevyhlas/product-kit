@@ -27,10 +27,10 @@ installation drift. Never repair during diagnosis or read a clean report as read
 templates or their explanatory examples. `unconfirmed-default` locates seeded Rigor still
 marked `[prdkit:unconfirmed]`; after the owner chooses `light` or `full`, set it and remove the
 marker. Both counts are under `trace` in JSON, and both advisories fail only in `--strict`.
-Residue scanning understands headings, paragraphs, list continuations and pipe-delimited table cells.
-It skips blockquotes, code, comments, link destinations and titles, single-line reference definitions,
-autolinks and inline tags, except for explicit stock anchors. Only a line-start HTML comment block can
-span blocks. Other Markdown is read as plain text and may cause a local miss or false finding.
+Residue checking is a best-effort scan of headings, paragraphs, lists and pipe-delimited tables.
+Except for explicit stock anchors, blockquotes, code, comments, link destinations and titles,
+single-line reference definitions, autolinks and inline tags are protected in this subset and
+are never reported. Unusual Markdown can cause the scan to miss slots; a clean result is not proof.
 
 If present, `specs/design.md` is checked for the four headings in `design-template.md`, a
 100-reading-line budget and resolvable links and citations, not for the quality of its direction.

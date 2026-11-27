@@ -268,7 +268,7 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
             return end
         }
         function reference_definition(s,   start,stop) {
-            if (!match(s, /^ ? ? ?\[(\\[[:punct:]]|[^][\\])+\]:[[:blank:]]*/)) return 0
+            if (!match(s, /^ ? ? ?\[(\\.|[^][\\])+\]:[[:blank:]]*/)) return 0
             start = RLENGTH + 1
             stop = destination_end(s, start)
             return stop > start && link_tail(s, stop, "")
@@ -291,22 +291,22 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
             flat = tag; gsub(/\n/, " ", flat)
             return (normalize(flat) in stock) ? "" : tag
         }
-        function split_cells(line, cells,   out,sep,pipe,n) {
-            while (match(line, /\\[\\|]/)) {
-                sep = substr(line, RSTART, RLENGTH)
-                out = out substr(line, 1, RSTART - 1) (sep == "\\|" ? ignored : sep)
-                line = substr(line, RSTART + RLENGTH)
-            }
-            line = out line
+        function split_cells(line, cells,   pipe,n,k) {
+            # GFM consumes the backslash immediately before a pipe, regardless
+            # of preceding backslashes. Earlier backslashes stay in the cell.
+            gsub(/\\\|/, ignored, line)
             pipe = index(line, "|")
             sub(/^ *\|/, "", line); sub(/\| *$/, "", line)
             n = split(line, cells, /\|/)
+            for (k = 1; k <= n; k++) gsub(ignored, "|", cells[k])
             cells[0] = pipe
             return n
         }
         function table_ahead(line, row, base,   divider,k,n,parts) {
             if (row >= last || line !~ /\|/ || line ~ /^    /) return 0
-            divider = relative(src[row + 1], base)
+            divider = src[row + 1]
+            if (indent(divider) < base) return 0
+            divider = relative(divider, base)
             if (divider !~ /\|/ || divider ~ /^    /) return 0
             n = split_cells(normalize(divider), parts)
             if (!parts[0]) return 0
@@ -400,7 +400,9 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
                 for (k in stage_columns) { stage_table = 1; break }
             }
             for (i = first + 2; i <= last; i++) {
-                text = relative(src[i], base)
+                text = src[i]
+                if (indent(text) < base) break
+                text = relative(text, base)
                 if (text !~ /\|/ || text ~ /^    / || interrupts(text) || reference_definition(text)) break
                 n = split_cells(text, parts)
                 if (!parts[0]) break
@@ -442,9 +444,11 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
             if (substr(mark, 1, 1) == "`" && index(substr(text, RLENGTH + 1), "`")) return ""
             return mark
         }
-        function list_prefix(text) {
+        function list_prefix(text,   prefix) {
             if (!match(text, /^ ? ? ?([-*+]|[0-9]+[.)])([[:blank:]]+|$)/)) return ""
-            return substr(text, 1, RLENGTH)
+            prefix = substr(text, 1, RLENGTH)
+            if (match(prefix, /[0-9]+/) && RLENGTH > 9) return ""
+            return prefix
         }
         function thematic(text) {
             return text ~ /^ ? ? ?((- *)- *-[- ]*|(\* *)\* *\*[* ]*|(_ *)_ *_[_ ]*)$/

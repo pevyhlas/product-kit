@@ -2037,6 +2037,49 @@ MD
 done
 mv "$arch.saved" "$arch"
 
+it "strict doctor does not report protected text in Markdown edge cases"
+cp "$arch" "$arch.saved"
+for boundary in table-double-backslash list-table-outdent reference-backslash ordered-ten-digit; do
+    cp "$arch.saved" "$arch"
+    printf '\n## Markdown boundaries\n\n' >> "$arch"
+    case "$boundary" in
+        table-double-backslash)
+            cat >> "$arch" <<'MD'
+| Sample | Status |
+| --- | --- |
+| `A\\| <delivery, tooling>` | Ready |
+MD
+            ;;
+        list-table-outdent)
+            cat >> "$arch" <<'MD'
+- Nested notes
+
+  | Part | Components |
+  | --- | --- |
+  | A | All filled |
+See this literal: x | <components> |.
+MD
+            ;;
+        reference-backslash)
+            cat >> "$arch" <<'MD'
+[Guide][path\file]
+
+[path\file]: https://example.org "<delivery, tooling>"
+MD
+            ;;
+        ordered-ten-digit)
+            cat >> "$arch" <<'MD'
+Example `raw
+0000000001. <delivery, tooling> text`.
+MD
+            ;;
+    esac
+    run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
+    assert_eq 0 "$STATUS" "$boundary: $OUTPUT"
+    assert_eq '[0,0]' "$(jq -c '[.trace["template-placeholder"], (.findings | length)]' <<< "$OUTPUT")" "$boundary: $OUTPUT"
+done
+mv "$arch.saved" "$arch"
+
 it "an untouched caption in the kit's two-stage journey table fails strict doctor"
 product="$EX/specs/product.md"
 sed -i.bak 's/^\(| Requests | | \)\[J-01\]/\1[J-01 <journey>]/' "$product"
