@@ -577,8 +577,14 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
                 else if ((ending = html_block_end(text)) != "") {
                     i = html_block(i, base, text, ending)
                 } else if (text ~ /^ ? ? ?>/) {
-                    sub(/^([[:blank:]]*>)+[[:blank:]]*/, "", text)
-                    quote = (text != "" && !interrupts(text))
+                    # Consume one optional space per marker, not the content indentation.
+                    lead = base
+                    while (match(text, /^ ? ? ?>/)) {
+                        lead += RLENGTH
+                        text = expand_indent(substr(text, RLENGTH + 1), lead)
+                        lead += sub(/^ /, "", text)
+                    }
+                    quote = (text ~ /[^[:blank:]]/ && !interrupts(text))
                     i++
                 } else if ((mark = fence_run(text)) != "") {
                     sub(/^ */, "", text)

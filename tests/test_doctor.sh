@@ -2235,6 +2235,41 @@ MD
 done
 mv "$arch.saved" "$arch"
 
+it "quote-relative indentation keeps a lazy continuation inside its quote"
+cp "$arch" "$arch.saved"
+for quoted in code-span prose block-start; do
+    cp "$arch.saved" "$arch"
+    printf '\n' >> "$arch"
+    expected=0
+    case "$quoted" in
+        code-span)
+            cat >> "$arch" <<'MD'
+> The legacy renderer used `page markup:
+>     <div class="release">
+with <delivery, tooling> as the sample label`.
+MD
+            ;;
+        prose)
+            cat >> "$arch" <<'MD'
+> The legacy renderer used page markup:
+>     <div class="release">
+with <delivery, tooling> as the sample label.
+MD
+            ;;
+        block-start)
+            # After consuming one column of the tab, the div is indented
+            # three columns inside the quote and really starts an HTML block.
+            printf '> The legacy renderer used page markup:\n>\t <div class="release">\n' >> "$arch"
+            printf '%s\n' 'Outside the quote: <delivery, tooling>.' >> "$arch"
+            expected=1
+            ;;
+    esac
+    run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
+    assert_eq "$expected" "$STATUS" "$quoted: $OUTPUT"
+    assert_eq "[$expected,$expected]" "$(jq -c '[.trace["template-placeholder"], (.findings | length)]' <<< "$OUTPUT")" "$quoted: $OUTPUT"
+done
+mv "$arch.saved" "$arch"
+
 it "escaping the opening angle or moving the text to a plain fence clears a strict finding"
 cp "$arch" "$arch.saved"
 for workaround in bare escaped fenced; do
