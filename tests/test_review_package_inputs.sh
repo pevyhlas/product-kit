@@ -174,7 +174,8 @@ for mode in "$@"; do
                 assert_contains "$section" 'HEAD bounds are unavailable'
                 assert_not_contains "$section" '**Required full context:**'
                 assert_not_contains "$section" 'mark the review pending'
-                assert_eq $'diff.patch\nindex.md' "$(default_read_paths)" 'missing scope and unavailable bounds stay inline'
+                # Stock seed size decides whether obligations overflow into their companion; full context must not be required.
+                assert_eq $'diff.patch\nindex.md' "$(default_read_paths | grep -vx obligations.md)" 'missing scope and unavailable bounds stay inline'
                 assert_contains "$(non_verification_gaps)" "child actual child record missing or unrecoverable: specs/changes/$ID.md"
                 assert_eq unavailable "$(cat "$PKG/bounds-status.txt")"
                 assert_eq '' "$(cat "$PKG/bounds.txt")"
