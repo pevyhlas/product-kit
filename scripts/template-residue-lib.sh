@@ -41,6 +41,7 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
             stage_name["general availability"] = 1
         }
         FILENAME == ARGV[1] {
+            if ($1 == "# escaped-stock") { escaped_stock[$2] = 1; next }
             if ($0 ~ /^#/) next
             if (NF < 6 || (NF - 2) % 4 || $1 == "" || $2 == "" || (($1, $2) in size)) {
                 invalid = 1; exit 1
@@ -83,7 +84,6 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
         function normalize(s) {
             gsub(/[[:blank:]]+/, " ", s)
             sub(/^ /, "", s); sub(/ $/, "", s)
-            gsub(/\\</, "<", s)
             return s
         }
         function report_slot(token, nr) {
@@ -183,7 +183,13 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
                 n = RLENGTH
                 out = out substr(text, 1, at - 1); text = substr(text, at)
                 ch = substr(text, 1, 1)
-                if (ch == "`") {
+                if (n == 2 && substr(text, 1, n) == "\\<") {
+                    # Only prompts shipped with this escape are still stock.
+                    tmp = substr(text, 2); gsub(/\n/, " ", tmp)
+                    out = out (match(tmp, angle) && RSTART == 1 &&
+                        normalize(substr(tmp, 1, RLENGTH)) in escaped_stock ? "<" : ignored)
+                    text = substr(text, n + 1); continue
+                } else if (ch == "`") {
                     rest = substr(text, n + 1)
                     if ((at = code_end(rest, n))) {
                         out = out masked(substr(text, 1, n + at))
@@ -403,15 +409,17 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
                 text = src[i]
                 if (indent(text) < base) break
                 text = relative(text, base)
-                if (text !~ /\|/ || text ~ /^    / || interrupts(text) || reference_definition(text)) break
+                if (text !~ /[^[:blank:]]/ || text ~ /^    / || interrupts(text) || reference_definition(text)) break
+                # GFM pads short rows (including one cell without pipes) and
+                # discards surplus cells. Missing cells have nothing to scan.
                 n = split_cells(text, parts)
-                if (!parts[0]) break
+                if (n > width) n = width
                 counts[i] = n
                 for (k = 1; k <= n; k++) {
                     values[i,k] = normalize(mask_inline(parts[k]))
                     # A journey link identifies a custom stage column.
                     if ("area" in headers && (section == "journeys" || stage_table) &&
-                        k <= width && columns[k] != "area" && values[i,k] ~ /\]\(product\/journeys\//) {
+                        columns[k] != "area" && values[i,k] ~ /\]\(product\/journeys\//) {
                         stage_columns[columns[k]] = 1
                         stage_table = 1
                     }
@@ -420,17 +428,17 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
             for (j = first; j < i; j++) {
                 for (k = 1; k <= counts[j]; k++)
                     scan(group_names, values[j,k], "", j, 0,
-                        (j == first ? "body-header" : "body-cell"), (k <= width ? columns[k] : ""))
+                        (j == first ? "body-header" : "body-cell"), columns[k])
             }
             end_table()
             return i
         }
         function indent(text) { match(text, /^ */); return RLENGTH }
-        function expand_indent(text,   pad,i,ch) {
+        function expand_indent(text, start,   pad,i,ch) {
             for (i = 1; i <= length(text); i++) {
                 ch = substr(text, i, 1)
                 if (ch == " ") pad = pad " "
-                else if (ch == "\t") pad = pad substr("    ", 1, 4 - length(pad) % 4)
+                else if (ch == "\t") pad = pad substr("    ", 1, 4 - (start + length(pad)) % 4)
                 else break
             }
             return pad substr(text, i)
@@ -538,10 +546,13 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
                     marker_len = length(prefix)
                     pad = prefix; sub(/^.*[^[:blank:]]/, "", pad)
                     text = substr(text, marker_len + 1)
+                    prefix = substr(prefix, 1, marker_len - length(pad))
+                    pad = expand_indent(pad, base + length(prefix))
                     if (length(pad) > 4) {
                         text = substr(pad, 2) text
-                        prefix = substr(prefix, 1, marker_len - length(pad) + 1)
+                        pad = " "
                     }
+                    prefix = prefix pad
                     base += length(prefix) + (pad == "" ? 1 : 0)
                     indents[++depth] = base; items[depth] = i
                 }

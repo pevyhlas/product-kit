@@ -2080,6 +2080,76 @@ MD
 done
 mv "$arch.saved" "$arch"
 
+it "strict doctor ignores short-row code spans, surplus cells and outdented tab-list text"
+cp "$arch" "$arch.saved"
+for boundary in short-row surplus-cell surplus-list-cell tab-list-outdent tab-nested-list-outdent; do
+    cp "$arch.saved" "$arch"
+    printf '\n## Markdown boundaries\n\n' >> "$arch"
+    case "$boundary" in
+        short-row)
+            cat >> "$arch" <<'MD'
+| Sample | Status |
+| --- | --- |
+Example: use ` before A\\|B
+| `Guide: <delivery, tooling>` | Ready |
+MD
+            ;;
+        surplus-cell)
+            cat >> "$arch" <<'MD'
+| Sample | Status |
+| --- | --- |
+| Service \| Worker | Ready | <delivery, tooling> |
+MD
+            ;;
+        surplus-list-cell)
+            cat >> "$arch" <<'MD'
+- Nested notes
+
+  | Sample | Status |
+  | --- | --- |
+  | Service | Ready | <delivery, tooling> |
+MD
+            ;;
+        tab-list-outdent)
+            printf -- '-\tNested notes\n\n' >> "$arch"
+            cat >> "$arch" <<'MD'
+    | Part | Components |
+    | --- | --- |
+    | A | Filled |
+  See this literal: x | <components> |.
+MD
+            ;;
+        tab-nested-list-outdent)
+            # Before the tab there are four columns of indentation and marker.
+            # The next stop is column offset eight, not six relative to the list.
+            printf -- '- Outer notes\n\n  1.\tNested notes\n\n' >> "$arch"
+            printf '\t\t| Part | Components |\n\t\t| --- | --- |\n\t\t| A | Filled |\n' >> "$arch"
+            printf '\t  See this literal: x | <components> |.\n' >> "$arch"
+            ;;
+    esac
+    run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
+    assert_eq 0 "$STATUS" "$boundary: $OUTPUT"
+    assert_eq '[0,0]' "$(jq -c '[.trace["template-placeholder"], (.findings | length)]' <<< "$OUTPUT")" "$boundary: $OUTPUT"
+done
+mv "$arch.saved" "$arch"
+
+it "escaping the opening angle or moving the text to a plain fence clears a strict finding"
+cp "$arch" "$arch.saved"
+for workaround in bare escaped fenced; do
+    cp "$arch.saved" "$arch"
+    printf '\n## Markdown boundaries\n\n' >> "$arch"
+    expected=0
+    case "$workaround" in
+        bare) printf 'Example: <delivery, tooling>.\n' >> "$arch"; expected=1 ;;
+        escaped) printf '%s\n' 'Example: \<delivery, tooling>.' >> "$arch" ;;
+        fenced) printf '%s\n' '```text' 'Example: <delivery, tooling>.' '```' >> "$arch" ;;
+    esac
+    run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
+    assert_eq "$expected" "$STATUS" "$workaround: $OUTPUT"
+    assert_eq "[$expected,$expected]" "$(jq -c '[.trace["template-placeholder"], (.findings | length)]' <<< "$OUTPUT")" "$workaround: $OUTPUT"
+done
+mv "$arch.saved" "$arch"
+
 it "an untouched caption in the kit's two-stage journey table fails strict doctor"
 product="$EX/specs/product.md"
 sed -i.bak 's/^\(| Requests | | \)\[J-01\]/\1[J-01 <journey>]/' "$product"

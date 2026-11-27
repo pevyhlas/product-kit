@@ -28,9 +28,11 @@ templates or their explanatory examples. `unconfirmed-default` locates seeded Ri
 marked `[prdkit:unconfirmed]`; after the owner chooses `light` or `full`, set it and remove the
 marker. Both counts are under `trace` in JSON, and both advisories fail only in `--strict`.
 Residue checking is a best-effort scan of headings, paragraphs, lists and pipe-delimited tables.
-Except for explicit stock anchors, blockquotes, code, comments, link destinations and titles,
-single-line reference definitions, autolinks and inline tags are protected in this subset and
-are never reported. Unusual Markdown can cause the scan to miss slots; a clean result is not proof.
+It avoids reporting text this subset protects: blockquotes, code, comments, link destinations and
+titles, single-line reference definitions, autolinks and inline tags, except for explicit stock
+anchors. Unusual Markdown can hide slots. If strict doctor flags protected text, please report it.
+Escape the opening `<` as `\<` (unless the stock prompt already uses that escape), or move the text
+into a plain fenced code block outside the stock Commands and Mermaid contexts.
 
 If present, `specs/design.md` is checked for the four headings in `design-template.md`, a
 100-reading-line budget and resolvable links and citations, not for the quality of its direction.

@@ -23,8 +23,9 @@ change by change.
 - Fresh installs mark seeded Rigor `light` as unconfirmed; independent reviewers must not use it
   as owner policy. Ordinary `doctor.sh` advises on the marker and leftover fill-in slots in
   project seeds, with JSON trace counts `unconfirmed-default` and `template-placeholder`.
-  The best-effort residue scan can miss slots in unusual Markdown. It never reports protected
-  text in the documented subset, such as link titles.
+  The best-effort residue scan can miss slots in unusual Markdown and avoids reporting protected
+  text in its documented subset. If strict doctor flags protected text, please report it. Escape
+  the opening `<` (unless already escaped in the stock prompt) or use a plain fenced code block.
   **Fresh installs now fail `doctor.sh --strict`** until the project fills or removes the slots
   and the owner chooses Rigor and removes the marker. Existing projects with leftover scaffold
   can also fail strict doctor after upgrading, even with unmarked Rigor. Plain upgrade preserves
