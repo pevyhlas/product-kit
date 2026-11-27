@@ -243,7 +243,8 @@ printf '# Change\n**Tier**: T3\n## State\n' > specs/changes/001-reviewed.md
 echo '- owner-approval: per-pr' >> .prdkit/memory/config.md
 git add -A; git commit -qm 'T3 implementation'
 approved="$(git rev-parse HEAD)"
-git commit -q --allow-empty -m 'fix "quoted" output'
+printf 'ordinary follow-up\n' > source.txt
+git add source.txt; git commit -qm 'fix "quoted" output'
 git commit -q --allow-empty -m 'close review round'
 h="$(git rev-parse HEAD)"; fx_pr 7 "$h"
 f="$GH_STUB_DIR/reviews/7.json"; printf '[]\n' > "$f"
@@ -345,6 +346,123 @@ assert_eq "$(git log --format='%h %s' -20 "$approved..$h")" \
 run bash "$CHECK" --pr "$PR" 001-reviewed
 assert_eq 0 "$STATUS"; assert_contains "$OUTPUT" '  +4 more'
 assert_not_contains "$OUTPUT" 'fix "quoted" output'
+
+carry_reviews() { # approval commit; publish the current fixture head and reset reviews
+    h="$(git rev-parse HEAD)"; fx_pr 7 "$h"
+    printf '[]\n' > "$f"
+    publisher_review APPROVED "$h"; fx_owner_review 7 APPROVED "$1"
+}
+assert_policy_carry_refused() { # first policy commit and Git's displayed path
+    online
+    assert_eq 1 "$STATUS" "$_CURRENT"
+    assert_eq "fail host publisher" \
+        "$(jq -r '[.result,.authority,.reviews[].role] | join(" ")' <<< "$OUTPUT")"
+    assert_eq "$1 $2" "$(jq -r '.owner_approval_policy_change | [.commit,.path] | join(" ")' <<< "$OUTPUT")"
+    assert_not_contains "$OUTPUT" '"owner_approval":'
+    run bash "$CHECK" --pr "$PR" 001-reviewed
+    assert_eq 1 "$STATUS"
+    assert_contains "$OUTPUT" "$1 ($2)"
+    assert_contains "$OUTPUT" "fresh owner approval on the exact head $h"
+}
+
+it 'a carried owner approval stops at the oldest policy edit, not the latest edit'
+git checkout -q --detach "$approved"
+git commit -q --allow-empty -m 'ordinary follow-up before policy'
+printf '\nPolicy update.\n' >> .prdkit/memory/config.md
+git add .prdkit/memory/config.md; git commit -qm 'first policy edit'
+first_policy="$(git rev-parse HEAD)"
+printf '\nSecond update.\n' >> .prdkit/memory/config.md
+git add .prdkit/memory/config.md; git commit -qm 'second policy edit'
+carry_reviews "$approved"
+assert_policy_carry_refused "$first_policy" .prdkit/memory/config.md
+
+it 'an exact-head owner approval still counts with policy edits'
+fx_owner_review 7 APPROVED "$h" '{"author":{"databaseId":1005}}'
+online; assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq 'publisher owner' "$(jq -r '[.reviews[].role] | join(" ")' <<< "$OUTPUT")"
+assert_not_contains "$OUTPUT" '"owner_approval'
+
+it 'a carried approval does not cover a kit gitlink update'
+git checkout -q --detach "$approved"
+git rm -qr .product-kit
+git update-index --add --cacheinfo "160000,$BASE,.product-kit"
+git commit -qm 'pin kit'
+link_approved="$(git rev-parse HEAD)"
+git update-index --cacheinfo "160000,$approved,.product-kit"
+git commit -qm 'update kit pin'
+carry_reviews "$link_approved"
+git config diff.ignoreSubmodules all
+assert_policy_carry_refused "$h" .product-kit
+git config --unset diff.ignoreSubmodules
+
+it 'a carried approval does not cover a workflow file, including spaces in its path'
+git checkout -q --detach "$approved"
+mkdir -p .github/workflows
+printf 'name: example\n' > '.github/workflows/check changes.yml'
+git add .github/workflows; git commit -qm 'add review workflow'
+carry_reviews "$approved"
+assert_policy_carry_refused "$h" '.github/workflows/check changes.yml'
+
+it 'a carried approval treats a quoted raw path as policy'
+git checkout -q --detach "$approved"
+odd_path="$(printf 'odd-\303\251.txt')"
+printf 'follow-up\n' > "$odd_path"
+git add "$odd_path"; git commit -qm 'add file with an odd path'
+carry_reviews "$approved"
+git config core.quotePath false
+assert_policy_carry_refused "$h" '"odd-\303\251.txt"'
+git config --unset core.quotePath
+
+it 'a policy change introduced by a merge is attributed to the merge commit'
+git checkout -q --detach "$approved"
+git commit -q --allow-empty -m 'main line follow-up'
+main_line="$(git rev-parse HEAD)"
+git checkout -q --detach "$approved"
+git commit -q --allow-empty -m 'side follow-up'
+side="$(git rev-parse HEAD)"
+git checkout -q --detach "$main_line"
+git merge -q --no-ff --no-commit "$side"
+printf '\nPolicy update at merge.\n' >> .prdkit/memory/config.md
+git add .prdkit/memory/config.md; git commit -qm 'merge with policy edit'
+carry_reviews "$approved"
+assert_policy_carry_refused "$h" .prdkit/memory/config.md
+
+it 'only net policy changes under the exact prefixes stop a carry'
+git checkout -q --detach "$first_policy"
+git revert --no-edit "$first_policy" >/dev/null
+mkdir -p .github/workflows-notes
+printf 'Notes\n' > .github/workflows-notes/review.md
+git add .github/workflows-notes; git commit -qm 'add workflow notes outside the policy surface'
+carry_reviews "$approved"
+online; assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq "$approved" "$(jq -r '.owner_approval.commit' <<< "$OUTPUT")"
+assert_not_contains "$OUTPUT" '"owner_approval_policy_change"'
+
+it 'an unreadable carry diff fails closed, even when Git produced output'
+real_git="$(command -v git)"
+mkdir "$_SCRATCH_CWD/git-fault"
+cat > "$_SCRATCH_CWD/git-fault/git" <<'SH'
+#!/usr/bin/env bash
+case "$REVIEW_DIFF_FAULT:$*" in
+    'diff:'*' diff --raw '*|'diff-tree:'*' diff-tree --raw '*)
+        "$REAL_GIT" "$@"
+        exit 5 ;;
+esac
+exec "$REAL_GIT" "$@"
+SH
+chmod +x "$_SCRATCH_CWD/git-fault/git"
+for fault in diff diff-tree; do
+    if [ "$fault" = diff ]; then target="$first_policy^"; else target="$first_policy"; fi
+    git checkout -q --detach "$target"
+    carry_reviews "$approved"
+    REAL_GIT="$real_git" REVIEW_DIFF_FAULT="$fault" PATH="$_SCRATCH_CWD/git-fault:$PATH" online
+    assert_eq 1 "$STATUS" "$fault read failure must prevent carry"
+    assert_eq "fail host publisher" \
+        "$(jq -r '[.result,.authority,.reviews[].role] | join(" ")' <<< "$OUTPUT")"
+    assert_contains "$OUTPUT" 'Cannot read the policy diff for the carried T3 owner approval'
+    assert_contains "$OUTPUT" "fresh owner approval on the exact head $h"
+    assert_not_contains "$OUTPUT" '"owner_approval'
+done
 
 it 'per-PR policy does not change owner objections at T1 or T2'
 for level in T1 T2; do

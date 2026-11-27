@@ -225,6 +225,14 @@ and only from a commit that is still an ancestor of the current head. An objecti
 that owner voids approval until a later qualifying approval. Publishers, reviewers covering
 lenses, and agents still need the exact head; T1 and T2 are unchanged.
 
+If the diff from the approved commit to the head changes `.prdkit` or anything under it,
+`.product-kit` or anything under it (including the gitlink), or a path under
+`.github/workflows/`, T3 requires a fresh owner approval on the exact head. Paths Git quotes
+in the raw diff also stop carry, as does an unreadable diff. For a policy change, the gate
+reports the first commit in the range, oldest first, that touches the policy surface, and
+the path it changed (`owner_approval_policy_change: {commit, path}` in JSON). An exact-head
+owner approval is unaffected.
+
 If the gate uses a carried approval, it names the approved commit and lists up to 20
 commits since then, with a `+N more` line if needed. JSON includes the qualifying owner in `reviews`
 and adds `owner_approval` with `mode`, `reviewer`, `review`, `commit`, `commits_since`
