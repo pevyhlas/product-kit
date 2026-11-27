@@ -11,6 +11,8 @@ change by change.
 
 ## [Unreleased]
 
+## [3.3.2] — 2026-11-27 — per-PR approval policy guard
+
 ### Fixed
 
 - Under `owner-approval: per-pr`, changes to the review policy surface after a T3 owner approval
