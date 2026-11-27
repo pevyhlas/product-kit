@@ -47,9 +47,10 @@ github_review_policy() {
                 if (index($0,"- " key ":")!=1)
                     malformed="Invalid " key " key at config.md line " NR ": expected - " key ": <value>"
             }
-            # owner-approval must be the whole label, so keys such as owner-approval-note stay unrelated.
-            if ((ntext ~ /^owner-approval[ *_]*[:=]/ || ntext ~ /[^a-z0-9_-]owner-approval[ *_]*[:=]/) &&
-                index($0,"- owner-approval:")!=1)
+            # Only a line whose label is owner-approval assigns it; owner-approval-note or text inside
+            # the value of another key stays unrelated.
+            label=ntext; sub(/^[-*+_ ]*/, "", label)
+            if (label ~ /^owner-approval[*_ ]*[:=]/ && index($0,"- owner-approval:")!=1)
                 malformed="Invalid owner-approval key at config.md line " NR ": expected - owner-approval: <value>"
         }
         /^- (review-(host|publishers|owner|publisher-isolation|lenses)|owner-approval):/ {

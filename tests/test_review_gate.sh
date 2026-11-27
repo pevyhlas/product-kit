@@ -324,7 +324,8 @@ owner_policy '- owner-approval: per-pr' '- Owner-Approval: exact-head'
 online; assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'Invalid owner-approval key'
 owner_policy '- **owner-approval**: per-pr'
 online; assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'Invalid owner-approval key'
-for unrelated in '- owner-approval-note: keep approvals current' '- owner-approval_x: per-pr'; do
+for unrelated in '- owner-approval-note: keep approvals current' '- owner-approval_x: per-pr' \
+    'Set owner-approval: per-pr only before production.' '- review-notes: owner-approval=per-pr is pre-production only'; do
     owner_policy "$unrelated"
     online; assert_not_contains "$OUTPUT" '"authority":"unavailable"'
     assert_not_contains "$OUTPUT" 'owner-approval key'
