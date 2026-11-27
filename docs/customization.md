@@ -208,8 +208,8 @@ For a declaring agent:
   which commands the skill needs. After the tier's rules, the renderer
   denies all skills and then allows only the declared runnable IDs. For each blocked skill,
   the prompt points to `<id>.json` or `<id>.md` supplied by the maker. Pass those completed
-  files with `build-review-package.sh --evidence <repo-relative-path>`; the package keeps
-  them under `evidence/<repo-relative-path>` and lists them in its inventory. Without
+  files with `build-review-package.sh --evidence <repo-relative-path>`; the package copies
+  them directly under `evidence/` and lists each final name and source in `manifest.tsv`. Without
   evidence the reviewer should report the facts as unverified.
 - **Claude Code:** The renderer owns `skills:` and writes all declared IDs as
   `<plugin>:<id>`. Claude skips missing, disabled or non-model-invocable skills. The

@@ -16,15 +16,50 @@ change by change.
 - Trusted `owner-approval: per-pr` lets a T3 owner approval carry forward on the same PR from an
   ancestor, with the approved commit and subsequent commits reported. The default remains `exact-head`.
 
+### Fixed
+
+- Under legacy mawk, the trusted review policy parser no longer rejects valid account lists or
+  misses headings indented by two or three spaces.
+
+## [3.3.0] — 2026-11-27 — template residue check
+
 ### Changed
 
 - Rejected `Bash(...)` entries in Claude tier tool lists now explain how to keep Bash out
   of reviewer tiers or restrict commands with Claude Code settings or project hooks.
   The customization guide also shows how to opt into scoped OpenCode V2 maker shell rules.
 - The adoption guide explains how to bootstrap the review gate and when default-branch policy changes take effect.
+- The review package index links one required companion for larger obligation lists rather
+  than inlining bulky policy and excerpts. Missing optional exact-head CI is reported as
+  not collected, not as an open question.
 
 ### Changed (breaking)
 
+- Ordinary `--evidence` files now sit at `evidence/<basename>` (numbered for collisions),
+  not `evidence/<repo-relative-path>`. Find the copied name and source in `manifest.tsv`.
+  `evidence/facts/` remains reserved, so an ordinary evidence file whose basename is `facts`
+  (ASCII case-insensitive, e.g. `proof/Facts`) is now refused with exit 1 even without `--facts`.
+  Rename or stage such files under another basename, and pass a facts pair with `--facts`.
+  Existing rounds are retained; rebuild to use the new layout.
+- Review obligations over 2 KiB (up to the 16 KiB cap) move from `index.md` into a required
+  `obligations.md` companion that the index links. Dispatchers and readers that consume only
+  `index.md` must also read the linked companion. The package format moves from `package11` to
+  `package14`: older rounds stay valid evidence but no longer count for same-head reuse, so build
+  a fresh round instead of rewriting retained ones.
+- The facts cache key moves from 4 to 5. Regenerate version 4 packs with `facts.sh`
+  before verifying or attaching them; retained review rounds do not need migration.
+- Facts no longer refuses a missing HEAD change record with exit 2. It may use historical scope,
+  or write a pack with `facts.bounds.state: unavailable` and exit 0, even for an unknown
+  well-formed ID. A checked inventory with valid scope but no bounds inputs reports `absent`.
+  Bounds also become `unavailable` for a scope record that is executable, not LF-terminated, has
+  other than exactly one valid Tier, or carries an unsupported State review field, and when the
+  BASE or HEAD spec namespace preflight rejects an entry. That rejection can leave doctor,
+  adoption and requested CI not collected. Review packages can then omit explicit spec
+  `--context` files: a rejected HEAD capture skips the copy and records a gap, while a BASE-only
+  rejection keeps the HEAD copy and records a gap for the BASE comparison. A successful build or `--verify` no longer implies a present
+  record, collected bounds, captured context or green checks: read `facts.bounds.state`,
+  `scope_revision`, each collector result, `bounds-status.txt` and the package manifest and gaps,
+  then repair the scope record or flagged spec inputs and recollect where those are required.
 - Fresh installs mark seeded Rigor `light` as unconfirmed; independent reviewers must not use it
   as owner policy. Ordinary `doctor.sh` advises on the marker and leftover fill-in slots in
   project seeds, with JSON trace counts `unconfirmed-default` and `template-placeholder`.
@@ -36,9 +71,22 @@ change by change.
   can also fail strict doctor after upgrading, even with unmarked Rigor. Plain upgrade preserves
   an existing constitution without adding the marker; `--force` reseeds it. The review gate still
   reads marked `light` as `light`; the marker tells reviewers to ask the owner.
+  `init.sh --check` now lists an untouched pre-marker constitution as informational `CUSTOMIZED`
+  rather than `OUTDATED`, and install output reads `preserved` and "Preserved project-owned files"
+  instead of `preserved (customized)` and "Modified since install". Update wrappers that parse
+  those strings, and do not read preservation as a Rigor decision; confirm Rigor explicitly.
 
 ### Fixed
 
+- Exact-head facts and review packages share a checked bounds inventory and scope validation.
+  No spec inputs with a valid scope means absent; incomplete inputs or invalid or missing
+  scope mean unavailable. Colliding evidence names use a short hashed fallback when a
+  numeric suffix would exceed the destination's filename limit.
+- Both bounds collectors check the `specs/` namespace and its ASCII case variants at BASE and
+  HEAD. ASCII case-fold collisions, non-ASCII paths within that namespace, and unsafe entries
+  make bounds unavailable. Facts skips its worktree snapshot on those rejections and still
+  writes a pack. Snapshot collisions outside that namespace do not invalidate checked bounds.
+  Review packages never label an unsafe HEAD reference as removed.
 - Review packages no longer require full context just because neither revision has spec bounds.
   A missing or unrecoverable child record still produces the usual warning.
   Historical records and diagnostics remain review evidence, including for same-ID follow-ups.

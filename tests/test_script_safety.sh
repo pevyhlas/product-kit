@@ -834,8 +834,9 @@ it "kit scripts use the approved runtime allowlist"
 # Keep language runtimes distinct from ordinary system tools and the existing
 # GitHub/JSON CLIs. This best-effort check inventories static commands and shebangs.
 # Optional, owner-approved Python 3.11+ stdlib runtime for the two PR evidence helpers.
-runtime_allowlist=(sh bash awk sed jq python3)
-kit_tools=(basename cat chmod cmp cp cut date dd dirname env find gh git grep head hostname ln mkdir mkfifo mktemp mv od openssl ps readlink rm rmdir sha256sum shasum sleep sort stat tail touch tr uname wc)
+ runtime_allowlist=(sh bash awk sed jq python3)
+ # The package builder uses POSIX getconf NAME_MAX for the destination filesystem.
+ kit_tools=(basename cat chmod cmp cp cut date dd dirname env find getconf gh git grep head hostname ln mkdir mkfifo mktemp mv od openssl ps readlink rm rmdir sha256sum shasum sleep sort stat tail touch tr uname wc)
 runtime_check() (
     local file
     {

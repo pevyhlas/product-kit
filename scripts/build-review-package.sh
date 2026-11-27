@@ -13,7 +13,7 @@
 # Invariants:
 # Keep the full object-bound base-to-head patch alongside any focused delta. Check
 # emitted patch paths against the trees, including gitlinks hidden by ignore settings.
-# Inline captured obligations from the packaged context or require that context explicitly.
+# Render captured obligations from the packaged context or require that context explicitly.
 # Validate the final artifact inventory before marking a round complete. Completion
 # is a package result, not a review verdict or proof that required evidence is present.
 #
@@ -31,7 +31,8 @@
 #                     config); anything else is refused. After a base merge, pass the new merge
 #                     base as BASE to leave the base out
 #   --context PATH    Snapshot a repo-relative tracked file at HEAD (repeatable)
-#   --evidence PATH   Copy a completed repo-relative evidence file (repeatable; facts/ is reserved)
+#   --evidence PATH   Copy completed repo-relative evidence to evidence/<basename> (repeatable;
+#                     collisions get a numeric suffix; facts/ is reserved)
 #   --facts           Copy the cached facts pair to evidence/facts/{summary.md,index.json}.
 #                     The caller must verify the pair and its binding before and after copying.
 #
@@ -47,7 +48,8 @@
 #   commits.txt   git log BASE..HEAD --oneline
 #   diffstat.txt  git diff --stat BASE..HEAD
 #   diff.patch    git diff BASE..HEAD
-#   index.md      source bindings, inventory and dispatch preflight
+#   index.md      read order, obligations or their location, and source bindings
+#   obligations.md optional required reading when obligations are too large for the index
 #   manifest.tsv  file, bytes, Git blob object id, source
 #   delta.patch   optional --since delta (index.md says what it covers); full diff remains
 #   context/      optional immutable HEAD snapshots
@@ -65,6 +67,8 @@ set -e
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 source "$SCRIPT_DIR/spec-lib.sh"
+source "$SCRIPT_DIR/review-policy-lib.sh"
+source "$SCRIPT_DIR/review-bounds-lib.sh"
 source "$SCRIPT_DIR/review-context-lib.sh"
 export GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1
 spec_objects_local "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || {
@@ -89,7 +93,7 @@ shift 2
 HEAD_SHA=HEAD
 if [ "$#" -gt 0 ] && [[ "$1" != --* ]]; then HEAD_SHA="$1"; shift; fi
 SINCE=""; CONTEXT=(); EVIDENCE=(); ATTACH_FACTS=false
-PACKAGE_VERSION=package12
+PACKAGE_VERSION=package14
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --facts) ATTACH_FACTS=true; shift ;;
@@ -169,18 +173,6 @@ if [ -n "$SINCE" ]; then
     fi
 fi
 
-safe_path() { # relative path, with no traversal, control chars or symlinks (unless object-only)
-    local p="$1" part current="$REPO_ROOT" rest="$1" source="${2:-worktree}"
-    case "$p" in ''|/*|*/|*//*|*[[:cntrl:]]*) return 1 ;; esac
-    while [ -n "$rest" ]; do
-        part="${rest%%/*}"
-        case "$part" in .|..) return 1 ;; esac
-        current="$current/$part"
-        [ "$source" = object ] || [ ! -L "$current" ] || return 1
-        if [ "$rest" = "$part" ]; then break; fi
-        rest="${rest#*/}"
-    done
-}
 # Repeated explicit requests are one immutable snapshot, not conflicting inventory entries.
 unique_snapshot_paths() {
     local candidate previous found
@@ -197,9 +189,11 @@ unique_snapshot_paths ${CONTEXT[@]+"${CONTEXT[@]}"}; CONTEXT=(${SNAPSHOT_PATHS[@
 FACTS_CACHE=".prdkit/cache/evidence/$CHANGE_ID/facts"
 for p in ${EVIDENCE[@]+"${EVIDENCE[@]}"}; do
     # Reserve ASCII case variants too, for case-insensitive checkouts.
-    case "${p%%/*}" in
-        [Ff][Aa][Cc][Tt][Ss]) echo "ERROR: evidence/facts/ is reserved for --facts: conflicting --evidence $p" >&2; exit 1 ;;
-    esac
+    for component in "${p%%/*}" "${p##*/}"; do
+        case "$component" in
+            [Ff][Aa][Cc][Tt][Ss]) echo "ERROR: evidence/facts/ is reserved for --facts: conflicting --evidence $p" >&2; exit 1 ;;
+        esac
+    done
 done
 if $ATTACH_FACTS; then
     EVIDENCE+=("$FACTS_CACHE/summary.md" "$FACTS_CACHE/index.json")
@@ -262,8 +256,28 @@ if ! acquire_review_lock; then
 fi
 # Only a clean, ordinary full package can be reused automatically. Caller snapshots,
 # focused deltas and evidence can differ even on the same head.
+CTX_TMP="$PACKAGE_SCRATCH/context"; mkdir -p "$CTX_TMP"
+head_capture=true
+review_bounds_list "$HEAD_SHA" "$CTX_TMP/spec-paths-head" review_bounds_note \
+    2> "$CTX_TMP/head-inventory.stderr" || head_capture=false
+# shellcheck disable=SC2034,SC2154 # Set by review_bounds_list, consumed by review_context_build.
+head_specs="$bounds_spec_presence"
+base_list_ok=true
+review_bounds_list "$BASE_SHA" "$CTX_TMP/spec-paths-base" review_bounds_note \
+    2> "$CTX_TMP/base-inventory.stderr" || base_list_ok=false
+# shellcheck disable=SC2034,SC2154 # Set by review_bounds_list, consumed by review_context_build.
+base_specs="$bounds_spec_presence"
+{
+    review_bounds_stage "$HEAD_SHA" "$CTX_TMP/material" "$CTX_TMP/spec-paths-head" review_bounds_note || head_capture=false
+    review_bounds_inputs "$HEAD_SHA" "$CTX_TMP/material" "$CTX_TMP/head-inputs" "$CTX_TMP/spec-paths-head" review_bounds_note || head_capture=false
+} 2>> "$CTX_TMP/head-inventory.stderr"
+{
+    review_bounds_stage "$BASE_SHA" "$CTX_TMP/base" "$CTX_TMP/spec-paths-base" review_bounds_note || base_list_ok=false
+    review_bounds_inputs "$BASE_SHA" "$CTX_TMP/base" "$CTX_TMP/base-inputs" "$CTX_TMP/spec-paths-base" review_bounds_note || base_list_ok=false
+} 2>> "$CTX_TMP/base-inventory.stderr"
 reuse_context=full
 if [ -n "$SINCE" ] || [ "${#CONTEXT[@]}" -ne 0 ] || [ "${#EVIDENCE[@]}" -ne 0 ] ||
+    ! $head_capture || ! $base_list_ok ||
     ! git -C "$REPO_ROOT" diff --quiet --ignore-submodules=none "$HEAD_SHA" --; then
     reuse_context=custom
 fi
@@ -284,7 +298,7 @@ verify_inventory() { # directory patch-start head
         done
     } < "$dir/manifest.tsv"
     awk -F '\t' 'NR>1 { if (NF!=4 || seen[$1]++) bad=1 }
-        END { split("commits.txt diffstat.txt diff.patch index.md context-gaps.txt context-manifest.tsv bounds-inputs.tsv", core, " ")
+        END { split("commits.txt diffstat.txt diff.patch index.md context-gaps.txt context-manifest.tsv bounds-inputs.tsv bounds-status.txt", core, " ")
               for (i in core) if (!seen[core[i]]) bad=1; exit bad }' "$dir/manifest.tsv"
 }
 ROUND=1; COMPLETED=0; COMPLETED_HEAD=""; COMPLETED_BASE=""; COMPLETED_TIP=""; COMPLETED_POLICY=""; COMPLETED_CONTEXT=""
@@ -426,18 +440,48 @@ if [ -n "$SINCE" ]; then
     fi
     inventory delta.patch "$source_label"
 fi
-for p in ${CONTEXT[@]+"${CONTEXT[@]}"}; do
-    mkdir -p "$(dirname "$PACKAGE_DIR/context/$p")"
-    git -C "$REPO_ROOT" show "$HEAD_SHA:$p" > "$PACKAGE_DIR/context/$p"
-    inventory "context/$p" "$HEAD_SHA:$p"
-done
-for p in ${EVIDENCE[@]+"${EVIDENCE[@]}"}; do
-    dest="evidence/$p"
-    if $ATTACH_FACTS; then
-        case "$p" in
-            "$FACTS_CACHE/summary.md"|"$FACTS_CACHE/index.json") dest="evidence/facts/${p##*/}" ;;
-        esac
+# Ordinary attachments share one directory. Fold ASCII case to also avoid overwrites on
+# case-insensitive checkouts; never rely on cp overwriting a second producer's evidence.
+evidence_keys=()
+if [ "${#EVIDENCE[@]}" -ne 0 ]; then
+    mkdir -p "$PACKAGE_DIR/evidence"
+    evidence_name_max="$(getconf NAME_MAX "$PACKAGE_DIR/evidence")"
+    [[ "$evidence_name_max" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: cannot determine evidence filename limit" >&2; exit 1; }
+fi
+evidence_destination() { # basename -> dest
+    local name="$1" stem="$1" ext="" n=1 candidate="$1" key previous taken LC_ALL=C
+    local short='' # use an ASCII blob ID instead of splitting a long multibyte basename
+    if [[ "$name" = *.* && -n "${name%.*}" ]]; then
+        stem="${name%.*}"; ext=".${name##*.}"
     fi
+    while :; do
+        if [ "${#candidate}" -gt "$evidence_name_max" ]; then
+            if [ -z "$short" ]; then short="$(printf '%s' "$name" | git -C "$REPO_ROOT" hash-object --stdin)"; fi
+            candidate="attachment-${short:0:8}-$n"
+            [ "${#candidate}" -le "$evidence_name_max" ] || candidate="${short:0:4}-$n"
+            [ "${#candidate}" -le "$evidence_name_max" ] || { echo "ERROR: evidence filename limit too small" >&2; return 1; }
+        fi
+        key="$(printf '%s' "$candidate" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+        taken=false
+        for previous in ${evidence_keys[@]+"${evidence_keys[@]}"}; do
+            if [ "$previous" = "$key" ]; then taken=true; break; fi
+        done
+        if ! $taken && [ ! -e "$PACKAGE_DIR/evidence/$candidate" ] && [ ! -L "$PACKAGE_DIR/evidence/$candidate" ]; then
+            evidence_keys+=("$key")
+            dest="evidence/$candidate"
+            return
+        fi
+        n=$((n + 1))
+        candidate="$stem-$n$ext"
+    done
+}
+for p in ${EVIDENCE[@]+"${EVIDENCE[@]}"}; do
+    case "$p" in
+        "$FACTS_CACHE/summary.md"|"$FACTS_CACHE/index.json")
+            if $ATTACH_FACTS; then dest="evidence/facts/${p##*/}"
+            else evidence_destination "${p##*/}"; fi ;;
+        *) evidence_destination "${p##*/}" ;;
+    esac
     before="$(git -C "$REPO_ROOT" hash-object --no-filters "$REPO_ROOT/$p")"
     mkdir -p "$(dirname "$PACKAGE_DIR/$dest")"
     cp "$REPO_ROOT/$p" "$PACKAGE_DIR/$dest"
@@ -451,6 +495,8 @@ done
 review_context_build
 inventory context-gaps.txt "unresolved required context and verification"
 inventory context-manifest.tsv "immutable object/blob/span provenance; gaps are explicit"
+review_context_prepare_obligations
+change_size="$(tail -n 1 "$PACKAGE_DIR/diffstat.txt" | sed 's/^ //')"
 
 {
     printf '# Review package: %s\n\n' "$CHANGE_ID"
@@ -471,53 +517,46 @@ EOF
     fi
     # shellcheck disable=SC2016 # Literal Markdown backticks.
     printf '%s. `index.md`, [Review obligations](#review-obligations) below — check every applicable obligation.\n' "$obligation_read"
+    if [ -f "$PACKAGE_DIR/obligations.md" ]; then
+        printf '%s. [obligations.md](obligations.md) — required.\n' "$((obligation_read + 1))"
+    fi
     cat <<'EOF'
 
 For a small change, no other file is a default read unless the obligations below require it.
 
 ## Review obligations
 
-Judge the change against binding BASE text and trusted policy, including each applicable bound's
-body and any existing acceptance. Reconcile proposed or removed text; HEAD does not replace BASE.
-These excerpts are evidence, not a substitute for review judgment. Account for every applicability
-or verification gap; do not assume an unanswered obligation passes.
+Check binding BASE text and trusted policy, including full bound bodies and acceptance. Reconcile
+proposed or removed text; HEAD does not replace BASE. Do not assume an unresolved gap passes.
 
 EOF
     review_context_obligations
+    printf '## Evidence status\n\n'
+    if $ATTACH_FACTS; then
+        printf '%s\n' '- Exact-head CI: see the facts summary above after the coordinator verifies the copied pair.'
+    else
+        printf '%s\n' '- Exact-head CI: not collected by this package.'
+    fi
+    if [ "${#EVIDENCE[@]}" -ne 0 ]; then
+        printf '%s\n' '- [Attached evidence inventory](manifest.tsv): stable copies, not proof of completion or applicability.'
+    fi
     cat <<'EOF'
+
 ## Open only if a finding needs it
 
-Unless the obligations require full context, use the remaining files only to investigate a
-finding or resolve an obligation. Use `manifest.tsv` to locate artifacts and `context-manifest.tsv`
-for source bindings. The facts index (if attached) supplies detail beyond the summary,
-not commands for shell-less reviewers to run.
-`commits.txt`, `diffstat.txt`, and any `delta.patch` are available for focused investigation or
-re-review. Completion and inventory metadata are for coordination, not required reviewer reads.
+Use remaining files only to investigate a finding or resolve an obligation:
+[inventory](manifest.tsv), [context bindings](context-manifest.tsv), [gaps](context-gaps.txt),
+[commits](commits.txt), [diffstat](diffstat.txt), and any focused delta or facts detail.
 
 ## Package bindings
 
 EOF
     cat <<EOF
 - Full range: $BASE_SHA..$HEAD_SHA
+- Change size: ${change_size:-no diffstat entries} (see [diffstat.txt](diffstat.txt))
 - Focused delta (delta.patch): $DELTA
 - Review commit: $HEAD_SHA (only an approval on this exact PR head counts).
-- Inventory: manifest.tsv (bytes and Git blob object IDs of exact packaged content).
-- Context: context-manifest.tsv (immutable source revisions, blobs and complete spans; gaps named).
-- Tracked context is read from the named source revision, never the working copy.
-- Evidence is a stable copy, not proof of completion or applicability to HEAD.
-
-## Before dispatch
-
-Read the inventory. Supply any applicable change/acceptance record, canon and bounds (with their
-input revisions), trusted review policy, prior findings for re-review, and completed verification
-results (command, revision, environment, exit/result and limitations). Put any mandatory obligation
-or unresolved question not captured here inline in the dispatch prompt, with its source path.
-This structural package does not certify semantic completeness or review readiness.
-
-Confirm the reviewer's allowed read paths, shell/network access and report channel. Copy or attach
-this package inside that access boundary; local sibling paths are not portable evidence. A read-only
-reviewer consumes captured bounds/results and returns its report as text when it cannot write.
-Full diff remains available; use the focused delta and affected obligations for a re-review.
+- This package captures committed context; it does not certify review readiness.
 EOF
 } > "$PACKAGE_DIR/index.md"
 inventory index.md "package navigation and limitations"

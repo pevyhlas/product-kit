@@ -82,7 +82,7 @@ assert_contains "$review_prompt" 'If the scope or required bound text cannot be 
 
 it "mandatory obligations cannot be hidden behind optional context"
 assert_contains "$review_prompt" '`index.md` → **Review obligations** (second if no verified facts)' "obligations are a default read with or without facts"
-assert_contains "$review_prompt" 'Check every listed obligation' "checking the obligations is mandatory"
+assert_contains "$review_prompt" 'Read `obligations.md` next if the index marks it required. Check every listed obligation' "checking the obligations is mandatory"
 assert_contains "$review_prompt" 'If the index says **Required full context**, read the indicated artifacts before giving a verdict' "overflow requires source reads"
 assert_contains "$review" 'Put any missing mandatory obligation or unresolved question inline in the dispatch prompt with its source path' "dispatch closes the capture gap"
 assert_contains "$review_prompt" "A proposed relaxation (including removal) is a finding unless the change record justifies it and the owner's approval is evidenced through the existing change process."

@@ -54,34 +54,45 @@ context_gap() {
     printf -- '-\t-\t-\t-\t-\t-\t%s\t%s\n' "$(spec_field "$1")" "$(spec_field "$*")" >> "$PACKAGE_DIR/context-manifest.tsv"
 }
 
-context_object() { # rev path -> blob; never dereference a symlink/tree/submodule
-    local entry
-    # Objects are checked at their own revision. A worktree symlink cannot hide a BASE blob.
-    safe_path "$2" object || return 1
-    entry="$(git -C "$REPO_ROOT" ls-tree "$1" -- ":(literal)$2")" || return 1
-    case "$entry" in 100644\ blob\ *|100755\ blob\ *) ;; *) return 1 ;; esac
-    entry="${entry#* blob }"; printf '%s\n' "${entry%%$'\t'*}"
-}
-
 context_slice() ( # Preserve the source's bytes, including any missing final LF.
     set -o pipefail
     if [ "$3" = all ]; then cat "$1"
     else head -n "$3" "$1" | tail -n "+$2"; fi
 )
 
+context_source() { # rev, exact path, scratch name for other files -> context_file, context_blob
+    local side material
+    case "$2" in
+        [sS][pP][eE][cC][sS]|[sS][pP][eE][cC][sS]/*)
+            if [ "$1" = "$BASE_SHA" ] && { [ "$1" != "$HEAD_SHA" ] || [ "${reference_side:-}" = BASE ]; }; then
+                side=base; material=base
+            elif [ "$1" = "$HEAD_SHA" ]; then side="head"; material=material
+            elif [ "$1" = "$historical_rev" ]; then side=historical; material=historical
+            else return 1; fi
+            context_blob="$(review_staged_blob "$CTX_TMP/spec-paths-$side" "$2")" || return 1
+            context_file="$CTX_TMP/$material/$2" ;;
+        *)
+            # Non-spec references don't get a repo-relative filename in scratch.
+            # Reuse the slot only after removing its previous, verified capture.
+            context_blob="$(context_object "$1" "$2")" || return 1
+            context_file="$CTX_TMP/$3"
+            rm -f "$context_file" && review_write_blob "$context_blob" "$context_file" &&
+                [ "$(git -C "$REPO_ROOT" hash-object --no-filters "$context_file")" = "$context_blob" ] || return 1 ;;
+    esac
+}
+
 context_span() { # rev path first last obligation reason
-    local rev="$1" path="$2" first="$3" last="$4" obligation="$5" reason="$6" blob name=""
+    local rev="$1" path="$2" first="$3" last="$4" obligation="$5" reason="$6" context_file context_blob name=""
     local artifact source_rev source_path source_blob source_first source_last rest fresh=false end="$4"
-    if ! blob="$(context_object "$rev" "$path")" ||
-        ! GIT_NO_LAZY_FETCH=1 git -C "$REPO_ROOT" cat-file blob "$blob" > "$CTX_TMP/blob"; then
+    if ! context_source "$rev" "$path" blob; then
         context_gap "$obligation" "missing/unsafe/unreadable context $rev:$path"; return
     fi
-    [ "$last" != all ] || last="$(awk 'END { print NR }' "$CTX_TMP/blob")"
+    [ "$last" != all ] || last="$(awk 'END { print NR }' "$context_file")"
     [ "$last" != 0 ] || first=0
     # Reuse exact spans, recording every obligation below. Explicit snapshots live exclusively
     # under context/<repo-path>; generated files must never share that namespace.
     while IFS=$'\t' read -r artifact source_rev source_path source_blob source_first source_last rest; do
-        if [ "$source_rev" = "$rev" ] && [ "$source_path" = "$path" ] && [ "$source_blob" = "$blob" ] &&
+        if [ "$source_rev" = "$rev" ] && [ "$source_path" = "$path" ] && [ "$source_blob" = "$context_blob" ] &&
             [ "$source_first" = "$first" ] && [ "$source_last" = "$last" ]; then name="$artifact"; break; fi
     done < "$PACKAGE_DIR/context-manifest.tsv"
     if [ -z "$name" ]; then
@@ -92,24 +103,24 @@ context_span() { # rev path first last obligation reason
         fi
         if [ "$last" = 0 ]; then
             : > "$PACKAGE_DIR/$name"; context_gap "$obligation" "empty required context $rev:$path"
-        elif ! context_slice "$CTX_TMP/blob" "$first" "$end" > "$PACKAGE_DIR/$name"; then
+        elif ! context_slice "$context_file" "$first" "$end" > "$PACKAGE_DIR/$name"; then
             context_gap "$obligation" "cannot copy context $rev:$path:$first-$last"
             return
         fi
     fi
     if $fresh; then inventory "$name" "$rev:$path:$first-$last"; fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$rev" "$path" "$blob" "$first" "$last" \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$rev" "$path" "$context_blob" "$first" "$last" \
         "$(spec_field "$obligation")" "$(spec_field "$reason")" >> "$PACKAGE_DIR/context-manifest.tsv"
 }
 
 context_select() { # rev path selector obligation reason [source line]
-    local rev="$1" path="$2" selector="$3" obligation="$4" reason="$5" at="${6:-0}" blob a b spans body n=0
-    if ! blob="$(context_object "$rev" "$path")" ||
-        ! GIT_NO_LAZY_FETCH=1 git -C "$REPO_ROOT" cat-file blob "$blob" > "$CTX_TMP/select" ||
-        ! review_file_without_nul "$CTX_TMP/select"; then
+    local rev="$1" path="$2" selector="$3" obligation="$4" reason="$5" at="${6:-0}" context_file context_blob a b spans body n=0
+    if ! context_source "$rev" "$path" select || ! review_file_without_nul "$context_file"; then
+        context_unresolved_reference
         context_gap "$obligation" "missing/unsafe context $rev:$path"; return
     fi
-    if ! spans="$(context_select_spans -v at="$at" -v selector="$selector" < "$CTX_TMP/select")"; then
+    if ! spans="$(context_select_spans -v at="$at" -v selector="$selector" < "$context_file")"; then
+        context_unresolved_reference
         context_gap "$obligation" "ambiguous/missing/unsupported section $rev:$path#$selector (line $at)"; return
     fi
     body="${spans##*$'\n'}"
@@ -128,79 +139,6 @@ context_select() { # rev path selector obligation reason [source line]
         fi
         context_span "$rev" "$path" "$a" "$b" "$obligation" "$reason"
     done <<< "$spans"
-}
-
-context_list_specs() { # rev, list file; sets spec_presence
-    local rev="$1" paths="$2" entry path
-    spec_presence=absent
-    if ! GIT_NO_LAZY_FETCH=1 git -C "$REPO_ROOT" ls-tree -r -t -z "$rev" -- specs > "$paths" ||
-        ! verify_nul_count "$paths" >/dev/null; then
-        spec_presence=unknown
-        context_gap canon "cannot completely enumerate spec entries at $rev"
-        return
-    fi
-    while IFS= read -r -d '' entry; do
-        path="${entry#*$'\t'}"
-        if context_spec_entry "$entry" "$path"; then spec_presence=present; return; fi
-    done < "$paths"
-}
-
-context_spec_entry() { # ls-tree entry, path; include obstructions at normal spec directories
-    case "$2" in
-        specs/*.md) return 0 ;;
-        specs|specs/product|specs/architecture|specs/parts|specs/decisions|specs/changes)
-            [[ "$1" != '040000 tree '* ]] ;;
-        *) return 1 ;;
-    esac
-}
-
-context_collect_specs() { # rev material-root inputs-name list-file; nonzero on incomplete capture
-    local rev="$1" material="$2" inputs="$3" paths="$4" entry path blob status=0 listed
-    if ! mkdir -p "$material/.prdkit"; then
-        context_gap canon "cannot prepare spec inputs at $rev"
-        return 1
-    fi
-    while IFS= read -r -d '' entry; do
-        path="${entry#*$'\t'}"
-        case "$path" in specs/changes/*) continue ;; esac
-        context_spec_entry "$entry" "$path" || continue
-        if [[ "$path" = specs/*.md ]] && blob="$(context_object "$rev" "$path")"; then
-            if mkdir -p "$(dirname "$material/$path")" &&
-                GIT_NO_LAZY_FETCH=1 git -C "$REPO_ROOT" cat-file blob "$blob" > "$material/$path" &&
-                review_file_without_nul "$material/$path"; then
-                continue
-            fi
-            context_gap canon "unreadable/non-text input $path at $rev"; rm -f "$material/$path"
-        else context_gap canon "unsafe spec input $(printf '%q' "$path") at $rev"; fi
-        status=1
-    done < "$paths"
-    if [ -n "$inputs" ]; then
-        if ! listed="$(verify_lines spec_files "$material")"; then
-            context_gap canon "cannot inventory materialized spec inputs at $rev"
-            return 1
-        fi
-        while IFS= read -r path; do
-            [ -n "$path" ] || continue
-            if ! blob="$(context_object "$rev" "$path")"; then
-                context_gap canon "cannot resolve materialized spec input $rev:$path"
-                status=1; continue
-            fi
-            printf '%s\t%s\t%s\n' "$path" "$rev" "$blob" >> "$PACKAGE_DIR/$inputs"
-        done <<< "$listed"
-    fi
-    return "$status"
-}
-
-context_collect_record() { # rev path material-root inputs-name
-    local rev="$1" path="$2" material="$3" inputs="$4" blob
-    blob="$(context_object "$rev" "$path")" || return 1
-    mkdir -p "$(dirname "$material/$path")" || return 1
-    if ! git -C "$REPO_ROOT" cat-file blob "$blob" > "$material/$path" ||
-        ! review_file_without_nul "$material/$path"; then
-        rm -f "$material/$path"
-        return 1
-    fi
-    if [ -n "$inputs" ]; then printf '%s\t%s\t%s\n' "$path" "$rev" "$blob" >> "$PACKAGE_DIR/$inputs"; fi
 }
 
 context_body_key() { # ignore only complete blank lines at the edges, for comparison only
@@ -231,19 +169,18 @@ context_bodies_equal() {
 }
 
 context_review_child() { # record path, usable HEAD or historical record revision
-    local path="$1" rev="$2" base_blob head_blob entry
-    base_blob="$(context_object "$BASE_SHA" "$path")" || {
+    local path="$1" rev="$2" base_blob base_file context_blob context_file entry
+    base_blob=''
+    if context_source "$BASE_SHA" "$path" base-child; then
+        base_blob="$context_blob"; base_file="$context_file"
+    else
         entry="$(git -C "$REPO_ROOT" ls-tree "$BASE_SHA" -- ":(literal)$path")" || entry=unreadable
         if [ -n "$entry" ]; then reference_side=BASE context_gap child "unsafe/unreadable base child record $BASE_SHA:$path"; fi
-    }
+    fi
     if [ "$rev" = "$HEAD_SHA" ]; then
-        head_blob="$(context_object "$HEAD_SHA" "$path")"
-        if [ "$base_blob" = "$head_blob" ] || {
-            [ -n "$base_blob" ] &&
-                git -C "$REPO_ROOT" cat-file blob "$base_blob" > "$CTX_TMP/base-child" &&
-                git -C "$REPO_ROOT" cat-file blob "$head_blob" > "$CTX_TMP/head-child" &&
-                context_bodies_equal "$CTX_TMP/base-child" "$CTX_TMP/head-child"
-        }; then
+        if context_source "$HEAD_SHA" "$path" head-child &&
+            { [ "$base_blob" = "$context_blob" ] ||
+                { [ -n "$base_blob" ] && context_bodies_equal "$base_file" "$context_file"; }; }; then
             reference_side=BASE context_span "$BASE_SHA" "$path" 1 all child-shared "Child record"
             return
         fi
@@ -258,7 +195,7 @@ context_review_child() { # record path, usable HEAD or historical record revisio
                 reference_side=BASE context_span "$BASE_SHA" "$path" 1 all child-base "Child record"
             fi
         fi
-        if [ -n "$rev" ] && [ "$base_blob" != "$(context_object "$rev" "$path")" ]; then
+        if [ -n "$rev" ] && context_source "$rev" "$path" historical-child && [ "$base_blob" != "$context_blob" ]; then
             context_span "$rev" "$path" 1 all child-historical "actual record (historical when source_rev differs from HEAD)"
         fi
     fi
@@ -308,48 +245,64 @@ context_compare_bound() {
     fi
 }
 
-context_review_bounds() { # record path and resolution at HEAD (possibly historical)
-    local path="$1" rev="$2"
-    local base_bounds="$PACKAGE_DIR/bounds.txt" base_scope="$CHANGE_ID" head_scope="$CHANGE_ID"
-    local head_bounds_ok=true base_capture=true file id
-    [ -n "$rev" ] || head_scope=--all
+context_review_bounds() { # record path, resolution at HEAD (possibly historical), checked scope file
+    local path="$1" rev="$2" scope_file="$3"
+    local base_bounds="$PACKAGE_DIR/bounds.txt" base_scope="$CHANGE_ID" head_scope=''
+    local head_bounds_ok=true base_capture="$base_list_ok" pair_capture="$head_capture" file id entry fallback_bounds=/dev/null
+    [ -z "$rev" ] || head_scope="$CHANGE_ID"
+    [ ! -f "$CTX_TMP/spec-paths-base.unsafe" ] || pair_capture=false
     : > "$CTX_TMP/head-bound-ids"
-    if { [ -n "$rev" ] || { [ "$head_specs" = absent ] && $head_capture; }; } &&
-        (bounds_for_root "$CTX_TMP/material" "$head_scope" "$head_capture") > "$PACKAGE_DIR/bounds.txt" 2> "$PACKAGE_DIR/bounds.stderr"; then
+    if review_bounds_run "$CTX_TMP/material" "$head_scope" "$pair_capture" "$PACKAGE_DIR/bounds-status.txt" "$scope_file" \
+        > "$PACKAGE_DIR/bounds.txt" 2> "$PACKAGE_DIR/bounds.stderr"; then
         awk '/^- [CNQ]-[0-9]/ { print $2 }' "$PACKAGE_DIR/bounds.txt" > "$CTX_TMP/head-bound-ids"
     else head_bounds_ok=false; context_gap bounds "bounds unavailable; inspect bounds.stderr"; fi
     # Fast path: identical relevant spec tree and child. If the child did not yet exist at
     # BASE, err towards inclusion: scope all BASE bounds, never via the proposed record.
-    if ! $shared_inputs; then
+    if ! $shared_inputs || ! $head_bounds_ok; then
         base_material="$CTX_TMP/base"; base_items="$CTX_TMP/base-items"; base_bounds="$PACKAGE_DIR/bounds-base.txt"
         printf 'path\tsource_rev\tsource_blob\n' > "$PACKAGE_DIR/bounds-base-inputs.tsv"
-        reference_side=BASE context_collect_specs "$BASE_SHA" "$base_material" bounds-base-inputs.tsv "$CTX_TMP/spec-paths-base" || base_capture=false
         [ "$base_specs" != unknown ] || base_capture=false
-        if ! context_collect_record "$BASE_SHA" "$path" "$base_material" bounds-base-inputs.tsv; then
-            if context_object "$BASE_SHA" "$path" >/dev/null; then
-                reference_side=BASE context_gap child "unreadable base child record $BASE_SHA:$path"
-                base_capture=false
-            fi
+        if ! entry="$(git -C "$REPO_ROOT" ls-tree "$BASE_SHA" -- ":(literal)$path")"; then
+            reference_side=BASE context_gap child "unreadable base child record $BASE_SHA:$path"
+            base_scope=''
+        elif [ -z "$entry" ]; then
+            # BASE recovery is not a HEAD scope claim: conservatively take all BASE bounds.
             base_scope=--all
+        elif ! review_bounds_record "$BASE_SHA" "$path" "$base_material" "$PACKAGE_DIR/bounds-base-inputs.tsv" "$CTX_TMP/spec-paths-base"; then
+            reference_side=BASE context_gap child "unreadable base child record $BASE_SHA:$path"
+            base_scope=''
         fi
-        if ! spec_items "$base_material" > "$base_items"; then
+        if [ -f "$CTX_TMP/spec-paths-base.unsafe" ]; then
+            : > "$base_items"
+        elif ! spec_items "$base_material" > "$base_items"; then
             reference_side=BASE context_gap bounds "BASE spec ID inventory incomplete at $BASE_SHA"
             base_capture=false
         fi
-        if ! (bounds_for_root "$base_material" "$base_scope" "$base_capture") > "$base_bounds" 2> "$PACKAGE_DIR/bounds-base.stderr"; then
-            reference_side=BASE context_gap bounds "BASE bounds unavailable; inspect bounds-base.stderr"
+        if [ -f "$CTX_TMP/base-inputs" ]; then cat "$CTX_TMP/base-inputs" >> "$PACKAGE_DIR/bounds-base-inputs.tsv"; fi
+        if ! review_bounds_run "$base_material" "$base_scope" "$base_capture" "$CTX_TMP/base-state" \
+            "$base_material/$path" > "$base_bounds" 2> "$PACKAGE_DIR/bounds-base.stderr"; then
+            if $shared_inputs && $head_capture; then
+                reference_side=BASE context_gap bounds "shared bounds unavailable at $BASE_SHA; inspect bounds.stderr"
+            else
+                reference_side=BASE context_gap bounds "BASE bounds unavailable; inspect bounds-base.stderr"
+            fi
+            # A BASE gap must not hide known binding bodies. Use the accepted
+            # subset conservatively for excerpts only, not a BASE bounds result.
+            if [ ! -f "$CTX_TMP/spec-paths-base.unsafe" ] && { ! $base_capture || [ "$base_scope" != --all ]; }; then
+                fallback_bounds="$CTX_TMP/base-conservative-bounds"
+                (bounds_for_root "$base_material" --all) \
+                    > "$fallback_bounds" 2>> "$PACKAGE_DIR/bounds-base.stderr" || :
+            fi
         fi
         for file in bounds-base-inputs.tsv bounds-base.txt bounds-base.stderr; do
             inventory "$file" "BASE bounds and object-materialized inputs"
         done
-    elif ! $head_bounds_ok; then
-        reference_side=BASE context_gap bounds "shared bounds unavailable at $BASE_SHA; inspect bounds.stderr"
     fi
     # A HEAD scope edit, stage change or deletion must not hide a BASE bound.
-    { cat "$CTX_TMP/head-bound-ids"; if [ -f "$base_bounds" ]; then awk '/^- [CNQ]-[0-9]/ { print $2 }' "$base_bounds"; fi; } |
+    { cat "$CTX_TMP/head-bound-ids"; awk '/^- [CNQ]-[0-9]/ { print $2 }' "$base_bounds" "$fallback_bounds"; } |
         LC_ALL=C sort -u > "$CTX_TMP/review-bound-ids"
     while IFS= read -r id; do context_compare_bound "$id" "$base_material" "$base_items"; done < "$CTX_TMP/review-bound-ids"
-    for file in bounds.txt bounds.stderr; do
+    for file in bounds.txt bounds.stderr bounds-status.txt; do
         [ ! -f "$PACKAGE_DIR/$file" ] || inventory "$file" "bounds from object-materialized inputs"
     done
 }
@@ -359,6 +312,12 @@ context_queue_reference() { # stable key, rev, path, first, last, description
         >> "$CTX_TMP/references-$reference_side"
 }
 
+context_unresolved_reference() {
+    if [ "${reference_side:-}" = HEAD ] && [ -n "${reference_key:-}" ]; then
+        printf '%s\n' "$reference_key" >> "$CTX_TMP/unresolved-references-HEAD"
+    fi
+}
+
 context_reference_select() {
     local reference_key="$1"; shift
     context_select "$@"
@@ -366,8 +325,10 @@ context_reference_select() {
 
 context_reference_id() { # rev, ID inventory, ID, reason
     local rev="$1" items="$2" id="$3" reason="$4" locations path line
+    local reference_key="id:$3"
     if ! locations="$(awk -F '\037' -v id="$id" '$1==id { print $7 }' "$items")" ||
         [ -z "$locations" ] || [[ "$locations" == *$'\n'* ]]; then
+        context_unresolved_reference
         context_gap "$id" "missing/ambiguous spec ID $id at $rev ($reason)"; return
     fi
     path="${locations%:*}"; line="${locations##*:}"
@@ -413,30 +374,31 @@ context_reference_links() { # rev, material, source path, optional TSV of select
 
 context_reference_parent() { # rev, parent ID, scratch material, ID inventory
     local rev="$1" parent="$2" material="$3" items="$4" path="specs/changes/$2.md"
-    local blob b checkpoint row line title seq id reference_parent=true
-    if ! blob="$(context_object "$rev" "$path")" ||
-        ! git -C "$REPO_ROOT" cat-file blob "$blob" > "$CTX_TMP/parent" ||
-        ! review_file_without_nul "$CTX_TMP/parent"; then
+    local context_blob context_file b checkpoint row line title seq id reference_parent=true
+    if ! context_source "$rev" "$path" parent || ! review_file_without_nul "$context_file"; then
+        [ "$reference_side" != HEAD ] || head_parent_unresolved=true
         context_gap parent "missing/unsafe parent $rev:$path"; return
     fi
     : > "$CTX_TMP/parent-spans"
-    b="$(awk "$SPEC_SKIP_AWK"' { if (!spec_skip($0) && $0 ~ /^## /) { print NR-1; exit } }' "$CTX_TMP/parent")"
+    b="$(awk "$SPEC_SKIP_AWK"' { if (!spec_skip($0) && $0 ~ /^## /) { print NR-1; exit } }' "$context_file")"
     if [ -n "$b" ] && [ "$b" -gt 0 ]; then
         context_queue_reference "parent:$parent:header" "$rev" "$path" 1 "$b" "Parent header ($parent)"
         printf '1\t%s\n' "$b" >> "$CTX_TMP/parent-spans"
     else context_gap parent "unsupported parent structure without sections: $rev:$path"; fi
     checkpoint="$(awk "$SPEC_SKIP_AWK"'
         { if (spec_skip($0)) next }
-        /^#+ / && tolower($0) ~ /outcome checkpoint/ { print NR }' "$CTX_TMP/parent")"
+        /^#+ / && tolower($0) ~ /outcome checkpoint/ { print NR }' "$context_file")"
     if [ -z "$checkpoint" ] || [[ "$checkpoint" == *$'\n'* ]]; then
+        reference_key="parent:$parent:checkpoint" context_unresolved_reference
         context_gap parent "missing/ambiguous outcome checkpoint in $rev:$path"
     else
         context_reference_select "parent:$parent:checkpoint" "$rev" "$path" "" checkpoint "Parent outcome checkpoint ($parent)" "$checkpoint"
     fi
     row="$(awk -v id="$CHANGE_ID" "$SPEC_SKIP_AWK"'
         { if (spec_skip($0)) next }
-        /^\|/ && $0 ~ ("(^|[^a-z0-9-])" id "([^a-z0-9-]|$)") { print NR }' "$CTX_TMP/parent")"
+        /^\|/ && $0 ~ ("(^|[^a-z0-9-])" id "([^a-z0-9-]|$)") { print NR }' "$context_file")"
     if [ -z "$row" ] || [[ "$row" == *$'\n'* ]]; then
+        reference_key="parent:$parent:child" context_unresolved_reference
         context_gap parent "missing/ambiguous child row in $rev:$path"
     else
         context_reference_select "parent:$parent:child" "$rev" "$path" "" child-row "Parent child row ($parent)" "$row"
@@ -451,23 +413,20 @@ context_reference_parent() { # rev, parent ID, scratch material, ID inventory
         /^#+ / && tolower($0) ~ /depend|hold|limit|architect|critical path|original goal|lane/ {
             title=$0; sub(/^#+[ \t]+/,"",title); gsub(/[[:cntrl:]]/," ",title)
             print NR "\t" ++seen[title] "\t" title
-        }' "$CTX_TMP/parent")
+         }' "$context_file")
     # Scan only the selected ranges, never unrelated siblings. Parse the original
     # file so heading/fence state and relative paths are interpreted correctly.
     if ! (set -o pipefail; awk "$SPEC_SKIP_AWK $SPEC_ID_AWK"'
         FILENAME==ARGV[1] { from[++n]=$1; to[n]=$2; next }
         { if (spec_skip($0)) next
           for (i=1; i<=n; i++) if (from[i]<=FNR && FNR<=to[i]) { spec_ids($0, ""); break } }
-        ' "$CTX_TMP/parent-spans" "$CTX_TMP/parent" | cut -d "$(printf '\037')" -f1 | LC_ALL=C sort -u) > "$CTX_TMP/parent-ids"; then
+        ' "$CTX_TMP/parent-spans" "$context_file" | cut -d "$(printf '\037')" -f1 | LC_ALL=C sort -u) > "$CTX_TMP/parent-ids"; then
         context_gap reference "cannot enumerate citations in $rev:$path"
     fi
     reference_parent=false
     while IFS= read -r id; do
         context_reference_id "$rev" "$items" "$id" "Selected parent obligation citation"
     done < "$CTX_TMP/parent-ids"
-    if ! mkdir -p "$material/specs/changes" || ! cp "$CTX_TMP/parent" "$material/$path"; then
-        context_gap parent "cannot materialize parent links from $rev:$path"; return
-    fi
     context_reference_links "$rev" "$material" "$path" "$CTX_TMP/parent-spans"
 }
 
@@ -481,6 +440,7 @@ context_reference_record() { # record/target revisions, scratch material, ID inv
     parent_field="$(printf '%s\n' "$header" | awk '/\*\*Parent\*\*:/ { sub(/^.*\*\*Parent\*\*:[[:space:]]*/, ""); sub(/·.*/, ""); sub(/[[:space:]]+$/, ""); print }')"
     parent="$(printf '%s\n' "$parent_field" | grep -Eo '[0-9]{3,}-[a-z0-9]+(-[a-z0-9]+)*' | LC_ALL=C sort -u || true)"
     if [ "$count" -gt 1 ] || [[ "$parent" == *$'\n'* ]]; then
+        [ "$reference_side" != HEAD ] || head_parent_unresolved=true
         context_gap parent "ambiguous Parent field at $rev:$record"
     elif [ -n "$parent" ] && [ "$parent" != "$CHANGE_ID" ]; then
         context_reference_parent "$rev" "$parent" "$material" "$items"
@@ -498,9 +458,9 @@ context_reference_record() { # record/target revisions, scratch material, ID inv
 }
 
 context_reference_canon() { # rev, material root; include BASE even if HEAD deleted the file
-    local rev="$1" material="$2" path reason entry
+    local rev="$1" material="$2" path reason entry context_blob context_file
     for path in specs/product.md specs/architecture.md specs/design.md; do
-        if [ -f "$material/$path" ]; then
+        if context_source "$rev" "$path" canon; then
             context_queue_reference "canon:$path" "$rev" "$path" 1 all "Canon ($path)"
         elif [ "$reference_side" = HEAD ] && [ "$path" != specs/design.md ]; then
             entry="$(git -C "$REPO_ROOT" ls-tree "$rev" -- ":(literal)$path")" || entry=unreadable
@@ -509,17 +469,30 @@ context_reference_canon() { # rev, material root; include BASE even if HEAD dele
     done
     while IFS= read -r path; do
         case "$path" in
-            specs/parts/*) reason="Part and cross-interface obligations ($path)"
-                context_queue_reference "canon:$path" "$rev" "$path" 1 all "$reason" ;;
+            specs/parts/*)
+                if context_source "$rev" "$path" canon; then
+                    reason="Part and cross-interface obligations ($path)"
+                    context_queue_reference "canon:$path" "$rev" "$path" 1 all "$reason"
+                fi ;;
         esac
     done < <(spec_files "$material")
 }
 
 context_reference_bytes() { # rev, path, first, last, destination
-    local blob
-    blob="$(context_object "$1" "$2")" &&
-        git -C "$REPO_ROOT" cat-file blob "$blob" > "$CTX_TMP/reference-source" || return 1
-    context_slice "$CTX_TMP/reference-source" "$3" "$4" > "$5"
+    local context_blob context_file
+    context_source "$1" "$2" reference-source && context_slice "$context_file" "$3" "$4" > "$5"
+}
+
+context_reference_removed() { # a missing HEAD row is a removal only if its capture was conclusive
+    local key="$1" unresolved
+    case "$key" in
+        canon:*) "$head_capture"; return ;;
+        *) ! $head_record_unresolved && ! $head_parent_unresolved || return 1 ;;
+    esac
+    while IFS= read -r unresolved; do
+        case "$key" in "$unresolved"|"$unresolved":context:*) return 1 ;; esac
+    done < "$CTX_TMP/unresolved-references-HEAD"
+    return 0
 }
 
 context_emit_references() {
@@ -536,8 +509,7 @@ context_emit_references() {
         base_kind=reference-base; head_kind=reference-proposed
         if [ "$br" != - ]; then
             if [ "$hr" = - ]; then
-                # Missing from an incomplete HEAD canon capture is not proof of removal.
-                if [[ "$key" != canon:* ]] || $head_capture; then base_kind=reference-removed; fi
+                if context_reference_removed "$key"; then base_kind=reference-removed; fi
             elif context_reference_bytes "$br" "$bp" "$bf" "$bl" "$CTX_TMP/reference-base-body" &&
                 context_reference_bytes "$hr" "$hp" "$hf" "$hl" "$CTX_TMP/reference-head-body" &&
                 context_bodies_equal "$CTX_TMP/reference-base-body" "$CTX_TMP/reference-head-body"; then
@@ -556,62 +528,83 @@ context_emit_references() {
 }
 
 review_context_build() {
-    local path blob base_blob record record_rev last count a entry base_material base_items hist_material reference_side
-    local shared_inputs=false explicit_kind explicit_rev spec_presence base_specs head_specs
-    local head_capture=true
+    local path blob base_blob record record_rev count a entry base_material base_items hist_material reference_side
+    local shared_inputs=false explicit_kind explicit_rev bounds_spec_presence
+    local historical_rev='' record_paths scope_material scope_file='' context_blob context_file diff_options=()
+    local head_record_unresolved=false head_parent_unresolved=false
     base_reference_gap=false
     undefined_link_gap=false
     no_spec_files=false
-    CTX_TMP="$PACKAGE_SCRATCH/context"; mkdir -p "$CTX_TMP/material/.prdkit"
     CTX_N=1
     printf 'artifact\tsource_rev\tsource_path\tsource_blob\tfirst_line\tlast_line\tobligation\treason\n' > "$PACKAGE_DIR/context-manifest.tsv"
     : > "$PACKAGE_DIR/context-gaps.txt"
-    if ! git -C "$REPO_ROOT" diff --quiet "$HEAD_SHA" --; then
+    if [ "$head_specs" = unknown ] || [ "$base_specs" = unknown ]; then
+        # Ignore worktree changes behind opaque spec entries.
+        diff_options+=(--ignore-submodules=all)
+    fi
+    # Trust the local checkout and its Git metadata (including initialized submodules) like Git itself.
+    if ! git -C "$REPO_ROOT" diff --quiet ${diff_options[@]+"${diff_options[@]}"} "$HEAD_SHA" --; then
         context_gap worktree "working tree differs from bound HEAD; only committed objects are packaged, verify local evidence applicability"
     fi
-    reference_side=BASE context_list_specs "$BASE_SHA" "$CTX_TMP/spec-paths-base"
-    base_specs="$spec_presence"
-    context_list_specs "$HEAD_SHA" "$CTX_TMP/spec-paths-head"
-    head_specs="$spec_presence"
-    if [ "$base_specs" = absent ] && [ "$head_specs" = absent ]; then no_spec_files=true; fi
-    record="specs/changes/$CHANGE_ID.md"; record_rev="$HEAD_SHA"
-    if ! context_object "$record_rev" "$record" >/dev/null; then
-        entry="$(git -C "$REPO_ROOT" ls-tree "$HEAD_SHA" -- ":(literal)$record" 2>/dev/null)" || entry=unreadable
-        if [ -n "$entry" ]; then
-            record_rev=""; context_gap child "actual child record is unsafe/unreadable at HEAD: $record; no historical substitution"
-        else
-            last="$(git -C "$REPO_ROOT" log -1 --format=%H "$HEAD_SHA" -- "$record" 2>/dev/null || true)"
-            if [ -n "$last" ] && context_object "$last^" "$record" >/dev/null; then
-                record_rev="$(git -C "$REPO_ROOT" rev-parse "$last^")"
-            else record_rev=""; context_gap child "actual child record missing or unrecoverable: $record"; fi
-        fi
+    while IFS= read -r entry; do reference_side=BASE context_gap canon "${entry#canon }"; done < "$CTX_TMP/base-inventory.stderr"
+    while IFS= read -r entry; do context_gap canon "${entry#canon }"; done < "$CTX_TMP/head-inventory.stderr"
+    record="specs/changes/$CHANGE_ID.md"
+    if ! record_rev="$(review_bounds_record_rev "$HEAD_SHA" "$record" 2> "$CTX_TMP/scope.stderr")"; then
+        record_rev=""; context_gap child "$(cat "$CTX_TMP/scope.stderr")"
     fi
     # Materialize canon from H; bounds scope alone may use the recovered historical child.
     # No checkout, index, hooks or candidate helper is used.
     printf 'path\tsource_rev\tsource_blob\n' > "$PACKAGE_DIR/bounds-inputs.tsv"
-    context_review_child "$record" "$record_rev"
-    if [ -n "$record_rev" ] && ! context_collect_record "$record_rev" "$record" "$CTX_TMP/material" bounds-inputs.tsv; then
-        context_gap child "unreadable child record $record_rev:$record"
-        record_rev=""
+    record_paths="$CTX_TMP/spec-paths-head"; scope_material="$CTX_TMP/material"
+    if [ -n "$record_rev" ] && [ "$record_rev" != "$HEAD_SHA" ]; then
+        if [ "$record_rev" = "$BASE_SHA" ]; then
+            record_paths="$CTX_TMP/spec-paths-base"; scope_material="$CTX_TMP/base"
+        else
+            historical_rev="$record_rev"
+            record_paths="$CTX_TMP/spec-paths-historical"
+            scope_material="$CTX_TMP/historical"
+            reference_side=historical review_bounds_list "$record_rev" "$record_paths" context_gap || :
+            reference_side=historical review_bounds_stage "$record_rev" "$scope_material" "$record_paths" context_gap || :
+            reference_side=historical review_bounds_inputs "$record_rev" "$scope_material" "" "$record_paths" context_gap || :
+        fi
     fi
-    if [ "$record_rev" = "$HEAD_SHA" ] &&
+    if [ -n "$record_rev" ]; then
+        if [ ! -f "$CTX_TMP/spec-paths-head.unsafe" ] &&
+            review_bounds_record "$record_rev" "$record" "$scope_material" "$PACKAGE_DIR/bounds-inputs.tsv" "$record_paths"; then
+            scope_file="$scope_material/$record"
+        else
+            context_gap child "unreadable child record $record_rev:$record"; record_rev=''
+        fi
+    fi
+    if [ "$record_rev" != "$HEAD_SHA" ]; then
+        entry="$(git -C "$REPO_ROOT" ls-tree "$HEAD_SHA" -- ":(literal)$record")" || entry=unreadable
+        if [ -n "$entry" ] || [ -f "$CTX_TMP/spec-paths-head.unsafe" ]; then
+            head_record_unresolved=true
+            context_gap reference "HEAD references unresolved; cannot inspect $HEAD_SHA:$record"
+        fi
+    fi
+    context_review_child "$record" "$record_rev"
+    if $base_list_ok && [ "$record_rev" = "$HEAD_SHA" ] &&
         git -C "$REPO_ROOT" diff --quiet --no-ext-diff --no-textconv "$BASE_SHA" "$HEAD_SHA" -- specs ':!specs/changes' &&
         git -C "$REPO_ROOT" diff --quiet --no-ext-diff --no-textconv "$BASE_SHA" "$HEAD_SHA" -- "$record"; then
-        # Shared material also feeds BASE discovery. Record any shared capture failure as binding.
+        # Shared material can feed BASE discovery, but only if HEAD bounds succeed.
         shared_inputs=true
-        reference_side=BASE
     fi
-    context_collect_specs "$HEAD_SHA" "$CTX_TMP/material" bounds-inputs.tsv "$CTX_TMP/spec-paths-head" || head_capture=false
-    [ "$head_specs" != unknown ] || head_capture=false
-    if ! spec_items "$CTX_TMP/material" > "$CTX_TMP/items"; then
-        context_gap canon "HEAD spec ID inventory incomplete at $HEAD_SHA"
-        head_capture=false
+    if [ -f "$CTX_TMP/head-inputs" ]; then cat "$CTX_TMP/head-inputs" >> "$PACKAGE_DIR/bounds-inputs.tsv"; fi
+    : > "$CTX_TMP/items"
+    if [ ! -f "$CTX_TMP/spec-paths-head.unsafe" ]; then
+        review_bounds_items "$CTX_TMP/material" "$CTX_TMP/items" "HEAD spec ID inventory incomplete at $HEAD_SHA" context_gap || head_capture=false
     fi
     reference_side=
     # Reuse the actual bounds computation, including all/later-stage/exception widening.
     source "$SCRIPT_DIR/bounds.sh"
     base_material="$CTX_TMP/material"; base_items="$CTX_TMP/items"
-    context_review_bounds "$record" "$record_rev"
+    context_review_bounds "$record" "$record_rev" "$scope_file"
+    # Bounds may share IDs across identical canon and scope, but BASE references
+    # must always resolve from their own capture (parents and link targets can differ).
+    base_material="$CTX_TMP/base"
+    if [ "$base_specs" = absent ] && [ "$head_specs" = absent ] &&
+        grep -Fxq absent "$PACKAGE_DIR/bounds-status.txt"; then no_spec_files=true; fi
     inventory bounds-inputs.tsv "object-materialized bounds inputs"
     # Policy is frozen at the trusted default; proposed policy remains in the full diff.
     for path in .prdkit/memory/constitution.md .prdkit/memory/agents.md .prdkit/memory/config.md; do
@@ -627,9 +620,10 @@ review_context_build() {
         fi
     done
     : > "$CTX_TMP/references-BASE"; : > "$CTX_TMP/references-HEAD"; : > "$CTX_TMP/references-historical"
+    : > "$CTX_TMP/unresolved-references-HEAD"
     reference_side=BASE
     context_reference_canon "$BASE_SHA" "$base_material"
-    if [ -f "$base_material/$record" ]; then
+    if context_source "$BASE_SHA" "$record" base-record && review_file_without_nul "$context_file"; then
         context_reference_record "$BASE_SHA" "$base_material" "$base_items" "$record"
     fi
     reference_side=HEAD
@@ -639,15 +633,10 @@ review_context_build() {
     elif [ -n "$record_rev" ] && [ "$record_rev" != "$BASE_SHA" ]; then
         reference_side=historical
         hist_material="$CTX_TMP/historical"
-        context_list_specs "$record_rev" "$CTX_TMP/spec-paths-historical"
-        context_collect_specs "$record_rev" "$hist_material" "" "$CTX_TMP/spec-paths-historical" || :
         if ! spec_items "$hist_material" > "$CTX_TMP/historical-items"; then
             context_gap canon "Historical spec ID inventory incomplete at $record_rev"
         fi
-        if context_collect_record "$record_rev" "$record" "$hist_material" ""; then
-            context_reference_record "$record_rev" "$hist_material" "$CTX_TMP/historical-items" "$record"
-        else context_gap child "cannot materialize historical references at $record_rev:$record"
-        fi
+        context_reference_record "$record_rev" "$hist_material" "$CTX_TMP/historical-items" "$record"
     fi
     reference_side=
     context_emit_references
@@ -671,13 +660,23 @@ review_context_build() {
         fi
     done < "$CTX_TMP/changed-paths"
     for path in ${CONTEXT[@]+"${CONTEXT[@]}"}; do
-        blob="$(context_object "$HEAD_SHA" "$path")"
+        if ! context_source "$HEAD_SHA" "$path" explicit-head; then
+            context_gap context "unsafe explicit context $HEAD_SHA:$path"; continue
+        fi
+        blob="$context_blob"
+        if ! mkdir -p "$(dirname "$PACKAGE_DIR/context/$path")" ||
+            ! (set -o noclobber
+                dest="$PACKAGE_DIR/context/$path"
+                [ ! -e "$dest" ] && [ ! -L "$dest" ] && cat "$context_file" > "$dest"); then
+            context_gap context "cannot exclusively copy explicit context $HEAD_SHA:$path"; continue
+        fi
+        inventory "context/$path" "$HEAD_SHA:$path"
         explicit_kind=reference-proposed; explicit_rev="$HEAD_SHA"
-        if base_blob="$(context_object "$BASE_SHA" "$path")"; then
+        if context_source "$BASE_SHA" "$path" explicit-base; then
+            base_blob="$context_blob"
             if [ "$base_blob" = "$blob" ]; then
                 explicit_kind=reference-shared; explicit_rev="$BASE_SHA"
-            elif git -C "$REPO_ROOT" cat-file blob "$base_blob" > "$CTX_TMP/explicit-base" &&
-                context_bodies_equal "$CTX_TMP/explicit-base" "$PACKAGE_DIR/context/$path"; then
+            elif context_bodies_equal "$context_file" "$PACKAGE_DIR/context/$path"; then
                 reference_side=BASE context_span "$BASE_SHA" "$path" 1 all reference-shared "Explicit context ($path)"
                 explicit_kind=explicit-snapshot
             else
@@ -692,12 +691,20 @@ review_context_build() {
         printf 'context/%s\t%s\t%s\t%s\t%s\t%s\t%s\tExplicit context (%s)\n' \
             "$path" "$explicit_rev" "$path" "$blob" "$a" "$count" "$explicit_kind" "$path" >> "$PACKAGE_DIR/context-manifest.tsv"
     done
-    if [ "${#EVIDENCE[@]}" -eq 0 ]; then context_gap verification "no verification evidence supplied; dispatch pending"
-    else context_gap verification "caller-supplied evidence requires revision/result/applicability verification; no semantic inference"; fi
+    if $ATTACH_FACTS; then
+        context_gap verification "coordinator must verify the copied facts pair and its change/range binding before use"
+        if [ "${#EVIDENCE[@]}" -gt 2 ]; then
+            context_gap verification "other caller-supplied evidence requires revision/result/applicability verification; no semantic inference"
+        fi
+    elif [ "${#EVIDENCE[@]}" -eq 0 ]; then
+        context_gap verification "no verification evidence supplied; dispatch pending"
+    else
+        context_gap verification "caller-supplied evidence requires revision/result/applicability verification; no semantic inference"
+    fi
 }
 
 # Render from the same immutable artifacts the manifest binds, not from the working tree.
-# Keep whole excerpts or require the full context: never cut a rule mid-span.
+# Keep whole excerpts inline or in one companion, or require the full context. Never cut a rule mid-span.
 review_inline_text() ( # 0 valid, 3 invalid, other nonzero I/O failure
     set -o pipefail
     # Work on byte values, independent of the installed locales or awk's Unicode support.
@@ -776,37 +783,53 @@ review_obligation_capture() {
     done < "$PACKAGE_SCRATCH/obligation-spans"
     if [ -s "$PACKAGE_DIR/context-gaps.txt" ]; then
         printf '### Unresolved context and verification\n\n' >> "$obligation_draft" || return 1
-        review_obligation_append context-gaps.txt 'Questions to resolve before a verdict' || return $?
+        review_obligation_append context-gaps.txt 'Context gaps and evidence limits; resolve applicable requirements before a verdict' || return $?
     fi
     # Source labels and gaps also contain repo-supplied values. Validate the complete preview.
     review_inline_text "$obligation_draft" || { status=$?; [ "$status" -eq 3 ] && return 3; return 1; }
 }
 
-review_context_obligations() {
-    local obligation_cap=16384 obligation_bytes=0 obligation_draft="$PACKAGE_SCRATCH/obligations" status
+review_context_prepare_obligations() {
+    local obligation_cap=16384 obligation_bytes=0 obligation_draft="$PACKAGE_SCRATCH/obligations"
     # Multiple obligations can cite the same excerpt. Include its body just once.
     awk -F '\t' '
         NR>1 && $1!="-" && $7!~/^(changed-spec|bound-context|explicit-snapshot)$/ &&
         !seen[$2 FS $3 FS $4 FS $5 FS $6]++' "$PACKAGE_DIR/context-manifest.tsv" \
         > "$PACKAGE_SCRATCH/obligation-spans"
     : > "$obligation_draft"
-    if $no_spec_files; then printf 'No spec files at BASE or HEAD; no spec bounds apply.\n\n'; fi
+    obligation_status=0
     if $base_reference_gap; then
-        status=4
+        obligation_status=4
     elif $undefined_link_gap; then
-        status=5
+        obligation_status=5
     elif review_obligation_capture; then
-        cat "$obligation_draft"
-        return
+        if [ "$obligation_bytes" -gt 2048 ]; then
+            { printf '# Review obligations\n\n'; cat "$obligation_draft"; } > "$PACKAGE_DIR/obligations.md"
+            inventory obligations.md "required review obligations and unresolved context"
+        fi
     else
-        status=$?
+        obligation_status=$?
     fi
-    case "$status" in
-        2) printf '**Required full context:** The captured obligations exceed the %s-byte inline cap.\n\n' "$obligation_cap" ;;
+}
+
+review_context_obligations() {
+    if $no_spec_files; then printf 'No spec files at BASE or HEAD; no spec bounds apply.\n\n'; fi
+    if grep -Fxq unavailable "$PACKAGE_DIR/bounds-status.txt"; then
+        printf 'HEAD bounds are unavailable; see the context gaps below or in [context-gaps.txt](context-gaps.txt).\n\n'
+    fi
+    case "$obligation_status" in
+        0)
+            if [ -f "$PACKAGE_DIR/obligations.md" ]; then
+                printf '**Required:** Read [obligations.md](obligations.md) for binding text, proposed changes, and any gaps.\n\n'
+            else
+                cat "$PACKAGE_SCRATCH/obligations"
+            fi
+            return ;;
+        2) printf '**Required full context:** The captured obligations exceed the 16384-byte excerpt cap.\n\n' ;;
         3) printf '**Required full context:** A captured artifact cannot be included as inline text.\n\n' ;;
         4) printf '**Required full context:** A BASE obligation could not be resolved. See [context-gaps.txt](context-gaps.txt) for the exact gap.\n\n' ;;
         5) printf '**Required full context:** A reference label is undefined. See [context-gaps.txt](context-gaps.txt) for the exact gap.\n\n' ;;
-        *) return "$status" ;;
+        *) return "$obligation_status" ;;
     esac
     cat <<'EOF'
 No partial obligation list is shown. Before giving a verdict, read

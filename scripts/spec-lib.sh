@@ -818,16 +818,31 @@ spec_reading_lines() { # file -> "<reading lines> <lines>"
     spec_navigation "$1" budget
 }
 
-# Spec files that define IDs, relative to root.
+# Ordered filesystem globs for spec files that define IDs.
+SPEC_FILE_GLOBS=('specs/SPEC.md' 'specs/product.md' 'specs/product/*.md' 'specs/product/*/*.md'
+                 'specs/architecture.md' 'specs/architecture/*.md' 'specs/architecture/*/*.md'
+                 'specs/parts/*.md' 'specs/parts/*/*.md' 'specs/decisions/*.md')
+
+spec_file_path() { # does a tree path match a spec glob, regardless of its entry type?
+    local path="$1" pattern slashes="${1//[^\/]/}"
+    if [[ "$path" = */.* ]] && ! shopt -q dotglob; then return 1; fi
+    for pattern in "${SPEC_FILE_GLOBS[@]}"; do
+        # Each literal slash in the pattern consumes a slash; none are left for '*' to match.
+        # shellcheck disable=SC2053 # Match the shared glob, not its literal spelling.
+        [[ "$slashes" = "${pattern//[^\/]/}" && "$path" = $pattern ]] && return 0
+    done
+    return 1
+}
+
 spec_files() { # root
-    local root="$1" path
-    for path in "$root"/specs/SPEC.md "$root"/specs/product.md "$root"/specs/product/*.md \
-                "$root"/specs/product/*/*.md "$root"/specs/architecture.md "$root"/specs/architecture/*.md \
-                "$root"/specs/architecture/*/*.md \
-                "$root"/specs/parts/*.md "$root"/specs/parts/*/*.md "$root"/specs/decisions/*.md; do
-        [ -f "$path" ] || continue
-        case "$path" in *$'\n'*|*$'\r'*|*"$SPEC_SEP"*) printf 'Unsupported record separator in spec path: %s\n' "$path" >&2; return 1 ;; esac
-        printf '%s\n' "${path#"$root"/}" || return 1
+    local root="$1" path pattern
+    for pattern in "${SPEC_FILE_GLOBS[@]}"; do
+        # shellcheck disable=SC2086 # Expand the fixed, whitespace-free spec glob.
+        for path in "$root"/$pattern; do
+            [ -f "$path" ] || continue
+            case "$path" in *$'\n'*|*$'\r'*|*"$SPEC_SEP"*) printf 'Unsupported record separator in spec path: %s\n' "$path" >&2; return 1 ;; esac
+            printf '%s\n' "${path#"$root"/}" || return 1
+        done
     done
     return 0
 }
@@ -1153,8 +1168,8 @@ spec_items() { # root [--skip-invalid-journey-ids] [file...]: the spec files whe
     for file in ${files[@]+"${files[@]}"}; do
         verify_lf_file "$root/$file" || { printf 'Invalid spec text: %s (expected non-empty LF-terminated text)\n' "$file" >&2; return 1; }
         expected="$(wc -l < "$root/$file")" || return 1
-        awk -v expected="$expected" -v file="$(spec_field "$file")" -v strict_journeys="$strict_journeys" "$SPEC_SKIP_AWK $SPEC_BULLET_ID_AWK $SPEC_PART_AWK"'
-            BEGIN { gsub(/[\037\r\n]/, " ", file) }
+        SPEC_ITEM_FILE="$(spec_field "$file")" awk -v expected="$expected" -v strict_journeys="$strict_journeys" "$SPEC_SKIP_AWK $SPEC_BULLET_ID_AWK $SPEC_PART_AWK"'
+            BEGIN { file = ENVIRON["SPEC_ITEM_FILE"] }
             function indent(s) { sub(/[^[:space:]].*/, "", s); return length(s) }
             function flags(line, id, block,   m, p, t, b, v, i, u) {
                 m = ""

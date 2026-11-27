@@ -48,6 +48,16 @@ review_eligibility() { # registry identity -> reviewer|maker|ambiguous|unregiste
         }'
 }
 
+record_tiers() { # stdin -> one entry per **Tier** field; '?' for an invalid whole value
+    awk "$SPEC_CHANGE_TAG_AWK"'{ s = change_without_tags($0); sub(/\r$/, "", s)
+        while ((i = index(s, "**Tier**:")) > 0) {
+            s = substr(s, i + 9); v = s; j = index(v, "·"); if (j) v = substr(v, 1, j - 1)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+            if (v ~ /^`T[0-3]`$/) gsub(/`/, "", v)
+            if (v ~ /^T[0-3]$/) print v; else print "?"
+        } }'
+}
+
 # Review text in State is not an authority in the current record format.
 review_record_format() { # record file -> 0 current, 1 unreadable, 2 unsupported review field
     verify_lf_file "$1" || return 1
