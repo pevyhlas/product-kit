@@ -23,6 +23,18 @@ close, duplicate inbox identities/fields/option keys and mismatched answer revis
 the rest are advisories that `--strict` fails. The kit's `scripts/init.sh --check` reports
 installation drift. Never repair during diagnosis or read a clean report as readiness.
 
+`template-placeholder` locates literal fill-in slots in project-owned seeds, not reusable
+templates or their explanatory examples. `unconfirmed-default` locates seeded Rigor still
+marked `[prdkit:unconfirmed]`; after the owner chooses `light` or `full`, set it and remove the
+marker. Both counts are under `trace` in JSON, and both advisories fail only in `--strict`.
+Residue checking is a best-effort scan of headings, paragraphs, lists and pipe-delimited tables.
+It avoids reporting text this subset protects: blockquotes, code, comments, link destinations and
+titles, single-line reference definitions, autolinks and inline tags, except for explicit stock
+anchors. HTML blocks (CommonMark types 1–6) are protected. Unusual Markdown can hide slots.
+If strict doctor flags protected text, please report it.
+Escape the opening `<` as `\<` (unless the stock prompt already uses that escape), or move the text
+into a plain fenced code block outside the stock Commands and Mermaid contexts.
+
 If present, `specs/design.md` is checked for the four headings in `design-template.md`, a
 100-reading-line budget and resolvable links and citations, not for the quality of its direction.
 

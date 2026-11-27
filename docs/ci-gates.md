@@ -416,6 +416,14 @@ agent context files (`CLAUDE.md`, `AGENTS.md`, ...) over `context-budget-bytes` 
 reports `{result, findings, advisories, trace, strict, ...}`, where `trace` counts each trace
 check by a stable code, so CI can ratchet a count down without failing on every advisory.
 
+`trace["template-placeholder"]` counts literal fill-in slots left in the project files those
+templates seed, including constitution and agent policy, active configuration and spec files.
+It ignores installed templates, explanatory examples and owner quotes.
+`trace["unconfirmed-default"]` counts seeded Rigor lines still marked `[prdkit:unconfirmed]`.
+A fresh install passes ordinary doctor but fails `--strict` until the project fills the
+seeded slots and the owner chooses `light` or `full` and removes the marker. Unmarked
+Rigor values, including existing `light` values, are not diagnosed as defaults.
+
 Text and JSON also report total reading lines over budget (`budget_excess_reading_lines`):
 the sum of each reading-budget file's excess, not its whole size or the advisory count.
 The total uses the same reading-line count as the advisories: validated generated

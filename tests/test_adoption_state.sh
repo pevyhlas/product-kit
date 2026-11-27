@@ -40,6 +40,7 @@ assert_contains "$OUTPUT" 'specs/changes/<id>.md records'
 rm specs/features/001-old/spec.md
 
 it 'the current layout is distinct from the version'
+fill_seeded_policy "$PROJ" || exit 1
 check_adoption 1.0 false
 run bash .prdkit/scripts/bash/doctor.sh --json --strict --inventory
 assert_eq 0 "$STATUS" 'summary adds no advisory to a clean current spec'
