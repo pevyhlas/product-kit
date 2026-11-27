@@ -2101,7 +2101,8 @@ spec_review_config_section() {
             }
         }
         function scan(raw,n,   s,title,level) {
-            s=raw; sub(/\r$/, "", s); sub(/^ ? ? ?/, "", s)
+            # Legacy mawk can collapse adjacent optional spaces to just one.
+            s=raw; sub(/\r$/, "", s); sub(/^(   |  | )/, "", s)
             underline_check(s)
             nonblank=(spaces(raw) ~ /[^[:space:]]/)
             if (match(s,/^#+/) && RLENGTH<=6 && substr(s,RLENGTH+1) ~ /^([ \t]|$)/) {

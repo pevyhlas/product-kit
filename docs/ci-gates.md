@@ -1,7 +1,7 @@
 # CI gates for consumer repositories
 
 Three installed helpers provide read-only CI checks: adoption validates the installed kit,
-review validates eligible GitHub approvals on the exact head, and strict doctor checks the spec and
+review validates eligible GitHub reviews for the current PR head, and strict doctor checks the spec and
 agent context. Online review gating needs `gh`, `jq` and host access in every tier. Adoption,
 doctor and offline review previews need no host credential; no helper needs a model credential.
 
@@ -161,17 +161,17 @@ bash .prdkit/scripts/bash/check-review.sh --pr <url> [--head <rev>] [--base <tru
 ```
 
 The **2.x tier minimums are unchanged**. The gate uses the effective record tier after
-checking trusted policy, the tier floor and T0 paths. It enforces these minimums on the exact PR head:
+checking trusted policy, the tier floor and T0 paths. It enforces these minimums for the current PR head:
 
 | Tier | Qualifying `APPROVED` reviews |
 | --- | --- |
 | T0 | None required. The structural checks and complete live host read must still pass. |
 | T1, T2 | At least one independent `review-publishers` account. |
-| T3 | At least one independent `review-publishers` account **and** one `review-owner` account. |
+| T3 | At least one independent `review-publishers` account **and** one `review-owner` account. The owner needs the exact head by default; see [Per-PR owner approval](#per-pr-owner-approval) for the opt-in. |
 
 The PR author counts for neither role. An account listed in both keys counts **only as owner**;
-commit authorship is irrelevant. For approval, only the account’s latest submitted review
-on the exact current head counts. A new SHA needs fresh approvals.
+commit authorship is irrelevant. By default, only the account’s latest submitted review
+on the exact current head counts. A new SHA needs fresh approvals, except for an owner under the opt-in.
 
 With optional `review-lenses`, the publishers are the union of the accounts mapped to
 reviewer identities in trusted `agents.md`. For example, `code=bot:1001, design=bot:1004`
@@ -189,8 +189,9 @@ approvals even if more than one covers an area; `blocking` lists open objections
 
 **As in 2.x, a push does not clear an objection.** An eligible account’s `CHANGES_REQUESTED`
 on **any commit of this PR** blocks every tier, including T0. The gate reads all review pages
-in submission order. The objector must submit a later `APPROVED` on the exact current head,
-or an owner/maintainer must dismiss the **objecting review itself** on GitHub. A comment,
+in submission order. The objector must submit a later qualifying `APPROVED` (on the exact
+current head except for the T3 owner opt-in), or an owner/maintainer must dismiss the
+**objecting review itself** on GitHub. A comment,
 approval from another account, or dismissal of a different review cannot clear it.
 Pending reviews have no effect.
 
@@ -210,6 +211,25 @@ It rejects a `**Review**:` field in the State of an affected record, including a
 or in a commit that later deleted the field. A close must have its own per-change entry at
 the closing commit; the shared log alone cannot establish a close.
 See [the configuration template](../templates/config-template.md) for key syntax.
+
+### Per-PR owner approval
+
+In `.prdkit/memory/config.md`, `owner-approval: exact-head` is the default, including when
+the key is absent. `owner-approval: per-pr` is for pre-production stages only; set it back
+to `exact-head` before production. Changing it is an owner-reviewed policy change. The gate
+reads the key from the trusted default branch, never from the PR.
+
+At T3 under `per-pr`, each owner's latest `APPROVED`, `CHANGES_REQUESTED` or `DISMISSED`
+review decides; comments and pending reviews do not. Approval carries only on the same PR
+and only from a commit that is still an ancestor of the current head. An objection from
+that owner voids approval until a later qualifying approval. Publishers, reviewers covering
+lenses, and agents still need the exact head; T1 and T2 are unchanged.
+
+If the gate uses a carried approval, it names the approved commit and lists up to 20
+commits since then, with a `+N more` line if needed. JSON includes the qualifying owner in `reviews`
+and adds `owner_approval` with `mode`, `reviewer`, `review`, `commit`, `commits_since`
+and `more` (the number omitted). If it cannot verify ancestry for an otherwise deciding
+approval, it reports the rejected SHA in `owner_approval_not_ancestors`.
 
 ### Trusted all-PR execution — `check-pr-review.sh`
 
@@ -384,7 +404,7 @@ any valid captured native object or null. Error classes/phases on stderr are san
 host/tool stderr stays private to the invocation, never printed as workflow commands.
 
 Only native exit 0, host pass, empty problems and matching change/PR/H/T/P/canonical target plus
-the exact-head approvals required for that tier can exit 0. Usage exits 2; all other refusals/failures exit 1.
+the qualifying approvals required for that tier can exit 0. Usage exits 2; all other refusals/failures exit 1.
 Missing/partial host data never falls back to offline success. Final CI certifies the actual remote H.
 
 ## Spec and context advisories — `doctor.sh --strict`

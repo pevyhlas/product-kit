@@ -11,6 +11,16 @@ change by change.
 
 ## [Unreleased]
 
+### Added
+
+- Trusted `owner-approval: per-pr` lets a T3 owner approval carry forward on the same PR from an
+  ancestor, with the approved commit and subsequent commits reported. The default remains `exact-head`.
+
+### Fixed
+
+- Under legacy mawk, the trusted review policy parser no longer rejects valid account lists or
+  misses headings indented by two or three spaces.
+
 ## [3.3.0] — 2026-11-27 — template residue check
 
 ### Changed

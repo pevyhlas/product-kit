@@ -118,17 +118,26 @@ closing commit the reviewer can inspect the closing delta and approve the new SH
 
 ## Merge
 
-Apply the same tier minimums as 2.x to the exact PR head. T0 needs no positive review;
+Apply the same tier minimums as 2.x to the current PR head. T0 needs no positive review;
 the live gate must still pass. At T1–T3 obtain an `APPROVED` review from at least one
-independent `review-publishers` account. At T3 also obtain `APPROVED` from a `review-owner`.
+independent `review-publishers` account on the exact head. At T3 also obtain `APPROVED`
+from a `review-owner` on the exact head by default (`owner-approval: exact-head`, also
+when unset).
 An account in both lists counts only as owner, and the PR author counts for neither role.
-These are minimums; cover every applicable concern in the review. Only the latest submitted
-review by that account on the current SHA counts toward approval. As in 2.x, a push does
+These are minimums; cover every applicable concern in the review. For exact-head approval,
+only the latest submitted review by that account on the current SHA counts. As in 2.x, a push does
 not clear objections: stop at every tier for an outstanding `CHANGES_REQUESTED` on any
-commit of this PR. Address the finding and ask the same reviewer to approve the current
-head. A comment or someone else’s approval cannot clear it. If an owner/maintainer
+commit of this PR. Address the finding and ask the same reviewer for a later qualifying
+approval. A comment or someone else’s approval cannot clear it. If an owner/maintainer
 dismisses the objection on GitHub, they must dismiss that specific review. Use `blocking`
 to find its review ID and commit.
+
+If trusted default-branch policy sets `owner-approval: per-pr`, a T3 owner's latest
+`APPROVED`, `CHANGES_REQUESTED` or `DISMISSED` review decides. Approval can carry on this
+PR only if the approved commit is an ancestor of the current head. The live gate names
+that commit and lists what followed it. Publisher, lens and agent reviews stay exact-head.
+Use `per-pr` only for pre-production stages; set it back to `exact-head` before production.
+Changing this setting is an owner-reviewed policy change read from the trusted default branch.
 
 If trusted policy sets `review-lenses`, dispatch each applicable concern to an account
 mapped to its registered reviewer name. One account can cover several concerns with
@@ -177,7 +186,7 @@ helper invocation:
 GIT_AUTHOR_NAME='Agent' GIT_AUTHOR_EMAIL=agent@example.com GIT_COMMITTER_NAME='Agent' GIT_COMMITTER_EMAIL=agent@example.com bash .prdkit/scripts/bash/close-change.sh --pr https://github.com/owner/repo/pull/1 001-example 'Update behavior — R-01 — complete — #1'
 ```
 
-Push the closing commit. Obtain the approvals required for its tier on that SHA and rerun the gate.
+Push the closing commit. Obtain any fresh approvals required for its tier and rerun the gate on that SHA.
 The PR, not the record,
 carries any handoff to whoever merges. Do not change scope,
 acceptance or policy after review without reviewing the affected changes. Later defects use
