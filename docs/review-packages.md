@@ -3,18 +3,26 @@
 `build-review-package.sh CHANGE BASE [HEAD]` retains the full BASE..HEAD commits, diffstat and
 binary diff. `--since REV` adds a focused delta using the existing trusted merge-base and
 automatic-merge/fallback rules; it never replaces the full diff. `--context PATH` snapshots a
-whole tracked regular file at HEAD; `--evidence PATH` copies stable local evidence without
-certifying its revision, completion or applicability. `--facts` copies the exact change's
+whole tracked regular file at HEAD; `--evidence PATH` copies stable local evidence to
+`evidence/<basename>` without certifying its revision, completion or applicability. Duplicate
+source paths are copied once. Basename collisions (including ASCII case variants) get the next
+available numeric suffix (`ci.md`, `ci-2.md`, etc.) in attachment order. If the name would
+exceed the destination's filename limit, a short hashed name with a suffix is used instead.
+Use `manifest.tsv` for the exact name, repo-relative source, and copied blob. `--facts` copies the exact change's
 cached pair to `evidence/facts/{summary.md,index.json}` without certifying its binding.
 All input paths are repository-relative. Ordinary `--evidence` cannot use the source paths
-`facts` or `facts/*`, including ASCII case variants, even in a package without `--facts`.
+`facts` or `facts/*`, or a file whose basename is `facts`, including ASCII case variants,
+even in a package without `--facts`.
 
 ## Read order
 
 The package's `index.md` and the [review prompt](../templates/review-prompt-template.md) direct
 reviewers to open `diff.patch` first, then `evidence/facts/summary.md` if the coordinator verified
-the attached pair, then the **Review obligations** section of `index.md`. That section shows
-binding BASE text and trusted default-branch policy with source pointers. Unchanged obligations
+the attached pair, then the **Review obligations** section of `index.md`. Read `obligations.md`
+next if linked there as required. This keeps the normal path to at most four package reads.
+The index shows a compact obligation list inline when it fits; the companion holds the same
+text when it doesn't. It includes binding BASE text and trusted default-branch policy with
+source pointers. Unchanged obligations
 appear once. Comparisons ignore leading and trailing blank lines, but leave captured bytes
 untouched and preserve every other whitespace difference. Changed text appears directly below
 its BASE counterpart, marked proposed; new text is proposed only, and removals retain the
@@ -22,8 +30,9 @@ BASE text marked for review. Reviewers reconcile the proposals against BASE, as 
 in the [review workflow](../workflows/review.md#review). Facts don't set obligations or grant
 approval, and their bounds inventory does not show full bound bodies.
 
-The inline excerpt budget is 16 KiB, including source labels and formatting. If the captured
-material would exceed it, is not valid UTF-8 text, a BASE obligation cannot be resolved, or a
+The index shows at most 2 KiB of excerpts. The excerpt budget for the obligation list as a
+whole is 16 KiB, including source labels and formatting. If the captured material would
+exceed that budget, is not valid UTF-8 text, a BASE obligation cannot be resolved, or a
 selected full or collapsed reference has no definition, the index shows no partial list and
 explicitly requires reading `context-manifest.tsv`, the relevant packaged context, the bounds
 inventories with their input bindings if present, and `context-gaps.txt`. Inline text permits
@@ -32,13 +41,18 @@ CRLF; the original artifact stays byte-for-byte. Otherwise, reviewers open
 other files only to investigate a finding or resolve an obligation. The dispatcher still supplies
 mandatory obligations and unresolved questions that automatic capture missed.
 
-If neither BASE nor HEAD has spec files, the index states that no endpoint spec bounds apply.
-Absence alone does not require full context. The usual HEAD-ancestry lookup can still supply
-historical scope, including for a follow-up to a record closed at or before BASE. This is
-not binding BASE acceptance. A missing or unrecoverable child record is still reported
-as a gap, but that warning alone does not trigger the full-context fallback. Malformed
-headers, unsafe or unreadable inputs, and unresolved references remain gaps. First specs
-are proposed; removed BASE specs remain binding evidence.
+The package records the bounds state in `bounds-status.txt`: `absent`, `collected`,
+or `unavailable`. Before writing spec files, both collectors check the BASE and HEAD trees
+for ASCII case-folded aliases at or under `specs/`, including ASCII case variants of that root.
+Unicode case-folding and normalization aliases are outside the threat model.
+Within that namespace, non-ASCII paths and unsafe entries (including symlinks and gitlinks)
+also make the result unavailable at either revision. Confirmed absence requires a checked inventory
+with no applicable spec inputs and a valid scope record. The usual HEAD-ancestry lookup can supply a historical
+record (including a follow-up to a record closed at or before BASE), but not binding BASE
+acceptance. Missing or invalid scope, malformed headers and unsafe or unreadable inputs do
+not establish absence. A missing child and its HEAD bounds gap alone do not trigger the
+full-context fallback. Unresolved references remain separate gaps. First specs are proposed;
+removed BASE specs remain binding evidence.
 
 ## What is automatic
 
@@ -61,10 +75,11 @@ The four-column `manifest.tsv` inventories artifacts. `context-manifest.tsv` add
 - the **actual** installed `bounds.sh` output on materialized HEAD canon and the actual child's
   scope when bounds inputs exist (a recovered scope record keeps its historical binding). When
   relevant inputs differ, `bounds-base.txt` and `bounds-base-inputs.tsv` capture the BASE scope
-  independently. With no BASE child record, all BASE bounds are considered conservatively. An
-  empty side has no spec bounds, but any scoped record header is still validated. The package
-  compares bound bodies by ID across both revisions, including IDs that dropped out of
-  candidate scope;
+  independently. With no BASE child record, all BASE bounds are considered conservatively.
+   If BASE bounds are unavailable, the package keeps the gap and can still excerpt verified BASE
+   bodies, but may omit all BASE bodies when the input tree fails preflight. The package
+   compares bound bodies by ID across both revisions, including IDs that dropped out of
+   candidate scope;
 - trusted constitution and any registry/config at `policy_at`; BASE and HEAD product/architecture
   canon and `specs/design.md` where present, and conservative part/cross-interface context. The
   full diff remains authoritative for what changed. Absent conventional canon and optional
@@ -141,10 +156,13 @@ specifies when the pack is collected, verified and attached.
 
 Without `--head`, the current `HEAD` is used. Pass `--base` to use the same base as the package
 builder; otherwise the helper uses the unique merge base with the locally available `origin/HEAD`.
-It never fetches. The change record must exist at `HEAD`. Python 3.11+ (stdlib only) is needed;
+It never fetches. Python 3.11+ (stdlib only) is needed;
 `jq` isn't. Only `--pr` with `gh` available triggers a host read through `pr-state.sh`. A missing,
 failed or mismatched PR snapshot is **not collected**, never green. Check names and links from
 the snapshot are preserved exactly. The PR's base tip can differ from the local diff's merge base.
+With verified facts, that summary is the place to read the collected status; without facts the
+package index states that it did not collect exact-head CI. Do not investigate missing optional
+CI evidence by default. When policy requires that evidence, it still must be verified.
 
 The local collectors run against a private, detached snapshot of committed `HEAD`, with its own
 Git index, metadata and object store. They see only objects reachable from `HEAD` within the
@@ -180,8 +198,19 @@ no migration is needed.
 
 The summary covers captured collector results. The bounds collector lists constraints, non-goals
 and qualities; it does not assess compliance, spec or design fit, or correctness.
-Collector failures are recorded in a successfully written pack. Exit 2 is a refusal (such as
-bad inputs, head mismatch, unsafe snapshot links, changed inputs during collection or unsafe cache).
+Facts run the same installed bounds helper as the package against the snapshot's committed
+objects. The index hashes that helper and its shell dependencies. It records the state
+(`absent`, `collected`, or `unavailable`) and the selected scope revision when resolved.
+The selected scope record must be a regular, non-executable, LF-terminated record with one
+valid tier and no unsupported State review field;
+the bounds collector also validates the scope fields. Missing scope or incomplete capture
+is unavailable, not absent. No HEAD state waives binding BASE bounds.
+Collector failures are recorded in a successfully written pack. If spec preflight fails, facts
+skips its Python worktree snapshot and records the gap in the pack. A snapshot collision outside
+the spec namespace leaves the checked bounds result intact and records affected collectors as
+not collected. Exit 2 is a refusal (such as
+bad inputs, head mismatch, unsafe links outside the spec inputs, changed inputs during collection
+or unsafe cache).
 
 Use `facts.sh --verify "$id"` with the original options to recompute and compare without writing.
 It exits 0 if both files match, 1 on drift (including a missing pack), or 2 on refusal. CI may

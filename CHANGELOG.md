@@ -17,9 +17,17 @@ change by change.
   of reviewer tiers or restrict commands with Claude Code settings or project hooks.
   The customization guide also shows how to opt into scoped OpenCode V2 maker shell rules.
 - The adoption guide explains how to bootstrap the review gate and when default-branch policy changes take effect.
+- The review package index links one required companion for larger obligation lists rather
+  than inlining bulky policy and excerpts. Missing optional exact-head CI is reported as
+  not collected, not as an open question.
 
 ### Changed (breaking)
 
+- Ordinary `--evidence` files now sit at `evidence/<basename>` (numbered for collisions),
+  not `evidence/<repo-relative-path>`. Find the copied name and source in `manifest.tsv`.
+  `evidence/facts/` remains reserved. Existing rounds are retained; rebuild to use the new layout.
+- The facts cache key moves from 4 to 5. Regenerate version 4 packs with `facts.sh`
+  before verifying or attaching them; retained review rounds do not need migration.
 - Fresh installs mark seeded Rigor `light` as unconfirmed; independent reviewers must not use it
   as owner policy. Ordinary `doctor.sh` advises on the marker and leftover fill-in slots in
   project seeds, with JSON trace counts `unconfirmed-default` and `template-placeholder`.
@@ -34,6 +42,15 @@ change by change.
 
 ### Fixed
 
+- Exact-head facts and review packages share a checked bounds inventory and scope validation.
+  No spec inputs with a valid scope means absent; incomplete inputs or invalid or missing
+  scope mean unavailable. Colliding evidence names use a short hashed fallback when a
+  numeric suffix would exceed the destination's filename limit.
+- Both bounds collectors check the `specs/` namespace and its ASCII case variants at BASE and
+  HEAD. ASCII case-fold collisions, non-ASCII paths within that namespace, and unsafe entries
+  make bounds unavailable. Facts skips its worktree snapshot on those rejections and still
+  writes a pack. Snapshot collisions outside that namespace do not invalidate checked bounds.
+  Review packages never label an unsafe HEAD reference as removed.
 - Review packages no longer require full context just because neither revision has spec bounds.
   A missing or unrecoverable child record still produces the usual warning.
   Historical records and diagnostics remain review evidence, including for same-ID follow-ups.

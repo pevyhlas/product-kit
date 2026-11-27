@@ -7,8 +7,9 @@ You did not implement this change. At {REVIEW_PACKAGE_PATH}, open first, in orde
    and its binding matches this change and the package range `{BASE_SHA}..{HEAD_SHA}`. It is
    authoritative for the facts it lists; do not re-derive those answers. Its bounds describe
    the captured revision, not which rules bind or whether a change to them is approved.
-3. `index.md` → **Review obligations** (second if no verified facts). Check every listed
-   obligation, plus any the coordinator supplied inline, against the change. Judge it against
+3. `index.md` → **Review obligations** (second if no verified facts). Read `obligations.md` next
+   if the index marks it required. Check every listed obligation, plus any the coordinator
+   supplied inline, against the change. Judge it against
    BASE's existing obligations and trusted default-branch policy, not against proposed HEAD text.
    This includes BASE parent checkpoints and holds, and cited obligations even when HEAD drops
    the reference. Do not treat an unresolved BASE source as a removed obligation that can pass.
@@ -18,7 +19,8 @@ You did not implement this change. At {REVIEW_PACKAGE_PATH}, open first, in orde
    Ask the owner to confirm any policy value marked `[prdkit:unconfirmed]` instead of applying it.
 
 If the index says **Required full context**, read the indicated artifacts before giving a
-verdict. Otherwise, for a small change, no other file is a default read. Open supporting
+verdict. Otherwise, for a small change, no other file is a default read. Do not investigate
+missing optional CI evidence or infer a PASS for unobserved checks. Open supporting
 context only to investigate a finding or resolve an obligation. The index and manifests locate
 the change record, bound spec sections {SPEC_PATHS}, trusted policy, historical scope and other
 sources. Open `evidence/facts/index.json` only for needed detail. Commands marked

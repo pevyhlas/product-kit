@@ -2,8 +2,10 @@
 # Minimum automatic context for fixtures asserting a full package can be reused.
 package_context_fixture() {
     mkdir -p .prdkit/memory specs/product specs/changes
-    local p
-    for p in .prdkit/memory/{constitution,agents,config}.md specs/{product,architecture}.md; do
+    local p files
+    files=(specs/{product,architecture}.md)
+    if [ "${2:-}" != installed-policy ]; then files+=(.prdkit/memory/{constitution,agents,config}.md); fi
+    for p in "${files[@]}"; do
         printf '# %s\n' "${p##*/}" > "$p"
     done
     printf '# Lifecycle\n\n**Now**: Demo · **Next**: MVP\n' > specs/product/lifecycle.md
@@ -13,7 +15,7 @@ package_context_fixture() {
 # Same one-line change and three unchanged review obligations in baseline and candidate.
 package_small_obligation_fixture() {
     local id="$1"
-    package_context_fixture "$id"
+    package_context_fixture "$id" "${2:-}"
     printf '\n## Acceptance\n\nAcceptance: Preserve the exported public label.\n' >> "specs/changes/$id.md"
     printf '\n## Review policy\n\n- **Rigor**: full\n- Release-label edits require the application smoke check.\n' >> .prdkit/memory/constitution.md
     printf '# Constraints\n\n- **C-01 Example bound**: Scope: all.\n  Keep the published label stable for automated clients.\n' > specs/product/constraints.md

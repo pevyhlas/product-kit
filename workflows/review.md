@@ -17,8 +17,8 @@ or log delivered tasks.
 
 The reviewer is a fresh context that did not implement the change. Reviews are run by the worker,
 not CI. Send `.prdkit/templates/review-prompt-template.md` with the full `diff.patch` first and
-the verified `evidence/facts/summary.md` second, if available. Always include `index.md`, under
-**Review obligations**, as the last default read. The reviewer must check every listed obligation,
+the verified `evidence/facts/summary.md` second, if available, then `index.md` under
+**Review obligations**. If the index marks `obligations.md` required, read it next. The reviewer must check every listed obligation,
 including full bound text, trusted policy and acceptance. A bounds inventory alone is not enough.
 Judge the change against BASE's obligations and trusted default-branch policy. Check each proposed
 or removed rule against the binding text, including BASE parent holds and cited obligations even
@@ -37,10 +37,12 @@ For focused policy context, `.prdkit/scripts/bash/role-digest.sh <role>` extract
 cite the role from working-tree policy and lists the input blobs. Use it as reading evidence,
 not instead of trusted policy, the full source, or review approval.
 
-Once per round at the exact head, if the change record exists there, run
+Once per round at the exact head, run
 `.prdkit/scripts/bash/facts.sh <change-id>` with the package's `--base` and `--head`.
-Add `--pr <number>` when the PR number and host access are available; missing host evidence
-stays explicit.
+Add `--pr <number>` when the PR number and host access are available. Use the verified facts
+summary for the exact-head CI observation, including failures or **not collected**. Without
+facts the index states that the package did not collect it. Do not turn missing optional CI
+into a reviewer research question or infer a pass. Verify any required CI before relying on it.
 Only after collection exits 0, verify the pair before attaching: `index.json` fields `change_id`,
 `key.base` and `key.head` must match this round's ID and full base and head SHAs, and the SHA-256
 of the raw index bytes must match the hash in `summary.md`. If they match, attach both files via
@@ -56,12 +58,14 @@ source for details and `facts.sh --help` for attachment syntax.
 
 For committed work run `.prdkit/scripts/bash/build-review-package.sh <change-id> <base> [head]`,
 adding `--context <path>` for selected tracked canon/policy/record files and `--evidence <path>`
-for completed local results; ordinary evidence cannot occupy `evidence/facts/`. The helper checks
+for completed local results. Ordinary attachments go directly under `evidence/`; locate their
+final names and sources in `manifest.tsv`. `evidence/facts/` remains reserved. The helper checks
 structural accessibility, not semantic completeness. Before dispatch, check the captured obligations
 against any BASE and HEAD change records, relevant canon (including full bound bodies), and the
-parents, citations, and dependencies at both revisions. If neither revision has spec files, no
-endpoint spec bounds apply, but recovered closing records and their gaps still matter. If specs
-are added or removed, reconcile them against the other revision.
+parents, citations, and dependencies at both revisions. Treat HEAD bounds as absent only when
+the checked inventory is complete and a valid scope record exists or is recovered. Unavailable
+bounds are a gap, not absence. If specs are added or removed, reconcile them against the other
+revision.
 Check trusted policy separately, along with required verification and prior findings. Put any
 missing mandatory obligation or unresolved question inline in the dispatch prompt with its source
 path.

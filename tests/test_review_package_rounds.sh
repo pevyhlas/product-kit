@@ -22,15 +22,20 @@ sed 's/line 15/changed fifteen/' src/app.txt > src/new; mv src/new src/app.txt; 
 F1="$(git rev-parse HEAD)"
 first="$(bash "$SCRIPT" 001-equal "$BASE")"; PKG="$(printf '%s' "$first" | jq -r .PACKAGE_DIR)"
 ROOT="$(dirname "$PKG")"
-it "An old, otherwise valid package is regenerated without editing its files"
-# Simulate a package written before absent spec inputs were distinguished from unresolved ones.
-sed 's/^package12/package11/' "$PKG/completed.tsv" > "$P/old-binding"
+it "Old, otherwise valid packages are regenerated without editing their files"
+# Keep coverage for both the pre-lean layout and the prior lean layout.
+cp -R "$PKG" "$ROOT/round-2"
+sed 's/^package14/package12/' "$PKG/completed.tsv" > "$P/old-binding"
 cp "$P/old-binding" "$PKG/completed.tsv"
+sed 's/^package14/package13/' "$ROOT/round-2/completed.tsv" > "$P/old-binding"
+cp "$P/old-binding" "$ROOT/round-2/completed.tsv"
 old_snapshot="$(package_snapshot "$PKG")"
+old_lean_snapshot="$(package_snapshot "$ROOT/round-2")"
 run bash "$SCRIPT" 001-equal "$BASE"
 assert_eq 0 "$STATUS" "$OUTPUT"
-assert_eq 2 "$(jq .ROUND <<<"$OUTPUT")" 'same source may get the new package format'
+assert_eq 3 "$(jq .ROUND <<<"$OUTPUT")" 'same source may get the new package format'
 assert_eq "$old_snapshot" "$(package_snapshot "$PKG")" 'old round left byte-exact'
+assert_eq "$old_lean_snapshot" "$(package_snapshot "$ROOT/round-2")" 'old lean round left byte-exact'
 run bash "$SCRIPT" 001-equal "$BASE"
 assert_eq 1 "$STATUS" 'current format retains exact-head duplicate refusal'
 assert_contains "$OUTPUT" 'no round needed'
@@ -39,7 +44,7 @@ printf '\nrecord note\n' >> specs/changes/001-equal.md; git commit -qam metadata
 TIP="$BASE"
 run bash "$SCRIPT" 001-equal "$TIP" --since "$F1"
 assert_eq 0 "$STATUS" "$OUTPUT"
-assert_eq 3 "$(printf '%s' "$OUTPUT" | jq .ROUND)" 'new review head packaged'
+assert_eq 4 "$(printf '%s' "$OUTPUT" | jq .ROUND)" 'new review head packaged'
 it "Incomplete rounds retain evidence/numbering but do not prove completion"
 printf 'fix\n' >> src/app.txt; git commit -qam fix
 mkdir "$ROOT/round-7"; printf 'interrupted evidence\n' > "$ROOT/round-7/failed.txt"

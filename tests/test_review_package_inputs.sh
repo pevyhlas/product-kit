@@ -15,7 +15,7 @@ setup() {
     printf '# Product\n\nSynthetic product.\n' > specs/product.md
     printf '# Architecture\n\n| Part | Purpose | Journeys |\n|---|---|---|\n| P1 | Behavior | J-01 |\n' > specs/architecture.md
     printf '# P1\n\n- **P1.B-01 Behavior** — Complete behavior.\n' > specs/parts/p1.md
-    printf '# Constraints\n\n- **C-77 Literal filename** — Scope: all parts.\n  REQUIRED_LITERAL_BODY\n' > specs/product/constraints/é.md
+    printf '# Constraints\n\n- **C-77 Literal filename** — Scope: all parts.\n  REQUIRED_LITERAL_BODY\n' > specs/product/constraints/literal.md
     cat > specs/changes/900-parent.md <<'EOF'
 # Programme
 
@@ -69,7 +69,7 @@ setup_small() {
     P="$(make_inited_project)" || exit 1
     track_tmp "$P"; cd "$P" || exit 1
     ID=001-small
-    package_small_obligation_fixture "$ID" || exit 1
+    package_small_obligation_fixture "$ID" "${1:-}" || exit 1
     BASE="$(git rev-parse HEAD^)"
 }
 setup_no_specs() {
@@ -103,7 +103,11 @@ integrity() {
 }
 
 default_reads() { awk '/^## Open first/{ open=1; next } /^## /{ open=0 } open && /^[0-9]+\. /' "$PKG/index.md"; }
-obligations_section() { sed -n '/^## Review obligations$/,/^## Open only if/p' "$PKG/index.md"; }
+default_read_paths() { default_reads | sed -e 's/^[0-9][0-9]*\. \[\([^]]*\)\].*/\1/' -e 's/^[0-9][0-9]*\. `\([^`]*\)`.*/\1/'; }
+obligations_section() {
+    sed -n '/^## Review obligations$/,/^## Evidence status/p' "$PKG/index.md"
+    if [ -f "$PKG/obligations.md" ]; then cat "$PKG/obligations.md"; fi
+}
 non_verification_gaps() { sed '/^verification /d' "$PKG/context-gaps.txt"; }
 released_context_retained() { # opt-in with a local v3.2.0 builder; named exceptions follow
     [ -n "${PACKAGE_TEST_REFERENCE_BUILDER:-}" ] || return 0
@@ -146,10 +150,11 @@ reject_reserved() {
     assert_contains "$OUTPUT" "conflicting --evidence $path"
 }
 
-[ "$#" -gt 0 ] || set -- context paths facts obligations no-specs empty-endpoints merged-history reconcile references reference-style plain-brackets edge-blanks nontext
+[ "$#" -gt 0 ] || set -- context paths facts lean obligations no-specs empty-endpoints merged-history reconcile references reference-style plain-brackets edge-blanks nontext
 for mode in "$@"; do
     case "$mode" in
         obligations|reconcile|references|reference-style|plain-brackets|edge-blanks|nontext) setup_small ;;
+        lean) setup_small installed-policy ;;
         no-specs|empty-endpoints|merged-history) setup_no_specs ;;
         *) setup ;;
     esac
@@ -158,19 +163,22 @@ for mode in "$@"; do
     case "$mode" in
         no-specs)
             no_specs='No spec files at BASE or HEAD; no spec bounds apply.'
-            it "A small committed change without specs has no spec obligations or full-context fallback"
+            it "A small committed change without specs or scope stays lean but does not claim absent bounds"
             assert_eq absent "$([ -e specs ] && echo present || echo absent)" 'no specs directory in fixture'
             # Untracked specs are not an input on either revision.
             mkdir -p specs
             printf '# Untracked\n' > specs/product.md
             if build; then
                 section="$(obligations_section)"
-                assert_contains "$section" "$no_specs"
+                assert_not_contains "$section" "$no_specs"
+                assert_contains "$section" 'HEAD bounds are unavailable'
                 assert_not_contains "$section" '**Required full context:**'
                 assert_not_contains "$section" 'mark the review pending'
-                assert_eq 2 "$(default_reads | wc -l | tr -d ' ')" 'only diff and inline obligations by default'
-                assert_eq "child actual child record missing or unrecoverable: specs/changes/$ID.md" \
-                    "$(non_verification_gaps)" 'only the released missing-child warning remains'
+                # Stock seed size decides whether obligations overflow into their companion; full context must not be required.
+                assert_eq $'diff.patch\nindex.md' "$(default_read_paths | grep -vx obligations.md)" 'missing scope and unavailable bounds stay inline'
+                assert_contains "$(non_verification_gaps)" "child actual child record missing or unrecoverable: specs/changes/$ID.md"
+                assert_eq unavailable "$(cat "$PKG/bounds-status.txt")"
+                assert_eq '' "$(cat "$PKG/bounds.txt")"
                 assert_eq '' "$(awk -F '\t' '$3 ~ /^specs\// {print}' "$PKG/context-manifest.tsv")" 'no spec obligations'
                 assert_contains "$(cat "$PKG/context-manifest.tsv")" '.prdkit/memory/constitution.md' 'required trusted policy remains'
                 integrity
@@ -204,9 +212,9 @@ for mode in "$@"; do
                 assert_contains "$section" 'C-01 — BASE, removed by this change'
                 assert_contains "$section" 'Canon (specs/product.md) — BASE, removed by this change'
                 assert_contains "$section" 'Keep the public label.'
-                assert_contains "$(cat "$PKG/bounds.txt")" 'No spec bounds apply at this revision.'
+                assert_eq unavailable "$(cat "$PKG/bounds-status.txt")"
                 assert_contains "$(non_verification_gaps)" 'child actual child record missing or unrecoverable:'
-                assert_not_contains "$(non_verification_gaps)" 'bounds unavailable'
+                assert_contains "$(non_verification_gaps)" 'bounds unavailable'
                 assert_not_contains "$(non_verification_gaps)" 'canon missing/unsafe/unreadable context'
                 released_context_retained
             fi
@@ -341,9 +349,9 @@ EOF
             git rm -q "$record" || exit 1
             advance 'close unreadable record'
             if build; then
-                assert_contains "$(obligations_section)" 'No spec files at BASE or HEAD; no spec bounds apply.'
+                assert_not_contains "$(obligations_section)" 'No spec files at BASE or HEAD; no spec bounds apply.'
                 assert_contains "$(non_verification_gaps)" "unreadable child record $historical:$record"
-                assert_not_contains "$(non_verification_gaps)" 'bounds unavailable'
+                assert_contains "$(non_verification_gaps)" 'bounds unavailable'
                 released_context_retained
             fi
 
@@ -360,7 +368,8 @@ exec "$FIXTURE_GIT" "$@"
 EOF
             chmod +x "$shim/git"
             if PATH="$shim:$PATH" build --evidence src/app.txt; then
-                assert_eq "child actual child record missing or unrecoverable: $record" "$(non_verification_gaps)"
+                assert_contains "$(non_verification_gaps)" "child actual child record missing or unrecoverable: $record"
+                assert_eq unavailable "$(cat "$PKG/bounds-status.txt")"
                 PATH="$shim:$PATH" released_context_retained --evidence src/app.txt
             fi
 
@@ -380,6 +389,7 @@ EOF
             if build; then
                 assert_contains "$(obligations_section)" '**Required full context:** A BASE obligation could not be resolved.'
                 assert_contains "$(non_verification_gaps)" 'bounds unresolved BASE obligation: shared bounds unavailable'
+                assert_contains "$(cat "$PKG/bounds-base.stderr")" 'Duplicate Parts field'
                 assert_contains "$(cat "$PKG/bounds.stderr")" 'Duplicate Parts field'
                 released_context_retained
             fi
@@ -390,7 +400,7 @@ EOF
             git rm -q "$record" || exit 1
             advance 'close change with invalid scope'
             if build; then
-                assert_contains "$(obligations_section)" 'No spec files at BASE or HEAD; no spec bounds apply.'
+                assert_not_contains "$(obligations_section)" 'No spec files at BASE or HEAD; no spec bounds apply.'
                 assert_contains "$(obligations_section)" 'Historical child record — scope evidence only, not a substitute for BASE'
                 assert_contains "$(non_verification_gaps)" 'bounds bounds unavailable; inspect bounds.stderr'
                 assert_contains "$(cat "$PKG/bounds.stderr")" "$record:5: Duplicate Parts field"
@@ -415,10 +425,10 @@ EOF
             assert_eq '' "$(git ls-tree -r --name-only HEAD -- specs)" 'HEAD has no specs'
             assert_eq '' "$(git log -1 --format=%H HEAD -- "$record")" 'default path history prunes both record commits'
             if build; then
-                assert_contains "$(obligations_section)" 'No spec files at BASE or HEAD; no spec bounds apply.'
-                assert_eq "child actual child record missing or unrecoverable: $record" "$(non_verification_gaps)"
+                assert_not_contains "$(obligations_section)" 'No spec files at BASE or HEAD; no spec bounds apply.'
+                assert_contains "$(non_verification_gaps)" "child actual child record missing or unrecoverable: $record"
                 assert_not_contains "$(cat "$PKG/context-manifest.tsv")" 'child-historical'
-                assert_contains "$(cat "$PKG/bounds.txt")" 'No spec bounds apply at this revision.'
+                assert_eq unavailable "$(cat "$PKG/bounds-status.txt")"
                 released_context_retained
             fi
 
@@ -449,9 +459,9 @@ EOF
                 args=()
                 [ "$style" != delta ] || args=(--since "$BASE")
                 if build ${args[@]+"${args[@]}"}; then
-                    assert_eq "child actual child record missing or unrecoverable: $record" "$(non_verification_gaps)" "$style: exact released child warning"
+                    assert_contains "$(non_verification_gaps)" "child actual child record missing or unrecoverable: $record"
                     assert_not_contains "$(cat "$PKG/context-manifest.tsv")" 'child-historical'
-                    assert_contains "$(obligations_section)" 'No spec files at BASE or HEAD; no spec bounds apply.'
+                    assert_not_contains "$(obligations_section)" 'No spec files at BASE or HEAD; no spec bounds apply.'
                     assert_not_contains "$(obligations_section)" '**Required full context:**'
                     released_context_retained ${args[@]+"${args[@]}"}
                 fi
@@ -489,27 +499,51 @@ EOF
             advance unanchored-parent
             if build; then assert_contains "$(cat "$PKG/context-gaps.txt")" 'explicit section needed for specs/changes/900-parent.md' 'unanchored parent link is accounted as a gap'; fi ;;
         paths)
-            it "Literal spec paths participate in actual bounds and changed canon, or have a named gap"
-            printf '  CHANGED_LITERAL_BODY\n' >> specs/product/constraints/é.md
+            it "An ASCII spec path participates in bounds; an unsafe path has a named gap"
+            literal=specs/product/constraints/literal.md
+            printf '  CHANGED_LITERAL_BODY\n' >> "$literal"
+            git add specs/product; git commit -qm 'change literal path' || exit 1
+            if build; then
+                assert_contains "$(cat "$PKG/bounds.txt")" C-77 'literal file included in actual bounds'
+                assert_eq collected "$(cat "$PKG/bounds-status.txt")"
+                assert_contains "$(cat "$PKG/bounds-inputs.tsv")" "$(git rev-parse "HEAD:$literal")" 'literal bounds input blob'
+                assert_contains "$(cat "$PKG/context-manifest.tsv")" "$literal" 'literal source path provenance'
+                assert_contains "$(find "$PKG" -type f -name '*.txt' -exec cat {} \;)" CHANGED_LITERAL_BODY 'changed literal canon supplied'
+            fi
+
+            it "A bound in an ASCII path with a backslash retains its body and exact Git binding"
+            backslash='specs/decisions/rule\draft.md'
+            mkdir -p specs/decisions
+            printf '# Decisions\n\n- **C-79 Backslash path** — Scope: all parts.\n  BACKSLASH_BOUND_BODY\n' > "$backslash"
+            git add -- "$backslash" && git commit -qm 'add a bound in a literal backslash path' || exit 1
+            if build; then
+                assert_eq collected "$(cat "$PKG/bounds-status.txt")"
+                row="$(awk -F '\t' '$7 == "bound-proposed" && $8 == "C-79" { print }' "$PKG/context-manifest.tsv")"
+                assert_contains "$row" $'\t'"$backslash"$'\t'"$(git rev-parse "HEAD:$backslash")"$'\t3\t4\tbound-proposed\tC-79'
+                assert_eq "$(tail -n 2 "$backslash")" "$(cat "$PKG/${row%%$'\t'*}")" 'exact bound excerpt'
+                assert_not_contains "$(non_verification_gaps)" 'unreadable bound body'
+            fi
+
             unsafe=$'specs/product/constraints/line\nbreak.md'
             printf '# Constraint\n\n- **C-78 Rejected path** — Scope: all parts.\n' > "$unsafe"
             git add specs/product; git commit -qm 'literal path controls' || exit 1
             if build; then
-                assert_contains "$(cat "$PKG/bounds.txt")" C-77 'Unicode file included in actual bounds'
-                assert_contains "$(cat "$PKG/bounds-inputs.tsv")" "$(git rev-parse HEAD:specs/product/constraints/é.md)" 'literal bounds input blob'
-                assert_contains "$(cat "$PKG/context-manifest.tsv")" 'specs/product/constraints/é.md' 'literal source path provenance'
-                assert_contains "$(find "$PKG" -type f -name '*.txt' -exec cat {} \;)" CHANGED_LITERAL_BODY 'changed literal canon supplied'
+                assert_eq unavailable "$(cat "$PKG/bounds-status.txt")" 'incomplete canon is not complete bounds'
+                assert_eq '' "$(cat "$PKG/bounds.txt")"
+                assert_not_contains "$(cat "$PKG/bounds-inputs.tsv")" "$literal" 'unsafe tree is not captured'
                 assert_contains "$(cat "$PKG/context-gaps.txt")" 'unsafe spec input' 'unsupported control path has explicit rejection gap'
                 integrity
             fi ;;
         facts)
             it "Only copied facts get a spot in the default reading list"
             if build; then
-                assert_eq 2 "$(default_reads | wc -l | tr -d ' ')" 'diff and obligations without facts'
+                assert_eq $'diff.patch\nindex.md' "$(default_read_paths)" 'diff and inline obligations without facts'
                 assert_contains "$(default_reads)" '2. `index.md`, [Review obligations]'
                 assert_not_contains "$(default_reads)" 'evidence/facts/'
                 assert_eq absent "$([ -e "$PKG/evidence/facts" ] || echo absent)"
                 assert_contains "$(cat "$PKG/index.md")" '## Open only if a finding needs it'
+                assert_eq 1 "$(grep -Fc 'Exact-head CI: not collected' "$PKG/index.md")"
+                assert_not_contains "$(cat "$PKG/context-gaps.txt")" 'CI'
             fi
             cache=".prdkit/cache/evidence/$ID/facts"
             mkdir -p "$cache" proof
@@ -527,19 +561,81 @@ EOF
             reject_reserved facts/summary.md
             reject_reserved facts/summary.md --facts
             reject_reserved Facts/summary.md
-            if build --facts --evidence proof/result.txt; then
+            printf 'Conflicting nested leaf\n' > proof/Facts
+            reject_reserved proof/Facts
+            mkdir -p other third
+            printf 'Cached CI note\n' > "${cache%/facts}/ci.md"
+            printf 'Existing numbered note\n' > proof/CI-2.MD
+            printf 'Second CI note\n' > other/ci.md
+            printf 'Third CI note\n' > third/CI.md
+            if build --facts --evidence proof/result.txt --evidence "${cache%/facts}/ci.md" \
+                --evidence proof/CI-2.MD --evidence other/ci.md --evidence third/CI.md --evidence other/ci.md; then
                 assert_eq 2 "$(jq .ROUND <<<"$OUTPUT")" 'validation failures do not allocate a round'
-                assert_eq $'diff.patch\nevidence/facts/summary.md\nindex.md' \
-                    "$(default_reads | sed -e 's/^[0-9][0-9]*\. \[\([^]]*\)\].*/\1/' -e 's/^[0-9][0-9]*\. `\([^`]*\)`.*/\1/')" \
-                    'exact default read order'
+                assert_eq $'diff.patch\nevidence/facts/summary.md\nindex.md' "$(default_read_paths)" 'exact default read order'
                 assert_contains "$(cat "$PKG/index.md")" 'no other file is a default read'
-                assert_file "$PKG/evidence/proof/result.txt"
+                assert_file "$PKG/evidence/result.txt"
+                assert_eq absent "$([ -e "$PKG/evidence/.prdkit" ] && echo present || echo absent)"
+                for mapping in "ci.md:${cache%/facts}/ci.md" 'CI-2.MD:proof/CI-2.MD' 'ci-3.md:other/ci.md' 'CI-4.md:third/CI.md'; do
+                    name="${mapping%%:*}"; source="${mapping#*:}"
+                    run cmp "$PKG/evidence/$name" "$source"
+                    assert_eq 0 "$STATUS" "shallow copy of $source"
+                    assert_eq "caller-supplied:$source (verify producer revision/result)" \
+                        "$(awk -F '\t' -v path="evidence/$name" '$1 == path { print $4 }' "$PKG/manifest.tsv")"
+                done
+                assert_eq 1 "$(grep -Fc 'caller-supplied:other/ci.md ' "$PKG/manifest.tsv")" 'repeated source is copied once'
+                assert_not_contains "$(cat "$PKG/index.md")" 'Exact-head CI: not collected'
+                assert_contains "$(cat "$PKG/index.md")" 'Exact-head CI: see the facts summary'
+                assert_not_contains "$(cat "$PKG/context-gaps.txt")" 'CI'
                 assert_file "$PKG/bounds.txt"
                 assert_file "$PKG/bounds-inputs.tsv"
                 assert_contains "$(cat "$PKG/context-manifest.tsv")" 'trusted default-branch policy'
                 for name in summary.md index.json; do
                     assert_file "$PKG/evidence/facts/$name"
                     assert_contains "$(cat "$PKG/manifest.tsv")" "caller-supplied:$cache/$name"
+                done
+                integrity
+            fi
+
+            it "Colliding 255-byte basenames preserve both bytes and original paths"
+            long="$(awk 'BEGIN { for (i = 0; i < 252; i++) printf "a"; print ".md" }')"
+            printf 'first long attachment\n' > "proof/$long"
+            printf 'second long attachment\n' > "other/$long"
+            # Occupy the first shortened name too; the next suffix must still fit and be unique.
+            short="$(printf '%s' "$long" | git hash-object --stdin)"
+            printf 'separate attachment\n' > "third/attachment-${short:0:8}-2"
+            if build --evidence "third/attachment-${short:0:8}-2" --evidence "proof/$long" --evidence "other/$long"; then
+                assert_eq 255 "$(printf '%s' "$long" | wc -c | tr -d ' ')" '255-byte fixture'
+                for src in "proof/$long" "other/$long" "third/attachment-${short:0:8}-2"; do
+                    row="$(awk -F '\t' -v p="caller-supplied:$src (verify producer revision/result)" '$4 == p { print $1 }' "$PKG/manifest.tsv")"
+                    case "$src" in
+                        proof/*) assert_eq "evidence/$long" "$row" ;;
+                        other/*) assert_eq "evidence/attachment-${short:0:8}-3" "$row" ;;
+                    esac
+                    run cmp "$src" "$PKG/$row"
+                    assert_eq 0 "$STATUS" "exact bytes for $row"
+                done
+                integrity
+            fi ;;
+        lean)
+            it "One line of source change with installed policy stays below 4 KiB and four default reads"
+            assert_eq $'1\t1\tlabel.txt' "$(git diff --numstat "$BASE" HEAD)"
+            run env PRDKIT_TODAY=2026-01-02 bash .prdkit/scripts/bash/facts.sh "$ID" --base "$BASE"
+            assert_eq 0 "$STATUS" "$OUTPUT"
+            if build --facts; then
+                bytes="$(wc -c < "$PKG/index.md")"
+                if [ "$bytes" -le 4096 ]; then _ok "index is $bytes bytes"; else _no 'index exceeds 4 KiB' "$bytes"; fi
+                assert_eq $'diff.patch\nevidence/facts/summary.md\nindex.md\nobligations.md' "$(default_read_paths)"
+                assert_not_contains "$(cat "$PKG/index.md")" '**Required full context:**'
+                assert_not_contains "$(cat "$PKG/index.md")" 'Release-label edits require the application smoke check.'
+                assert_contains "$(cat "$PKG/obligations.md")" 'Release-label edits require the application smoke check.'
+                assert_contains "$(cat "$PKG/obligations.md")" 'Acceptance: Preserve the exported public label.'
+                assert_contains "$(cat "$PKG/obligations.md")" 'Keep the published label stable for automated clients.'
+                assert_contains "$(cat "$PKG/obligations.md")" 'coordinator must verify the copied facts pair'
+                assert_contains "$(cat "$PKG/manifest.tsv")" $'obligations.md\t'
+                for source in .prdkit/memory/{constitution,agents,config}.md; do
+                    artifact="$(awk -F '\t' -v p="$source" '$3 == p && $7 == "policy" {print $1}' "$PKG/context-manifest.tsv")"
+                    run cmp "$PKG/$artifact" "$source"
+                    assert_eq 0 "$STATUS" "trusted $source remains byte-exact"
                 done
                 integrity
             fi ;;
@@ -551,7 +647,7 @@ EOF
             assert_eq 0 "$STATUS" "$OUTPUT"
             if build --facts; then
                 assert_contains "$(default_reads)" '3. `index.md`, [Review obligations]' 'required default read'
-                section="$(sed -n '/^## Review obligations$/,/^## Open only if/p' "$PKG/index.md")"
+                section="$(obligations_section)"
                 assert_contains "$section" 'Acceptance: Preserve the exported public label.'
                 assert_contains "$section" 'Release-label edits require the application smoke check.'
                 assert_contains "$section" 'Keep the published label stable for automated clients.'
@@ -563,7 +659,7 @@ EOF
                 assert_contains "$section" 'Source: .prdkit/memory/constitution.md:'
                 assert_contains "$section" 'Source: specs/product/constraints.md:'
                 assert_contains "$section" '### Unresolved context and verification'
-                assert_contains "$section" 'caller-supplied evidence requires revision/result/applicability verification'
+                assert_contains "$section" 'coordinator must verify the copied facts pair'
                 assert_not_contains "$section" '**Required full context:**'
                 integrity
             fi
@@ -579,11 +675,11 @@ EOF
             git add first.md second.md; git commit -qm 'add two long explicit obligations'
             if build --context first.md; then
                 assert_not_contains "$(cat "$PKG/index.md")" '**Required full context:**'
-                assert_contains "$(cat "$PKG/index.md")" 'EXPLICIT_END first.md'
+                assert_contains "$(cat "$PKG/obligations.md")" 'EXPLICIT_END first.md'
             fi
             if build --context first.md --context second.md; then
-                section="$(sed -n '/^## Review obligations$/,/^## Open only if/p' "$PKG/index.md")"
-                assert_contains "$section" 'captured obligations exceed the 16384-byte inline cap'
+                section="$(obligations_section)"
+                assert_contains "$section" 'captured obligations exceed the 16384-byte excerpt cap'
                 assert_contains "$section" 'No partial obligation list is shown'
                 assert_contains "$section" '[context-manifest.tsv](context-manifest.tsv)'
                 assert_contains "$section" '[context-gaps.txt](context-gaps.txt)'
@@ -750,6 +846,54 @@ EOF
                 assert_contains "$section" 'Proposed linked contract.'
                 assert_eq 1 "$(printf '%s\n' "$section" | grep -Fc 'Follow the published target')" 'unchanged checkpoint only once'
             fi
+
+            it "A blocked HEAD parent leaves its BASE hold unresolved, not removed"
+            previous="$(git rev-parse HEAD)"
+            shim="$(mktemp -d)"; track_tmp "$shim"
+            {
+                printf '#!/usr/bin/env bash\nreal=%q\n' "$(command -v mkdir)"
+                cat <<'EOF'
+"$real" "$@" || exit
+case "$1" in
+    */material/specs/changes) ln -s 001-small.md "$1/900-programme.md" ;;
+esac
+EOF
+            } > "$shim/mkdir"
+            {
+                printf '#!/usr/bin/env bash\nreal=%q\nblocked=%q\ntrace=%q\n' \
+                    "$(command -v git)" "$(git rev-parse "HEAD:$parent")" "$shim/blocked-blob-opens"
+                cat <<'EOF'
+if [ "${3:-}" = cat-file ] && [ "${4:-}" = blob ] && [ "${5:-}" = "$blocked" ]; then
+    printf 'opened blocked HEAD parent\n' >> "$trace"
+fi
+exec "$real" "$@"
+EOF
+            } > "$shim/git"
+            chmod +x "$shim/mkdir" "$shim/git"
+            if PATH="$shim:$PATH" build; then
+                assert_eq unavailable "$(cat "$PKG/bounds-status.txt")"
+                assert_contains "$(non_verification_gaps)" 'HEAD references unresolved'
+                assert_contains "$(cat "$PKG/context-manifest.tsv")" \
+                    $'\treference-base\tParent obligation (900-programme): Holds and lane limits'
+                assert_not_contains "$(cat "$PKG/context-manifest.tsv")" \
+                    $'\treference-removed\tParent obligation (900-programme)'
+                assert_contains "$(obligations_section)" "$hold"
+                assert_eq '' "$([ ! -e "$shim/blocked-blob-opens" ] || cat "$shim/blocked-blob-opens")"
+            fi
+
+            it "An unsafe HEAD parent cannot be opened even when its child was captured"
+            rm "$parent" && ln -s "$ID.md" "$parent" && git add "$parent" &&
+                git commit -qm 'replace retained parent with symlink' || exit 1
+            if build; then
+                assert_contains "$(non_verification_gaps)" "unsafe spec input $parent at $(git rev-parse HEAD)"
+                assert_contains "$(non_verification_gaps)" 'HEAD references unresolved'
+                assert_contains "$(cat "$PKG/context-manifest.tsv")" \
+                    $'\treference-base\tParent obligation (900-programme): Holds and lane limits'
+                assert_not_contains "$(cat "$PKG/context-manifest.tsv")" \
+                    $'\treference-removed\tParent obligation (900-programme)'
+                assert_contains "$(obligations_section)" "$hold"
+            fi
+            git checkout -q "$previous" || exit 1
 
             it "An unresolved BASE reference requires full context even after HEAD drops it"
             git rm -q "$parent" specs/decisions/guidance.md
