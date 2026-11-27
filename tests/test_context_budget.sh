@@ -12,12 +12,13 @@ set_config() { # key value
 }
 filler() { head -c "$1" /dev/zero | tr '\0' 'x' | fold -w 100; }
 
-it "a fresh install has no advisories"
+it "a fresh install has no context-budget advisories"
 run bash "$DOCTOR" --json
 assert_eq 0 "$STATUS" "fresh install passes doctor"
-assert_contains "$OUTPUT" '"advisories":[]' "no advisories on a fresh install"
+assert_not_contains "$OUTPUT" 'Context budget:' "no budget advisories on a fresh install"
 assert_contains "$OUTPUT" '"strict":false' "strict mode is off by default"
 assert_contains "$(cat "$CONFIG")" "context-budget-bytes: 16384" "budget key seeded with its default"
+fill_seeded_policy "$PROJ" || exit 1
 
 it "an over-budget agent context file is an advisory, not a failure"
 { printf '# Project\n\n'; filler 20000; } > "$PROJ/CLAUDE.md"

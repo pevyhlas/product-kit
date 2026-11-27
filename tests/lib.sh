@@ -90,6 +90,13 @@ make_inited_project() {
     echo "$d"
 }
 
+# For fixtures testing a clean, adopted project rather than a fresh install.
+fill_seeded_policy() { # project root
+    printf '# Demo constitution\n\n- **Name**: Demo\n- **Intent owner**: owner\n- **Rigor**: light\n' \
+        > "$1/.prdkit/memory/constitution.md" &&
+        printf '# Capabilities\n\n| Intent owner | Owner | Product direction |\n' > "$1/.prdkit/memory/agents.md"
+}
+
 # An upgrade reads a committed installation.
 # Only for disposable fixtures: stage the prepared state and point origin/HEAD at it.
 snapshot_upgrade_fixture() {

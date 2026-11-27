@@ -18,6 +18,20 @@ change by change.
   The customization guide also shows how to opt into scoped OpenCode V2 maker shell rules.
 - The adoption guide explains how to bootstrap the review gate and when default-branch policy changes take effect.
 
+### Changed (breaking)
+
+- Fresh installs mark seeded Rigor `light` as unconfirmed; independent reviewers must not use it
+  as owner policy. Ordinary `doctor.sh` advises on the marker and leftover fill-in slots in
+  project seeds, with JSON trace counts `unconfirmed-default` and `template-placeholder`.
+  The best-effort residue scan can miss slots in unusual Markdown and avoids reporting protected
+  text in its documented subset. If strict doctor flags protected text, please report it. Escape
+  the opening `<` (unless already escaped in the stock prompt) or use a plain fenced code block.
+  **Fresh installs now fail `doctor.sh --strict`** until the project fills or removes the slots
+  and the owner chooses Rigor and removes the marker. Existing projects with leftover scaffold
+  can also fail strict doctor after upgrading, even with unmarked Rigor. Plain upgrade preserves
+  an existing constitution without adding the marker; `--force` reseeds it. The review gate still
+  reads marked `light` as `light`; the marker tells reviewers to ask the owner.
+
 ### Fixed
 
 - Review packages no longer require full context just because neither revision has spec bounds.

@@ -10,6 +10,415 @@ DOCTOR="$PROJ/.prdkit/scripts/bash/doctor.sh"
 export PRDKIT_TODAY=2026-10-17
 cd "$PROJ" || exit 1
 
+it "a fresh installation warns about actual fill-in slots and the unconfirmed Rigor default"
+run bash "$DOCTOR"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" "advisory: Unfilled template placeholder"
+assert_contains "$OUTPUT" ".prdkit/memory/constitution.md:1 (<Project>)"
+assert_contains "$OUTPUT" "advisory: Unconfirmed init default (1): .prdkit/memory/constitution.md:5 (Rigor)"
+run bash "$DOCTOR" --strict --json
+assert_eq 1 "$STATUS"
+assert_eq '[10,1]' "$(jq -c '[.trace["template-placeholder"], .trace["unconfirmed-default"]]' <<< "$OUTPUT")"
+assert_eq 2 "$(jq '.findings | length' <<< "$OUTPUT")" "strict promotes both advisories"
+assert_eq '[]' "$(jq -c .advisories <<< "$OUTPUT")"
+
+it "ordinary syntax, examples and protected quotes are not fill-in slots"
+fill_seeded_policy "$PROJ" || exit 1
+cat >> .prdkit/memory/constitution.md <<'MD'
+
+<!-- Example: # <Project> constitution -->
+> Preserve the literal text <human who owns outcomes and consequential choices>.
+
+Use <details> for notes, with [a label]. A typed argument can be <project>.
+~~~md
+- **Rigor**: light [prdkit:unconfirmed]
+# <Project> constitution
+~~~
+MD
+run bash "$DOCTOR" --strict --json
+assert_eq 0 "$STATUS" "unmarked light and retained config examples are clean"
+assert_eq '[0,0]' "$(jq -c '[.trace["template-placeholder"], .trace["unconfirmed-default"]]' <<< "$OUTPUT")"
+
+it "an otherwise filled constitution warns on a marked value, not the value itself"
+sed -i.bak 's/^\(- \*\*Rigor\*\*: light\)$/\1 [prdkit:unconfirmed]/' .prdkit/memory/constitution.md
+run bash "$DOCTOR" --json
+assert_eq 0 "$STATUS"
+assert_eq '[0,1]' "$(jq -c '[.trace["template-placeholder"], .trace["unconfirmed-default"]]' <<< "$OUTPUT")"
+mv .prdkit/memory/constitution.md.bak .prdkit/memory/constitution.md
+run bash "$DOCTOR" --strict
+assert_eq 0 "$STATUS" "removing the marker confirms the same value"
+
+it "active config and spec fields show literal residue without needing the kit checkout"
+mv .product-kit kit-away
+consumer_template=.prdkit/templates/product-template.md
+cp "$consumer_template" product-template.saved
+printf '<Local template slot>\n' > "$consumer_template"
+cp .prdkit/memory/config.md config.saved
+sed '/^- context-budget-bytes:/a\
+- review-publishers: bot:123, bot:<numeric account id>, user:<numeric account id>\
+- review-owner: user:<numeric owner id>
+' config.saved > .prdkit/memory/config.md
+mkdir -p specs/changes
+cat > specs/product.md <<'MD'
+# Demo
+
+\<One sentence: who struggles with what today.>
+
+```mermaid
+flowchart LR
+  A([<persona>]) -->|web| J1[J-01 Review order]
+```
+
+<The thesis, and the signal that would prove it wrong.>
+<The thesis, and the signal that would prove it wrong.>
+<Local template slot>
+MD
+printf '# Change: Demo\n\n## State\n**Waiting on**: nothing\n**Next**: <next action>\n' > specs/changes/001-demo.md
+run bash "$DOCTOR" --json
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq 8 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" '.prdkit/memory/config.md:9 (<numeric account id>)'
+assert_contains "$OUTPUT" 'specs/product.md:3 (<One sentence: who struggles with what today.>)'
+assert_contains "$OUTPUT" 'specs/product.md:7 (<persona>)'
+assert_not_contains "$OUTPUT" '(<Local template slot>)'
+run bash "$DOCTOR" --strict --json
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "Unfilled template placeholder (8)" "strict fails on slots alone"
+mv kit-away .product-kit
+mv product-template.saved "$consumer_template"
+mv config.saved .prdkit/memory/config.md
+rm specs/changes/001-demo.md specs/product.md
+rmdir specs/changes
+
+it "local anchors find each slot of a partly filled line, including split spec rows"
+mkdir -p specs/architecture specs/product specs/parts
+printf '# Request Service — <topic>\n' > specs/architecture/operations.md
+printf '# P<n> <part name>\n' > specs/parts/draft.md
+printf '# Request Service — requirements\n\n- **R-17 Display status** (hypothesis): <what must be true>.\n' > specs/product/requirements.md
+run bash "$DOCTOR" --json
+assert_eq 4 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" 'specs/architecture/operations.md:1 (<topic>)'
+assert_contains "$OUTPUT" 'specs/parts/draft.md:1 (<n>)'
+assert_contains "$OUTPUT" 'specs/parts/draft.md:1 (<part name>)'
+assert_contains "$OUTPUT" 'specs/product/requirements.md:3 (<what must be true>)'
+printf '# <Product> — <topic>\n' > specs/architecture/operations.md
+run bash "$DOCTOR" --json
+assert_eq 5 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")" "both unfilled heading slots count"
+assert_contains "$OUTPUT" 'specs/architecture/operations.md:1 (<Product>)'
+rm specs/architecture/operations.md specs/product/requirements.md specs/parts/draft.md
+rmdir specs/architecture specs/product specs/parts
+
+it "combined SPEC.md uses split slot contexts only in the corresponding sections"
+cat > specs/SPEC.md <<'MD'
+# Request Service — spec
+
+## Problem and users
+
+- **R-17 Display status** (hypothesis): <what must be true>.
+
+## Requirements and qualities
+
+- **R-18 Show the outcome** (hypothesis): <what must be true>.
+- **Q-07 Respond promptly** (validated): <band and method>. Journeys: J-02. Enforced by: <test, metric,
+  owner review or unenforced>.
+
+## Shape and parts
+
+```mermaid
+sequenceDiagram
+  P1->>P2: <request>
+```
+
+### P3 <part name>
+
+## Constraints and non-goals
+
+- **N-03 Skip notifications**: <what it does not do>. Why: email is out of scope. Revisit when: validated.
+
+## Decisions and why it works
+
+- **Mechanism**: <how the parts achieve it>
+MD
+run bash "$DOCTOR" --json
+assert_eq 7 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" 'specs/SPEC.md:9 (<what must be true>)'
+assert_not_contains "$OUTPUT" 'specs/SPEC.md:5 (<what must be true>)'
+assert_contains "$OUTPUT" 'specs/SPEC.md:10 (<test, metric, owner review or unenforced>)'
+assert_contains "$OUTPUT" 'specs/SPEC.md:17 (<request>)'
+assert_contains "$OUTPUT" 'specs/SPEC.md:20 (<part name>)'
+rm specs/SPEC.md
+
+it "combined requirements and qualities recognize lists and ranges without hiding stock slots"
+cat > specs/SPEC.md <<'MD'
+# Request Service — spec
+
+## Journeys
+
+- **J-01 Submit** (hypothesis): a requester sends a request.
+- **J-02 Track** (hypothesis): a requester looks up the status.
+- **J-03 Resolve** (hypothesis): an operator records a decision.
+
+## Requirements and qualities
+
+- **R-01 Show the outcome** (hypothesis): the user sees progress. Journeys: J-01,J-02. Source: <owner, date: "<words>"; observed; or the change that introduced it>.
+- **Q-01 Respond promptly** (hypothesis): p95 under 1 s on a slow network. Journeys: J-01, J-02–J-03.
+  Enforced by: <test, metric, owner review or unenforced>.
+
+## Shape and parts
+
+One service delivers J-01, J-02, J-03, R-01 and Q-01.
+MD
+run bash "$DOCTOR" --strict --json
+assert_eq 1 "$STATUS" "$OUTPUT"
+assert_eq 2 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" 'specs/SPEC.md:11 (<owner, date:'
+assert_contains "$OUTPUT" 'specs/SPEC.md:12 (<test, metric, owner review or unenforced>)'
+sed -i.bak 's/Source: <.*>/Source: observed/; s/Enforced by: <.*>/Enforced by: unenforced/' specs/SPEC.md
+run bash "$DOCTOR" --strict --json
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq 0 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+rm specs/SPEC.md specs/SPEC.md.bak
+
+it "other stock citation fields preserve slots beside mixed ID lists, subparts and linked lists"
+mkdir -p specs/parts
+cat > specs/architecture.md <<'MD'
+# Request Service — architecture
+
+| Part | What it is | Why it exists | Components | Maturity | Spec |
+|------|------------|---------------|------------|----------|------|
+| P2.1 Index | tracks requests | Q-01, J-01 to J-02, R-01, P2.2 | <components> | hypothesis | [p2.1-index](parts/p2.1-index.md) |
+MD
+cat > specs/parts/p2.1-index.md <<'MD'
+# P2.1 Index
+
+- <When a dependency fails, what this part does>. Users see: J-01, J-02, Variations.
+MD
+cat > specs/product.md <<'MD'
+# Request Service
+
+| Pain today | Evidence | Solved by |
+|------------|----------|-----------|
+| Lost updates | <assumed, desk research, observed or measured; a link> | J-01 J-02 |
+
+| Area | Idea (now) | Demo | MVP |
+|------|------------|------|-----|
+| Requests | [J-01](product/journeys/j-01-submit.md), [J-02 <journey>](product/journeys/j-02-track.md), [J-03 Resolve](product/journeys/j-03-resolve.md) | [J-04 Review](product/journeys/j-04-review.md), [J-05 Reopen](product/journeys/j-05-reopen.md) | |
+MD
+run bash "$DOCTOR" --json
+assert_eq 4 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")" "one stock slot per row"
+assert_contains "$OUTPUT" 'specs/architecture.md:5 (<components>)'
+assert_contains "$OUTPUT" 'specs/parts/p2.1-index.md:3 (<When a dependency fails, what this part does>)'
+assert_contains "$OUTPUT" 'specs/product.md:5 (<assumed, desk research, observed or measured; a link>)'
+assert_contains "$OUTPUT" 'specs/product.md:9 (<journey>)'
+rm specs/architecture.md specs/parts/p2.1-index.md specs/product.md
+rmdir specs/parts
+
+it "parts and journey-stage anchors ignore other columns and count each link, in either layout"
+cat > architecture.slots <<'MD'
+| Maturity | Part | Why it exists | Components | Spec |
+|----------|------|---------------|------------|------|
+| validated | P1 <name> | J-01 to J-08; R-01 to R-13 | <components> | none yet |
+| validated | P2 Client | J-01: one owner of request state (R-01, R-02, Q-01) | <components> | none yet |
+| validated | P3 Service | Unrelated free text <components> | scheduler | none yet |
+MD
+cat > journeys.slots <<'MD'
+| Area | Idea (now) | MVP |
+|------|------------|-----|
+| Requests | | [J-01 <journey>](product/journeys/j-01-submit.md) |
+| Requests | [J-01 <journey>](product/journeys/j-01-submit.md); [J-02 <journey>](product/journeys/j-02-track.md) | |
+| Requests | [J-01 Submit](product/journeys/j-01-submit.md); [J-02 Track](product/journeys/j-02-track.md) | |
+
+| Area | Idea (now) | MVP | GA |
+|------|------------|-----|----|
+| <area> | [J-01 Submit](product/journeys/j-01-submit.md) | [J-02 Track](product/journeys/j-02-track.md) | [J-03 <journey>](product/journeys/j-03-resolve.md) |
+
+| Area | Notes |
+|------|-------|
+| <area> | A literal example of <journey>. |
+
+Area | MVP
+-----|----
+Requests | [J-01 <journey>](product/journeys/j-01-submit.md)
+MD
+for layout in split combined; do
+    if [ "$layout" = split ]; then
+        { printf '# Request Service — architecture\n\n'; cat architecture.slots; } > specs/architecture.md
+        run bash "$DOCTOR" --json
+        assert_eq 3 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")" "split: three parts slots"
+        assert_contains "$OUTPUT" '(<name>)' "Part column located by name after reordering"
+        assert_contains "$OUTPUT" '(<components>)' "unrelated maturity and citation text do not hide slots"
+        { printf '# Request Service\n\n## Journeys\n\n'; cat journeys.slots; } > specs/product.md
+    else
+        {
+            printf '# Request Service — spec\n\n## Shape and parts\n\n'
+            cat architecture.slots
+            printf '\n## Journeys\n\n'
+            cat journeys.slots
+        } > specs/SPEC.md
+    fi
+    run bash "$DOCTOR" --json
+    assert_eq 9 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")" "$layout: three parts slots, six stage slots"
+    if [ "$layout" = combined ]; then
+        assert_contains "$OUTPUT" '(<name>)' "$layout: Part column located by name after reordering"
+        assert_contains "$OUTPUT" '(<components>)' "$layout: unrelated maturity and citation text do not hide slots"
+    fi
+    assert_contains "$OUTPUT" '(<journey>)' "$layout: stock token in a link caption"
+    if [ "$layout" = split ]; then rm specs/architecture.md specs/product.md; else rm specs/SPEC.md; fi
+done
+rm architecture.slots journeys.slots
+
+it "distinctive occurrences are counted in active prose but not in protected Markdown"
+cat > specs/architecture.md <<'MD'
+# Request Service — architecture
+
+Keep <delivery, tooling> separately from <delivery, tooling> in the release plan. Ignore <path> here.
+
+`<delivery, tooling>` and ``literal `<delivery, tooling>` with another tick`` are examples.
+This span wraps `over the
+next line with <delivery, tooling>` and then closes.
+
+<!-- <delivery, tooling> -->
+Prose <!-- beginning of a longer comment
+<delivery, tooling>
+closing --> after the comment, still <delivery, tooling>.
+
+> <delivery, tooling> belongs to a quote.
+So does <delivery, tooling> on a lazy continuation.
+
+~~~md
+<delivery, tooling>
+~~~
+
+    <delivery, tooling>
+MD
+run bash "$DOCTOR" --strict --json
+assert_eq 1 "$STATUS" "$OUTPUT"
+assert_eq 3 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" 'specs/architecture.md:3 (<delivery, tooling>), specs/architecture.md:3 (<delivery, tooling>)'
+rm specs/architecture.md
+
+it "link destinations and XML tags are not stock slots, including inside the Components column"
+cat > specs/architecture.md <<'MD'
+# Request Service — architecture
+
+[Component definitions](<components>)
+The manifest stores component identifiers in the `<id>` children of <components></components>.
+The manifest uses <components format="xml" example="<delivery, tooling>">.
+[Further details](<delivery, tooling>)
+[Workflow notes](workflow<components>(v2).md "Examples of <delivery, tooling>")
+
+| Part | Components |
+|------|------------|
+| P1 Service | <components enabled="true"></components> |
+| P2 Client | [Component definitions](<components>) |
+MD
+run bash "$DOCTOR" --json
+assert_eq 0 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")" "$OUTPUT"
+rm specs/architecture.md
+
+it "Markdown blocks keep list text and escaped ticks active after multiline inline code"
+cat > specs/architecture.md <<'MD'
+# Request Service — architecture
+
+An example uses the delimiter `raw
+text <!--` without opening a comment.
+
+This line is still active: <delivery, tooling>.
+
+<!-- A genuine multiline comment starts here.
+
+## This heading is not active
+```text
+<delivery, tooling>
+--> The comment ends here.
+
+1. Inventory the part's major pieces:
+    <delivery, tooling>.
+
+       <delivery, tooling>
+
+    ~~~text
+    <delivery, tooling>
+    ~~~
+
+After the list, a literal \` leaves <delivery, tooling> active before another literal \`.
+Actual code still closes at the next equal run, even after a literal backslash: `\<delivery, tooling>\`.
+MD
+run bash "$DOCTOR" --strict --json
+assert_eq 1 "$STATUS" "$OUTPUT"
+assert_eq 3 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" 'specs/architecture.md:6 (<delivery, tooling>)'
+assert_contains "$OUTPUT" 'specs/architecture.md:15 (<delivery, tooling>)'
+assert_contains "$OUTPUT" 'specs/architecture.md:24 (<delivery, tooling>)'
+rm specs/architecture.md
+
+it "headings and table rows do not lend closing backticks to another block"
+cat > specs/architecture.md <<'MD'
+# Request Service — architecture
+
+Literal ` in a heading
+----------------------
+The paragraph has <delivery, tooling> before its own literal `.
+
+| Format | Example |
+|--------|---------|
+| Literal ` | First row |
+| Active prompt | <delivery, tooling> and a literal ` |
+MD
+run bash "$DOCTOR" --json
+assert_eq 2 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" 'specs/architecture.md:5 (<delivery, tooling>)'
+assert_contains "$OUTPUT" 'specs/architecture.md:10 (<delivery, tooling>)'
+rm specs/architecture.md
+
+it "stock destination anchors still match even though ordinary destinations are skipped"
+cat > specs/product.md <<'MD'
+# Request Service
+
+## Journeys
+
+| Area | Idea (now) | MVP |
+|------|------------|-----|
+| Requests | [J-01 <journey>](product/journeys/j-01-<slug>.md) | |
+MD
+run bash "$DOCTOR" --json
+assert_eq 2 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" 'specs/product.md:7 (<journey>), specs/product.md:7 (<slug>)'
+rm specs/product.md
+
+it "only stock Mermaid nodes and edges match diagram slots"
+cat > specs/product.md <<'MD'
+# Request Service
+
+```mermaid
+flowchart LR
+  A([Requester]) -->|<surface>| J1[J-01 <journey>]
+  B([Operator]) -->|<surface>| J2[J-02 Resolve]
+  %% A([Requester]) -->|<surface>| J1[J-01 <journey>]
+```
+
+```text
+flowchart LR
+  A([Requester]) -->|<surface>| J1[J-01 <journey>]
+```
+MD
+run bash "$DOCTOR" --json
+assert_eq 2 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" 'specs/product.md:5 (<surface>), specs/product.md:5 (<journey>)'
+rm specs/product.md
+
+it "record reasons count only when the whole field is still the stock slot"
+cat > specs/records.md <<'MD'
+# Records
+
+ATTEST A-1 by=agent what=checked env=test version=abc date=2026-10-17 — copied syntax — <evidence link>
+ATTEST A-2 by=agent what=checked env=test version=abc date=2026-10-17 — <evidence link>
+MD
+run bash "$DOCTOR" --json
+assert_eq 1 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" 'specs/records.md:4 (<evidence link>)'
+rm specs/records.md
+
 mkdir -p specs/parts specs/decisions tests .prdkit/history
 cat > specs/product.md <<'MD'
 # Demo — product
@@ -37,7 +446,7 @@ git add -A >/dev/null; git commit -qm spec >/dev/null
 it "a consistent 1.0 spec passes with no advisories"
 run bash "$DOCTOR" --json
 assert_eq 0 "$STATUS" "doctor passes"
-assert_contains "$OUTPUT" '"findings":[],"advisories":[],"trace":{"code-path":0,"planned-closed":0,"planned-unknown":0,"retired-cited":0,"unallocated":0,"part-need":0,"change-restates":0,"change-undefined":0}' "nothing to report; each trace check counted by its code"
+assert_contains "$OUTPUT" '"findings":[],"advisories":[],"trace":{"code-path":0,"planned-closed":0,"planned-unknown":0,"retired-cited":0,"unallocated":0,"part-need":0,"change-restates":0,"change-undefined":0,"template-placeholder":0,"unconfirmed-default":0}' "nothing to report; each trace check counted by its code"
 assert_contains "$OUTPUT" '"readiness":"not-evaluated"' "never a readiness claim"
 assert_eq 0 "$(printf '%s\n' "$OUTPUT" | jq '.budget_excess_reading_lines')" "no reading-budget excess"
 
@@ -1454,8 +1863,521 @@ it "the shipped example spec passes strict doctor"
 EX="$(mktemp -d)"; track_tmp "$EX"
 git -C "$EX" init -q
 bash "$PK_ROOT/scripts/init.sh" --target "$EX" --copy >/dev/null
+fill_seeded_policy "$EX" || exit 1
 cp -R "$PK_ROOT/examples/request-service/specs" "$EX/"
 run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict"
 assert_eq 0 "$STATUS" "example has no findings or advisories"
+
+it "ordinary link destinations and paired tags in the filled example pass strict doctor"
+arch="$EX/specs/architecture.md"
+cp "$arch" "$arch.saved"
+printf 'Component definitions are versioned here.\n' > "$EX/specs/components"
+cat >> "$arch" <<'MD'
+
+[Component definitions](<components>)
+
+The manifest stores component identifiers in the `<id>` children of <components></components>.
+MD
+run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq 0 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+mv "$arch.saved" "$arch"
+rm "$EX/specs/components"
+
+it "residue cannot leak out of an inline construct in a filled spec"
+printf 'Delivery and tooling are documented here.\n' > "$EX/specs/delivery, tooling"
+cp "$arch" "$arch.saved"
+for boundary in link-comment link-backtick html-comment html-backtick ordered-marker empty-bullet \
+        reference-definition inline-unclosed block-comment table-block-comment; do
+    cp "$arch.saved" "$arch"
+    printf '\n## Markdown boundaries\n\n' >> "$arch"
+    expected=1
+    case "$boundary" in
+        link-comment)
+            cat >> "$arch" <<'MD'
+[Guide](https://example.org "The <!-- delimiter").
+
+Architecture still needs <delivery, tooling>.
+MD
+            ;;
+        link-backtick)
+            cat >> "$arch" <<'MD'
+[Guide](https://example.org "A ` delimiter"). Architecture still needs <delivery, tooling>. Then a literal `.
+MD
+            ;;
+        html-comment)
+            cat >> "$arch" <<'MD'
+The <span title="The <!-- delimiter">guide</span> is deployed.
+
+Architecture still needs <delivery, tooling>.
+MD
+            ;;
+        html-backtick)
+            cat >> "$arch" <<'MD'
+The <span title="A ` delimiter">guide</span> is deployed. Architecture still needs <delivery, tooling>. Then a literal `.
+MD
+            ;;
+        ordered-marker)
+            expected=0
+            cat >> "$arch" <<'MD'
+Example `raw
+2. <delivery, tooling> text`.
+MD
+            ;;
+        empty-bullet)
+            expected=0
+            cat >> "$arch" <<'MD'
+Example `raw
+*
+<delivery, tooling> text`.
+MD
+            ;;
+        reference-definition)
+            cat >> "$arch" <<'MD'
+[Guide][docs], [the local notes][local], [the overview][overview], and [the API][api].
+
+[docs]: https://example.org "<delivery, tooling>"
+[local]: <delivery, tooling>
+[overview]: https://example.org '<delivery, tooling> <!--'
+[api]: https://example.org (A ` delimiter and <delivery, tooling>)
+
+Architecture still needs <delivery, tooling>. Then a literal `.
+MD
+            ;;
+        inline-unclosed)
+            cat >> "$arch" <<'MD'
+Example <!-- raw.
+
+Architecture still needs <delivery, tooling>.
+
+Close here -->.
+MD
+            ;;
+        block-comment)
+            expected=0
+            cat >> "$arch" <<'MD'
+Architecture note with an unmatched `.
+<!-- This genuine comment starts on its own line, even with a ` and <delivery, tooling> here.
+
+## Not a heading
+The hidden example was <delivery, tooling>.
+
+--> Architecture still needs <delivery, tooling>.
+MD
+            ;;
+        table-block-comment)
+            expected=0
+            cat >> "$arch" <<'MD'
+| Topic | Notes |
+|-------|-------|
+| First | Details |
+<!-- A genuine comment with a pipe | <delivery, tooling>.
+
+More hidden text: <delivery, tooling>.
+
+--> Architecture still needs <delivery, tooling>.
+MD
+            ;;
+    esac
+    run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
+    assert_eq "$expected" "$STATUS" "$boundary: $OUTPUT"
+    assert_eq "[$expected,$expected]" "$(jq -c '[.trace["template-placeholder"], (.findings | length)]' <<< "$OUTPUT")" "$boundary: $OUTPUT"
+done
+mv "$arch.saved" "$arch"
+rm "$EX/specs/delivery, tooling"
+
+it "the real Parts table resolves backticks, comments and escaped pipes within each cell"
+cp "$arch" "$arch.saved"
+for boundary in code paired-comment open-comment escaped-pipe; do
+    case "$boundary" in
+        code) before='`'; after='`' ;;
+        paired-comment) before='<!--'; after='-->' ;;
+        open-comment) before='<!--'; after='example' ;;
+        escaped-pipe)
+            # shellcheck disable=SC2016 # backticks are literal Markdown
+            before='`A\|B`'; after='example'
+            ;;
+    esac
+    ROW_BEFORE="$before" ROW_AFTER="$after" awk '
+        function replace_cell(row, col, value,   cells,n,i,out) {
+            n = split(row, cells, /\|/)
+            cells[col] = value
+            for (i = 1; i <= n; i++) out = out (i > 1 ? "|" : "") cells[i]
+            return out
+        }
+        /^\| Part \|/ && /\| Components \|/ {
+            n = split($0, columns, /\|/)
+            for (c = 1; c <= n; c++) if (columns[c] == " Components ") col = c
+            sub(/\| Components \|/, "| Before | Components | After |")
+            print
+            getline; print replace_cell($0, col, " --- | --- | --- ")
+            getline; print replace_cell($0, col, " " ENVIRON["ROW_BEFORE"] " | <components> | " ENVIRON["ROW_AFTER"] " ")
+            next
+        }
+        { print }
+    ' "$arch.saved" > "$arch"
+    if [ "$boundary" = open-comment ]; then
+        cat >> "$arch" <<'MD'
+
+## Markdown boundaries
+
+| Topic | Notes |
+|-------|-------|
+| First | <!-- example |
+| Second | <delivery, tooling> |
+
+Architecture still needs <delivery, tooling>.
+MD
+        expected=3
+    else
+        expected=1
+    fi
+    run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
+    assert_eq 1 "$STATUS" "$boundary: $OUTPUT"
+    assert_eq "[$expected,1]" "$(jq -c '[.trace["template-placeholder"], (.findings | length)]' <<< "$OUTPUT")" "$boundary: $OUTPUT"
+    assert_contains "$OUTPUT" '(<components>)'
+done
+mv "$arch.saved" "$arch"
+
+it "strict doctor does not report protected text in Markdown edge cases"
+cp "$arch" "$arch.saved"
+for boundary in table-double-backslash list-table-outdent reference-backslash ordered-ten-digit; do
+    cp "$arch.saved" "$arch"
+    printf '\n## Markdown boundaries\n\n' >> "$arch"
+    case "$boundary" in
+        table-double-backslash)
+            cat >> "$arch" <<'MD'
+| Sample | Status |
+| --- | --- |
+| `A\\| <delivery, tooling>` | Ready |
+MD
+            ;;
+        list-table-outdent)
+            cat >> "$arch" <<'MD'
+- Nested notes
+
+  | Part | Components |
+  | --- | --- |
+  | A | All filled |
+See this literal: x | <components> |.
+MD
+            ;;
+        reference-backslash)
+            cat >> "$arch" <<'MD'
+[Guide][path\file]
+
+[path\file]: https://example.org "<delivery, tooling>"
+MD
+            ;;
+        ordered-ten-digit)
+            cat >> "$arch" <<'MD'
+Example `raw
+0000000001. <delivery, tooling> text`.
+MD
+            ;;
+    esac
+    run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
+    assert_eq 0 "$STATUS" "$boundary: $OUTPUT"
+    assert_eq '[0,0]' "$(jq -c '[.trace["template-placeholder"], (.findings | length)]' <<< "$OUTPUT")" "$boundary: $OUTPUT"
+done
+mv "$arch.saved" "$arch"
+
+it "strict doctor ignores short-row code spans, surplus cells and outdented tab-list text"
+cp "$arch" "$arch.saved"
+for boundary in short-row surplus-cell surplus-list-cell tab-list-outdent tab-nested-list-outdent; do
+    cp "$arch.saved" "$arch"
+    printf '\n## Markdown boundaries\n\n' >> "$arch"
+    case "$boundary" in
+        short-row)
+            cat >> "$arch" <<'MD'
+| Sample | Status |
+| --- | --- |
+Example: use ` before A\\|B
+| `Guide: <delivery, tooling>` | Ready |
+MD
+            ;;
+        surplus-cell)
+            cat >> "$arch" <<'MD'
+| Sample | Status |
+| --- | --- |
+| Service \| Worker | Ready | <delivery, tooling> |
+MD
+            ;;
+        surplus-list-cell)
+            cat >> "$arch" <<'MD'
+- Nested notes
+
+  | Sample | Status |
+  | --- | --- |
+  | Service | Ready | <delivery, tooling> |
+MD
+            ;;
+        tab-list-outdent)
+            printf -- '-\tNested notes\n\n' >> "$arch"
+            cat >> "$arch" <<'MD'
+    | Part | Components |
+    | --- | --- |
+    | A | Filled |
+  See this literal: x | <components> |.
+MD
+            ;;
+        tab-nested-list-outdent)
+            # Before the tab there are four columns of indentation and marker.
+            # The next stop is column offset eight, not six relative to the list.
+            printf -- '- Outer notes\n\n  1.\tNested notes\n\n' >> "$arch"
+            printf '\t\t| Part | Components |\n\t\t| --- | --- |\n\t\t| A | Filled |\n' >> "$arch"
+            printf '\t  See this literal: x | <components> |.\n' >> "$arch"
+            ;;
+    esac
+    run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
+    assert_eq 0 "$STATUS" "$boundary: $OUTPUT"
+    assert_eq '[0,0]' "$(jq -c '[.trace["template-placeholder"], (.findings | length)]' <<< "$OUTPUT")" "$boundary: $OUTPUT"
+done
+mv "$arch.saved" "$arch"
+
+it "a block directly after a table keeps its multiline Markdown protection"
+cp "$arch" "$arch.saved"
+for boundary in details-comment div-title atx-tab details-pipe-comment div-pipe-title autolink-surplus \
+        details-checklist span-surplus html-blank; do
+    cp "$arch.saved" "$arch"
+    expected=0
+    cat >> "$arch" <<'MD'
+
+## Markdown boundaries
+
+| Sample | Status |
+| --- | --- |
+| Service | Ready |
+MD
+    case "$boundary" in
+        details-comment)
+            cat >> "$arch" <<'MD'
+<details><!-- Maintainer note
+<delivery, tooling>
+-->
+<summary>Rollout notes</summary>
+</details>
+MD
+            ;;
+        div-title)
+            cat >> "$arch" <<'MD'
+<div title="Deployment metadata:
+<delivery, tooling>">
+See the release checklist.
+</div>
+MD
+            ;;
+        atx-tab)
+            printf '##\tNotes\n' >> "$arch"
+            cat >> "$arch" <<'MD'
+Use `tag
+<delivery, tooling>` literally.
+MD
+            ;;
+        details-pipe-comment)
+            cat >> "$arch" <<'MD'
+<details><!-- Checklist: build | release
+<delivery, tooling>
+-->
+<summary>Rollout notes</summary>
+</details>
+MD
+            ;;
+        div-pipe-title)
+            cat >> "$arch" <<'MD'
+<div title="Rollout | <delivery, tooling>">
+See the release checklist.
+</div>
+MD
+            ;;
+        autolink-surplus)
+            cat >> "$arch" <<'MD'
+<https://example.org/checklist>
+<maintainer@example.org>
+| Service | Ready | <delivery, tooling> |
+MD
+            ;;
+        details-checklist)
+            cat >> "$arch" <<'MD'
+<details><!-- Checklist: build | release
+- The audit example uses <delivery, tooling> as its sample label.
+1. Record <delivery, tooling>.
+## Confirm <delivery, tooling>
+-->
+<summary>Rollout notes</summary>
+</details>
+MD
+            ;;
+        span-surplus)
+            cat >> "$arch" <<'MD'
+<span class="status">Ready</span> | Production
+| Service | Ready | <delivery, tooling> |
+MD
+            ;;
+        html-blank)
+            expected=1
+            cat >> "$arch" <<'MD'
+<div>
+<delivery, tooling>
+</div>
+Still within the block: <delivery, tooling>.
+
+Still active: <A few lines: where data lives and where the trust boundaries are.>
+MD
+            ;;
+    esac
+    run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
+    assert_eq "$expected" "$STATUS" "$boundary: $OUTPUT"
+    assert_eq "[$expected,$expected]" "$(jq -c '[.trace["template-placeholder"], (.findings | length)]' <<< "$OUTPUT")" "$boundary: $OUTPUT"
+    if [ "$boundary" = html-blank ]; then
+        assert_contains "$OUTPUT" '(<A few lines: where data lives and where the trust boundaries are.>)'
+    fi
+done
+mv "$arch.saved" "$arch"
+
+it "quote-relative indentation keeps a lazy continuation inside its quote"
+cp "$arch" "$arch.saved"
+for quoted in code-span prose block-start; do
+    cp "$arch.saved" "$arch"
+    printf '\n' >> "$arch"
+    expected=0
+    case "$quoted" in
+        code-span)
+            cat >> "$arch" <<'MD'
+> The legacy renderer used `page markup:
+>     <div class="release">
+with <delivery, tooling> as the sample label`.
+MD
+            ;;
+        prose)
+            cat >> "$arch" <<'MD'
+> The legacy renderer used page markup:
+>     <div class="release">
+with <delivery, tooling> as the sample label.
+MD
+            ;;
+        block-start)
+            # After consuming one column of the tab, the div is indented
+            # three columns inside the quote and really starts an HTML block.
+            printf '> The legacy renderer used page markup:\n>\t <div class="release">\n' >> "$arch"
+            printf '%s\n' 'Outside the quote: <delivery, tooling>.' >> "$arch"
+            expected=1
+            ;;
+    esac
+    run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
+    assert_eq "$expected" "$STATUS" "$quoted: $OUTPUT"
+    assert_eq "[$expected,$expected]" "$(jq -c '[.trace["template-placeholder"], (.findings | length)]' <<< "$OUTPUT")" "$quoted: $OUTPUT"
+done
+mv "$arch.saved" "$arch"
+
+it "escaping the opening angle or moving the text to a plain fence clears a strict finding"
+cp "$arch" "$arch.saved"
+for workaround in bare escaped fenced; do
+    cp "$arch.saved" "$arch"
+    printf '\n## Markdown boundaries\n\n' >> "$arch"
+    expected=0
+    case "$workaround" in
+        bare) printf 'Example: <delivery, tooling>.\n' >> "$arch"; expected=1 ;;
+        escaped) printf '%s\n' 'Example: \<delivery, tooling>.' >> "$arch" ;;
+        fenced) printf '%s\n' '```text' 'Example: <delivery, tooling>.' '```' >> "$arch" ;;
+    esac
+    run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
+    assert_eq "$expected" "$STATUS" "$workaround: $OUTPUT"
+    assert_eq "[$expected,$expected]" "$(jq -c '[.trace["template-placeholder"], (.findings | length)]' <<< "$OUTPUT")" "$workaround: $OUTPUT"
+done
+mv "$arch.saved" "$arch"
+
+it "an untouched caption in the kit's two-stage journey table fails strict doctor"
+product="$EX/specs/product.md"
+sed -i.bak 's/^\(| Requests | | \)\[J-01\]/\1[J-01 <journey>]/' "$product"
+run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
+assert_eq 1 "$STATUS" "$OUTPUT"
+assert_eq 1 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_eq 1 "$(jq '.findings | length' <<< "$OUTPUT")" "the caption is the only finding"
+assert_contains "$OUTPUT" '(<journey>)'
+mv "$product.bak" "$product"
+
+it "a filled spec with bracket notation and non-stock Mermaid lines still passes strict doctor"
+cat >> "$EX/specs/architecture.md" <<'MD'
+
+An identifier can look like `<request>` or [status]. [The identifiers part](parts/p9-identifiers.md) serves J-01.
+
+| Format | Example |
+|--------|---------|
+| Type | `Queue<Entry>` |
+
+```text
+P1->>P2: <request>
+```
+
+```mermaid
+flowchart LR
+  C[Client] -->|"Queue&lt;Entry&gt;"| S["Store [active]"]
+```
+
+```mermaid
+sequenceDiagram
+  Client->>Service: <request>
+  Client->>Service: <request> (the caller's variable)
+  P1->>P2: <request> (the caller's variable)
+```
+MD
+mkdir -p "$EX/specs/parts" || exit 1
+cat > "$EX/specs/parts/p9-identifiers.md" <<'MD'
+# P9 Identifiers
+
+**What it is**: Formatting conventions for identifiers seen by users in J-01.
+
+## Why it exists
+
+Readers need to recognize identifiers in J-01.
+
+An alert shows `P<n>` as the generic identifier notation when the part index is hidden.
+
+    Code: <path> (a sample line of indented CLI help)
+MD
+run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq 0 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+
+it "split requirement and quality metadata survives multiple linked journeys"
+journeys="$EX/specs/product/journeys"
+sed '1s/J-01 Get a request handled/J-02 Track a request/' "$journeys/j-01-get-a-request-handled.md" > "$journeys/j-02-track-a-request.md"
+printf '\n[J-02 Track a request](product/journeys/j-02-track-a-request.md).\n' >> "$EX/specs/product.md"
+req="$EX/specs/product/requirements.md"
+qual="$EX/specs/product/qualities.md"
+sed -i.bak 's/Journeys: J-01\./Journeys: J-01, J-02./' "$req"
+sed -i.bak '6s/$/ Source: <owner, date: "<words>"; observed; or the change that introduced it>./' "$req"
+sed -i.bak 's/Journeys: J-01\. Enforced by: unenforced\./Journeys: J-01, J-02. Enforced by: <test, metric, owner review or unenforced>./' "$qual"
+run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
+assert_eq 1 "$STATUS" "$OUTPUT"
+assert_eq 1 "$(jq '.findings | length' <<< "$OUTPUT")" "residue is the only failure"
+assert_eq 2 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" 'specs/product/requirements.md:5 (<owner, date:'
+assert_contains "$OUTPUT" 'specs/product/qualities.md:3 (<test, metric, owner review or unenforced>)'
+sed -i.bak 's/Source: <.*>/Source: observed/' "$req"
+sed -i.bak 's/Enforced by: <.*>/Enforced by: unenforced/' "$qual"
+run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq 0 "$(jq '.trace["template-placeholder"]' <<< "$OUTPUT")"
+
+it "the generated catalog detects a new slot and a stale slot independently"
+generator="$PK_ROOT/scripts/maintainer/generate-template-residue.py"
+catalog="$PK_ROOT/scripts/template-residue.tsv"
+MUTANT="$(mktemp -d)"; track_tmp "$MUTANT"
+python3 "$generator" > "$MUTANT/fresh.tsv" || exit 1
+run cmp -s "$catalog" "$MUTANT/fresh.tsv"
+assert_eq 0 "$STATUS" "checked-in catalog must equal regeneration byte-for-byte"
+cp -R "$PK_ROOT/templates" "$MUTANT/"
+printf '\n- **Rollout when**: <owner-visible rollout conditions>.\n' >> "$MUTANT/templates/lifecycle-template.md"
+python3 "$generator" "$MUTANT/templates" > "$MUTANT/mutated.tsv" || exit 1
+run cmp -s "$catalog" "$MUTANT/mutated.tsv"
+assert_eq 1 "$STATUS" "an addition fails the same equality check"
+assert_contains "$(cat "$MUTANT/mutated.tsv")" '<owner-visible rollout conditions>' "new slots enter the catalog"
+sed 's/<observable criteria>/filled criteria/' "$PK_ROOT/templates/lifecycle-template.md" > "$MUTANT/templates/lifecycle-template.md"
+python3 "$generator" "$MUTANT/templates" > "$MUTANT/mutated.tsv" || exit 1
+run cmp -s "$catalog" "$MUTANT/mutated.tsv"
+assert_eq 1 "$STATUS" "a removal fails the same equality check"
+assert_not_contains "$(cat "$MUTANT/mutated.tsv")" '<observable criteria>' "removing a slot drops the orphaned token"
 
 finish
