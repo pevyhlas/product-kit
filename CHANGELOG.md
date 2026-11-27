@@ -19,7 +19,7 @@ change by change.
   from the approved commit to the head touches `.prdkit`, `.product-kit` (including the gitlink)
   or `.github/workflows/`, contains a path Git quotes (such as a non-ASCII filename), or cannot be
   read; the PR then needs a fresh owner approval on the exact head. A policy edit later reverted
-  in full still carries. The gate names the first policy commit and path
+  in full still carries. When the gate finds a policy change, it names the first commit and path
   ([Per-PR owner approval](docs/ci-gates.md#per-pr-owner-approval)).
 
 ## [3.3.1] — 2026-11-27 — optional per-PR owner approval
