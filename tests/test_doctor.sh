@@ -2135,7 +2135,7 @@ mv "$arch.saved" "$arch"
 
 it "a block directly after a table keeps its multiline Markdown protection"
 cp "$arch" "$arch.saved"
-for boundary in details-comment div-title atx-tab; do
+for boundary in details-comment div-title atx-tab details-pipe-comment div-pipe-title autolink-surplus; do
     cp "$arch.saved" "$arch"
     cat >> "$arch" <<'MD'
 
@@ -2168,6 +2168,29 @@ MD
             cat >> "$arch" <<'MD'
 Use `tag
 <delivery, tooling>` literally.
+MD
+            ;;
+        details-pipe-comment)
+            cat >> "$arch" <<'MD'
+<details><!-- Checklist: build | release
+<delivery, tooling>
+-->
+<summary>Rollout notes</summary>
+</details>
+MD
+            ;;
+        div-pipe-title)
+            cat >> "$arch" <<'MD'
+<div title="Rollout | <delivery, tooling>">
+See the release checklist.
+</div>
+MD
+            ;;
+        autolink-surplus)
+            cat >> "$arch" <<'MD'
+<https://example.org/checklist>
+<maintainer@example.org>
+| Service | Ready | <delivery, tooling> |
 MD
             ;;
     esac

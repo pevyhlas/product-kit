@@ -397,6 +397,10 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
             comment = 0
             return ignored substr(text, at + 3)
         }
+        function html_block_start(text) {
+            # A tag-name boundary excludes scheme and email autolinks.
+            return text ~ /^ ? ? ?<(!--|[?]|![A-Za-z]|!\[CDATA\[|\/?[A-Za-z][A-Za-z0-9-]*([[:space:]]|>|\/>|$))/
+        }
         function table(first, base, text, width,   values,counts,i,j,k,n,parts) {
             split_cells(text, parts)
             start_table(parts, width)
@@ -409,12 +413,11 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
                 text = src[i]
                 if (indent(text) < base) break
                 text = relative(text, base)
-                if (text !~ /[^[:blank:]]/ || text ~ /^    / || interrupts(text) || reference_definition(text)) break
+                if (text !~ /[^[:blank:]]/ || text ~ /^    / || interrupts(text) ||
+                    html_block_start(text) || reference_definition(text)) break
                 # GFM pads short rows (including one cell without pipes) and
                 # discards surplus cells. Missing cells have nothing to scan.
                 n = split_cells(text, parts)
-                # Let the document scanner handle HTML at a short-row boundary.
-                if (!parts[0] && text ~ /^ ? ? ?</) break
                 if (n > width) n = width
                 counts[i] = n
                 for (k = 1; k <= n; k++) {
