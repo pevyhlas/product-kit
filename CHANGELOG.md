@@ -35,9 +35,11 @@ change by change.
   No spec inputs with a valid scope means absent; incomplete inputs or invalid or missing
   scope mean unavailable. Colliding evidence names use a short hashed fallback when a
   numeric suffix would exceed the destination's filename limit.
-- Both bounds collectors reject ASCII case-folded spec aliases, non-ASCII spec paths and
-  unsafe spec entries at BASE or HEAD before capture. Facts still writes a pack and skips
-  its worktree snapshot. Review packages never label an unsafe HEAD reference as removed.
+- Both bounds collectors check the `specs/` namespace and its ASCII case variants at BASE and
+  HEAD. ASCII case-fold collisions, non-ASCII paths within that namespace, and unsafe entries
+  make bounds unavailable. Facts skips its worktree snapshot on those rejections and still
+  writes a pack. Snapshot collisions outside that namespace do not invalidate checked bounds.
+  Review packages never label an unsafe HEAD reference as removed.
 - Review packages no longer require full context just because neither revision has spec bounds.
   A missing or unrecoverable child record still produces the usual warning.
   Historical records and diagnostics remain review evidence, including for same-ID follow-ups.

@@ -509,6 +509,20 @@ EOF
                 assert_contains "$(cat "$PKG/context-manifest.tsv")" "$literal" 'literal source path provenance'
                 assert_contains "$(find "$PKG" -type f -name '*.txt' -exec cat {} \;)" CHANGED_LITERAL_BODY 'changed literal canon supplied'
             fi
+
+            it "A bound in an ASCII path with a backslash retains its body and exact Git binding"
+            backslash='specs/decisions/rule\draft.md'
+            mkdir -p specs/decisions
+            printf '# Decisions\n\n- **C-79 Backslash path** — Scope: all parts.\n  BACKSLASH_BOUND_BODY\n' > "$backslash"
+            git add -- "$backslash" && git commit -qm 'add a bound in a literal backslash path' || exit 1
+            if build; then
+                assert_eq collected "$(cat "$PKG/bounds-status.txt")"
+                row="$(awk -F '\t' '$7 == "bound-proposed" && $8 == "C-79" { print }' "$PKG/context-manifest.tsv")"
+                assert_contains "$row" $'\t'"$backslash"$'\t'"$(git rev-parse "HEAD:$backslash")"$'\t3\t4\tbound-proposed\tC-79'
+                assert_eq "$(tail -n 2 "$backslash")" "$(cat "$PKG/${row%%$'\t'*}")" 'exact bound excerpt'
+                assert_not_contains "$(non_verification_gaps)" 'unreadable bound body'
+            fi
+
             unsafe=$'specs/product/constraints/line\nbreak.md'
             printf '# Constraint\n\n- **C-78 Rejected path** — Scope: all parts.\n' > "$unsafe"
             git add specs/product; git commit -qm 'literal path controls' || exit 1

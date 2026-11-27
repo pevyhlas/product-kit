@@ -32,13 +32,20 @@ context_object() { # rev path -> blob; never dereference a symlink/tree/submodul
     review_bounds_entry_blob "$entry"
 }
 
+review_bounds_file_path() { # bounds files, supporting design canon, or a change scope record
+    local path="$1" record="${1#specs/changes/}"
+    spec_file_path "$path" || [ "$path" = specs/design.md ] ||
+        { [[ "$path" = specs/changes/*.md && "$record" != */* ]] && is_change_id "${record%.md}"; }
+}
+
 review_bounds_list() { # rev, spool, diagnostic callback; preflight names and entry types
     local rev="$1" paths="$2" note="$3" entry meta path count=0 expected presence=absent collision
     local problem="cannot completely enumerate spec entries at $1" LC_ALL=C
     export LC_ALL
     bounds_spec_presence=unknown
     # Trust Git's successful output, checking only transport framing and spec input safety.
-    # Include directory rows and all spellings of the root so aliases such as Specs/ are visible.
+    # Include directory rows and ASCII case variants of the root so aliases such as Specs/ are visible.
+    # Unicode case-folding and normalization aliases are outside this check's threat model.
     if git -C "$REPO_ROOT" ls-tree -r -t -z "$rev" > "$paths.tree" &&
         expected="$(verify_nul_count "$paths.tree")" && : > "$paths" && : > "$paths.names"; then
         while IFS= read -r -d '' entry; do
@@ -52,8 +59,10 @@ review_bounds_list() { # rev, spool, diagnostic callback; preflight names and en
             case "$path" in
                 *[![:print:]]*) problem="unsafe spec input $(printf '%q' "$path") at $rev (non-ASCII or control byte)"; break ;;
             esac
+            if [[ "$meta" = '040000 tree '* ]] && review_bounds_file_path "$path"; then
+                problem="unsafe spec input $(printf '%q' "$path") at $rev"; break
+            fi
             case "$meta:$path" in
-                '040000 tree '*:specs/*.md|\
                 '100'[67]*:specs|'100'[67]*:specs/product|'100'[67]*:specs/architecture|\
                 '100'[67]*:specs/parts|'100'[67]*:specs/decisions|'100'[67]*:specs/changes)
                     problem="unsafe spec input $(printf '%q' "$path") at $rev"; break ;;

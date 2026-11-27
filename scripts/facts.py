@@ -38,6 +38,10 @@ class Refusal(Exception):
 class SnapshotMismatch(Exception):
     """The filesystem could not represent the frozen tree one-to-one."""
 
+    def __init__(self, path, message):
+        self.path = path
+        super().__init__(message)
+
 
 def require(condition, reason):
     if not condition:
@@ -237,7 +241,7 @@ class Snapshot(Collector):
             self.write_tree(head)
         except (FileExistsError, NotADirectoryError, IsADirectoryError) as exc:
             path = Path(exc.filename).relative_to(self.root)
-            raise SnapshotMismatch(f"snapshot materialization collision: {str(path)!r}") from exc
+            raise SnapshotMismatch(path, f"snapshot materialization collision: {str(path)!r}") from exc
         self.git("read-tree", head)
 
     def write_tree(self, head):
@@ -333,8 +337,8 @@ class Snapshot(Collector):
                 if h.hexdigest().encode() != oid:
                     raise ValueError("wrong blob hash")
             except (OSError, ValueError) as exc:
-                name = str(path.relative_to(self.root))
-                raise SnapshotMismatch(f"snapshot verification mismatch: {name!r}: {exc}") from exc
+                relative = path.relative_to(self.root)
+                raise SnapshotMismatch(relative, f"snapshot verification mismatch: {str(relative)!r}: {exc}") from exc
 
 
 def read_optional(path):
@@ -445,9 +449,11 @@ def collect(collector, snapshot, change_id, base, head, pr):
             snapshot.materialize(head)
         except SnapshotMismatch as exc:
             snapshot_gap = snapshot.normalize(str(exc))
-            stderr = (bounds.get("stderr", "").rstrip() + "\n" + snapshot_gap).lstrip("\n")
-            bounds.update(state="unavailable", details=None, stderr=stderr,
-                          result="bounds not collected (snapshot materialization failed)")
+            # A failure outside the ASCII spec namespace cannot invalidate checked bounds.
+            if os.fsencode(exc.path.parts[0]).lower() == b"specs":
+                stderr = (bounds.get("stderr", "").rstrip() + "\n" + snapshot_gap).lstrip("\n")
+                bounds.update(state="unavailable", details=None, stderr=stderr,
+                              result="bounds not collected (snapshot materialization failed)")
     rules, config_stamp = load_map(snapshot, head)
     span = f"{base}..{head}"
 

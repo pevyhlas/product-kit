@@ -808,7 +808,7 @@ EOF
 done
 rm -f "$fault_bin/stat"
 
-it 'Facts publish unavailable even when the collision is only in the Python worktree snapshot'
+it 'Facts publish unavailable when a Python snapshot collision hits a spec path'
 {
     printf '#!/usr/bin/env bash\nreal=%q\n' "$real_git"
     cat <<'EOF'
@@ -826,6 +826,47 @@ assert_eq unavailable "$(jq -r '.facts.bounds.state' "$CACHE/index.json")"
 assert_contains "$(jq -r '.facts.bounds.stderr' "$CACHE/index.json")" 'snapshot materialization collision'
 assert_eq null "$(jq -r '.facts.adoption.exit_status' "$CACHE/index.json")"
 rm -f "$fault_bin/git"
+
+it 'A whole-tree snapshot collision outside specs does not change checked bounds'
+guide="$(printf 'Guide\n' | git hash-object -w --stdin)" || exit 1
+git update-index --add --cacheinfo "100644,$guide,docs/Snapshot-Guide.md" &&
+    git update-index --add --cacheinfo "100644,$guide,docs/snapshot-guide.md" &&
+    git commit -qm 'add case aliases outside specs' || exit 1
+{
+    printf '#!/usr/bin/env bash\nreal=%q\n' "$real_git"
+    cat <<'EOF'
+case "$PWD:$*" in
+    */prdkit-facts-*/head:"cat-file --batch")
+        # Reproduce the occupied name without depending on case-folding storage.
+        ln -s Snapshot-Guide.md docs/snapshot-guide.md || exit 1 ;;
+esac
+exec "$real" "$@"
+EOF
+} > "$fault_bin/git"
+chmod +x "$fault_bin/git"
+compare_bounds collected 'C-11 Upper' env PATH="$fault_bin:$PATH"
+for fact in adoption doctor; do
+    assert_eq null "$(jq -r --arg fact "$fact" '.facts[$fact].exit_status' "$CACHE/index.json")"
+    assert_contains "$(jq -r --arg fact "$fact" '.facts[$fact].result' "$CACHE/index.json")" \
+        'not collected: snapshot materialization collision:'
+done
+assert_not_contains "$(jq -r '.facts.bounds.stderr' "$CACHE/index.json")" 'snapshot materialization collision'
+rm -f "$fault_bin/git"
+
+it 'A Markdown-named directory outside the spec file globs is an ordinary asset'
+git checkout -q --detach "$BASE" || exit 1
+mkdir -p specs/assets/archive.md
+printf 'Attachment, not a spec.\n' > specs/assets/archive.md/nested.txt
+git add -- specs/assets && git commit -qm 'add a directory outside the spec globs' || exit 1
+compare_bounds collected 'C-11 Upper'
+assert_not_contains "$(cat "$parity_pkg/bounds-inputs.tsv")" 'specs/assets/archive.md'
+assert_eq number "$(jq -r '.facts.doctor.exit_status | type' "$CACHE/index.json")" 'doctor still runs'
+
+it 'A directory inside a spec file glob still obstructs bounds'
+mkdir -p specs/product/limits.md
+printf 'Not a regular spec file.\n' > specs/product/limits.md/nested.txt
+git add -- specs/product/limits.md && git commit -qm 'obstruct a spec file glob' || exit 1
+compare_bounds unavailable 'unsafe spec input specs/product/limits.md'
 
 for path in specs/product/group specs/parts/group vendor/group; do
     it "An opaque gitlink is a bounds gap only under the spec root: $path"

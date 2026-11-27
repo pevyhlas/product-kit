@@ -43,9 +43,10 @@ mandatory obligations and unresolved questions that automatic capture missed.
 
 The package records the bounds state in `bounds-status.txt`: `absent`, `collected`,
 or `unavailable`. Before writing spec files, both collectors check the BASE and HEAD trees
-for ASCII case-folded aliases at or under `specs/`, including differently cased root names.
-Non-ASCII spec paths and unsafe spec entries (including symlinks and gitlinks) also make
-the result unavailable at either revision. Confirmed absence requires a checked inventory
+for ASCII case-folded aliases at or under `specs/`, including ASCII case variants of that root.
+Unicode case-folding and normalization aliases are outside the threat model.
+Within that namespace, non-ASCII paths and unsafe entries (including symlinks and gitlinks)
+also make the result unavailable at either revision. Confirmed absence requires a checked inventory
 with no applicable spec inputs and a valid scope record. The usual HEAD-ancestry lookup can supply a historical
 record (including a follow-up to a record closed at or before BASE), but not binding BASE
 acceptance. Missing or invalid scope, malformed headers and unsafe or unreadable inputs do
@@ -205,7 +206,9 @@ valid tier and no unsupported State review field;
 the bounds collector also validates the scope fields. Missing scope or incomplete capture
 is unavailable, not absent. No HEAD state waives binding BASE bounds.
 Collector failures are recorded in a successfully written pack. If spec preflight fails, facts
-skips its Python worktree snapshot and records the gap in the pack. Exit 2 is a refusal (such as
+skips its Python worktree snapshot and records the gap in the pack. A snapshot collision outside
+the spec namespace leaves the checked bounds result intact and records affected collectors as
+not collected. Exit 2 is a refusal (such as
 bad inputs, head mismatch, unsafe links outside the spec inputs, changed inputs during collection
 or unsafe cache).
 
