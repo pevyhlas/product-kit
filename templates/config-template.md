@@ -6,6 +6,7 @@ on the trusted default branch before the online gate can pass.
 ## Configuration
 
 - context-budget-bytes: 16384
+- owner-approval: exact-head
 
 ## Meaning
 
@@ -42,6 +43,12 @@ lists personal `user:` ids. Use `gh api users/<login> --jq .id` or
 a branch can add workflows using it. The native gate rejects `review-publisher-isolation`.
 An ID listed in both keys counts only as owner. The PR author is always ineligible.
 Reviewers submit normal reviews under their own accounts.
+
+`owner-approval` accepts `exact-head` (also the default when absent) or `per-pr`.
+`per-pr` lets a T3 owner approval carry forward on the same PR from an ancestor of the
+current head; independent reviews still require the exact head. Use `per-pr` only for
+pre-production stages and set it back to `exact-head` before production. Changing this
+setting requires owner review; the gate reads it from the trusted default branch.
 
 Optionally use `review-lenses` in `## Configuration` to assign accounts to the existing
 reviewer identities in trusted `.prdkit/memory/agents.md`. Use each lowercase name

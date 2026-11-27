@@ -85,6 +85,17 @@ review APPROVED 1003; gate; assert_eq 0 "$STATUS" "$OUTPUT"
 review CHANGES_REQUESTED 1001; gate
 assert_eq 1 "$STATUS"; assert_eq '1001' "$(jq -r '.blocking[].reviewer' <<< "$OUTPUT")"
 
+it 'T3 per-PR owner approval does not carry forward an independent design approval'
+tier T3
+policy "$separate" '- owner-approval: per-pr'
+review APPROVED 1004; review APPROVED 1003
+git commit -q --allow-empty -m 'new PR head'
+head="$(git rev-parse HEAD)"; fx_pr 7 "$head"
+gate; assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'requires an independent approval for the design area'
+review APPROVED 1004; gate; assert_eq 0 "$STATUS" "$OUTPUT"
+assert_contains "$OUTPUT" '"owner_approval":'
+
 it 'formatting cannot turn a T3 lenses policy into a legacy approval'
 tier T3; review APPROVED 1001; review APPROVED 1003
 publishers='- review-publishers: bot:1001,user:1004,user:1006'

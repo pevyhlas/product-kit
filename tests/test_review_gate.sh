@@ -230,4 +230,127 @@ for level in T0 T1; do
     assert_eq 0 "$STATUS" "$level later exact-head approval by the objector clears it across pages"
     assert_contains "$OUTPUT" '"blocking":[]'
 done
+
+owner_policy() {
+    { git show "$BASE:.prdkit/memory/config.md"; printf '%s\n' "$@"; } |
+        trusted_edit refs/remotes/origin/main .prdkit/memory/config.md
+}
+
+it 'only trusted per-PR policy lets a T3 owner approval carry to a descendant'
+git checkout -q --detach "$BASE"
+mkdir -p specs/changes
+printf '# Change\n**Tier**: T3\n## State\n' > specs/changes/001-reviewed.md
+echo '- owner-approval: per-pr' >> .prdkit/memory/config.md
+git add -A; git commit -qm 'T3 implementation'
+approved="$(git rev-parse HEAD)"
+git commit -q --allow-empty -m 'fix "quoted" output'
+git commit -q --allow-empty -m 'close review round'
+h="$(git rev-parse HEAD)"; fx_pr 7 "$h"
+f="$GH_STUB_DIR/reviews/7.json"; printf '[]\n' > "$f"
+publisher_review APPROVED "$h"; fx_owner_review 7 APPROVED "$approved"
+rid="$(jq -r 'last.fullDatabaseId' "$f")"
+online; assert_eq 1 "$STATUS" 'missing key defaults to exact-head despite the candidate edit'
+assert_contains "$OUTPUT" "requires a review-owner APPROVED review on the exact PR head $h"
+assert_not_contains "$OUTPUT" '"owner_approval'
+implicit="$(jq -c 'del(.policy_at)' <<< "$OUTPUT")"
+owner_policy '- owner-approval: exact-head'
+online; assert_eq 1 "$STATUS" 'explicit exact-head also refuses'
+assert_eq "$implicit" "$(jq -c 'del(.policy_at)' <<< "$OUTPUT")" 'explicit and implicit exact-head have the same verdict'
+owner_policy '- owner-approval: per-pr'
+GH_STUB_PAGE_SIZE=1 online; assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq "per-pr 1003 $rid $approved 0" \
+    "$(jq -r '.owner_approval | [.mode,.reviewer,.review,.commit,.more] | join(" ")' <<< "$OUTPUT")"
+assert_eq "publisher owner" "$(jq -r '[.reviews[].role]|join(" ")' <<< "$OUTPUT")"
+commits="$(git log --format='%h %s' "$approved..$h")"
+assert_eq "$commits" "$(jq -r '.owner_approval.commits_since[]' <<< "$OUTPUT")"
+run bash "$CHECK" --pr "$PR" 001-reviewed
+assert_eq 0 "$STATUS"; assert_contains "$OUTPUT" "owner approval is per-PR, given on $approved"
+while IFS= read -r line; do assert_contains "$OUTPUT" "  $line"; done <<< "$commits"
+
+it 'the latest deciding owner review is replayed across commits and pages'
+fx_owner_review 7 COMMENTED "$h"; online; assert_eq 0 "$STATUS" 'comment is not a deciding review'
+fx_review 7 draft '{"state":"PENDING","submittedAt":null}'; online; assert_eq 0 "$STATUS" 'pending is ignored'
+fx_owner_review 7 CHANGES_REQUESTED "$approved" '{"submittedAt":"2026-02-01T00:00:00Z"}'
+fx_owner_review 7 APPROVED "$h" # appears last, but submitted before the objection
+GH_STUB_PAGE_SIZE=1 online; assert_eq 1 "$STATUS" 'later objection on an earlier SHA voids approval'
+assert_contains "$OUTPUT" '"blocking":[{"reviewer":1003,'
+fx_owner_review 7 APPROVED "$approved" '{"submittedAt":"2026-02-02T00:00:00Z"}'
+rid="$(jq -r 'last.fullDatabaseId' "$f")"
+online; assert_eq 0 "$STATUS" 'later qualifying approval from the objector restores it'
+assert_contains "$OUTPUT" '"blocking":[]'
+dismiss_review "$rid"; online; assert_eq 1 "$STATUS" 'the latest dismissed approval does not count or restore an older approval'
+assert_not_contains "$OUTPUT" '"owner_approval"'
+fx_owner_review 7 APPROVED "$h" '{"submittedAt":"2026-02-03T00:00:00Z"}'
+run bash "$CHECK" --pr "$PR" 001-reviewed
+assert_eq 0 "$STATUS"; exact_text="$OUTPUT"
+assert_not_contains "$OUTPUT" 'per-PR'
+online; assert_eq 0 "$STATUS"; exact_json="$(jq -c 'del(.policy_at)' <<< "$OUTPUT")"
+assert_not_contains "$OUTPUT" '"owner_approval"'
+owner_policy '- owner-approval: exact-head'
+run bash "$CHECK" --pr "$PR" 001-reviewed
+assert_eq "$exact_text" "$OUTPUT" 'clean exact-head approval prints the same in both modes'
+online; assert_eq "$exact_json" "$(jq -c 'del(.policy_at)' <<< "$OUTPUT")"
+owner_policy '- owner-approval: per-pr'
+
+it 'per-PR does not credit old publisher, non-owner or rewritten approvals'
+printf '[]\n' > "$f"
+publisher_review APPROVED "$approved"; fx_owner_review 7 APPROVED "$approved"
+online; assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'requires an independent review-publishers APPROVED review'
+printf '[]\n' > "$f"
+publisher_review APPROVED "$h"; fx_owner_review 7 APPROVED "$approved" '{"author":{"databaseId":1009}}'
+online; assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'requires a review-owner APPROVED review under per-PR policy'
+rewritten="$(git commit-tree "$approved^{tree}" -p "$BASE" -m 'old version of this PR')"
+fx_owner_review 7 APPROVED "$approved"; fx_owner_review 7 APPROVED "$rewritten"
+online; assert_eq 1 "$STATUS" 'latest approval on rewritten history cannot carry or restore the prior one'
+assert_eq "$rewritten" "$(jq -r '.owner_approval_not_ancestors[]' <<< "$OUTPUT")"
+run bash "$CHECK" --pr "$PR" 001-reviewed
+assert_contains "$OUTPUT" "approval on $rewritten does not carry over: not a verified ancestor of $h"
+fx_owner_review 7 APPROVED "$approved" '{"author":{"databaseId":1005}}'
+online; assert_eq 0 "$STATUS" 'a different eligible owner can still satisfy the minimum'
+assert_eq 1005 "$(jq '.owner_approval.reviewer' <<< "$OUTPUT")"
+fx_owner_review 7 CHANGES_REQUESTED "$approved"
+online; assert_eq 1 "$STATUS" 'another owner approval cannot clear the objector'
+assert_eq 1003 "$(jq '.blocking[].reviewer' <<< "$OUTPUT")"
+
+it 'invalid or duplicate owner policy fails closed'
+for value in '' sticky 'per-pr exact-head' Exact-head; do
+    owner_policy "- owner-approval: $value"
+    online; assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'Expected one owner-approval value'
+    assert_contains "$OUTPUT" '"authority":"unavailable"'
+done
+owner_policy '- owner-approval: per-pr' '- owner-approval: per-pr'
+online; assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'Expected one owner-approval value'
+owner_policy '- owner-approval: per-pr' '- Owner-Approval: exact-head'
+online; assert_eq 1 "$STATUS"; assert_contains "$OUTPUT" 'Invalid owner-approval key'
+owner_policy '- owner-approval: per-pr'
+
+it 'per-PR commit evidence lists the first 20 lines in git log order'
+for i in {1..22}; do git commit -q --allow-empty -m "follow-up $i"; done
+h="$(git rev-parse HEAD)"; fx_pr 7 "$h"
+printf '[]\n' > "$f"
+publisher_review APPROVED "$h"; fx_owner_review 7 APPROVED "$approved"
+online; assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq 20 "$(jq '.owner_approval.commits_since|length' <<< "$OUTPUT")"
+assert_eq 4 "$(jq '.owner_approval.more' <<< "$OUTPUT")"
+assert_eq "$(git log --format='%h %s' -20 "$approved..$h")" \
+    "$(jq -r '.owner_approval.commits_since[]' <<< "$OUTPUT")"
+run bash "$CHECK" --pr "$PR" 001-reviewed
+assert_eq 0 "$STATUS"; assert_contains "$OUTPUT" '  +4 more'
+assert_not_contains "$OUTPUT" 'fix "quoted" output'
+
+it 'per-PR policy does not change owner objections at T1 or T2'
+for level in T1 T2; do
+    git checkout -q --detach "$BASE"
+    mkdir -p specs/changes
+    printf '# Change\n**Tier**: %s\n## State\n' "$level" > specs/changes/001-reviewed.md
+    git add -A; git commit -qm "$level record"
+    approved="$(git rev-parse HEAD)"
+    git commit -q --allow-empty -m 'new exact head'
+    h="$(git rev-parse HEAD)"; fx_pr 7 "$h"; printf '[]\n' > "$f"
+    publisher_review APPROVED "$h"
+    fx_owner_review 7 CHANGES_REQUESTED "$approved"; fx_owner_review 7 APPROVED "$approved"
+    online; assert_eq 1 "$STATUS" "$level requires an exact-head approval to clear the owner's objection"
+    assert_contains "$OUTPUT" '"blocking":[{"reviewer":1003,'
+    fx_owner_review 7 APPROVED "$h"; online; assert_eq 0 "$STATUS" "$OUTPUT"
+done
 finish

@@ -2,8 +2,9 @@
 # Read a single GitHub PR's reviews. No review bodies, commit authors or credentials are inputs.
 #
 # Invariants:
-# Only the latest exact-head submission per eligible non-author account can grant approval.
-# Its undismissed objections on any PR commit require a later exact-head approval by that account.
+# Only the latest exact-head submission per eligible non-author account can grant approval by default.
+# A T3 per-PR owner instead needs a latest deciding approval on a verified ancestor or the head.
+# Undismissed objections on any PR commit require a later eligible approval by that account.
 # Report open objections separately from approvals after complete, consistent pagination.
 # With lenses, publisher eligibility is the union of accounts mapped to trusted reviewers.
 # Only the single raw Configuration section can establish policy.
@@ -29,15 +30,25 @@ github_review_policy() {
             print reason ((key in line) ? " (config.md line " line[key] ")" : "")
             exit 1
         }
+        # Older mawk can reject three or more entries with a repeated group.
+        function valid_accounts(value, owners_only,   ids,n,i) {
+            n=split(value, ids, ",")
+            for (i=1;i<=n;i++) {
+                sub(/^[[:space:]]+/, "", ids[i]); sub(/[[:space:]]+$/, "", ids[i])
+                if (owners_only ? ids[i]!~/^user:[1-9][0-9]*$/ : ids[i]!~/^(bot|user):[1-9][0-9]*$/)
+                    return 0
+            }
+            return n>0
+        }
         {
             ntext=normalized($0)
-            if (match(ntext,/review-(lenses|publishers)/) && substr(ntext,RSTART+RLENGTH) ~ /[:=]/) {
+            if (match(ntext,/(review-(lenses|publishers)|owner-approval)/) && substr(ntext,RSTART+RLENGTH) ~ /[:=]/) {
                 key=substr(ntext,RSTART,RLENGTH)
                 if (index($0,"- " key ":")!=1)
                     malformed="Invalid " key " key at config.md line " NR ": expected - " key ": <value>"
             }
         }
-        /^- review-(host|publishers|owner|publisher-isolation|lenses):/ {
+        /^- (review-(host|publishers|owner|publisher-isolation|lenses)|owner-approval):/ {
             key=$0; sub(/:.*/, "", key); sub(/^- /,"",key)
             sub(/^[^:]*:[[:space:]]*/,""); sub(/[[:space:]]+$/,"")
             values[key]=$0; count[key]++; line[key]=NR
@@ -46,12 +57,12 @@ github_review_policy() {
             if (malformed) fail(malformed)
             pub=values["review-publishers"]; lenses=values["review-lenses"]
             if (count["review-host"]!=1 || values["review-host"]!="github" ||
-                count["review-owner"]!=1 || values["review-owner"]!~/^user:[1-9][0-9]*([[:space:]]*,[[:space:]]*user:[1-9][0-9]*)*$/) {
+                count["review-owner"]!=1 || !valid_accounts(values["review-owner"], 1)) {
                 if (count["review-lenses"]) fail("Trusted policy requires review-host: github and numeric review-owner")
                 fail("Trusted policy requires review-host: github, numeric review-publishers and numeric review-owner")
             }
             if (count["review-publishers"] || !count["review-lenses"]) {
-                if (count["review-publishers"]!=1 || pub!~/^(bot|user):[1-9][0-9]*([[:space:]]*,[[:space:]]*(bot|user):[1-9][0-9]*)*$/)
+                if (count["review-publishers"]!=1 || !valid_accounts(pub, 0))
                     fail("Trusted policy requires review-host: github, numeric review-publishers and numeric review-owner", "review-publishers")
             }
             if (count["review-lenses"]) {
@@ -83,10 +94,13 @@ github_review_policy() {
                 pub=union
             }
             if (count["review-publisher-isolation"]) fail("review-publisher-isolation is unsupported by the native review gate", "review-publisher-isolation")
-            print pub ";" values["review-owner"] ";" lenses
+            mode=values["owner-approval"]
+            if (count["owner-approval"] && (count["owner-approval"]!=1 || (mode!="exact-head" && mode!="per-pr")))
+                fail("Expected one owner-approval value: exact-head or per-pr", "owner-approval")
+            print pub ";" values["review-owner"] ";" lenses ";" (mode ? mode : "exact-head")
         }')" || { RC_ERROR="${fields:-Cannot parse trusted review policy}"; return 1; }
     fields="$(printf '%s' "$fields" | tr -d ' \t\r' | sed 's/bot://g;s/user://g')"
-    IFS=';' read -r REVIEW_PUBLISHERS REVIEW_OWNERS REVIEW_LENSES <<< "$fields"
+    IFS=';' read -r REVIEW_PUBLISHERS REVIEW_OWNERS REVIEW_LENSES REVIEW_OWNER_APPROVAL <<< "$fields"
     if [ -n "$REVIEW_LENSES" ]; then
         RC_ERROR="Cannot read trusted review-lenses registry in agents.md"
         registry="$(git -C "$root" show "$at:.prdkit/memory/agents.md" | review_text_stream | review_registry)" || return 1
@@ -178,24 +192,77 @@ github_review_fetch() { # URL private-work expected-head expected-base
     pr_head="$(jq -r '.headRefOid' "$work/validated")" || return 1
     RC_ERROR='The PR head or target differs from the checked head and trusted base'
     [ "$pr_head" = "$expected" ] && [ "$(jq -r .baseRefName "$work/validated")" = "$base" ] || return 1
+}
+
+github_review_decide() { # private-work head [file of verified owner approval commits]
+    local work="$1" expected="$2" ancestors="${3:-/dev/null}" per_pr=false decisions
+    [ "$#" -eq 2 ] || per_pr=true
     # Replay each account's submissions in time order (host order breaks timestamp ties).
     # GitHub marks the original review DISMISSED, so only still-live requests open blockers.
-    local decisions
-    decisions="$(jq -sc --arg publishers "$REVIEW_PUBLISHERS" --arg owners "$REVIEW_OWNERS" --arg head "$expected" '
+    decisions="$(jq -sc --arg publishers "$REVIEW_PUBLISHERS" --arg owners "$REVIEW_OWNERS" --arg head "$expected" \
+        --argjson per_pr "$per_pr" --rawfile ancestors "$ancestors" '
+        ($ancestors|split("\n")|map({key:.,value:true})|from_entries) as $verified |
         .[0].author.databaseId as $maker | ($publishers|split(",")) as $pub | ($owners|split(",")) as $own |
         [.[].reviews.nodes[] | select(.state!="PENDING" and .author.databaseId!=$maker) |
          (.author.databaseId|tostring) as $id |
          .role = (if $own|index($id)!=null then "owner" elif $pub|index($id)!=null then "publisher" else empty end)] |
         group_by(.author.databaseId) | map(reduce (sort_by(.submittedAt)[]) as $r
-          ({approval:null,blocking:[]};
-           ($r | {reviewer:.author.databaseId,review:(.fullDatabaseId|tostring),role}) as $entry |
-           if $r.commit.oid==$head and $r.state=="APPROVED" then
+           ({approval:null,blocking:[]};
+            ($r | {reviewer:.author.databaseId,review:(.fullDatabaseId|tostring),role}) as $entry |
+            if $per_pr and $r.role=="owner" then
+                if $r.state=="APPROVED" then
+                    if $r.commit.oid==$head then .approval=$entry | .blocking=[] | .rejected=null
+                    elif $verified[$r.commit.oid] then
+                        .approval=($entry + {commit:$r.commit.oid}) | .blocking=[] | .rejected=null
+                    else .approval=null | .rejected=$r.commit.oid end
+                elif $r.state=="CHANGES_REQUESTED" then
+                    .approval=null | .rejected=null | .blocking += [$entry + {commit:$r.commit.oid}]
+                elif $r.state=="DISMISSED" then .approval=null | .rejected=null
+                else . end
+            elif $r.commit.oid==$head and $r.state=="APPROVED" then
                .approval=$entry | .blocking=[]
            else
                (if $r.commit.oid==$head then .approval=null else . end) |
                if $r.state=="CHANGES_REQUESTED" then .blocking += [$entry + {commit:$r.commit.oid}] else . end
            end))' "$work/pages")" || return 1
-    approvals="$(jq -c '[.[].approval | select(.!=null)]' <<< "$decisions")" || return 1
+    approvals="$(jq -c '[.[].approval | select(.!=null and .commit==null)]' <<< "$decisions")" || return 1
     blocking="$(jq -c '[.[].blocking[]]' <<< "$decisions")" || return 1
+    if $per_pr; then
+        # Prefer exact-head evidence. Only select a carried approval if it is needed.
+        carried_owner="$(jq -c '[.[].approval | select(.role=="owner")] |
+            if any(.[]; .commit==null) then null else .[0] end' <<< "$decisions")" || return 1
+        rejected_owner_commits="$(jq -c '[.[].rejected | select(.!=null)] | unique' <<< "$decisions")" || return 1
+    fi
     RC_ERROR=""
+}
+
+github_review_per_pr_owners() { # root private-work head
+    local root="$1" work="$2" head="$3" candidates commit
+    # Use only this PR's validated pages; prove ancestry once per distinct approval SHA.
+    candidates="$(jq -sr --arg owners "$REVIEW_OWNERS" --arg head "$head" '
+        .[0].author.databaseId as $maker | ($owners|split(",")) as $own |
+        [.[].reviews.nodes[] | select(.state=="APPROVED" and .author.databaseId!=$maker) |
+         select((.author.databaseId|tostring) as $id | $own|index($id)!=null) |
+         .commit.oid | select(.!=$head)] | unique[]' "$work/pages")" || return 1
+    : > "$work/owner-ancestors" || return 1
+    if [ -n "$candidates" ] && spec_objects_local "$root"; then
+        while IFS= read -r commit; do
+            if GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -C "$root" merge-base --is-ancestor "$commit" "$head" 2>/dev/null; then
+                printf '%s\n' "$commit" >> "$work/owner-ancestors" || return 1
+            fi
+        done <<< "$candidates"
+    fi
+    github_review_decide "$work" "$head" "$work/owner-ancestors"
+}
+
+github_review_owner_evidence() { # root head carried-owner JSON
+    local root="$1" head="$2" owner="$3" commit range commits count
+    commit="$(jq -r .commit <<< "$owner")" || return 1
+    range="$commit..$head"
+    commits="$(GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -C "$root" log --no-notes --no-show-signature \
+        --no-decorate --no-color --format='%h %s' --max-count=20 "$range" --)" || return 1
+    count="$(GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -C "$root" rev-list --count "$range" --)" || return 1
+    jq -cn --argjson owner "$owner" --arg commits "$commits" --argjson count "$count" '
+        ($commits|split("\n")) as $listed |
+        $owner | del(.role) + {mode:"per-pr", commits_since:$listed, more:($count - ($listed|length))}'
 }

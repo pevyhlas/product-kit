@@ -5,6 +5,7 @@
 # Use committed policy from the trusted default branch, even for other PR targets.
 # Exit 0 requires host authority; a would-pass offline preview exits 3.
 # Require the exact PR head, its effective tier's approvals and no eligible open objection.
+# Only trusted per-PR policy can let a T3 owner's approval carry forward from an ancestor.
 # With lenses, only a mapped independent publisher covers an area; T3 requires design.
 # PR-authored record text does not grant approval.
 #
@@ -68,7 +69,8 @@ $base_trusted || import_base=""
 
 problems=(); tier=""; record_at=""; record_only=false; start=""
 authority=none; pr_head=""; approvals='[]'; blocking='[]'; head_is_pr_head=false
-lenses=""; areas='[]'
+lenses=""; areas='[]'; reviews_fetched=false
+owner_approval=exact-head; owner_evidence=""; carried_owner=null; rejected_owner_commits='[]'
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 if [ -z "$policy_at" ]; then
     problems+=("No trusted integration base: origin/HEAD does not resolve here, so there is no policy to check against; establish it (git remote set-head origin --auto) with its history fetched")
@@ -88,9 +90,12 @@ fi
 if $online; then authority=unavailable; fi
 if github_review_policy "$root" "$policy_at"; then
     lenses="$REVIEW_LENSES"
+    owner_approval="$REVIEW_OWNER_APPROVAL"
     if $online; then
         if github_review_fetch "$pr_url" "$work" "$head" "${base_canonical#refs/remotes/origin/}"; then
-            authority=host; head_is_pr_head=true
+            if [ "$owner_approval" = per-pr ]; then reviews_fetched=true
+            elif github_review_decide "$work" "$head"; then authority=host; head_is_pr_head=true
+            else problems+=("$RC_ERROR"); fi
         else problems+=("$RC_ERROR"); fi
     fi
 else problems+=("$RC_ERROR")
@@ -350,6 +355,24 @@ fi
 if [ -n "$lenses" ] && [ "$tier" = T3 ] && [[ ",$lenses," != *,design=* ]]; then
     problems+=("T3 requires a review-lenses mapping for design")
 fi
+if $reviews_fetched; then
+    if [ "$tier" = T3 ]; then
+        if github_review_per_pr_owners "$root" "$work" "$head"; then
+            authority=host; head_is_pr_head=true
+            if [ "$carried_owner" != null ]; then
+                if owner_evidence="$(github_review_owner_evidence "$root" "$head" "$carried_owner")"; then
+                    # Keep the reviews entry shape used by the trusted launcher.
+                    approvals="$(jq -c --argjson owner "$carried_owner" '. + [$owner | del(.commit)] | sort_by(.reviewer)' <<< "$approvals")"
+                else
+                    problems+=("Cannot list the commits since the per-PR owner approval: fetch the complete local history")
+                fi
+            fi
+        else problems+=("Cannot evaluate per-PR owner reviews"); fi
+    elif github_review_decide "$work" "$head"; then
+        authority=host; head_is_pr_head=true
+    else problems+=("$RC_ERROR")
+    fi
+fi
 if [ "$authority" = host ]; then
     if [ -n "$lenses" ]; then
         areas="$(jq -c --arg lenses "$lenses" '
@@ -376,8 +399,11 @@ if [ "$authority" = host ]; then
             problems+=("$tier requires an independent review-publishers APPROVED review on the exact PR head $head")
         fi
         if [ "$tier" = T3 ]; then
-            jq -e 'any(.[]; .role=="owner")' <<< "$approvals" >/dev/null ||
-                problems+=("T3 also requires a review-owner APPROVED review on the exact PR head $head")
+            if ! jq -e 'any(.[]; .role=="owner")' <<< "$approvals" >/dev/null; then
+                if [ "$owner_approval" = per-pr ]; then
+                    problems+=("T3 also requires a review-owner APPROVED review under per-PR policy (on $head or an ancestor)")
+                else problems+=("T3 also requires a review-owner APPROVED review on the exact PR head $head"); fi
+            fi
         fi ;;
     esac
 fi
@@ -394,6 +420,10 @@ if $json; then
     printf '"blocking":%s,"authority":"%s","pr":"%s","pr_head":"%s","head_is_pr_head":%s,"problems":%s' \
         "$blocking" "$authority" "$(json_escape "$pr_url")" "$pr_head" "$head_is_pr_head" "$(json_array ${problems[@]+"${problems[@]}"})"
     if [ -n "$lenses" ]; then printf ',"areas":%s' "$areas"; fi
+    if [ -n "$owner_evidence" ]; then printf ',"owner_approval":%s' "$owner_evidence"; fi
+    if [ "$rejected_owner_commits" != '[]' ]; then
+        printf ',"owner_approval_not_ancestors":%s' "$rejected_owner_commits"
+    fi
     if $diagnostics; then
         printf ',"diagnostics":{"base_ref":"%s","base_at":"%s","policy_ref":"%s","policy_at":"%s","head":"%s"}' \
             "$(json_escape "$base_canonical")" "$import_base" "$(json_escape "$trusted_default")" "$policy_at" "$head"
@@ -406,6 +436,17 @@ elif [ "$result" = pass ]; then
 else
     printf 'FAIL %s at %s:\n' "$id" "$head"
     printf '  %s\n' "${problems[@]}"
+fi
+if ! $json; then
+    if [ -n "$owner_evidence" ]; then
+        jq -r '"T3 owner approval is per-PR, given on \(.commit). Commits since approval:",
+            (.commits_since[] | "  " + .), (select(.more > 0) | "  +\(.more) more")' <<< "$owner_evidence"
+    fi
+    if [ "$rejected_owner_commits" != '[]' ]; then
+        jq -r --arg head "$head" '.[] |
+            "Per-PR owner approval on \(.) does not carry over: not a verified ancestor of \($head) (history may have been rewritten or be incomplete)."' \
+            <<< "$rejected_owner_commits"
+    fi
 fi
 [ "$result" = pass ] || exit 1
 [ "$authority" = host ] || exit 3

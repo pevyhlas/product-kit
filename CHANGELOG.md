@@ -11,6 +11,11 @@ change by change.
 
 ## [Unreleased]
 
+### Added
+
+- Trusted `owner-approval: per-pr` lets a T3 owner approval carry forward on the same PR from an
+  ancestor, with the approved commit and subsequent commits reported. The default remains `exact-head`.
+
 ### Changed
 
 - Rejected `Bash(...)` entries in Claude tier tool lists now explain how to keep Bash out
