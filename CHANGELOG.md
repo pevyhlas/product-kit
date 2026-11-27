@@ -11,6 +11,8 @@ change by change.
 
 ## [Unreleased]
 
+## [3.3.0] — 2026-11-27 — template residue check
+
 ### Changed
 
 - Rejected `Bash(...)` entries in Claude tier tool lists now explain how to keep Bash out
