@@ -11,6 +11,11 @@ change by change.
 
 ## [Unreleased]
 
+### Fixed
+
+- Under `owner-approval: per-pr`, changes to the review policy surface after a T3 owner approval
+  require fresh approval on the exact head. The gate identifies the first policy commit and path.
+
 ## [3.3.1] — 2026-11-27 — optional per-PR owner approval
 
 ### Added

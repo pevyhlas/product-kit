@@ -5,7 +5,8 @@
 # Use committed policy from the trusted default branch, even for other PR targets.
 # Exit 0 requires host authority; a would-pass offline preview exits 3.
 # Require the exact PR head, its effective tier's approvals and no eligible open objection.
-# Only trusted per-PR policy can let a T3 owner's approval carry forward from an ancestor.
+# Only trusted per-PR policy can let a T3 owner's approval carry from an ancestor, and only
+# when the diff from that ancestor to the head does not touch the policy surface.
 # With lenses, only a mapped independent publisher covers an area; T3 requires design.
 # PR-authored record text does not grant approval.
 #
@@ -71,6 +72,7 @@ problems=(); tier=""; record_at=""; record_only=false; start=""
 authority=none; pr_head=""; approvals='[]'; blocking='[]'; head_is_pr_head=false
 lenses=""; areas='[]'; reviews_fetched=false
 owner_approval=exact-head; owner_evidence=""; carried_owner=null; rejected_owner_commits='[]'
+owner_policy_change=""; owner_policy_problem=""
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 if [ -z "$policy_at" ]; then
     problems+=("No trusted integration base: origin/HEAD does not resolve here, so there is no policy to check against; establish it (git remote set-head origin --auto) with its history fetched")
@@ -189,18 +191,25 @@ metadata_mode_problems() { # rev -> the record or log path when it is there but 
         case "$entry" in ""|"100644 blob "*) ;; *) printf '%s\n' "$file" ;; esac
     done
 }
+review_raw_diff() { # Git diff command, then options/revisions/pathspecs
+    local command="$1"; shift
+    LC_ALL=C GIT_NO_REPLACE_OBJECTS=1 git -C "$root" -c core.quotepath=true "$command" --raw --no-abbrev \
+        --no-renames --no-ext-diff --no-textconv --no-color --no-relative --ignore-submodules=none "$@"
+}
+kit_policy_path() { # raw path; a quoted path cannot be classified safely
+    case "$1" in .prdkit|.prdkit/*|.product-kit|.product-kit/*|\"*) return 0 ;; *) return 1 ;; esac
+}
 t0_violations() { # from to
     local allowed raw meta file old new entry ok
     allowed="$(t0_paths "$policy_at")"
-    raw="$(LC_ALL=C GIT_NO_REPLACE_OBJECTS=1 git -C "$root" -c core.quotepath=true diff --raw --no-abbrev \
-        --no-renames --no-ext-diff --no-textconv --no-color --no-relative --ignore-submodules=none "$1" "$2" -- . \
+    raw="$(review_raw_diff diff "$1" "$2" -- . \
         ":(top,literal,exclude)$path" ":(top,literal,exclude).prdkit/history/log/$id.md")" || return 1
     while IFS="$(printf '\t')" read -r meta file; do
         [ -n "$meta" ] || continue
         old="${meta%% *}"; old="${old#:}"; new="${meta#* }"; new="${new%% *}"
         ok=false
         case "$old:$new" in 000000:100644|100644:100644|100644:000000) ok=true ;; esac
-        case "$file" in .prdkit|.prdkit/*|.product-kit|.product-kit/*|specs/changes/*|\"*) ok=false ;; esac
+        if kit_policy_path "$file" || [[ "$file" == specs/changes/* ]]; then ok=false; fi
         for entry in "${spec_l01[@]}"; do
             case "$file" in "$entry"|"$entry"/*) ok=false ;; esac
         done
@@ -216,6 +225,37 @@ t0_violations() { # from to
         fi
         $ok || printf '%s\n' "$file"
     done <<< "$raw"
+}
+first_owner_policy_path() { # raw diff -> the first policy path, if any
+    local meta file
+    while IFS=$'\t' read -r meta file; do
+        [ -n "$meta" ] || continue
+        if kit_policy_path "$file" || [[ "$file" == .github/workflows/* ]]; then
+            printf '%s\n' "$file"
+            return
+        fi
+    done
+}
+owner_policy_change_since() { # approved head -> JSON evidence, or empty if no policy change
+    local approved="$1" tip="$2" raw commits commit file
+    local GIT_NO_LAZY_FETCH=1
+    export GIT_NO_LAZY_FETCH
+    raw="$(review_raw_diff diff "$approved" "$tip" --)" || return 1
+    [ -n "$(first_owner_policy_path <<< "$raw")" ] || return 0
+
+    # The net diff decides whether carry is barred. Walk ancestors first for the diagnostic,
+    # including merges (diff against each parent) and roots of merged unrelated history.
+    commits="$(GIT_NO_REPLACE_OBJECTS=1 git -C "$root" rev-list --date-order --reverse "$approved..$tip" --)" || return 1
+    while IFS= read -r commit; do
+        [ -n "$commit" ] || continue
+        raw="$(review_raw_diff diff-tree -r -m --root --no-commit-id "$commit" --)" || return 1
+        file="$(first_owner_policy_path <<< "$raw")"
+        if [ -n "$file" ]; then
+            jq -cn --arg commit "$commit" --arg path "$file" '{$commit,$path}'
+            return
+        fi
+    done <<< "$commits"
+    return 1
 }
 path="specs/changes/$id.md"
 spec_l01=(specs/product.md specs/product specs/architecture.md specs/architecture specs/design.md specs/SPEC.md specs/decisions)
@@ -348,7 +388,13 @@ if $reviews_fetched; then
         if github_review_per_pr_owners "$root" "$work" "$head"; then
             authority=host; head_is_pr_head=true
             if [ "$carried_owner" != null ]; then
-                if owner_evidence="$(github_review_owner_evidence "$root" "$head" "$carried_owner")"; then
+                approved="$(jq -r .commit <<< "$carried_owner")"
+                if ! owner_policy_change="$(owner_policy_change_since "$approved" "$head")"; then
+                    owner_policy_problem="Cannot read the policy diff for the carried T3 owner approval on $approved: fetch the complete local history and trees or obtain a fresh owner approval on the exact head $head"
+                elif [ -n "$owner_policy_change" ]; then
+                    changed_at="$(jq -r '"\(.commit) (\(.path))"' <<< "$owner_policy_change")"
+                    owner_policy_problem="T3 owner approval on $approved does not carry over: $changed_at touches the policy surface; obtain a fresh owner approval on the exact head $head"
+                elif owner_evidence="$(github_review_owner_evidence "$root" "$head" "$carried_owner")"; then
                     # Keep the reviews entry shape used by the trusted launcher.
                     approvals="$(jq -c --argjson owner "$carried_owner" '. + [$owner | del(.commit)] | sort_by(.reviewer)' <<< "$approvals")"
                 else
@@ -387,7 +433,9 @@ if [ "$authority" = host ]; then
             problems+=("$tier requires an independent review-publishers APPROVED review on the exact PR head $head")
         fi
         if [ "$tier" = T3 ]; then
-            if ! jq -e 'any(.[]; .role=="owner")' <<< "$approvals" >/dev/null; then
+            if [ -n "$owner_policy_problem" ]; then
+                problems+=("$owner_policy_problem")
+            elif ! jq -e 'any(.[]; .role=="owner")' <<< "$approvals" >/dev/null; then
                 if [ "$owner_approval" = per-pr ]; then
                     problems+=("T3 also requires a review-owner APPROVED review under per-PR policy (on $head or an ancestor)")
                 else problems+=("T3 also requires a review-owner APPROVED review on the exact PR head $head"); fi
@@ -409,6 +457,7 @@ if $json; then
         "$blocking" "$authority" "$(json_escape "$pr_url")" "$pr_head" "$head_is_pr_head" "$(json_array ${problems[@]+"${problems[@]}"})"
     if [ -n "$lenses" ]; then printf ',"areas":%s' "$areas"; fi
     if [ -n "$owner_evidence" ]; then printf ',"owner_approval":%s' "$owner_evidence"; fi
+    if [ -n "$owner_policy_change" ]; then printf ',"owner_approval_policy_change":%s' "$owner_policy_change"; fi
     if [ "$rejected_owner_commits" != '[]' ]; then
         printf ',"owner_approval_not_ancestors":%s' "$rejected_owner_commits"
     fi
