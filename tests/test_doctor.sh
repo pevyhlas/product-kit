@@ -2133,6 +2133,50 @@ MD
 done
 mv "$arch.saved" "$arch"
 
+it "a block directly after a table keeps its multiline Markdown protection"
+cp "$arch" "$arch.saved"
+for boundary in details-comment div-title atx-tab; do
+    cp "$arch.saved" "$arch"
+    cat >> "$arch" <<'MD'
+
+## Markdown boundaries
+
+| Sample | Status |
+| --- | --- |
+| Service | Ready |
+MD
+    case "$boundary" in
+        details-comment)
+            cat >> "$arch" <<'MD'
+<details><!-- Maintainer note
+<delivery, tooling>
+-->
+<summary>Rollout notes</summary>
+</details>
+MD
+            ;;
+        div-title)
+            cat >> "$arch" <<'MD'
+<div title="Deployment metadata:
+<delivery, tooling>">
+See the release checklist.
+</div>
+MD
+            ;;
+        atx-tab)
+            printf '##\tNotes\n' >> "$arch"
+            cat >> "$arch" <<'MD'
+Use `tag
+<delivery, tooling>` literally.
+MD
+            ;;
+    esac
+    run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
+    assert_eq 0 "$STATUS" "$boundary: $OUTPUT"
+    assert_eq '[0,0]' "$(jq -c '[.trace["template-placeholder"], (.findings | length)]' <<< "$OUTPUT")" "$boundary: $OUTPUT"
+done
+mv "$arch.saved" "$arch"
+
 it "escaping the opening angle or moving the text to a plain fence clears a strict finding"
 cp "$arch" "$arch.saved"
 for workaround in bare escaped fenced; do

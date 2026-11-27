@@ -413,6 +413,8 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
                 # GFM pads short rows (including one cell without pipes) and
                 # discards surplus cells. Missing cells have nothing to scan.
                 n = split_cells(text, parts)
+                # Let the document scanner handle HTML at a short-row boundary.
+                if (!parts[0] && text ~ /^ ? ? ?</) break
                 if (n > width) n = width
                 counts[i] = n
                 for (k = 1; k <= n; k++) {
@@ -462,7 +464,7 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
             return text ~ /^ ? ? ?((- *)- *-[- ]*|(\* *)\* *\*[* ]*|(_ *)_ *_[_ ]*)$/
         }
         function atx(text) {
-            return text ~ /^ ? ? ?##?#?#?#?#?( |$)/
+            return text ~ /^ ? ? ?##?#?#?#?#?([[:blank:]]|$)/
         }
         function comment_prefix(text) {
             return match(text, /^ ? ? ?<!--/) ? RLENGTH : 0
