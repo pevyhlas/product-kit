@@ -41,9 +41,12 @@ CRLF; the original artifact stays byte-for-byte. Otherwise, reviewers open
 other files only to investigate a finding or resolve an obligation. The dispatcher still supplies
 mandatory obligations and unresolved questions that automatic capture missed.
 
-The package records the HEAD bounds state in `bounds-status.txt`: `absent`, `collected`,
-or `unavailable`. Confirmed absence requires a complete checked inventory with no applicable
-spec inputs and a valid scope record. The usual HEAD-ancestry lookup can supply a historical
+The package records the bounds state in `bounds-status.txt`: `absent`, `collected`,
+or `unavailable`. Before writing spec files, both collectors check the BASE and HEAD trees
+for ASCII case-folded aliases at or under `specs/`, including differently cased root names.
+Non-ASCII spec paths and unsafe spec entries (including symlinks and gitlinks) also make
+the result unavailable at either revision. Confirmed absence requires a checked inventory
+with no applicable spec inputs and a valid scope record. The usual HEAD-ancestry lookup can supply a historical
 record (including a follow-up to a record closed at or before BASE), but not binding BASE
 acceptance. Missing or invalid scope, malformed headers and unsafe or unreadable inputs do
 not establish absence. A missing child and its HEAD bounds gap alone do not trigger the
@@ -72,9 +75,10 @@ The four-column `manifest.tsv` inventories artifacts. `context-manifest.tsv` add
   scope when bounds inputs exist (a recovered scope record keeps its historical binding). When
   relevant inputs differ, `bounds-base.txt` and `bounds-base-inputs.tsv` capture the BASE scope
   independently. With no BASE child record, all BASE bounds are considered conservatively.
-  If BASE bounds are unavailable, the package keeps the gap and can still excerpt known BASE
-  bodies. Neither fallback applies to HEAD. The package compares bound bodies by ID across
-  both revisions, including IDs that dropped out of candidate scope;
+   If BASE bounds are unavailable, the package keeps the gap and can still excerpt verified BASE
+   bodies, but may omit all BASE bodies when the input tree fails preflight. The package
+   compares bound bodies by ID across both revisions, including IDs that dropped out of
+   candidate scope;
 - trusted constitution and any registry/config at `policy_at`; BASE and HEAD product/architecture
   canon and `specs/design.md` where present, and conservative part/cross-interface context. The
   full diff remains authoritative for what changed. Absent conventional canon and optional
@@ -200,8 +204,10 @@ The selected scope record must be a regular, non-executable, LF-terminated recor
 valid tier and no unsupported State review field;
 the bounds collector also validates the scope fields. Missing scope or incomplete capture
 is unavailable, not absent. No HEAD state waives binding BASE bounds.
-Collector failures are recorded in a successfully written pack. Exit 2 is a refusal (such as
-bad inputs, head mismatch, unsafe snapshot links, changed inputs during collection or unsafe cache).
+Collector failures are recorded in a successfully written pack. If spec preflight fails, facts
+skips its Python worktree snapshot and records the gap in the pack. Exit 2 is a refusal (such as
+bad inputs, head mismatch, unsafe links outside the spec inputs, changed inputs during collection
+or unsafe cache).
 
 Use `facts.sh --verify "$id"` with the original options to recompute and compare without writing.
 It exits 0 if both files match, 1 on drift (including a missing pack), or 2 on refusal. CI may

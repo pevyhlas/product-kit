@@ -32,43 +32,56 @@ context_object() { # rev path -> blob; never dereference a symlink/tree/submodul
     review_bounds_entry_blob "$entry"
 }
 
-review_bounds_spec_entry() { # include obstructions at normal spec directories
-    case "$2" in
-        specs/*.md) return 0 ;;
-        specs|specs/product|specs/architecture|specs/parts|specs/decisions|specs/changes)
-            [[ "$1" != '040000 tree '* ]] ;;
-        specs/*)
-            case "$1" in '040000 tree '*|'100644 blob '*|'100755 blob '*) return 1 ;; *) return 0 ;; esac ;;
-        *) return 1 ;;
-    esac
-}
-
-review_bounds_list() { # rev, spool, diagnostic callback; sets presence and gitlink flag
-    local rev="$1" paths="$2" note="$3" entry path count=0 expected presence=absent
+review_bounds_list() { # rev, spool, diagnostic callback; preflight names and entry types
+    local rev="$1" paths="$2" note="$3" entry meta path count=0 expected presence=absent collision
+    local problem="cannot completely enumerate spec entries at $1" LC_ALL=C
+    export LC_ALL
     bounds_spec_presence=unknown
-    bounds_has_gitlinks=false
-    # Git is trusted: its exit status and successful output are trusted; these checks only validate transport framing.
-    if git -C "$REPO_ROOT" ls-tree -r -t -z "$rev" -- specs > "$paths" &&
-        expected="$(verify_nul_count "$paths")"; then
+    # Trust Git's successful output, checking only transport framing and spec input safety.
+    # Include directory rows and all spellings of the root so aliases such as Specs/ are visible.
+    if git -C "$REPO_ROOT" ls-tree -r -t -z "$rev" > "$paths.tree" &&
+        expected="$(verify_nul_count "$paths.tree")" && : > "$paths" && : > "$paths.names"; then
         while IFS= read -r -d '' entry; do
-            path="${entry#*$'\t'}"
-            [[ "${entry%%$'\t'*}" =~ ^[0-7]{6}\ (tree|blob|commit)\ ([0-9a-f]{40}|[0-9a-f]{64})$ &&
-                "$entry" != "$path" ]] || break
-            case "$path" in specs|specs/*) ;; *) break ;; esac
-            if review_bounds_spec_entry "$entry" "$path"; then
-                presence=present
-                case "$entry" in '160000 commit '*) bounds_has_gitlinks=true ;; esac
-            fi
+            meta="${entry%%$'\t'*}"; path="${entry#*$'\t'}"
+            [[ "$entry" != "$path" && "$meta" =~ ^[0-7]{6}\ (tree|blob|commit)\ ([0-9a-f]{40}|[0-9a-f]{64})$ ]] || break
+            case "$path" in
+                [sS][pP][eE][cC][sS]|[sS][pP][eE][cC][sS]/*) ;;
+                *) count=$((count+1)); continue ;;
+            esac
+            # In C, printable bytes are ASCII. Reject controls too before the line-based check.
+            case "$path" in
+                *[![:print:]]*) problem="unsafe spec input $(printf '%q' "$path") at $rev (non-ASCII or control byte)"; break ;;
+            esac
+            case "$meta:$path" in
+                '040000 tree '*:specs/*.md|\
+                '100'[67]*:specs|'100'[67]*:specs/product|'100'[67]*:specs/architecture|\
+                '100'[67]*:specs/parts|'100'[67]*:specs/decisions|'100'[67]*:specs/changes)
+                    problem="unsafe spec input $(printf '%q' "$path") at $rev"; break ;;
+            esac
+            case "$meta" in
+                '040000 tree '*|'100644 blob '*|'100755 blob '*) ;;
+                *) problem="unsafe spec input $(printf '%q' "$path") at $rev"; break ;;
+            esac
+            safe_path "$path" object || { problem="unsafe spec input $(printf '%q' "$path") at $rev"; break; }
+            printf '%s\n' "$path" >> "$paths.names" || break
+            case "$path" in
+                specs|specs/*) printf '%s\0' "$entry" >> "$paths" || break ;;
+            esac
+            case "$path" in specs/*.md) presence=present ;; esac
             count=$((count+1))
-        done < "$paths" || count=-1
-        if [ "$count" -eq "$expected" ]; then
-            bounds_spec_presence="$presence"
-            return 0
+        done < "$paths.tree" || count=-1
+        if [ "$count" -eq "$expected" ] &&
+            collision="$(awk 'seen[tolower($0)]++ { print; exit }' "$paths.names")"; then
+            if [ -z "$collision" ]; then
+                bounds_spec_presence="$presence"
+                return 0
+            fi
+            problem="ASCII case-fold collision in spec input $collision at $rev"
         fi
     fi
     : > "$paths"
     : > "$paths.unsafe"
-    "$note" canon "cannot completely enumerate spec entries at $rev"
+    "$note" canon "$problem"
     return 1
 }
 
@@ -94,27 +107,23 @@ review_bounds_stage() { # rev, material dir, checked spool, diagnostic callback
     local use_stat=true seen=() prior checked=0
     local LC_ALL=C
     export LC_ALL
+    [ ! -f "$paths.unsafe" ] || return 1
     if ! { mkdir -p "$material/.prdkit" && : > "$paths.captured" &&
         : > "$paths.reserved" && : > "$paths.identities"; }; then
         : > "$paths.unsafe"
         "$note" canon "cannot prepare spec inputs at $rev"
         return 1
     fi
-    [ ! -f "$paths.unsafe" ] || return 1
     # The Git tree is in parent-first order. Create each directory and leaf exclusively,
     # then verify all bytes and identities together before allowing any spec parsing.
     while IFS= read -r -d '' entry; do
         path="${entry#*$'\t'}"
-        if ! safe_path "$path" object; then
-            "$note" canon "unsafe spec input $(printf '%q' "$path") at $rev"
-            status=1; continue
-        fi
         if [[ "$entry" = '040000 tree '* ]]; then
             mkdir "$material/$path" 2>/dev/null || { failed="$path"; break; }
             kind=dir; blob=-
         else
             kind=blob
-            if ! blob="$(review_bounds_entry_blob "$entry")"; then kind=opaque; blob=-; fi
+            blob="$(review_bounds_entry_blob "$entry")" || { failed="$path"; break; }
             review_write_blob - "$material/$path" 2>/dev/null || { failed="$path"; break; }
         fi
         printf '%s\t%s\t%s\n' "$path" "$kind" "$blob" >> "$paths.reserved" || { failed="$path"; break; }
@@ -167,32 +176,19 @@ review_bounds_stage() { # rev, material dir, checked spool, diagnostic callback
         "$note" canon "spec materialization collision or verification mismatch${failed:+: $failed} at $rev"
         return 1
     fi
-    # Opaque entries occupied a name only; never dereference a symlink or gitlink.
     while IFS=$'\t' read -r path kind blob; do
-        case "$kind:$path" in
-            opaque:*)
-                rm -f "$material/$path" || { : > "$paths.unsafe"; return 1; }
-                "$note" canon "unsafe spec input $(printf '%q' "$path") at $rev"
-                status=1 ;;
-            dir:specs/*.md)
-                "$note" canon "unsafe spec input $(printf '%q' "$path") at $rev"
-                status=1 ;;
-            blob:*)
-                case "$path" in
-                    specs/changes/*) ;; # A specific record is checked when selected.
-                    specs/*.md)
-                        if ! review_file_without_nul "$material/$path"; then
-                            "$note" canon "unreadable/non-text input $path at $rev"
-                            rm -f "$material/$path" || { : > "$paths.unsafe"; return 1; }
-                            status=1; continue
-                        fi ;;
-                    specs|specs/product|specs/architecture|specs/parts|specs/decisions|specs/changes)
-                        "$note" canon "unsafe spec input $path at $rev"
-                        status=1 ;;
-                esac
-                printf '%s\t%s\t%s\n' "$path" "$rev" "$blob" >> "$paths.captured" ||
-                    { : > "$paths.unsafe"; return 1; } ;;
+        [ "$kind" = blob ] || continue
+        case "$path" in
+            specs/changes/*) ;; # A specific record is checked when selected.
+            specs/*.md)
+                if ! review_file_without_nul "$material/$path"; then
+                    "$note" canon "unreadable/non-text input $path at $rev"
+                    rm -f "$material/$path" || { : > "$paths.unsafe"; return 1; }
+                    status=1; continue
+                fi ;;
         esac
+        printf '%s\t%s\t%s\n' "$path" "$rev" "$blob" >> "$paths.captured" ||
+            { : > "$paths.unsafe"; return 1; }
     done < "$paths.written"
     return "$status"
 }
@@ -302,17 +298,25 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     source "$script_dir/bounds.sh" # also loads common.sh and spec-lib.sh
     source "$script_dir/review-policy-lib.sh"
     export GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1
-    REPO_ROOT="$1"; head="$2"; id="$3"
-    is_change_id "$id" && [[ "$head" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] || exit 2
+    REPO_ROOT="$1"; base="$2"; head="$3"; id="$4"
+    is_change_id "$id" && [[ "$base" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ &&
+        "$head" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] || exit 2
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
     scope=''; scope_file=''; complete=true
     path="specs/changes/$id.md"
     review_bounds_list "$head" "$work/specs" review_bounds_note || complete=false
+    review_bounds_list "$base" "$work/base-specs" review_bounds_note || complete=false
     review_bounds_stage "$head" "$work/material" "$work/specs" review_bounds_note || complete=false
+    # A BASE alias blocks the reported state too. Ordinary BASE content gaps don't
+    # change the HEAD result; only unsafe inventories or unverified material do.
+    review_bounds_stage "$base" "$work/base" "$work/base-specs" review_bounds_note || :
+    review_bounds_inputs "$base" "$work/base" "" "$work/base-specs" review_bounds_note || :
     if rev="$(review_bounds_record_rev "$head" "$path")"; then
         spool="$work/specs"; record_material="$work/material"
-        if [ "$rev" != "$head" ]; then
+        if [ "$rev" = "$base" ] && [ "$rev" != "$head" ]; then
+            spool="$work/base-specs"; record_material="$work/base"
+        elif [ "$rev" != "$head" ]; then
             spool="$work/historical"
             record_material="$work/history"
             review_bounds_list "$rev" "$spool" review_bounds_note || :
@@ -325,7 +329,10 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         else review_bounds_note child "unreadable child record $rev:$path"; fi
     fi
     review_bounds_capture_head "$head" "$work/material" "$work/inputs" "$work/specs" "$work/items" review_bounds_note || complete=false
-    if [ -f "$work/specs.unsafe" ] && [ -n "${4:-}" ]; then : > "$4"; fi
+    if [ -f "$work/specs.unsafe" ] || [ -f "$work/base-specs.unsafe" ]; then
+        complete=false
+        if [ -n "${5:-}" ]; then : > "$5"; fi
+    fi
     rc=0
     review_bounds_run "$work/material" "$scope" "$complete" "$work/state" "$scope_file" > "$work/bounds" || rc=$?
     cat "$work/state"

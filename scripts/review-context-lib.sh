@@ -63,7 +63,7 @@ context_slice() ( # Preserve the source's bytes, including any missing final LF.
 context_source() { # rev, exact path, scratch name for other files -> context_file, context_blob
     local side material
     case "$2" in
-        specs|specs/*)
+        [sS][pP][eE][cC][sS]|[sS][pP][eE][cC][sS]/*)
             if [ "$1" = "$BASE_SHA" ] && { [ "$1" != "$HEAD_SHA" ] || [ "${reference_side:-}" = BASE ]; }; then
                 side=base; material=base
             elif [ "$1" = "$HEAD_SHA" ]; then side="head"; material=material
@@ -248,10 +248,11 @@ context_compare_bound() {
 context_review_bounds() { # record path, resolution at HEAD (possibly historical), checked scope file
     local path="$1" rev="$2" scope_file="$3"
     local base_bounds="$PACKAGE_DIR/bounds.txt" base_scope="$CHANGE_ID" head_scope=''
-    local head_bounds_ok=true base_capture="$base_list_ok" file id entry fallback_bounds=/dev/null
+    local head_bounds_ok=true base_capture="$base_list_ok" pair_capture="$head_capture" file id entry fallback_bounds=/dev/null
     [ -z "$rev" ] || head_scope="$CHANGE_ID"
+    [ ! -f "$CTX_TMP/spec-paths-base.unsafe" ] || pair_capture=false
     : > "$CTX_TMP/head-bound-ids"
-    if review_bounds_run "$CTX_TMP/material" "$head_scope" "$head_capture" "$PACKAGE_DIR/bounds-status.txt" "$scope_file" \
+    if review_bounds_run "$CTX_TMP/material" "$head_scope" "$pair_capture" "$PACKAGE_DIR/bounds-status.txt" "$scope_file" \
         > "$PACKAGE_DIR/bounds.txt" 2> "$PACKAGE_DIR/bounds.stderr"; then
         awk '/^- [CNQ]-[0-9]/ { print $2 }' "$PACKAGE_DIR/bounds.txt" > "$CTX_TMP/head-bound-ids"
     else head_bounds_ok=false; context_gap bounds "bounds unavailable; inspect bounds.stderr"; fi
@@ -528,7 +529,7 @@ context_emit_references() {
 
 review_context_build() {
     local path blob base_blob record record_rev count a entry base_material base_items hist_material reference_side
-    local shared_inputs=false explicit_kind explicit_rev bounds_spec_presence bounds_has_gitlinks
+    local shared_inputs=false explicit_kind explicit_rev bounds_spec_presence
     local historical_rev='' record_paths scope_material scope_file='' context_blob context_file diff_options=()
     local head_record_unresolved=false head_parent_unresolved=false
     base_reference_gap=false
@@ -537,7 +538,7 @@ review_context_build() {
     CTX_N=1
     printf 'artifact\tsource_rev\tsource_path\tsource_blob\tfirst_line\tlast_line\tobligation\treason\n' > "$PACKAGE_DIR/context-manifest.tsv"
     : > "$PACKAGE_DIR/context-gaps.txt"
-    if [ "$head_specs" = unknown ] || [ "$base_specs" = unknown ] || $head_has_gitlinks || $base_has_gitlinks; then
+    if [ "$head_specs" = unknown ] || [ "$base_specs" = unknown ]; then
         # Ignore worktree changes behind opaque spec entries.
         diff_options+=(--ignore-submodules=all)
     fi

@@ -192,7 +192,6 @@ class Snapshot(Collector):
         self.freeze_objects(source, scratch, head)
         require(self.run(("git", "merge-base", "--is-ancestor", base, head)).returncode == 0,
                 "base is not in the snapshot's available HEAD history")
-        self.git("read-tree", head)
 
     def freeze_objects(self, source, scratch, head):
         # Use the consumer store only to build a self-contained pack. In particular,
@@ -239,6 +238,7 @@ class Snapshot(Collector):
         except (FileExistsError, NotADirectoryError, IsADirectoryError) as exc:
             path = Path(exc.filename).relative_to(self.root)
             raise SnapshotMismatch(f"snapshot materialization collision: {str(path)!r}") from exc
+        self.git("read-tree", head)
 
     def write_tree(self, head):
         inventory = []
@@ -368,11 +368,13 @@ def local_json(snapshot, command, *, doctor):
     return fact
 
 
-def ci_fact(collector, snapshot, pr, head):
+def ci_fact(collector, snapshot, pr, head, snapshot_gap):
     command = ["bash", f"{SCRIPTS}/pr-state.sh", *([str(pr)] if pr else [])]
     if not pr or not shutil.which("gh", path=collector.env.get("PATH")):
         reason = "no --pr supplied" if not pr else "gh not available on PATH"
         return {"command": command, "exit_status": None, "result": f"not collected: {reason}", "details": None}
+    if snapshot_gap:
+        return {"command": command, "exit_status": None, "result": f"not collected: {snapshot_gap}", "details": None}
     script = snapshot.root / command[1]
     fact, raw = collector.capture(command, argv=["bash", str(script), *command[2:]], diagnostics=snapshot)
     fact["details"] = None
@@ -412,9 +414,9 @@ def bounds_tools_stamp(collector):
             for name in BOUNDS_TOOLS}
 
 
-def bounds_fact(collector, snapshot, change_id, head, unsafe_path):
-    # Use the installed implementation, like the package builder, but the frozen HEAD objects.
-    command = ["bash", f"{SCRIPTS}/{BOUNDS_TOOLS[0]}", ".", head, change_id]
+def bounds_fact(collector, snapshot, change_id, base, head, unsafe_path):
+    # Use the package builder's implementation, but with the frozen BASE and HEAD objects.
+    command = ["bash", f"{SCRIPTS}/{BOUNDS_TOOLS[0]}", ".", base, head, change_id]
     bounds, raw = snapshot.capture(command, argv=[
         command[0], str(collector.scripts / BOUNDS_TOOLS[0]), *command[2:], str(unsafe_path)])
     bounds["details"] = snapshot.text(raw) if raw is not None else None
@@ -434,10 +436,10 @@ def collect(collector, snapshot, change_id, base, head, pr):
     inputs = snapshot.inputs(base, head)
     bounds_tools = bounds_tools_stamp(collector)
     unsafe_path = Path(snapshot.env["TMPDIR"]) / "unsafe-spec-capture"
-    bounds = bounds_fact(collector, snapshot, change_id, head, unsafe_path)
+    bounds = bounds_fact(collector, snapshot, change_id, base, head, unsafe_path)
     snapshot_gap = None
     if unsafe_path.is_file():
-        snapshot_gap = "HEAD spec materialization could not be verified"
+        snapshot_gap = "BASE or HEAD spec inputs could not be verified"
     else:
         try:
             snapshot.materialize(head)
@@ -462,7 +464,7 @@ def collect(collector, snapshot, change_id, base, head, pr):
         diff["exit_status"], f"diff check failed ({diff['result']})")
     facts["diff_check"] = diff
     facts["adoption"] = worktree_fact("check-adoption.sh", doctor=False)
-    facts["ci"] = ci_fact(collector, snapshot, pr, head)
+    facts["ci"] = ci_fact(collector, snapshot, pr, head, snapshot_gap)
     facts["path_checks"] = map_paths(snapshot, span, rules, facts["ci"])
     # Commands record collection provenance, not steps for the reviewer to execute.
     for fact in facts.values():

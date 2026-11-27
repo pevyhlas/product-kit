@@ -666,7 +666,7 @@ for fault in fail truncated malformed; do
         printf '#!/usr/bin/env bash\nreal=%q\nhead=%q\nfault=%q\n' "$real_git" "$fault_head" "$fault"
         cat <<'EOF'
 case " $* " in
-    *" ls-tree -r -t -z $head -- specs ")
+    *" ls-tree -r -t -z $head ")
         case "$fault" in
             fail) exit 65 ;;
             truncated) printf '040000 tree 0123456789abcdef\tspecs'; exit 0 ;;
@@ -695,7 +695,60 @@ EOF
 } > "$fault_bin/git"
 compare_bounds unavailable 'actual child record missing or unrecoverable' env PATH="$fault_bin:$PATH"
 
-it 'Exclusive capture rejects a filesystem alias without guessing path folding, preserving BASE'
+it 'Spec preflight rejects a case-folded root, even when its leaf exists only under Specs'
+git checkout -q --detach "$BASE" || exit 1
+regular="$(printf '# Other\n' | git hash-object -w --stdin)" || exit 1
+git update-index --add --cacheinfo "100644,$regular,Specs/other.md" &&
+    git commit -qm 'add a differently cased spec root' || exit 1
+compare_bounds unavailable 'ASCII case-fold collision in spec input specs'
+assert_eq null "$(jq -r '.facts.doctor.exit_status' "$CACHE/index.json")"
+
+it 'An ASCII collision only at BASE blocks otherwise collected HEAD bounds'
+git checkout -q --detach "$BASE" || exit 1
+git update-index --add --cacheinfo "100644,$regular,specs/Product.md" &&
+    git commit -qm 'add a case alias of the existing BASE canon' || exit 1
+alias_base="$(git rev-parse HEAD)"
+git update-index --force-remove specs/Product.md &&
+    git commit -qm 'remove just the alias' || exit 1
+old_base="$BASE"
+BASE="$alias_base"
+compare_bounds unavailable 'unresolved BASE obligation: ASCII case-fold collision'
+assert_contains "$(jq -r '.facts.bounds.stderr' "$CACHE/index.json")" 'ASCII case-fold collision'
+BASE="$old_base"
+compare_bounds collected 'C-01 Base promise'
+
+it 'A non-ASCII spec path is unavailable even without a second spelling'
+git checkout -q --detach "$BASE" || exit 1
+git update-index --add --cacheinfo "100644,$regular,specs/product/é.md" &&
+    git commit -qm 'add one non-ASCII spec path' || exit 1
+compare_bounds unavailable 'non-ASCII or control byte'
+
+for target in architecture.md "$fault_bin/outside.md"; do
+    it "Facts writes a pack without materializing a rejected spec symlink: $target"
+    git checkout -q --detach "$record_only_base" || exit 1
+    printf 'outside scratch sentinel\n' > "$fault_bin/outside.md"
+    git update-index --add --cacheinfo "100644,$regular,specs/architecture.md" || exit 1
+    link="$(printf '%s' "$target" | git hash-object -w --stdin)" || exit 1
+    git update-index --add --cacheinfo "120000,$link,specs/product.md" &&
+        git commit -qm 'add an unsafe spec link' || exit 1
+    {
+        printf '#!/usr/bin/env bash\nreal=%q\ntrace=%q\n' "$real_git" "$fault_bin/snapshot-attempt"
+        cat <<'EOF'
+case "$PWD:$*" in
+    */prdkit-facts-*/head:"cat-file --batch") printf 'opened Python snapshot\n' >> "$trace" ;;
+esac
+exec "$real" "$@"
+EOF
+    } > "$fault_bin/git"
+    BASE="$record_only_base"
+    compare_bounds unavailable 'unsafe spec input specs/product.md' env PATH="$fault_bin:$PATH"
+    assert_eq true "$(jq '.facts | .doctor.exit_status == null and .adoption.exit_status == null' "$CACHE/index.json")"
+    assert_eq '' "$([ ! -e "$fault_bin/snapshot-attempt" ] || cat "$fault_bin/snapshot-attempt")"
+    assert_eq 'outside scratch sentinel' "$(cat "$fault_bin/outside.md")"
+    BASE="$old_base"
+done
+
+it 'Exclusive capture remains a backstop for filesystem aliases, preserving verified BASE'
 git checkout -q --detach "$BASE" || exit 1
 upper=specs/product/first.md
 lower=specs/product/second.md

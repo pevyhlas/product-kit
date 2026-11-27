@@ -15,7 +15,7 @@ setup() {
     printf '# Product\n\nSynthetic product.\n' > specs/product.md
     printf '# Architecture\n\n| Part | Purpose | Journeys |\n|---|---|---|\n| P1 | Behavior | J-01 |\n' > specs/architecture.md
     printf '# P1\n\n- **P1.B-01 Behavior** — Complete behavior.\n' > specs/parts/p1.md
-    printf '# Constraints\n\n- **C-77 Literal filename** — Scope: all parts.\n  REQUIRED_LITERAL_BODY\n' > specs/product/constraints/é.md
+    printf '# Constraints\n\n- **C-77 Literal filename** — Scope: all parts.\n  REQUIRED_LITERAL_BODY\n' > specs/product/constraints/literal.md
     cat > specs/changes/900-parent.md <<'EOF'
 # Programme
 
@@ -498,12 +498,16 @@ EOF
             advance unanchored-parent
             if build; then assert_contains "$(cat "$PKG/context-gaps.txt")" 'explicit section needed for specs/changes/900-parent.md' 'unanchored parent link is accounted as a gap'; fi ;;
         paths)
-            it "Literal spec paths participate in actual bounds and changed canon, or have a named gap"
-            printf '  CHANGED_LITERAL_BODY\n' >> specs/product/constraints/é.md
-            git add specs/product; git commit -qm 'change Unicode path' || exit 1
+            it "An ASCII spec path participates in bounds; an unsafe path has a named gap"
+            literal=specs/product/constraints/literal.md
+            printf '  CHANGED_LITERAL_BODY\n' >> "$literal"
+            git add specs/product; git commit -qm 'change literal path' || exit 1
             if build; then
-                assert_contains "$(cat "$PKG/bounds.txt")" C-77 'Unicode file included in actual bounds'
+                assert_contains "$(cat "$PKG/bounds.txt")" C-77 'literal file included in actual bounds'
                 assert_eq collected "$(cat "$PKG/bounds-status.txt")"
+                assert_contains "$(cat "$PKG/bounds-inputs.tsv")" "$(git rev-parse "HEAD:$literal")" 'literal bounds input blob'
+                assert_contains "$(cat "$PKG/context-manifest.tsv")" "$literal" 'literal source path provenance'
+                assert_contains "$(find "$PKG" -type f -name '*.txt' -exec cat {} \;)" CHANGED_LITERAL_BODY 'changed literal canon supplied'
             fi
             unsafe=$'specs/product/constraints/line\nbreak.md'
             printf '# Constraint\n\n- **C-78 Rejected path** — Scope: all parts.\n' > "$unsafe"
@@ -511,9 +515,7 @@ EOF
             if build; then
                 assert_eq unavailable "$(cat "$PKG/bounds-status.txt")" 'incomplete canon is not complete bounds'
                 assert_eq '' "$(cat "$PKG/bounds.txt")"
-                assert_contains "$(cat "$PKG/bounds-inputs.tsv")" "$(git rev-parse HEAD:specs/product/constraints/é.md)" 'literal bounds input blob'
-                assert_contains "$(cat "$PKG/context-manifest.tsv")" 'specs/product/constraints/é.md' 'literal source path provenance'
-                assert_contains "$(find "$PKG" -type f -name '*.txt' -exec cat {} \;)" CHANGED_LITERAL_BODY 'changed literal canon supplied'
+                assert_not_contains "$(cat "$PKG/bounds-inputs.tsv")" "$literal" 'unsafe tree is not captured'
                 assert_contains "$(cat "$PKG/context-gaps.txt")" 'unsafe spec input' 'unsupported control path has explicit rejection gap'
                 integrity
             fi ;;
@@ -868,7 +870,8 @@ EOF
             rm "$parent" && ln -s "$ID.md" "$parent" && git add "$parent" &&
                 git commit -qm 'replace retained parent with symlink' || exit 1
             if build; then
-                assert_contains "$(non_verification_gaps)" "missing/unsafe parent $(git rev-parse HEAD):$parent"
+                assert_contains "$(non_verification_gaps)" "unsafe spec input $parent at $(git rev-parse HEAD)"
+                assert_contains "$(non_verification_gaps)" 'HEAD references unresolved'
                 assert_contains "$(cat "$PKG/context-manifest.tsv")" \
                     $'\treference-base\tParent obligation (900-programme): Holds and lane limits'
                 assert_not_contains "$(cat "$PKG/context-manifest.tsv")" \
