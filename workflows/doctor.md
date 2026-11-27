@@ -30,7 +30,8 @@ marker. Both counts are under `trace` in JSON, and both advisories fail only in 
 Residue checking is a best-effort scan of headings, paragraphs, lists and pipe-delimited tables.
 It avoids reporting text this subset protects: blockquotes, code, comments, link destinations and
 titles, single-line reference definitions, autolinks and inline tags, except for explicit stock
-anchors. Unusual Markdown can hide slots. If strict doctor flags protected text, please report it.
+anchors. HTML blocks (CommonMark types 1–6) are protected. Unusual Markdown can hide slots.
+If strict doctor flags protected text, please report it.
 Escape the opening `<` as `\<` (unless the stock prompt already uses that escape), or move the text
 into a plain fenced code block outside the stock Commands and Mermaid contexts.
 

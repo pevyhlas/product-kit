@@ -1954,6 +1954,7 @@ Close here -->.
 MD
             ;;
         block-comment)
+            expected=0
             cat >> "$arch" <<'MD'
 Architecture note with an unmatched `.
 <!-- This genuine comment starts on its own line, even with a ` and <delivery, tooling> here.
@@ -1965,6 +1966,7 @@ The hidden example was <delivery, tooling>.
 MD
             ;;
         table-block-comment)
+            expected=0
             cat >> "$arch" <<'MD'
 | Topic | Notes |
 |-------|-------|
@@ -2135,8 +2137,10 @@ mv "$arch.saved" "$arch"
 
 it "a block directly after a table keeps its multiline Markdown protection"
 cp "$arch" "$arch.saved"
-for boundary in details-comment div-title atx-tab details-pipe-comment div-pipe-title autolink-surplus; do
+for boundary in details-comment div-title atx-tab details-pipe-comment div-pipe-title autolink-surplus \
+        details-checklist span-surplus html-blank; do
     cp "$arch.saved" "$arch"
+    expected=0
     cat >> "$arch" <<'MD'
 
 ## Markdown boundaries
@@ -2193,10 +2197,41 @@ MD
 | Service | Ready | <delivery, tooling> |
 MD
             ;;
+        details-checklist)
+            cat >> "$arch" <<'MD'
+<details><!-- Checklist: build | release
+- The audit example uses <delivery, tooling> as its sample label.
+1. Record <delivery, tooling>.
+## Confirm <delivery, tooling>
+-->
+<summary>Rollout notes</summary>
+</details>
+MD
+            ;;
+        span-surplus)
+            cat >> "$arch" <<'MD'
+<span class="status">Ready</span> | Production
+| Service | Ready | <delivery, tooling> |
+MD
+            ;;
+        html-blank)
+            expected=1
+            cat >> "$arch" <<'MD'
+<div>
+<delivery, tooling>
+</div>
+Still within the block: <delivery, tooling>.
+
+Still active: <A few lines: where data lives and where the trust boundaries are.>
+MD
+            ;;
     esac
     run bash -c "cd '$EX' && bash .prdkit/scripts/bash/doctor.sh --strict --json"
-    assert_eq 0 "$STATUS" "$boundary: $OUTPUT"
-    assert_eq '[0,0]' "$(jq -c '[.trace["template-placeholder"], (.findings | length)]' <<< "$OUTPUT")" "$boundary: $OUTPUT"
+    assert_eq "$expected" "$STATUS" "$boundary: $OUTPUT"
+    assert_eq "[$expected,$expected]" "$(jq -c '[.trace["template-placeholder"], (.findings | length)]' <<< "$OUTPUT")" "$boundary: $OUTPUT"
+    if [ "$boundary" = html-blank ]; then
+        assert_contains "$OUTPUT" '(<A few lines: where data lives and where the trust boundaries are.>)'
+    fi
 done
 mv "$arch.saved" "$arch"
 

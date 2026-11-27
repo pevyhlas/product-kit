@@ -36,6 +36,12 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
             attribute = "[[:space:]]+[A-Za-z_:][A-Za-z0-9_.:-]*" \
                 "([[:space:]]*=[[:space:]]*(\"[^\"]*\"|\047[^\047]*\047|[^[:space:]\"<>=`\047]+))?"
             html_tag = "^<[A-Za-z][A-Za-z0-9:_-]*(" attribute ")*[[:space:]]*/?>"
+            # CommonMark 0.31.2 §4.6, type 6. Type 7 is deliberately inline here.
+            html_block_tags = "^</?(address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|" \
+                "dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|" \
+                "h1|h2|h3|h4|h5|h6|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|" \
+                "ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)" \
+                "([[:blank:]]|>|/>|$)"
             n = split(stages, defaults, ">")
             for (i = 1; i <= n; i++) stage_name[defaults[i]] = 1
             stage_name["general availability"] = 1
@@ -390,16 +396,31 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
                 scan_plain(group_names, a[i], nr)
             }
         }
-        # Resume at the first exposed text after a comment that crossed a
-        # block boundary. Comment contents cannot alter the block structure.
-        function comment_tail(text,   at) {
-            if (!(at = index(text, "-->"))) return ignored
-            comment = 0
-            return ignored substr(text, at + 3)
+        # Return the closing marker (or a blank-line boundary) for types 1–6.
+        function html_block_end(text,   tag) {
+            if (text !~ /^ ? ? ?</) return ""
+            sub(/^ */, "", text)
+            if (text ~ /^<!--/) return "-->"
+            if (text ~ /^<[?]/) return "?>"
+            if (text ~ /^<![A-Za-z]/) return ">"
+            if (text ~ /^<!\[CDATA\[/) return "]]>"
+            text = tolower(text)
+            if (match(text, /^<(script|pre|style|textarea)([[:blank:]]|>|$)/)) {
+                tag = substr(text, 2, RLENGTH - 1)
+                sub(/[[:blank:]>]$/, "", tag)
+                return "</" tag ">"
+            }
+            return (text ~ html_block_tags ? "blank" : "")
         }
-        function html_block_start(text) {
-            # A tag-name boundary excludes scheme and email autolinks.
-            return text ~ /^ ? ? ?<(!--|[?]|![A-Za-z]|!\[CDATA\[|\/?[A-Za-z][A-Za-z0-9-]*([[:space:]]|>|\/>|$))/
+        function html_block(first, base, text, ending,   i) {
+            for (i = first; i <= last; i++) {
+                if (i > first) {
+                    text = src[i]
+                    if (text ~ /^[[:blank:]]*$/ ? ending == "blank" : indent(text) < base) break
+                }
+                if (ending != "blank" && index(tolower(text), ending)) return i + 1
+            }
+            return i
         }
         function table(first, base, text, width,   values,counts,i,j,k,n,parts) {
             split_cells(text, parts)
@@ -413,8 +434,7 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
                 text = src[i]
                 if (indent(text) < base) break
                 text = relative(text, base)
-                if (text !~ /[^[:blank:]]/ || text ~ /^    / || interrupts(text) ||
-                    html_block_start(text) || reference_definition(text)) break
+                if (text !~ /[^[:blank:]]/ || text ~ /^    / || interrupts(text) || reference_definition(text)) break
                 # GFM pads short rows (including one cell without pipes) and
                 # discards surplus cells. Missing cells have nothing to scan.
                 n = split_cells(text, parts)
@@ -469,12 +489,9 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
         function atx(text) {
             return text ~ /^ ? ? ?##?#?#?#?#?([[:blank:]]|$)/
         }
-        function comment_prefix(text) {
-            return match(text, /^ ? ? ?<!--/) ? RLENGTH : 0
-        }
         function interrupts(text, in_paragraph,   prefix) {
             if (atx(text) || text ~ /^ ? ? ?>/ || fence_run(text) != "" ||
-                thematic(text) || comment_prefix(text)) return 1
+                thematic(text) || html_block_end(text) != "") return 1
             prefix = list_prefix(text)
             if (!in_paragraph || prefix == "") return prefix != ""
             return (length(prefix) < length(text) && prefix ~ /^ *([-*+]|0*1[.)])/)
@@ -522,8 +539,8 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
             }
             return i
         }
-        function document(   i,text,line,lead,base,depth,indents,items,item,marker_len,prefix,pad,mark,columns_n,quote,n) {
-            group_names = group; section = ""; comment = 0
+        function document(   i,text,line,lead,base,depth,indents,items,item,marker_len,prefix,pad,mark,columns_n,quote,ending) {
+            group_names = group; section = ""
             i = 1
             if (group == "agent-definition" && src[i] == "---") {
                 for (i++; i <= last && src[i] != "---"; i++)
@@ -532,12 +549,6 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
             }
             while (i <= last) {
                 line = src[i]
-                if (comment) {
-                    line = comment_tail(line)
-                    if (!comment) body(line, i, 0, 0)
-                    i++
-                    continue
-                }
                 lead = indent(line)
                 while (depth && lead < indents[depth] && line ~ /[^[:blank:]]/) depth--
                 base = (depth ? indents[depth] : 0)
@@ -563,14 +574,11 @@ template_residue_rows() ( # root, followed by the already discovered spec and ch
                 }
                 item = (depth ? items[depth] : 0)
                 if (text ~ /^    / || text !~ /[^[:blank:]]/ || reference_definition(text)) i++
-                else if ((n = comment_prefix(text))) {
-                    comment = 1
-                    text = comment_tail(substr(text, n + 1))
-                    if (!comment) body(text, i, 0, 0)
-                    i++
+                else if ((ending = html_block_end(text)) != "") {
+                    i = html_block(i, base, text, ending)
                 } else if (text ~ /^ ? ? ?>/) {
                     sub(/^([[:blank:]]*>)+[[:blank:]]*/, "", text)
-                    quote = (text != "" && text !~ /^<!--/ && !interrupts(text))
+                    quote = (text != "" && !interrupts(text))
                     i++
                 } else if ((mark = fence_run(text)) != "") {
                     sub(/^ */, "", text)
