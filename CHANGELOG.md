@@ -44,8 +44,9 @@ change by change.
   Bounds also become `unavailable` for a scope record that is executable, not LF-terminated, has
   other than exactly one valid Tier, or carries an unsupported State review field, and when the
   BASE or HEAD spec namespace preflight rejects an entry. That rejection can leave doctor,
-  adoption and requested CI not collected, and review packages record gaps instead of copying
-  explicit spec `--context` files. A successful build or `--verify` no longer implies a present
+  adoption and requested CI not collected. Review packages can then omit explicit spec
+  `--context` files: a rejected HEAD capture skips the copy and records a gap, while a BASE-only
+  rejection keeps the HEAD copy and records a gap for the BASE comparison. A successful build or `--verify` no longer implies a present
   record, collected bounds, captured context or green checks: read `facts.bounds.state`,
   `scope_revision`, each collector result, `bounds-status.txt` and the package manifest and gaps,
   then repair the scope record or flagged spec inputs and recollect where those are required.
