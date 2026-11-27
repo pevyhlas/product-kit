@@ -270,6 +270,14 @@ review_bounds_list "$BASE_SHA" "$CTX_TMP/spec-paths-base" review_bounds_note \
 # shellcheck disable=SC2034 # Consumed by review_context_build.
 base_specs="$bounds_spec_presence"
 base_has_gitlinks="$bounds_has_gitlinks"
+{
+    review_bounds_stage "$HEAD_SHA" "$CTX_TMP/material" "$CTX_TMP/spec-paths-head" review_bounds_note || head_capture=false
+    review_bounds_inputs "$HEAD_SHA" "$CTX_TMP/material" "$CTX_TMP/head-inputs" "$CTX_TMP/spec-paths-head" review_bounds_note || head_capture=false
+} 2>> "$CTX_TMP/head-inventory.stderr"
+{
+    review_bounds_stage "$BASE_SHA" "$CTX_TMP/base" "$CTX_TMP/spec-paths-base" review_bounds_note || base_list_ok=false
+    review_bounds_inputs "$BASE_SHA" "$CTX_TMP/base" "$CTX_TMP/base-inputs" "$CTX_TMP/spec-paths-base" review_bounds_note || base_list_ok=false
+} 2>> "$CTX_TMP/base-inventory.stderr"
 reuse_context=full
 if [ -n "$SINCE" ] || [ "${#CONTEXT[@]}" -ne 0 ] || [ "${#EVIDENCE[@]}" -ne 0 ] ||
     ! $head_capture || ! $base_list_ok || $head_has_gitlinks || $base_has_gitlinks ||
@@ -435,12 +443,6 @@ if [ -n "$SINCE" ]; then
     fi
     inventory delta.patch "$source_label"
 fi
-for p in ${CONTEXT[@]+"${CONTEXT[@]}"}; do
-    if review_bounds_blocked "$CTX_TMP/spec-paths-head.aliases" "$p"; then continue; fi
-    mkdir -p "$(dirname "$PACKAGE_DIR/context/$p")"
-    git -C "$REPO_ROOT" show "$HEAD_SHA:$p" > "$PACKAGE_DIR/context/$p"
-    inventory "context/$p" "$HEAD_SHA:$p"
-done
 # Ordinary attachments share one directory. Fold ASCII case to also avoid overwrites on
 # case-insensitive checkouts; never rely on cp overwriting a second producer's evidence.
 evidence_keys=()

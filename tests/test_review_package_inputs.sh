@@ -830,6 +830,53 @@ EOF
                 assert_eq 1 "$(printf '%s\n' "$section" | grep -Fc 'Follow the published target')" 'unchanged checkpoint only once'
             fi
 
+            it "A blocked HEAD parent leaves its BASE hold unresolved, not removed"
+            previous="$(git rev-parse HEAD)"
+            shim="$(mktemp -d)"; track_tmp "$shim"
+            {
+                printf '#!/usr/bin/env bash\nreal=%q\n' "$(command -v mkdir)"
+                cat <<'EOF'
+"$real" "$@" || exit
+case "$1" in
+    */material/specs/changes) ln -s 001-small.md "$1/900-programme.md" ;;
+esac
+EOF
+            } > "$shim/mkdir"
+            {
+                printf '#!/usr/bin/env bash\nreal=%q\nblocked=%q\ntrace=%q\n' \
+                    "$(command -v git)" "$(git rev-parse "HEAD:$parent")" "$shim/blocked-blob-opens"
+                cat <<'EOF'
+if [ "${3:-}" = cat-file ] && [ "${4:-}" = blob ] && [ "${5:-}" = "$blocked" ]; then
+    printf 'opened blocked HEAD parent\n' >> "$trace"
+fi
+exec "$real" "$@"
+EOF
+            } > "$shim/git"
+            chmod +x "$shim/mkdir" "$shim/git"
+            if PATH="$shim:$PATH" build; then
+                assert_eq unavailable "$(cat "$PKG/bounds-status.txt")"
+                assert_contains "$(non_verification_gaps)" 'HEAD references unresolved'
+                assert_contains "$(cat "$PKG/context-manifest.tsv")" \
+                    $'\treference-base\tParent obligation (900-programme): Holds and lane limits'
+                assert_not_contains "$(cat "$PKG/context-manifest.tsv")" \
+                    $'\treference-removed\tParent obligation (900-programme)'
+                assert_contains "$(obligations_section)" "$hold"
+                assert_eq '' "$([ ! -e "$shim/blocked-blob-opens" ] || cat "$shim/blocked-blob-opens")"
+            fi
+
+            it "An unsafe HEAD parent cannot be opened even when its child was captured"
+            rm "$parent" && ln -s "$ID.md" "$parent" && git add "$parent" &&
+                git commit -qm 'replace retained parent with symlink' || exit 1
+            if build; then
+                assert_contains "$(non_verification_gaps)" "missing/unsafe parent $(git rev-parse HEAD):$parent"
+                assert_contains "$(cat "$PKG/context-manifest.tsv")" \
+                    $'\treference-base\tParent obligation (900-programme): Holds and lane limits'
+                assert_not_contains "$(cat "$PKG/context-manifest.tsv")" \
+                    $'\treference-removed\tParent obligation (900-programme)'
+                assert_contains "$(obligations_section)" "$hold"
+            fi
+            git checkout -q "$previous" || exit 1
+
             it "An unresolved BASE reference requires full context even after HEAD drops it"
             git rm -q "$parent" specs/decisions/guidance.md
             printf '\nR-99.\n' >> "$record"

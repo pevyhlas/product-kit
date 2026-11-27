@@ -43,27 +43,10 @@ review_bounds_spec_entry() { # include obstructions at normal spec directories
     esac
 }
 
-review_bounds_path_key() { # encode line delimiters without losing any Git path bytes
-    bounds_path_key="${1//%/%25}"
-    bounds_path_key="${bounds_path_key//$'\n'/%0a}"
-    bounds_path_key="${bounds_path_key//$'\r'/%0d}"
-}
-
-review_bounds_blocked() { # alias list, path; reject exact aliases and descendants
-    [ -s "$1" ] || return 1
-    local bounds_path_key alias
-    review_bounds_path_key "$2"
-    while IFS= read -r alias; do
-        case "$bounds_path_key" in "$alias"|"$alias"/*) return 0 ;; esac
-    done < "$1"
-    return 1
-}
-
 review_bounds_list() { # rev, spool, diagnostic callback; sets presence and gitlink flag
-    local rev="$1" paths="$2" note="$3" entry path count=0 expected presence=absent bounds_path_key
+    local rev="$1" paths="$2" note="$3" entry path count=0 expected presence=absent
     bounds_spec_presence=unknown
     bounds_has_gitlinks=false
-    : > "$paths.aliases" || return 1
     # Git is trusted: its exit status and successful output are trusted; these checks only validate transport framing.
     if git -C "$REPO_ROOT" ls-tree -r -t -z "$rev" -- specs > "$paths" &&
         expected="$(verify_nul_count "$paths")"; then
@@ -76,74 +59,163 @@ review_bounds_list() { # rev, spool, diagnostic callback; sets presence and gitl
                 presence=present
                 case "$entry" in '160000 commit '*) bounds_has_gitlinks=true ;; esac
             fi
-            review_bounds_path_key "$path"
-            printf '%s\n' "$bounds_path_key" || break
             count=$((count+1))
-        done < "$paths" > "$paths.names" || count=-1
-        if [ "$count" -eq "$expected" ] && LC_ALL=C awk '
-            { paths[NR] = $0; count[tolower($0)]++ }
-            END { for (i = 1; i <= NR; i++) if (count[tolower(paths[i])] > 1) print paths[i] }
-        ' "$paths.names" > "$paths.aliases"; then
+        done < "$paths" || count=-1
+        if [ "$count" -eq "$expected" ]; then
             bounds_spec_presence="$presence"
-            if [ ! -s "$paths.aliases" ]; then return 0; fi
-            while IFS= read -r path; do
-                "$note" canon "ASCII case-fold collision: $path at $rev"
-            done < "$paths.aliases"
-            return 1
+            return 0
         fi
     fi
     : > "$paths"
+    : > "$paths.unsafe"
     "$note" canon "cannot completely enumerate spec entries at $rev"
     return 1
 }
 
-review_bounds_specs() { # rev, material dir, optional input TSV, checked spool, diagnostic callback
-    local rev="$1" material="$2" inputs="$3" paths="$4" note="$5" entry path blob status=0
+review_write_blob() ( # blob (or - to reserve an empty file), fresh destination
+    set -o noclobber
+    # Bash noclobber alone does not reject every kind of nonregular destination.
+    [ ! -e "$2" ] && [ ! -L "$2" ] && { exec 3> "$2"; } || return 1
+    [ "$1" = - ] || git -C "$REPO_ROOT" cat-file blob "$1" >&3
+)
+
+review_entry_identity() {
+    stat -c '%d:%i' "$1" 2>/dev/null || stat -f '%d:%i' "$1"
+}
+
+review_staged_blob() { # checked spool, exact path -> blob; never resolve a filesystem alias
+    [ ! -f "$1.unsafe" ] && [ -f "$1.captured" ] || return 1
+    LC_ALL=C needle="$2" awk -F '\t' '$1 == ENVIRON["needle"] { print $3; found=1; exit }
+        END { exit !found }' "$1.captured"
+}
+
+review_bounds_stage() { # rev, material dir, checked spool, diagnostic callback
+    local rev="$1" material="$2" paths="$3" note="$4" entry path blob kind identity status=0 failed='' written=0
+    local use_stat=true seen=() prior checked=0
     local LC_ALL=C
     export LC_ALL
-    if ! mkdir -p "$material/.prdkit"; then
+    if ! { mkdir -p "$material/.prdkit" && : > "$paths.captured" &&
+        : > "$paths.reserved" && : > "$paths.identities"; }; then
+        : > "$paths.unsafe"
         "$note" canon "cannot prepare spec inputs at $rev"
         return 1
     fi
-    if [ -n "$inputs" ]; then : > "$paths.captured" || return 1; fi
+    [ ! -f "$paths.unsafe" ] || return 1
+    # The Git tree is in parent-first order. Create each directory and leaf exclusively,
+    # then verify all bytes and identities together before allowing any spec parsing.
     while IFS= read -r -d '' entry; do
         path="${entry#*$'\t'}"
-        if review_bounds_blocked "$paths.aliases" "$path"; then status=1; continue; fi
-        case "$path" in
-            specs/changes/*)
-                case "$entry" in '040000 tree '*|'100644 blob '*|'100755 blob '*) continue ;; esac ;;
-        esac
-        review_bounds_spec_entry "$entry" "$path" || continue
-        if [[ "$path" = specs/*.md ]] && safe_path "$path" object &&
-            blob="$(review_bounds_entry_blob "$entry")"; then
-            if mkdir -p "$(dirname "$material/$path")" &&
-                git -C "$REPO_ROOT" cat-file blob "$blob" > "$material/$path" &&
-                review_file_without_nul "$material/$path"; then
-                if [ -n "$inputs" ]; then
-                    printf '%s\t%s\t%s\n' "$path" "$rev" "$blob" >> "$paths.captured" || return 1
-                fi
-                continue
-            fi
-            "$note" canon "unreadable/non-text input $path at $rev"
-            rm -f "$material/$path"
-        else "$note" canon "unsafe spec input $(printf '%q' "$path") at $rev"; fi
-        status=1
+        if ! safe_path "$path" object; then
+            "$note" canon "unsafe spec input $(printf '%q' "$path") at $rev"
+            status=1; continue
+        fi
+        if [[ "$entry" = '040000 tree '* ]]; then
+            mkdir "$material/$path" 2>/dev/null || { failed="$path"; break; }
+            kind=dir; blob=-
+        else
+            kind=blob
+            if ! blob="$(review_bounds_entry_blob "$entry")"; then kind=opaque; blob=-; fi
+            review_write_blob - "$material/$path" 2>/dev/null || { failed="$path"; break; }
+        fi
+        printf '%s\t%s\t%s\n' "$path" "$kind" "$blob" >> "$paths.reserved" || { failed="$path"; break; }
     done < "$paths"
-    if [ -n "$inputs" ]; then
-        # Keep the bounds tool's spec subset and order, recording the same blobs
-        # we copied from the checked spool rather than resolving their paths again.
-        if ! verify_lines spec_files "$material" > "$paths.selected" ||
-            ! awk -F '\t' '
+    if [ -z "$failed" ]; then
+        # Only fill names this capture created exclusively. Never read a candidate
+        # blob at all when reservation found a collision.
+        : > "$paths.written" || { : > "$paths.unsafe"; return 1; }
+        while IFS=$'\t' read -r path kind blob; do
+            if [ "$kind" = blob ] && ! git -C "$REPO_ROOT" cat-file blob "$blob" > "$material/$path"; then
+                "$note" canon "unreadable/non-text input $path at $rev"
+                rm -f "$material/$path" || { failed="$path"; break; }
+                status=1; continue
+            fi
+            printf '%s\t%s\t%s\n' "$path" "$kind" "$blob" >> "$paths.written" || { failed="$path"; break; }
+            written=$((written+1))
+        done < "$paths.reserved"
+    fi
+    if [ -z "$failed" ]; then
+        review_entry_identity "$material" >/dev/null 2>&1 || use_stat=false
+        while IFS=$'\t' read -r path kind blob; do
+            if [ -L "$material/$path" ] ||
+                { [ "$kind" = dir ] && [ ! -d "$material/$path" ]; } ||
+                { [ "$kind" != dir ] && [ ! -f "$material/$path" ]; }; then
+                failed="$path"; break
+            fi
+            if $use_stat; then
+                identity="$(review_entry_identity "$material/$path")" || { failed="$path"; break; }
+            else
+                # Bash's same-file test also compares device and inode, even
+                # when no GNU/BSD stat utility is on PATH.
+                for prior in ${seen[@]+"${seen[@]}"}; do
+                    if [ "$material/$path" -ef "$material/$prior" ]; then failed="$path"; break 2; fi
+                done
+                seen+=("$path")
+                checked=$((checked+1))
+                identity="$checked"
+            fi
+            if [ "$kind" = blob ] &&
+                [ "$(git -C "$REPO_ROOT" hash-object --no-filters "$material/$path")" != "$blob" ]; then
+                failed="$path"; break
+            fi
+            printf '%s\n' "$identity" >> "$paths.identities" || { failed="$path"; break; }
+        done < "$paths.written"
+    fi
+    if [ -n "$failed" ] ||
+        ! awk -v expected="$written" 'seen[$0]++ { duplicate=1; exit }
+            END { exit (duplicate || NR != expected) }' "$paths.identities"; then
+        : > "$paths.unsafe"
+        "$note" canon "spec materialization collision or verification mismatch${failed:+: $failed} at $rev"
+        return 1
+    fi
+    # Opaque entries occupied a name only; never dereference a symlink or gitlink.
+    while IFS=$'\t' read -r path kind blob; do
+        case "$kind:$path" in
+            opaque:*)
+                rm -f "$material/$path" || { : > "$paths.unsafe"; return 1; }
+                "$note" canon "unsafe spec input $(printf '%q' "$path") at $rev"
+                status=1 ;;
+            dir:specs/*.md)
+                "$note" canon "unsafe spec input $(printf '%q' "$path") at $rev"
+                status=1 ;;
+            blob:*)
+                case "$path" in
+                    specs/changes/*) ;; # A specific record is checked when selected.
+                    specs/*.md)
+                        if ! review_file_without_nul "$material/$path"; then
+                            "$note" canon "unreadable/non-text input $path at $rev"
+                            rm -f "$material/$path" || { : > "$paths.unsafe"; return 1; }
+                            status=1; continue
+                        fi ;;
+                    specs|specs/product|specs/architecture|specs/parts|specs/decisions|specs/changes)
+                        "$note" canon "unsafe spec input $path at $rev"
+                        status=1 ;;
+                esac
+                printf '%s\t%s\t%s\n' "$path" "$rev" "$blob" >> "$paths.captured" ||
+                    { : > "$paths.unsafe"; return 1; } ;;
+        esac
+    done < "$paths.written"
+    return "$status"
+}
+
+review_bounds_inputs() { # rev, material dir, optional output TSV, checked spool, diagnostic callback
+    local rev="$1" material="$2" inputs="${3:-/dev/null}" paths="$4" note="$5"
+    [ ! -f "$paths.unsafe" ] || return 1
+    # Keep the bounds tool's spec subset and order, recording the same blobs
+    # we verified above. A filesystem lookup must not invent a Git path.
+    if ! verify_lines spec_files "$material" > "$paths.selected" ||
+        ! { [ ! -f "$material/specs/product/lifecycle.md" ] || printf '%s\n' specs/product/lifecycle.md; } > "$paths.lifecycle" ||
+        ! awk -F '\t' '
                 FILENAME == ARGV[1] { rows[$1] = $0; next }
+                FILENAME == ARGV[2] { if (!($0 in rows)) failed=1; next }
                 $0 in rows { print rows[$0]; next }
                 { failed = 1 }
                 END { exit failed }
-            ' "$paths.captured" "$paths.selected" >> "$inputs"; then
-            "$note" canon "cannot inventory materialized spec inputs at $rev"
-            return 1
-        fi
+            ' "$paths.captured" "$paths.lifecycle" "$paths.selected" > "$paths.selected-rows"; then
+        "$note" canon "cannot inventory materialized spec inputs at $rev"
+        : > "$paths.unsafe"
+        return 1
     fi
-    return "$status"
+    cat "$paths.selected-rows" >> "$inputs"
 }
 
 review_bounds_record_rev() { # HEAD and path -> scope revision
@@ -166,17 +238,12 @@ review_bounds_record_rev() { # HEAD and path -> scope revision
     return 1
 }
 
-review_bounds_record() { # rev, path, material dir, optional input TSV, checked spool
+review_bounds_record() { # rev, path, staged dir, optional input TSV, checked spool
     local rev="$1" path="$2" material="$3" inputs="$4" entry blob
-    ! review_bounds_blocked "$5.aliases" "$path" || return 1
+    blob="$(review_staged_blob "$5" "$path")" || return 1
     entry="$(git -C "$REPO_ROOT" ls-tree "$rev" -- ":(literal)$path")" &&
-        blob="$(review_bounds_entry_blob "$entry" plain)" &&
-        mkdir -p "$(dirname "$material/$path")" || return 1
-    if ! git -C "$REPO_ROOT" cat-file blob "$blob" > "$material/$path" ||
-        ! review_file_without_nul "$material/$path"; then
-        rm -f "$material/$path"
-        return 1
-    fi
+        [ "$(review_bounds_entry_blob "$entry" plain)" = "$blob" ] &&
+        review_file_without_nul "$material/$path" || return 1
     if [ -n "$inputs" ]; then printf '%s\t%s\t%s\n' "$path" "$rev" "$blob" >> "$inputs"; fi
 }
 
@@ -191,12 +258,15 @@ review_bounds_capture_head() { # HEAD, material dir, input TSV, checked spool, s
     local rev="$1" material="$2" inputs="$3" paths="$4" items="$5" note="$6" ok=true
     local LC_ALL=C
     export LC_ALL
-    review_bounds_specs "$rev" "$material" "$inputs" "$paths" "$note" || ok=false
+    if ! review_bounds_inputs "$rev" "$material" "$inputs" "$paths" "$note"; then
+        : > "$items"
+        return 1
+    fi
     review_bounds_items "$material" "$items" "HEAD spec ID inventory incomplete at $rev" "$note" || ok=false
     "$ok"
 }
 
-review_bounds_run() ( # material dir, scope (empty if unavailable), inventory complete, status path
+review_bounds_run() ( # material dir, scope (empty if unavailable), inventory complete, status path, scope file
     local material="$1" scope="$2" complete="$3" state_path="$4" record tiers
     set -o pipefail
     export LC_ALL=C
@@ -208,7 +278,7 @@ review_bounds_run() ( # material dir, scope (empty if unavailable), inventory co
         printf 'No usable change record for bounds scope.\n' >&2; return 2
     fi
     if [ "$scope" != --all ]; then
-        record="$material/specs/changes/$scope.md"
+        record="$5"
         if ! review_record_format "$record" || ! tiers="$(record_tiers < "$record")" ||
             [[ ! "$tiers" =~ ^T[0-3]$ ]]; then
             printf 'Change record must be LF-terminated Markdown with exactly one valid Tier and no unsupported State review field: specs/changes/%s.md\n' "$scope" >&2
@@ -216,7 +286,7 @@ review_bounds_run() ( # material dir, scope (empty if unavailable), inventory co
         fi
     fi
     local status=0
-    (bounds_for_root "$material" "$scope" true "$state_path") > "$state_path.output" || status=$?
+    (bounds_for_root "$material" "$scope" true "$state_path" "${5:-}") > "$state_path.output" || status=$?
     if [ "$status" -eq 0 ]; then cat "$state_path.output" || status=$?; fi
     rm -f "$state_path.output" || return 1
     if [ "$status" -ne 0 ]; then printf 'unavailable\n' > "$state_path" || return 1; fi
@@ -236,23 +306,28 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     is_change_id "$id" && [[ "$head" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] || exit 2
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
-    scope=''; complete=true
+    scope=''; scope_file=''; complete=true
     path="specs/changes/$id.md"
     review_bounds_list "$head" "$work/specs" review_bounds_note || complete=false
-    if [ -s "$work/specs.aliases" ] && [ -n "${4:-}" ]; then cat "$work/specs.aliases" > "$4"; fi
+    review_bounds_stage "$head" "$work/material" "$work/specs" review_bounds_note || complete=false
     if rev="$(review_bounds_record_rev "$head" "$path")"; then
-        spool="$work/specs"
+        spool="$work/specs"; record_material="$work/material"
         if [ "$rev" != "$head" ]; then
             spool="$work/historical"
+            record_material="$work/history"
             review_bounds_list "$rev" "$spool" review_bounds_note || :
+            review_bounds_stage "$rev" "$record_material" "$spool" review_bounds_note || :
+            review_bounds_inputs "$rev" "$record_material" "" "$spool" review_bounds_note || :
         fi
-        if ! review_bounds_blocked "$work/specs.aliases" "$path" &&
-            review_bounds_record "$rev" "$path" "$work/material" "" "$spool"; then scope="$id"
+        if [ ! -f "$work/specs.unsafe" ] &&
+            review_bounds_record "$rev" "$path" "$record_material" "" "$spool"; then
+            scope="$id"; scope_file="$record_material/$path"
         else review_bounds_note child "unreadable child record $rev:$path"; fi
     fi
     review_bounds_capture_head "$head" "$work/material" "$work/inputs" "$work/specs" "$work/items" review_bounds_note || complete=false
+    if [ -f "$work/specs.unsafe" ] && [ -n "${4:-}" ]; then : > "$4"; fi
     rc=0
-    review_bounds_run "$work/material" "$scope" "$complete" "$work/state" > "$work/bounds" || rc=$?
+    review_bounds_run "$work/material" "$scope" "$complete" "$work/state" "$scope_file" > "$work/bounds" || rc=$?
     cat "$work/state"
     printf '%s\n' "${rev:--}"
     cat "$work/bounds"

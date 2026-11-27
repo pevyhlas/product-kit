@@ -15,8 +15,8 @@
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 source "$SCRIPT_DIR/spec-lib.sh"
-bounds_for_root() { # root, scope, [complete capture allows empty bounds], [state output path]
-local root="$1" allow_empty="${3:-false}" state_file="${4:-}"; shift
+bounds_for_root() { # root, scope, [complete capture allows empty bounds], [state output path], [checked scope file]
+local root="$1" allow_empty="${3:-false}" state_file="${4:-}" scope_file="${5:-}"; shift
 usage='Usage: bounds.sh <change-id> | bounds.sh --all'
 case "${1:-}" in
     -h|--help) echo "$usage"; exit 0 ;;
@@ -24,7 +24,7 @@ case "${1:-}" in
 esac
 scope=""
 if [ "$1" != "--all" ]; then
-    record="$root/specs/changes/$1.md"
+    record="${scope_file:-$root/specs/changes/$1.md}"
     [ -f "$record" ] || { echo "No change record at specs/changes/$1.md" >&2; exit 2; }
     # The header's Parts and Journeys fields, before the first section; their IDs are read below.
     spec_change_metadata "$record" tags >/dev/null || return 1

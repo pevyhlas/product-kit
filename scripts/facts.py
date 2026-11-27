@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from difflib import unified_diff
 import fcntl
 from fnmatch import fnmatchcase
-from hashlib import file_digest, sha256
+from hashlib import file_digest, new as hash_new, sha256
 import json
 import os
 from pathlib import Path
@@ -33,6 +33,10 @@ DIFF = ("git", "diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=no
 
 class Refusal(Exception):
     pass
+
+
+class SnapshotMismatch(Exception):
+    """The filesystem could not represent the frozen tree one-to-one."""
 
 
 def require(condition, reason):
@@ -83,12 +87,15 @@ def glob_matches(pattern, path):
     return len(names) in positions
 
 
-def load_map(root):
-    path = root / CONFIG
-    if not mode(path):
+def load_map(snapshot, head):
+    entry = snapshot.git("ls-tree", "-z", head, "--", f":(literal){CONFIG}")
+    if not entry:
         return None, {"kind": "absent"}
-    require(stat.S_ISREG(mode(path)), f"{CONFIG}: expected a regular JSON file")
-    raw = path.read_bytes()
+    metadata, name = entry.removesuffix(b"\0").split(b"\t", 1)
+    perms, kind, oid = metadata.split()
+    require(name == os.fsencode(CONFIG) and kind == b"blob" and perms in {b"100644", b"100755"},
+            f"{CONFIG}: expected a regular JSON file")
+    raw = snapshot.git("cat-file", "blob", oid.decode())
     try:
         rules = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object)
         require(isinstance(rules, dict), "expected an object mapping globs to check names")
@@ -176,8 +183,8 @@ class Snapshot(Collector):
         self.env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, HOME=str(directory),
                         PATH=os.pathsep.join(path for path in paths if os.path.isabs(path)) or os.defpath,
                         TMPDIR=str(scratch))
-        object_format = source.git("rev-parse", "--show-object-format").decode().strip()
-        self.git("init", "--quiet", "--template=", f"--object-format={object_format}")
+        self.object_format = source.git("rev-parse", "--show-object-format").decode().strip()
+        self.git("init", "--quiet", "--template=", f"--object-format={self.object_format}")
         self.shallow = read_optional(source.git_path("shallow"))
         if self.shallow is not None:
             (self.root / ".git/shallow").write_bytes(self.shallow)
@@ -212,7 +219,7 @@ class Snapshot(Collector):
         tools = {}
         for name in ("awk", "basename", "bash", "cat", "cksum", "cmp", "cut", "date", "dd",
                      "dirname", "find", "git", "grep", "head", "mkdir", "mktemp", "od", "readlink",
-                     "rm", "sed", "sha256sum", "shasum", "sort", "tail", "tr", "uniq", "wc"):
+                     "rm", "sed", "sha256sum", "shasum", "sort", "stat", "tail", "tr", "uniq", "wc"):
             path = shutil.which(name, path=self.env.get("PATH"))
             if path:
                 with open(path, "rb") as stream:
@@ -226,28 +233,30 @@ class Snapshot(Collector):
                 "local_tools_sha256": digest(json_bytes(tools)),
                 "doctor_date_sha256": digest(self.env["PRDKIT_TODAY"].encode())}
 
-    def materialize(self, head, aliases):
+    def materialize(self, head):
+        try:
+            self.write_tree(head)
+        except (FileExistsError, NotADirectoryError, IsADirectoryError) as exc:
+            path = Path(exc.filename).relative_to(self.root)
+            raise SnapshotMismatch(f"snapshot materialization collision: {str(path)!r}") from exc
+
+    def write_tree(self, head):
+        inventory = []
         blobs, links = [], []
-        for entry in self.git("ls-tree", "-rz", head).split(b"\0")[:-1]:
+        for entry in self.git("ls-tree", "-rtz", head).split(b"\0")[:-1]:
             metadata, name = entry.split(b"\t", 1)
-            if aliases:
-                # Same line-safe path encoding as review_bounds_path_key.
-                key = name.replace(b"%", b"%25").replace(b"\n", b"%0a").replace(b"\r", b"%0d")
-                while key and key not in aliases:
-                    key = key.rpartition(b"/")[0]
-                if key:
-                    continue
             perms, kind, oid = metadata.split()
             parts = os.fsdecode(name).split("/")
             require(all(part.casefold() not in {"", ".", "..", ".git"} for part in parts),
                     f"unsupported snapshot path: {name!r}")
             path = self.root.joinpath(*parts)
-            if perms == b"160000" and kind == b"commit":
-                path.mkdir(parents=True)
+            if (perms, kind) in {(b"040000", b"tree"), (b"160000", b"commit")}:
+                path.mkdir()
             else:
                 require(kind == b"blob" and perms in {b"100644", b"100755", b"120000"},
                         f"unsupported snapshot entry: {name!r}")
                 blobs.append((path, perms, oid))
+            inventory.append((path, perms, kind, oid))
         # Stream raw blobs rather than checkout filters, EOL conversion or archive attributes.
         # Materialize symlinks last, so no blob write can follow one.
         with TemporaryFile() as requests:
@@ -262,7 +271,6 @@ class Snapshot(Collector):
                         require(len(header) == 3 and header[:2] == [oid, b"blob"] and header[2].isdigit(),
                                 f"snapshot blob unavailable: {oid.decode()}")
                         size = int(header[2])
-                        path.parent.mkdir(parents=True, exist_ok=True)
                         if perms == b"120000":
                             require(0 < size < 4096, f"unsupported symlink: {path.relative_to(self.root)}")
                             links.append((path, os.fsdecode(stream.read(size))))
@@ -277,7 +285,8 @@ class Snapshot(Collector):
                         require(stream.read(1) == b"\n", "incomplete snapshot blob")
                     require(proc.wait() == 0, "could not read snapshot blobs")
                 except BaseException:
-                    proc.kill()
+                    if proc.poll() is None:
+                        proc.kill()
                     raise
         for path, target in links:
             level = len(path.parent.relative_to(self.root).parts)
@@ -286,6 +295,7 @@ class Snapshot(Collector):
                 level += -1 if part == ".." else int(part not in {"", "."})
                 require(level >= 0, f"snapshot symlink leaves HEAD: {path.relative_to(self.root)}")
             path.symlink_to(target)
+        self.verify_tree(inventory)
         for path, _ in links:
             try:
                 resolved = path.resolve()
@@ -293,6 +303,38 @@ class Snapshot(Collector):
                 raise Refusal(f"snapshot symlink cycle: {path.relative_to(self.root)}") from exc
             require(resolved.is_relative_to(self.root) and not resolved.is_relative_to(self.root / ".git"),
                     f"snapshot symlink leaves HEAD: {path.relative_to(self.root)}")
+
+    def verify_tree(self, inventory):
+        identities = set()
+        for path, perms, kind, oid in inventory:
+            try:
+                info = path.lstat()
+                identity = (info.st_dev, info.st_ino)
+                if identity in identities:
+                    raise ValueError("duplicate file identity")
+                if info.st_ino:
+                    identities.add(identity)
+                if kind != b"blob":
+                    if not stat.S_ISDIR(info.st_mode):
+                        raise ValueError("not a directory")
+                    continue
+                h = hash_new(self.object_format, usedforsecurity=False)
+                if perms == b"120000" and stat.S_ISLNK(info.st_mode):
+                    target = os.fsencode(os.readlink(path))
+                    h.update(f"blob {len(target)}\0".encode())
+                    h.update(target)
+                elif perms != b"120000" and stat.S_ISREG(info.st_mode):
+                    h.update(f"blob {info.st_size}\0".encode())
+                    with path.open("rb") as stream:
+                        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                            h.update(chunk)
+                else:
+                    raise ValueError("wrong file type")
+                if h.hexdigest().encode() != oid:
+                    raise ValueError("wrong blob hash")
+            except (OSError, ValueError) as exc:
+                name = str(path.relative_to(self.root))
+                raise SnapshotMismatch(f"snapshot verification mismatch: {name!r}: {exc}") from exc
 
 
 def read_optional(path):
@@ -370,11 +412,11 @@ def bounds_tools_stamp(collector):
             for name in BOUNDS_TOOLS}
 
 
-def bounds_fact(collector, snapshot, change_id, head, aliases_path):
+def bounds_fact(collector, snapshot, change_id, head, unsafe_path):
     # Use the installed implementation, like the package builder, but the frozen HEAD objects.
     command = ["bash", f"{SCRIPTS}/{BOUNDS_TOOLS[0]}", ".", head, change_id]
     bounds, raw = snapshot.capture(command, argv=[
-        command[0], str(collector.scripts / BOUNDS_TOOLS[0]), *command[2:], str(aliases_path)])
+        command[0], str(collector.scripts / BOUNDS_TOOLS[0]), *command[2:], str(unsafe_path)])
     bounds["details"] = snapshot.text(raw) if raw is not None else None
     state, _, payload = (bounds["details"] or "").partition("\n")
     scope, _, details = payload.partition("\n")
@@ -391,18 +433,27 @@ def bounds_fact(collector, snapshot, change_id, head, aliases_path):
 def collect(collector, snapshot, change_id, base, head, pr):
     inputs = snapshot.inputs(base, head)
     bounds_tools = bounds_tools_stamp(collector)
-    aliases_path = Path(snapshot.env["TMPDIR"]) / "spec-aliases"
-    bounds = bounds_fact(collector, snapshot, change_id, head, aliases_path)
-    aliases = set((read_optional(aliases_path) or b"").splitlines())
-    snapshot.materialize(head, aliases)
-    rules, config_stamp = load_map(snapshot.root)
+    unsafe_path = Path(snapshot.env["TMPDIR"]) / "unsafe-spec-capture"
+    bounds = bounds_fact(collector, snapshot, change_id, head, unsafe_path)
+    snapshot_gap = None
+    if unsafe_path.is_file():
+        snapshot_gap = "HEAD spec materialization could not be verified"
+    else:
+        try:
+            snapshot.materialize(head)
+        except SnapshotMismatch as exc:
+            snapshot_gap = snapshot.normalize(str(exc))
+            stderr = (bounds.get("stderr", "").rstrip() + "\n" + snapshot_gap).lstrip("\n")
+            bounds.update(state="unavailable", details=None, stderr=stderr,
+                          result="bounds not collected (snapshot materialization failed)")
+    rules, config_stamp = load_map(snapshot, head)
     span = f"{base}..{head}"
 
     def worktree_fact(script, *, doctor):
         command = ["bash", f"{SCRIPTS}/{script}", "--json"]
-        if aliases:
+        if snapshot_gap:
             return {"command": command, "exit_status": None, "details": None,
-                    "result": "not collected: HEAD spec paths collide under ASCII case folding"}
+                    "result": f"not collected: {snapshot_gap}"}
         return local_json(snapshot, command, doctor=doctor)
 
     facts = {"doctor": worktree_fact("doctor.sh", doctor=True), "bounds": bounds}

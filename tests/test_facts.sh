@@ -695,30 +695,84 @@ EOF
 } > "$fault_bin/git"
 compare_bounds unavailable 'actual child record missing or unrecoverable' env PATH="$fault_bin:$PATH"
 
-it 'ASCII case aliases are rejected before copying either HEAD path, preserving BASE'
+it 'Exclusive capture rejects a filesystem alias without guessing path folding, preserving BASE'
 git checkout -q --detach "$BASE" || exit 1
-upper=specs/product/Guides.md
-lower=specs/product/guides.md
-# Create both names in the Git tree without relying on a case-sensitive checkout.
+upper=specs/product/first.md
+lower=specs/product/second.md
 upper_blob="$(printf '# Upper\n\n- **C-11 Upper**: Scope: all.\n  Keep the original upper body.\n' | git hash-object -w --stdin)" || exit 1
 git update-index --add --cacheinfo "100644,$upper_blob,$upper" &&
     git commit -qm 'add binding upper path' || exit 1
 BASE="$(git rev-parse HEAD)"
-lower_blob="$(printf '# Lower\n\n- **C-12 Lower**: Scope: all.\n' | git hash-object -w --stdin)" || exit 1
-git -c core.ignoreCase=false update-index --add --cacheinfo "100644,$lower_blob,$lower" &&
-    git commit -qm 'add case-alias path' || exit 1
-compare_bounds unavailable 'ASCII case-fold collision'
-assert_contains "$(jq -r '.facts.bounds.stderr' "$CACHE/index.json")" 'ASCII case-fold collision'
+# Both paths have identical bytes so the hard-link check below depends on identity, not hash.
+git update-index --add --cacheinfo "100644,$upper_blob,$lower" &&
+    git commit -qm 'add a second spec path' || exit 1
+rm -f "$fault_bin/git"
+{
+    printf '#!/usr/bin/env bash\nreal=%q\n' "$(command -v mkdir)"
+    cat <<'EOF'
+"$real" "$@" || exit
+case "$1" in
+    */material/specs/product) ln -s first.md "$1/second.md" ;;
+esac
+EOF
+} > "$fault_bin/mkdir"
+chmod +x "$fault_bin/mkdir"
+compare_bounds unavailable 'spec materialization collision' env PATH="$fault_bin:$PATH"
+assert_contains "$(jq -r '.facts.bounds.stderr' "$CACHE/index.json")" 'spec materialization collision'
+assert_eq null "$(jq -r '.facts.doctor.exit_status' "$CACHE/index.json")"
 assert_not_contains "$(cat "$parity_pkg/bounds-inputs.tsv")" "$upper"
 assert_not_contains "$(cat "$parity_pkg/bounds-inputs.tsv")" "$lower"
 assert_contains "$(cat "$parity_pkg/bounds-base.txt")" 'C-11 Upper'
 assert_contains "$(cat "$parity_pkg/bounds-base-inputs.tsv")" "$upper"
 assert_contains "$(cat "$parity_pkg"/context-sections/*.txt)" 'Keep the original upper body.'
-run bash "$BIN/build-review-package.sh" "$ID" "$BASE" --context "$upper" --context "$lower"
+run env PATH="$fault_bin:$PATH" bash "$BIN/build-review-package.sh" "$ID" "$BASE" --context "$upper" --context "$lower"
 assert_eq 0 "$STATUS" "$OUTPUT"
 pkg="$(jq -er .PACKAGE_DIR <<< "$OUTPUT")"
 assert_eq unavailable "$(cat "$pkg/bounds-status.txt")"
 assert_eq '' "$([ ! -e "$pkg/context/specs" ] || printf present)" 'explicit context must not materialize either alias'
+rm -f "$fault_bin/mkdir"
+
+for damage in hardlink bytes; do
+    it "Post-write verification rejects $damage damage"
+    {
+        printf '#!/usr/bin/env bash\nreal=%q\ndamage=%q\n' "$(command -v stat)" "$damage"
+        cat <<'EOF'
+case "${3:-}" in
+    */material/specs/product/second.md)
+        if [ "$damage" = hardlink ]; then
+            # Same bytes, so only the identity check detects the collision.
+            rm "$3" && ln "${3%/*}/first.md" "$3" || exit 1
+        else
+            printf 'wrong blob bytes\n' > "$3" || exit 1
+        fi ;;
+esac
+exec "$real" "$@"
+EOF
+    } > "$fault_bin/stat"
+    chmod +x "$fault_bin/stat"
+    compare_bounds unavailable 'spec materialization collision or verification mismatch' env PATH="$fault_bin:$PATH"
+    assert_contains "$(cat "$parity_pkg/bounds-base.txt")" 'C-11 Upper'
+done
+rm -f "$fault_bin/stat"
+
+it 'Facts publish unavailable even when the collision is only in the Python worktree snapshot'
+{
+    printf '#!/usr/bin/env bash\nreal=%q\n' "$real_git"
+    cat <<'EOF'
+case "$PWD:$*" in
+    */prdkit-facts-*/head:"cat-file --batch")
+        ln -s first.md specs/product/second.md || exit 1 ;;
+esac
+exec "$real" "$@"
+EOF
+} > "$fault_bin/git"
+chmod +x "$fault_bin/git"
+run env PATH="$fault_bin:$PATH" bash "$BIN/facts.sh" "$ID" --base "$BASE"
+assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq unavailable "$(jq -r '.facts.bounds.state' "$CACHE/index.json")"
+assert_contains "$(jq -r '.facts.bounds.stderr' "$CACHE/index.json")" 'snapshot materialization collision'
+assert_eq null "$(jq -r '.facts.adoption.exit_status' "$CACHE/index.json")"
+rm -f "$fault_bin/git"
 
 for path in specs/product/group specs/parts/group vendor/group; do
     it "An opaque gitlink is a bounds gap only under the spec root: $path"

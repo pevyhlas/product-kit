@@ -35,6 +35,9 @@ change by change.
   No spec inputs with a valid scope means absent; incomplete inputs or invalid or missing
   scope mean unavailable. Colliding evidence names use a short hashed fallback when a
   numeric suffix would exceed the destination's filename limit.
+- Both bounds collectors detect filesystem collisions without assuming case or normalization
+  rules. Review packages preserve independently verified BASE obligations and no longer
+  label an unsafe or unreadable HEAD reference as removed.
 - Review packages no longer require full context just because neither revision has spec bounds.
   A missing or unrecoverable child record still produces the usual warning.
   Historical records and diagnostics remain review evidence, including for same-ID follow-ups.
