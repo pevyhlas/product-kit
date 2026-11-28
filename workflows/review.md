@@ -172,6 +172,15 @@ the change, except tasks marked as dropped in the PR description. Whatever delet
 an owner-disposed cancellation included, adds its change-level log entry in the same PR.
 Required live gates still block. Non-gating runtime observations need no cleanup PR.
 
+For a [spec-first change](change.md#spec-first-delivery-later), the spec-only PR is reviewed
+at the level it edits and merges the `specified` record open, with no close commit or log
+entry. Later PRs review acceptance, tests and evidence for what each delivers. The last PR
+deletes the remaining task lines and closes the same record. `close-change.sh` accepts an
+already-merged record only when its committed default-branch copy is specified. If the
+current head still says `specified`, resolve all open task lines before closing. For an
+explicit owner disposition with remaining tasks, change Step in a reviewed edit and
+withdraw, defer or rebind unfinished intent before closing.
+
 Before final review: reconcile the approved spec delta with actual behavior. Remove only built
 `planned` markers; preserve unbuilt intent and hypotheses. Known unmet required work needs an
 explicit disposition and durable follow-up reference; never erase it with the plan. Cancellation
@@ -208,7 +217,7 @@ acceptance or policy after review without reviewing the affected changes. Later 
 ordinary linked fix changes, which inherit the failing outcome's attempts, limits and holds
 ([protocol.md](protocol.md)); they never retroactively turn an unknown into a PASS or erase a
 known unmet obligation. Never reopen a completed transaction merely to clear working files. A
-change merged with its record still open (status flags it) closes in the next relevant PR, whose
+non-specified change flagged as merged without closing closes in the next relevant PR, whose
 record is its review carrier; never fabricate acceptance or open a cleanup-only PR. After merge
 run `.prdkit/scripts/bash/cleanup-change.sh <id>` from the main checkout; it keeps the worktree's
 evidence before moving the checkout and its Git registration into the reported quarantine.

@@ -20,6 +20,91 @@ assert_contains "$OUTPUT" "None: no open changes, holds or owner questions." "no
 run bash "$STATUS_SH" --json
 assert_eq 'null' "$(jq -c '.part_parents' <<< "$OUTPUT")" "unstated parents are null"
 
+it "specified changes are grouped separately with age and open tasks"
+mkdir -p specs/changes
+cat > specs/changes/001-plan.md <<'MD'
+# Change: Delivery plan
+**Opened**: 2026-10-10
+
+## State
+**Step**: specified
+**Waiting on**: nothing
+**Next**: deliver
+
+## Tasks
+- [ ] First
+  * [ ] Second
+- [ ] (P9) Still open even with an invalid part
+- [x] Done
+<!-- Example:
+- [ ] Comment
+-->
+~~~~
+~~~
+- [ ] Fenced
+~~~~
+
+## Notes
+- [ ] Outside Tasks
+MD
+printf '# Change: Ordinary\n\n## State\n**Step**: building\n' > specs/changes/002-ordinary.md
+run bash "$STATUS_SH"
+assert_eq 0 "$STATUS"
+assert_eq '  002-ordinary — Ordinary' "$(awk '/^In flight$/{getline; print}' <<< "$OUTPUT")"
+assert_eq '  001-plan — Delivery plan' "$(awk '/^Specified changes$/{getline; print}' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" '6 open tasks, opened 7 days ago'
+run bash "$STATUS_SH" --json
+assert_eq 0 "$STATUS"
+assert_eq '["specified",6,7]' "$(jq -c '.changes[] | select(.id == "001-plan") | [.step,.open_tasks,.age_days]' <<< "$OUTPUT")"
+assert_eq 'false' "$(jq -c '.changes[] | select(.id == "002-ordinary") | has("open_tasks")' <<< "$OUTPUT")"
+rm specs/changes/{001-plan,002-ordinary}.md
+
+it "only a literal, unambiguous Step line counts as specified"
+# shellcheck disable=SC2016 # literal Markdown code span
+for step in specified-ish Specified '`specified`' 'specified · note' 'specified '; do
+    printf '# Change: Not specified\n\n## State\n**Step**: %s\n' "$step" > specs/changes/001-plan.md
+    run bash "$STATUS_SH"
+    assert_not_contains "$OUTPUT" 'Specified changes' "$step does not activate the state"
+done
+for example in notes comment fence; do
+    {
+        printf '# Change: Examples\n\n## State\n**Step**: specified\n\n'
+        case "$example" in
+            notes) printf '## Notes\n **Step**: review\n' ;;
+            comment) printf 'Example: <!--\n**Step**: review\n-->\n' ;;
+            fence)
+                # shellcheck disable=SC2016 # literal Markdown fence
+                printf '%s\n' '````md' '```' '**Step**: review' '````' ;;
+        esac
+    } > specs/changes/001-plan.md
+    run bash "$STATUS_SH" --json
+    assert_eq 'false' "$(jq -c '.changes[0] | has("open_tasks")' <<< "$OUTPUT")" "an extra Step line in $example prevents opt-in"
+done
+printf '# Change: Ambiguous\n\n## State\n**Step**: specified\n**Step**: review\n' > specs/changes/001-plan.md
+run bash "$STATUS_SH"
+assert_not_contains "$OUTPUT" 'Specified changes' "ambiguous State does not activate the state"
+printf '# Change: Literal\n\n## Notes\n**Step**: specified\n' > specs/changes/001-plan.md
+run bash "$STATUS_SH" --json
+assert_eq '["specified",0]' "$(jq -c '.changes[0] | [.step,.open_tasks]' <<< "$OUTPUT")" "the literal rule does not parse sections"
+rm specs/changes/001-plan.md
+
+it "a replacement blob cannot exempt a merged legacy record"
+printf '# Change: Merged plan\n\n## State\n**Step**: review\n' > specs/changes/001-plan.md
+default_ref=refs/remotes/origin/spec-test
+git update-ref "$default_ref" HEAD &&
+    git symbolic-ref refs/remotes/origin/HEAD "$default_ref" &&
+    trusted_edit "$default_ref" specs/changes/001-plan.md < specs/changes/001-plan.md || exit 1
+legacy_oid="$(git rev-parse "$default_ref:specs/changes/001-plan.md")" || exit 1
+replacement_oid="$(printf '# Change: Merged plan\n\n## State\n**Step**: specified\n' | git hash-object -w --stdin)" || exit 1
+git replace "$legacy_oid" "$replacement_oid" || exit 1
+run bash "$STATUS_SH" --json
+assert_eq 0 "$STATUS"
+assert_eq '[true]' "$(jq -c '[.changes[] | select(.id == "001-plan") | .merged_unclosed]' <<< "$OUTPUT")"
+git replace -d "$legacy_oid" >/dev/null &&
+    git symbolic-ref --delete refs/remotes/origin/HEAD &&
+    git update-ref -d "$default_ref" || exit 1
+rm specs/changes/001-plan.md
+
 it "the retired one-digit journey bullet is not a live spec item"
 mkdir -p specs
 printf '# Product\n\n- **J-1 Search** (hypothesis): Locate a result.\n' > specs/product.md

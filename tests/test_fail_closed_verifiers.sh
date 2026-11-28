@@ -46,8 +46,10 @@ case "$VERIFY_FAULT:$*" in
     doc-index-eof:*'ls-files -z -- specs') printf 'specs/results/pending.log'; exit 0 ;;
     squash-empty:*'diff --no-renames --name-only -z '*) exit 0 ;;
     squash-eof:*'diff --no-renames --name-only -z '*) printf 'one.txt'; exit 0 ;;
-    close-default-fail:*'ls-tree --name-only main -- :(literal)specs/changes/'*|close-default-fail:*'cat-file -e main:specs/changes/'*)
+    close-default-fail:*'ls-tree main -- :(literal)specs/changes/'*)
         exit 5 ;;
+    specified-blob-fail:*"cat-file blob $VERIFY_SPECIFIED_OID")
+        "$REAL_GIT" "$@"; exit 5 ;;
     close-log-fail:*'ls-tree HEAD -- :(literal).prdkit/history/log.md') exit 5 ;;
 esac
 exec "$REAL_GIT" "$@"
@@ -397,6 +399,60 @@ assert_contains "$OUTPUT" 'could not check for specs/changes/001-example.md on m
 assert_eq "$before_head" "$(git rev-parse HEAD)" 'HEAD unchanged after producer failure'
 assert_file "$record"
 if [ "$(git rev-parse HEAD)" != "$before_head" ]; then git checkout -qb retry-default "$before_head" || exit 1; fi
+
+it 'default-branch Step is not trusted when the committed object read fails'
+specified_ref=refs/remotes/origin/main
+git update-ref "$specified_ref" main &&
+    git symbolic-ref refs/remotes/origin/HEAD "$specified_ref" || exit 1
+printf '# Change: Example\n\n## State\n**Step**: specified\n' |
+    trusted_edit "$specified_ref" "$record" || exit 1
+VERIFY_SPECIFIED_OID="$(git rev-parse "$specified_ref:$record")" || exit 1
+export VERIFY_SPECIFIED_OID
+for verifier in status doctor; do
+    fault specified-blob-fail bash "$B/$verifier.sh" --json
+    failed "$verifier must not accept the output of a failed object read"
+    assert_contains "$OUTPUT" 'Incomplete output from git'
+done
+fault specified-blob-fail bash "$B/close-change.sh" "${close_args[@]}"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "$record is already on origin/main"
+assert_eq "$before_head" "$(git rev-parse HEAD)" 'cannot close without proof of default Step'
+assert_file "$record"
+git symbolic-ref --delete refs/remotes/origin/HEAD &&
+    git update-ref -d "$specified_ref" || exit 1
+
+it 'a default-branch change gitlink preserves legacy failure bytes in text and JSON'
+gitlink_index="$_SCRATCH_CWD/gitlink-index"
+GIT_INDEX_FILE="$gitlink_index" git read-tree main &&
+    GIT_INDEX_FILE="$gitlink_index" git update-index --add --cacheinfo "160000,$before_head,$record" &&
+    gitlink_tree="$(GIT_INDEX_FILE="$gitlink_index" git write-tree)" &&
+    gitlink_commit="$(git commit-tree "$gitlink_tree" -p main -m 'Default record is a gitlink')" &&
+    git update-ref "$specified_ref" "$gitlink_commit" &&
+    git symbolic-ref refs/remotes/origin/HEAD "$specified_ref" || exit 1
+# Reproduce main's stderr using the native Git diagnostic for this Git version.
+expected_err="$_SCRATCH_CWD/gitlink-expected.err"
+if git cat-file blob "origin/main:$record" >/dev/null 2>"$expected_err"; then exit 1; fi
+printf '%s\n' 'Incomplete output from git: producer or reader failed' >> "$expected_err"
+: > "$_SCRATCH_CWD/gitlink-expected.out"
+printf '1\n' > "$_SCRATCH_CWD/gitlink-expected.exit"
+for verifier in status doctor; do
+    if [ "$verifier" = doctor ]; then
+        printf '%s\n' 'Incomplete output from spec_unclosed_changes: producer or reader failed' >> "$expected_err"
+    fi
+    for format in text json; do
+        args=()
+        [ "$format" != json ] || args=(--json)
+        rc=0
+        bash "$B/$verifier.sh" ${args[@]+"${args[@]}"} >"$_SCRATCH_CWD/gitlink.out" 2>"$_SCRATCH_CWD/gitlink.err" || rc=$?
+        printf '%s\n' "$rc" > "$_SCRATCH_CWD/gitlink.exit"
+        for stream in out err exit; do
+            run cmp "$_SCRATCH_CWD/gitlink-expected.$stream" "$_SCRATCH_CWD/gitlink.$stream"
+            assert_eq 0 "$STATUS" "$verifier $format $stream matches legacy: $OUTPUT"
+        done
+    done
+done
+git symbolic-ref --delete refs/remotes/origin/HEAD &&
+    git update-ref -d "$specified_ref" || exit 1
 
 it 'a failed folded-log lookup is not a successful absence'
 before_index="$(git hash-object .git/index)"

@@ -11,8 +11,10 @@ own the operational behavior, starting with [protocol.md](../workflows/protocol.
   ready work consumes approved product/design intent. `continue` resumes from the
   change's State after checking actual repository state.
 - [`/prdkit-status`](../commands/prdkit-status.md) — runs `status.sh` (`--json` for the derived
-  form) and answers the question first, then outcome progress and the longest pole. Recorded
-  milestone evidence and no-progress counts stay distinct from PR/test totals. Read-only.
+   form) and answers the question first, then outcome progress and the longest pole. Recorded
+   milestone evidence and no-progress counts stay distinct from PR/test totals. The
+   **Specified changes** group shows open task counts and age from `Opened`; JSON adds
+   `open_tasks` to those entries in `changes`, alongside `age_days`. Read-only.
 - [`/prdkit-inbox`](../commands/prdkit-inbox.md) — reconcile recorded answers, then review owner
   questions one at a time through the agent. Select IDs or tags in ordinary words (for example,
   `tags ux, export`); `preview` requests a read-only review. Answers update the governing spec

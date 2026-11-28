@@ -13,6 +13,9 @@ change by change.
 
 ### Added
 
+- Spec-first changes can merge a spec with `**Step**: specified` and keep their tasks and
+  `planned:` markers open for implementing PRs. Status shows remaining tasks and age, doctor
+  advises when no tasks remain, and the final implementing PR closes the existing record.
 - Trusted `owner-approval: exact-head-opt-in` keeps T3 owner approval exact-head unless the
   owner posts an unedited `owner-approval: carry` conversation comment on that PR. Editing
   or deleting the comment removes that opt-in, and a later change request or dismissed review

@@ -22,6 +22,68 @@ assert_eq '[10,1]' "$(jq -c '[.trace["template-placeholder"], .trace["unconfirme
 assert_eq 2 "$(jq '.findings | length' <<< "$OUTPUT")" "strict promotes both advisories"
 assert_eq '[]' "$(jq -c .advisories <<< "$OUTPUT")"
 
+it "doctor advises once per specified change with no open task lines, in a checkout or on default"
+mkdir -p specs/changes
+cat > specs/changes/001-empty.md <<'MD'
+# Change: Waiting for close
+
+## State
+**Step**: specified
+**Waiting on**: nothing
+**Next**: close
+
+## Tasks
+- [X] Delivered
+<!-- - [ ] Inline example -->
+MD
+git update-ref refs/remotes/origin/spec-test HEAD
+git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/spec-test
+trusted_edit refs/remotes/origin/spec-test specs/changes/002-remote.md < specs/changes/001-empty.md || exit 1
+empty_record=specs/changes/001-empty.md
+# shellcheck disable=SC2094 # trusted_edit changes only Git objects and the remote ref
+trusted_edit refs/remotes/origin/spec-test "$empty_record" < "$empty_record" || exit 1
+run bash "$DOCTOR" --json
+assert_eq 0 "$STATUS"
+assert_eq '["Specified with no open tasks: 001-empty; close it in this PR (close-change.sh) or change Step","Specified with no open tasks: 002-remote; close it in this PR (close-change.sh) or change Step"]' \
+    "$(jq -c '[.advisories[] | select(startswith("Specified with no open tasks:"))] | sort' <<< "$OUTPUT")"
+assert_not_contains "$OUTPUT" 'Merged without closing'
+
+it "task lines inside examples count in both the checkout and default records"
+cat >> "$empty_record" <<'MD'
+
+## Notes
+<!--
+- [ ] Comment example
+-->
+
+~~~md
+- [ ] Fenced example
+~~~
+MD
+trusted_edit refs/remotes/origin/spec-test specs/changes/002-remote.md < "$empty_record" || exit 1
+# shellcheck disable=SC2094 # trusted_edit changes only Git objects and the remote ref
+trusted_edit refs/remotes/origin/spec-test "$empty_record" < "$empty_record" || exit 1
+run bash "$DOCTOR" --json
+assert_eq 0 "$STATUS"
+assert_eq '[]' "$(jq -c '[.advisories[] | select(startswith("Specified with no open tasks:"))]' <<< "$OUTPUT")"
+
+it "doctor still reports a merged legacy record when a local replacement looks specified"
+legacy_record=specs/changes/003-legacy.md
+printf '# Change: Merged plan\n\n## State\n**Step**: review\n' > "$legacy_record"
+# shellcheck disable=SC2094 # trusted_edit changes only Git objects and the remote ref
+trusted_edit refs/remotes/origin/spec-test "$legacy_record" < "$legacy_record" || exit 1
+legacy_oid="$(git rev-parse "refs/remotes/origin/spec-test:$legacy_record")" || exit 1
+replacement_oid="$(printf '# Change: Merged plan\n\n## State\n**Step**: specified\n' | git hash-object -w --stdin)" || exit 1
+git replace "$legacy_oid" "$replacement_oid" || exit 1
+run bash "$DOCTOR" --json
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" 'Merged without closing: 003-legacy records'
+git replace -d "$legacy_oid" >/dev/null || exit 1
+git symbolic-ref --delete refs/remotes/origin/HEAD
+git update-ref -d refs/remotes/origin/spec-test
+rm "$empty_record" "$legacy_record"
+rmdir specs/changes
+
 it "ordinary syntax, examples and protected quotes are not fill-in slots"
 fill_seeded_policy "$PROJ" || exit 1
 cat >> .prdkit/memory/constitution.md <<'MD'

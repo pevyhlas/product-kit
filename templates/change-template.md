@@ -48,5 +48,6 @@ Delete the line in the PR that delivers it; do not check it off. -->
 **Step**: intent
 **Waiting on**: nothing
 **Next**: <next action>
+<!-- Set Step to specified for a spec-only PR that leaves delivery tasks open (workflows/change.md). -->
 <!-- Outcome checkpoint format: .prdkit/scripts/bash/outcome-checkpoint.md -->
 <!-- Verdicts live in publisher-authored PR reviews, never in this record (workflows/review.md). -->
