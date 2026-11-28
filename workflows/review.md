@@ -134,11 +134,14 @@ to find its review ID and commit.
 
 If trusted default-branch policy sets `owner-approval: per-pr`, a T3 owner's latest
 `APPROVED`, `CHANGES_REQUESTED` or `DISMISSED` review decides. Approval can carry on this
-PR only if the approved commit is an ancestor of the current head and the diff between
-them is readable and does not touch the policy surface (`.prdkit`, `.product-kit`,
-`.github/workflows/`, or any Git-quoted path). Otherwise obtain a fresh exact-head owner
-approval. When approval carries, the live gate names the approved commit and lists what
-followed it. Publisher, lens and agent reviews stay exact-head.
+PR only from an ancestor of the current head, with a readable diff and one readable merge
+base with the trusted target. Each net change to the policy surface (`.prdkit`, `.product-kit`,
+their descendants, or paths under `.github/workflows/`) must leave the same tree entry
+as that merge base (mode and object ID, or absent in both). A Git-quoted path or an unreadable
+entry stops carry. Obtain fresh exact-head owner approval if the merged result differs
+from the base, even when the approved PR and base edited the same path and merged cleanly.
+When approval carries, the live gate names the approved commit and lists what followed it.
+Publisher, lens and agent reviews stay exact-head.
 Use `per-pr` only for pre-production stages; set it back to `exact-head` before production.
 Changing this setting is an owner-reviewed policy change read from the trusted default branch.
 

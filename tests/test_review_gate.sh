@@ -261,6 +261,7 @@ owner_policy '- owner-approval: per-pr'
 GH_STUB_PAGE_SIZE=1 online; assert_eq 0 "$STATUS" "$OUTPUT"
 assert_eq "per-pr 1003 $rid $approved 0" \
     "$(jq -r '.owner_approval | [.mode,.reviewer,.review,.commit,.more] | join(" ")' <<< "$OUTPUT")"
+assert_eq false "$(jq '.owner_approval | has("base")' <<< "$OUTPUT")"
 assert_eq "publisher owner" "$(jq -r '[.reviews[].role]|join(" ")' <<< "$OUTPUT")"
 commits="$(git log --format='%h %s' "$approved..$h")"
 assert_eq "$commits" "$(jq -r '.owner_approval.commits_since[]' <<< "$OUTPUT")"
@@ -413,19 +414,87 @@ git config core.quotePath false
 assert_policy_carry_refused "$h" '"odd-\303\251.txt"'
 git config --unset core.quotePath
 
-it 'a policy change introduced by a merge is attributed to the merge commit'
-git checkout -q --detach "$approved"
-git commit -q --allow-empty -m 'main line follow-up'
-main_line="$(git rev-parse HEAD)"
-git checkout -q --detach "$approved"
-git commit -q --allow-empty -m 'side follow-up'
-side="$(git rev-parse HEAD)"
-git checkout -q --detach "$main_line"
-git merge -q --no-ff --no-commit "$side"
-printf '\nPolicy update at merge.\n' >> .prdkit/memory/config.md
-git add .prdkit/memory/config.md; git commit -qm 'merge with policy edit'
-carry_reviews "$approved"
-assert_policy_carry_refused "$h" .prdkit/memory/config.md
+it 'a carried approval accepts policy changes that match the merged trusted base, not its tip'
+per_pr_base="$(git rev-parse origin/main)"
+git checkout -q --detach "$per_pr_base"
+mkdir -p .github/workflows
+printf 'name: old check\n' > .github/workflows/old.yml
+git add .github/workflows; git commit -qm 'baseline workflow'
+merge_fork="$(git rev-parse HEAD)"
+git checkout "$approved" -- specs/changes/001-reviewed.md
+git commit -qm 'implement change'
+merge_approved="$(git rev-parse HEAD)"
+
+git checkout -q --detach "$merge_fork"
+mkdir -p .prdkit/history/log
+history_path='.prdkit/history/log/002-[closed].md'
+printf -- '- 2026-01-02 002-earlier: completed\n' > "$history_path"
+git add -- "$history_path"; git commit -qm 'record a completed change'
+printf '\nBase policy update.\n' >> .prdkit/memory/config.md
+git rm -q .github/workflows/old.yml
+git add .prdkit/memory/config.md; git commit -qm 'update base policy'
+merged_base="$(git rev-parse HEAD)"
+git update-ref refs/remotes/origin/main "$merged_base"
+{ git show "$merged_base:.prdkit/memory/config.md"; printf '\nNot merged yet.\n'; } |
+    trusted_edit refs/remotes/origin/main .prdkit/memory/config.md
+
+git checkout -q --detach "$merge_approved"
+git merge -q --no-ff -m 'update from trusted base' "$merged_base"
+printf 'ordinary follow-up after updating\n' > source.txt
+git add source.txt; git commit -qm 'follow up after update'
+merged_head="$(git rev-parse HEAD)"
+assert_eq "$merged_base" "$(git merge-base origin/main "$merged_head")"
+carry_reviews "$merge_approved"
+online; assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq "$merge_approved $merged_base" \
+    "$(jq -r '.owner_approval | [.commit,.base] | join(" ")' <<< "$OUTPUT")"
+assert_not_contains "$OUTPUT" '"owner_approval_policy_change"'
+
+it 'a PR policy change introduced by merging the base is attributed to the merge commit'
+git checkout -q --detach "$merge_approved"
+git merge -q --no-ff --no-commit "$merged_base"
+mkdir -p .github/workflows
+printf 'name: new check\n' > .github/workflows/new.yml
+git add .github/workflows; git commit -qm 'merge with a PR workflow edit'
+carry_reviews "$merge_approved"
+assert_policy_carry_refused "$h" .github/workflows/new.yml
+
+it 'a merge resolution that differs from the trusted base voids carry'
+git checkout -q --detach "$merge_approved"
+git merge -q --no-ff --no-commit "$merged_base"
+printf '\nDifferent resolution.\n' >> .prdkit/memory/config.md
+git add .prdkit/memory/config.md; git commit -qm 'merge with a different policy resolution'
+carry_reviews "$merge_approved"
+assert_policy_carry_refused "$merged_base" .prdkit/memory/config.md
+
+it 'a clean merge of approved PR and base edits to the same path still needs fresh approval'
+git checkout -q --detach "$merge_approved"
+{ printf '# PR policy notes\n'; git show HEAD:.prdkit/memory/config.md; } > .prdkit/memory/config.md
+git add .prdkit/memory/config.md; git commit -qm 'document PR policy changes'
+same_path_approved="$(git rev-parse HEAD)"
+git merge -q --no-ff -m 'combine two policy edits' "$merged_base"
+carry_reviews "$same_path_approved"
+assert_policy_carry_refused "$merged_base" .prdkit/memory/config.md
+
+it 'a mode difference from the trusted base voids carry even with identical blob content'
+git checkout -q --detach "$merged_head"
+chmod +x "$history_path"
+git update-index --chmod=+x -- "$history_path"
+git commit -qm 'change mode only'
+carry_reviews "$merge_approved"
+assert_policy_carry_refused "$(git rev-parse "$merged_base^")" "$history_path"
+
+it 'a carried owner approval needs one trusted merge base even without a net policy change'
+feature_tip="$(git commit-tree "$merge_approved^{tree}" -p "$merge_approved" -p "$merged_base" -m 'feature integrates target')"
+target_tip="$(git commit-tree "$merged_base^{tree}" -p "$merged_base" -p "$merge_approved" -m 'target integrates feature')"
+git update-ref refs/remotes/origin/main "$target_tip"
+git checkout -q --detach "$feature_tip"
+carry_reviews "$merge_approved"
+online; assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'multiple merge bases'
+assert_contains "$OUTPUT" "fresh owner approval on the exact head $h"
+assert_not_contains "$OUTPUT" '"owner_approval"'
+git update-ref refs/remotes/origin/main "$per_pr_base"
 
 it 'only net policy changes under the exact prefixes stop a carry'
 git checkout -q --detach "$first_policy"
@@ -448,6 +517,13 @@ case "$REVIEW_DIFF_FAULT:$*" in
         "$REAL_GIT" "$@"
         exit 5 ;;
 esac
+case "$*" in
+    *" ls-tree "*" $REVIEW_TREE_FAULT -- .github/workflows/old.yml"|*" ls-tree $REVIEW_TREE_FAULT")
+        if [ -n "$REVIEW_TREE_FAULT" ]; then
+            "$REAL_GIT" "$@"
+            exit 5
+        fi ;;
+esac
 exec "$REAL_GIT" "$@"
 SH
 chmod +x "$_SCRATCH_CWD/git-fault/git"
@@ -463,6 +539,25 @@ for fault in diff diff-tree; do
     assert_contains "$OUTPUT" "fresh owner approval on the exact head $h"
     assert_not_contains "$OUTPUT" '"owner_approval'
 done
+
+it 'an unreadable tree entry is not evidence of a matching policy deletion'
+git update-ref refs/remotes/origin/main "$merged_base"
+git checkout -q --detach "$merged_head"
+carry_reviews "$merge_approved"
+for unreadable in "$h" "$merged_base"; do
+    REAL_GIT="$real_git" REVIEW_TREE_FAULT="$unreadable" PATH="$_SCRATCH_CWD/git-fault:$PATH" \
+        assert_policy_carry_refused "$merged_base" .github/workflows/old.yml
+done
+git update-ref refs/remotes/origin/main "$per_pr_base"
+
+it 'an unreadable merge base tree voids carry even without policy changes'
+git checkout -q --detach "$first_policy^"
+carry_reviews "$approved"
+REAL_GIT="$real_git" REVIEW_TREE_FAULT="$(git merge-base origin/main "$h")" \
+    PATH="$_SCRATCH_CWD/git-fault:$PATH" online
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "fresh owner approval on the exact head $h"
+assert_not_contains "$OUTPUT" '"owner_approval"'
 
 it 'per-PR policy does not change owner objections at T1 or T2'
 for level in T1 T2; do
