@@ -20,6 +20,71 @@ assert_contains "$OUTPUT" "None: no open changes, holds or owner questions." "no
 run bash "$STATUS_SH" --json
 assert_eq 'null' "$(jq -c '.part_parents' <<< "$OUTPUT")" "unstated parents are null"
 
+it "specified changes are grouped separately with age and open tasks"
+mkdir -p specs/changes
+cat > specs/changes/001-plan.md <<'MD'
+# Change: Delivery plan
+**Opened**: 2026-10-10
+
+## State
+**Step**: specified
+**Waiting on**: nothing
+**Next**: deliver
+
+## Tasks
+- [ ] First
+  * [ ] Second
+- [ ] (P9) Still open even with an invalid part
+- [x] Done
+<!-- Example:
+- [ ] Comment
+-->
+~~~~
+~~~
+- [ ] Fenced
+~~~~
+
+## Notes
+- [ ] Not a task
+MD
+printf '# Change: Ordinary\n\n## State\n**Step**: building\n' > specs/changes/002-ordinary.md
+run bash "$STATUS_SH"
+assert_eq 0 "$STATUS"
+assert_eq '  002-ordinary — Ordinary' "$(awk '/^In flight$/{getline; print}' <<< "$OUTPUT")"
+assert_eq '  001-plan — Delivery plan' "$(awk '/^Specified changes$/{getline; print}' <<< "$OUTPUT")"
+assert_contains "$OUTPUT" '3 open tasks, opened 7 days ago'
+run bash "$STATUS_SH" --json
+assert_eq 0 "$STATUS"
+assert_eq '["specified",3,7]' "$(jq -c '.changes[] | select(.id == "001-plan") | [.step,.open_tasks,.age_days]' <<< "$OUTPUT")"
+assert_eq 'false' "$(jq -c '.changes[] | select(.id == "002-ordinary") | has("open_tasks")' <<< "$OUTPUT")"
+rm specs/changes/{001-plan,002-ordinary}.md
+
+it "only a literal, unambiguous State step counts as specified"
+# shellcheck disable=SC2016 # literal Markdown code span
+for step in specified-ish Specified '`specified`' 'specified · note'; do
+    printf '# Change: Not specified\n\n## State\n**Step**: %s\n' "$step" > specs/changes/001-plan.md
+    run bash "$STATUS_SH"
+    assert_not_contains "$OUTPUT" 'Specified changes' "$step does not activate the state"
+done
+for example in notes comment fence; do
+    {
+        printf '# Change: Examples\n\n## State\n\n'
+        case "$example" in
+            notes) printf '## Notes\n**Step**: specified\n' ;;
+            comment) printf 'Example: <!--\n**Step**: specified\n-->\n' ;;
+            fence)
+                # shellcheck disable=SC2016 # literal Markdown fence
+                printf '%s\n' '````md' '```' '**Step**: specified' '````' ;;
+        esac
+    } > specs/changes/001-plan.md
+    run bash "$STATUS_SH" --json
+    assert_eq 'false' "$(jq -c '.changes[0] | has("open_tasks")' <<< "$OUTPUT")" "$example does not activate the state"
+done
+printf '# Change: Ambiguous\n\n## State\n**Step**: specified\n**Step**: review\n' > specs/changes/001-plan.md
+run bash "$STATUS_SH"
+assert_not_contains "$OUTPUT" 'Specified changes' "ambiguous State does not activate the state"
+rm specs/changes/001-plan.md
+
 it "the retired one-digit journey bullet is not a live spec item"
 mkdir -p specs
 printf '# Product\n\n- **J-1 Search** (hypothesis): Locate a result.\n' > specs/product.md

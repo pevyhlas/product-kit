@@ -76,6 +76,7 @@ change_metadata() { # open rows -> same rows with tags, task tallies, and invali
         fi
         tallies="$(printf '%s\n' "$metadata" | awk -F "$SEP" -v known="$known" '
             $1 == "tags" { tag_rows++; tags = $2; next }
+            $1 == "specified" { open = $2; next }
             $1 == "task" {
                 issue = $5
                 if (issue != "malformed" && $2 != "" && !index(known, " " $2 " ")) issue = "unknown"
@@ -94,7 +95,7 @@ change_metadata() { # open rows -> same rows with tags, task tallies, and invali
                 }
                 printf "\037"
                 if ("" in total) printf "%d:%d", checked[""], total[""]
-                print "\037" invalid
+                print "\037" invalid "\037" open
             }')" || return 1
         printf '%s\037%s\n' "$row" "$tallies" || return 1
     done <<< "$1"
@@ -182,7 +183,7 @@ if git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     if [ -n "$base" ]; then
         branches="$(verify_lines git -C "$root" for-each-ref --no-merged="$base" --sort=committerdate \
             --format="%(refname:short)$SEP%(committerdate:short)" refs/heads)"
-        # Reviewed PR-scoped records still on the default branch; a child in any checkout keeps its parent open.
+        # PR-scoped records still on default; a child in any checkout keeps its parent open.
         if $objects_local; then
             unclosed=" $(spec_unclosed_changes "$root" "$base" |
                 awk -v named=" $(printf '%s\n' "$parents" | tr -d '`' | tr '\n' ' ') " 'index(named, " " $0 " ") == 0' | tr '\n' ' ')"
@@ -315,14 +316,16 @@ if $json; then
         sep=,
     done <<< "$items"
     printf '],"changes":['; sep=""
-    while IFS="$SEP" read -r id title opened step waits nxt parent total passed failed maxatt stalled_items ws ns loc tags tallies unassigned invalid; do
+    while IFS="$SEP" read -r id title opened step waits nxt parent total passed failed maxatt stalled_items ws ns loc tags tallies unassigned invalid open_tasks; do
         [ -n "$id" ] || continue
+        [ -z "$open_tasks" ] || step=specified
         flag=false; case "$unclosed" in *" $id "*) flag=true ;; esac
         printf '%s{"id":%s,"title":%s,"opened":%s,"age_days":%s,"step":%s,"waiting_on":%s,"next":%s,"parent":%s,"location":%s,"merged_unclosed":%s,"state_fields":{"waiting_on":"%s","next":"%s"},"acceptance":{"total":%s,"passed":%s,"failed_or_blocked":%s,"max_attempts":%s,"stalled":%s}' "$sep" \
             "$(js "$id")" "$(js "$title")" "$(js "$opened")" "$(ji "$(age "$opened")")" "$(js "$step")" "$(js "$waits")" \
             "$(js "$nxt")" "$(js "$parent")" "$(js "$loc")" "$flag" "$ws" "$ns" \
             "$(ju "$total")" "$(ju "$passed")" "$(ju "$failed")" "$(ju "$maxatt")" "$(js "$stalled_items")"
         change_metadata_json "$tags" "$tallies" "$unassigned" "$invalid"
+        [ -z "$open_tasks" ] || printf ',"open_tasks":%s' "$(ju "$open_tasks")"
         printf '}'; sep=,
     done <<< "$detailed_changes"
     printf '],"part_parents":'; sep="["
@@ -438,35 +441,53 @@ while IFS="$SEP" read -r kind part parent; do
     printf '    %s (parent: %s)\n' "$part" "$parent"
 done <<< "$part_graph"
 
+render_changes() {
+    local id title opened step waits nxt parent total passed failed maxatt stalled_items ws ns loc tags tallies unassigned invalid open_tasks a tally counts
+    while IFS="$SEP" read -r id title opened step waits nxt parent total passed failed maxatt stalled_items ws ns loc tags tallies unassigned invalid open_tasks; do
+        [ -n "$id" ] || continue
+        a="$(age "$opened")"
+        printf '  %s — %s\n' "$id" "$title"
+        case "$loc" in ''|.) ;; *) printf '    in %s\n' "$loc" ;; esac
+        if [ -n "$open_tasks" ]; then
+            if [ -n "$a" ]; then a="opened $a days ago"; else a="age unknown"; fi
+            printf '    %s open tasks, %s\n' "$open_tasks" "$a"
+            step=specified
+            a=""
+        fi
+        printf '    step %s%s; acceptance %s/%s passed' "${step:-unknown}" "${a:+, opened $a days ago}" "$passed" "$total"
+        [ "$failed" -eq 0 ] || printf ', %s failing or blocked' "$failed"
+        [ "$maxatt" -eq 0 ] || printf ', up to %s attempts' "$maxatt"
+        printf '\n'
+        [ -z "$tags" ] || printf '    tags: %s\n' "$tags"
+        for tally in $tallies; do
+            counts="${tally#*:}"
+            printf '    tasks: %s %s/%s checked\n' "${tally%%:*}" "${counts%%:*}" "${counts#*:}"
+        done
+        [ -z "$unassigned" ] || printf '    tasks: unassigned %s/%s checked\n' "${unassigned%%:*}" "${unassigned#*:}"
+        invalid_task_parts "$invalid"
+        [ -z "$stalled_items" ] || printf '    stalled: %s (alternatives note and owner decision due)\n' "$stalled_items"
+        [ -z "$waits" ] || printf '    waiting on: %s\n' "$waits"
+        [ -z "$nxt" ] || printf '    next: %s\n' "$nxt"
+        [ "$ws" = present ] || printf '    State: Waiting on is %s\n' "$ws"
+        [ "$ns" = present ] || printf '    State: Next is %s\n' "$ns"
+        case "$parent" in ''|none) ;; *) printf '    parent: %s\n' "$parent" ;; esac
+        case "$unclosed" in *" $id "*) printf '    merged without closing: record on %s, with no child or outcome checkpoint keeping it open; close it in the next relevant PR, or give a change spanning PRs a checkpoint (review.md, Closing)\n' "$base" ;; esac
+    done <<< "$1"
+}
+
 printf '\nIn flight\n'
-if [ -z "$changes" ]; then printf '  No open changes.\n'; fi
-while IFS="$SEP" read -r id title opened step waits nxt parent total passed failed maxatt stalled_items ws ns loc tags tallies unassigned invalid; do
-    [ -n "$id" ] || continue
-    a="$(age "$opened")"
-    printf '  %s — %s\n' "$id" "$title"
-    case "$loc" in ''|.) ;; *) printf '    in %s\n' "$loc" ;; esac
-    printf '    step %s%s; acceptance %s/%s passed' "${step:-unknown}" "${a:+, opened $a days ago}" "$passed" "$total"
-    [ "$failed" -eq 0 ] || printf ', %s failing or blocked' "$failed"
-    [ "$maxatt" -eq 0 ] || printf ', up to %s attempts' "$maxatt"
-    printf '\n'
-    [ -z "$tags" ] || printf '    tags: %s\n' "$tags"
-    for tally in $tallies; do
-        counts="${tally#*:}"
-        printf '    tasks: %s %s/%s checked\n' "${tally%%:*}" "${counts%%:*}" "${counts#*:}"
-    done
-    [ -z "$unassigned" ] || printf '    tasks: unassigned %s/%s checked\n' "${unassigned%%:*}" "${unassigned#*:}"
-    invalid_task_parts "$invalid"
-    [ -z "$stalled_items" ] || printf '    stalled: %s (alternatives note and owner decision due)\n' "$stalled_items"
-    [ -z "$waits" ] || printf '    waiting on: %s\n' "$waits"
-    [ -z "$nxt" ] || printf '    next: %s\n' "$nxt"
-    [ "$ws" = present ] || printf '    State: Waiting on is %s\n' "$ws"
-    [ "$ns" = present ] || printf '    State: Next is %s\n' "$ns"
-    case "$parent" in ''|none) ;; *) printf '    parent: %s\n' "$parent" ;; esac
-    case "$unclosed" in *" $id "*) printf '    merged without closing: record on %s, with no child or outcome checkpoint keeping it open; close it in the next relevant PR, or give a change spanning PRs a checkpoint (review.md, Closing)\n' "$base" ;; esac
-done <<< "$detailed_changes"
+in_flight="$(awk -F "$SEP" '$NF == ""' <<< "$detailed_changes")"
+if [ -z "$changes" ]; then printf '  No open changes.\n'
+elif [ -z "$in_flight" ]; then printf '  No other open changes.\n'
+else render_changes "$in_flight"; fi
 if [ -n "$branches" ]; then
     printf '  Unmerged branches (oldest first):\n'
     printf '%s\n' "$branches" | head -10 | awk -F '\037' 'NF { printf "    %s (last commit %s%s)\n", $1, $2, ($3 == "yes" ? ", possibly squash-merged" : "") }'
+fi
+specified_changes="$(awk -F "$SEP" '$NF != ""' <<< "$detailed_changes")"
+if [ -n "$specified_changes" ]; then
+    printf '\nSpecified changes\n'
+    render_changes "$specified_changes"
 fi
 
 printf '\nLive\n'

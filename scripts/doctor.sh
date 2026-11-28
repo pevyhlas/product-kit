@@ -549,12 +549,21 @@ while IFS="$SEP" read -r path _ loc; do
         open_ids="$open_ids$id "
     done
 done <<< "$checkouts"
+specified_advised=" "
+advise_empty_specified() {
+    case "$specified_advised" in *" $1 "*) return 0 ;; esac
+    specified_advised="$specified_advised$1 "
+    advisories+=("Specified with no open tasks: $1; close it in this PR (close-change.sh) or change Step")
+}
 while IFS="$SEP" read -r id _ _ _ _ _ _ _ _ _ _ _ ws ns loc; do
     [ -n "$id" ] || continue
     file="specs/changes/$id.md"
     [ "$loc" = . ] || file="$loc/$file"
     [ "$ws" = present ] || advisories+=("$file (## State): Waiting on is $ws")
     [ "$ns" = present ] || advisories+=("$file (## State): Next is $ns")
+    case "$file" in /*) ;; *) file="$root/$file" ;; esac
+    open_tasks="$(spec_specified_tasks "$file")"
+    if [ "$open_tasks" = 0 ]; then advise_empty_specified "$id"; fi
 done <<< "$open_changes"
 planned_closed=""; planned_unknown=""
 rows="$(verify_lines spec_planned_at "$root")"
@@ -857,14 +866,23 @@ if $in_git; then
         done <<< "$rows"
         [ -z "$unlogged" ] || findings+=("Closed without a log entry: $unlogged; the change that deletes its record adds .prdkit/history/log/<id>.md, '- <date> <id>: <what changed>' (close-change.sh)")
     fi
-    # A reviewed record still on the default branch and in this checkout: its change merged
-    # without closing. A branch that closes it (record deleted, log line added) is not flagged.
+    # Read committed default-branch state, not the Step a feature branch
+    # happens to carry. Do not flag a change the current branch has closed.
     base="$(spec_default_branch "$root")"
     if $compaction_verified && [ -n "$base" ] && spec_objects_local "$root"; then
         named=" $(printf '%s\n' "$open_changes" | awk -F "$SEP" '{ v = $7; gsub(/`/, "", v); if (v != "") printf "%s ", v }')"
-        rows="$(verify_lines spec_unclosed_changes "$root" "$base")"
+        rows="$(verify_lines spec_default_change_rows "$root" "$base")"
         unclosed=""; n=0
-        while IFS= read -r cid; do
+        while IFS="$SEP" read -r kind cid; do
+            case "$kind" in
+                specified-empty)
+                    if $archive_verified && spec_archive_log_covers "$archive_index" "$cid"; then continue; fi
+                    case "$closed_ids" in *" $cid "*) continue ;; esac
+                    advise_empty_specified "$cid"
+                    continue ;;
+                unclosed) ;;
+                *) continue ;;
+            esac
             [ -f "$root/specs/changes/$cid.md" ] || continue
             case "$named" in *" $cid "*) continue ;; esac
             n=$((n + 1)); [ "$n" -gt 8 ] || unclosed="${unclosed:+$unclosed, }$cid"

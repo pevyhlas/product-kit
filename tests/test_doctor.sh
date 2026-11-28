@@ -22,6 +22,45 @@ assert_eq '[10,1]' "$(jq -c '[.trace["template-placeholder"], .trace["unconfirme
 assert_eq 2 "$(jq '.findings | length' <<< "$OUTPUT")" "strict promotes both advisories"
 assert_eq '[]' "$(jq -c .advisories <<< "$OUTPUT")"
 
+it "doctor advises once per specified change with no open task lines, in a checkout or on default"
+mkdir -p specs/changes
+cat > specs/changes/001-empty.md <<'MD'
+# Change: Waiting for close
+
+## State
+**Step**: specified
+**Waiting on**: nothing
+**Next**: close
+
+## Tasks
+- [X] Delivered
+Notes: <!--
+- [ ] Comment example
+-->
+
+~~~md
+- [ ] Fenced example
+~~~
+
+## Notes
+- [ ] Outside Tasks
+MD
+git update-ref refs/remotes/origin/spec-test HEAD
+git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/spec-test
+trusted_edit refs/remotes/origin/spec-test specs/changes/002-remote.md < specs/changes/001-empty.md || exit 1
+empty_record=specs/changes/001-empty.md
+# shellcheck disable=SC2094 # trusted_edit changes only Git objects and the remote ref
+trusted_edit refs/remotes/origin/spec-test "$empty_record" < "$empty_record" || exit 1
+run bash "$DOCTOR" --json
+assert_eq 0 "$STATUS"
+assert_eq '["Specified with no open tasks: 001-empty; close it in this PR (close-change.sh) or change Step","Specified with no open tasks: 002-remote; close it in this PR (close-change.sh) or change Step"]' \
+    "$(jq -c '[.advisories[] | select(startswith("Specified with no open tasks:"))] | sort' <<< "$OUTPUT")"
+assert_not_contains "$OUTPUT" 'Merged without closing'
+git symbolic-ref --delete refs/remotes/origin/HEAD
+git update-ref -d refs/remotes/origin/spec-test
+rm specs/changes/001-empty.md
+rmdir specs/changes
+
 it "ordinary syntax, examples and protected quotes are not fill-in slots"
 fill_seeded_policy "$PROJ" || exit 1
 cat >> .prdkit/memory/constitution.md <<'MD'

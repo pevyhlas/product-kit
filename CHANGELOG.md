@@ -11,6 +11,12 @@ change by change.
 
 ## [Unreleased]
 
+### Added
+
+- Spec-first changes can merge a spec with `**Step**: specified` and keep their tasks and
+  `planned:` markers open for implementing PRs. Status shows remaining tasks and age, doctor
+  advises when no tasks remain, and the final implementing PR closes the existing record.
+
 ## [3.3.2] — 2026-11-27 — per-PR approval policy guard
 
 ### Fixed

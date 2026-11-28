@@ -357,15 +357,14 @@ it "a failed entry write leaves the change open for an ordinary retry"
 printf -- '- 2026-11-01 099-other: elsewhere\n' > .prdkit/history/log/099-other.md
 other_blob="$(git hash-object .prdkit/history/log/099-other.md)"
 cat > "$outside/limit-write" <<'SH'
-cat() (
+cat() {
     if [[ $PWD = "$CLOSE_SPECS"/log/.close-* ]]; then
-        trap '' XFSZ
-        ulimit -f 0 || exit 1
-        command cat "$@" || { echo 'limited entry write failed' >&2; exit 1; }
-        exit 0
+        (trap '' XFSZ; ulimit -f 0 || exit 1; exec cat "$@") ||
+            { echo 'limited entry write failed' >&2; return 1; }
+    else
+        command cat "$@"
     fi
-    command cat "$@"
-)
+}
 SH
 run env BASH_ENV="$outside/limit-write" bash "$B/close-change.sh" --pr "$pr" --date 2026-11-01 013-guard "guarded — R-01 — #6"
 assert_eq 1 "$STATUS" 'the limited write refuses close'
@@ -565,4 +564,136 @@ assert_not_contains "$OUTPUT" "004-left" "doctor reads the checkout, not only th
 assert_contains "$OUTPUT" 'Merged without closing: 007-child, 008-planned, 010-tzero, 011-child records' 'other open leaves remain'
 run bash "$B/status.sh"
 assert_eq 4 "$(printf '%s\n' "$OUTPUT" | grep -c 'merged without closing')" "status agrees that only one record closed"
+
+it "a spec-only PR can merge open, then two implementing PRs can finish and close it"
+PROJ="$(make_inited_project)" || exit 1
+track_tmp "$PROJ"
+cd "$PROJ" || exit 1
+B="$PWD/.prdkit/scripts/bash"
+fill_seeded_policy "$PROJ" || exit 1
+review_policy "$PROJ" || exit 1
+git add -A && git commit -qm installed || exit 1
+DEFAULT="$(git symbolic-ref --short HEAD)"
+integration="refs/remotes/origin/$DEFAULT"
+git update-ref "$integration" HEAD
+git symbolic-ref refs/remotes/origin/HEAD "$integration"
+land_piece() {
+    local piece
+    piece="$(git symbolic-ref --short HEAD)" &&
+        git checkout -q "$DEFAULT" &&
+        git merge -q --no-ff -m "Merge $piece" "$piece" &&
+        git update-ref "$integration" HEAD
+}
+approve_export_head() {
+    approve_head && fx_owner_review 7 APPROVED "$(git rev-parse HEAD)"
+}
+git checkout -qb plan
+id=021-plan
+path="specs/changes/$id.md"
+entry=".prdkit/history/log/$id.md"
+mkdir -p specs/changes
+cat > "$path" <<'MD'
+# Change: Export
+**Opened**: 2026-11-01 · **Tier**: T3 · **Parent**: none
+
+## State
+**Step**: specified
+**Waiting on**: nothing
+**Next**: deliver
+
+## Tasks
+- [ ] First piece
+- [ ] Second piece
+- [ ] Third piece
+MD
+printf '# Product\n\n- **R-01 Export** (hypothesis, planned: 021-plan): users export.\n' > specs/product.md
+git add specs && git commit -qm 'Specify export' && approve_export_head || exit 1
+run bash "$B/check-review.sh" --pr "$pr" "$id"
+assert_eq 0 "$STATUS" "the spec-only PR passes review without a close commit: $OUTPUT"
+assert_not_contains "$OUTPUT" "is still at this head" "the spec-only PR is meant to leave its record open"
+land_piece || exit 1
+assert_file "$path"
+run test ! -e "$entry"; assert_eq 0 "$STATUS" "the spec PR makes no log entry"
+run bash "$B/doctor.sh" --json
+assert_eq 0 "$STATUS" "the spec-only merge is valid"
+assert_eq '[0,0]' "$(jq -c '[.trace["planned-closed"],.trace["planned-unknown"]]' <<< "$OUTPUT")"
+assert_not_contains "$OUTPUT" 'Merged without closing'
+assert_not_contains "$OUTPUT" 'Specified with no open tasks'
+run bash "$B/status.sh" --json
+assert_eq '[3,8,false]' "$(jq -c '.changes[] | select(.id == "021-plan") | [.open_tasks,.age_days,.merged_unclosed]' <<< "$OUTPUT")"
+
+git checkout -qb deliver-first
+sed -i.bak '/^- \[ \] First piece$/d' "$path"; rm "$path.bak"
+mkdir -p src; printf 'first\n' > src/export.txt
+git add specs src && git commit -qm 'Deliver the first piece' && approve_export_head || exit 1
+before="$(git rev-parse HEAD)"
+run bash "$B/close-change.sh" --pr "$pr" "$id" 'export — R-01 — complete — #7'
+assert_eq 1 "$STATUS" 'open tasks prevent closing even with approval'
+assert_contains "$OUTPUT" 'finish or delete its tasks, or change Step for an owner disposition, first'
+assert_eq "$before" "$(git rev-parse HEAD)"
+assert_eq '' "$(git status --porcelain)" 'refusal leaves no writes'
+land_piece || exit 1
+assert_file "$path"
+run bash "$B/doctor.sh" --json
+assert_eq 0 "$STATUS"
+assert_not_contains "$OUTPUT" 'Merged without closing'
+assert_not_contains "$OUTPUT" 'Specified with no open tasks'
+run bash "$B/status.sh" --json
+assert_eq '[2,false]' "$(jq -c '.changes[] | select(.id == "021-plan") | [.open_tasks,.merged_unclosed]' <<< "$OUTPUT")"
+
+git checkout -qb deliver-rest
+sed -i.bak '/^- \[ \] /d' "$path"; rm "$path.bak"
+sed -i.bak 's/, planned: 021-plan//' specs/product.md; rm specs/product.md.bak
+printf 'second\nthird\n' >> src/export.txt
+git commit -qam 'Deliver the remaining pieces' || exit 1
+run bash "$B/doctor.sh"
+assert_contains "$OUTPUT" 'Specified with no open tasks: 021-plan; close it in this PR (close-change.sh) or change Step'
+approve_export_head || exit 1
+run bash "$B/close-change.sh" --pr "$pr" "$id" 'export — R-01 — complete — #7'
+assert_eq 0 "$STATUS" "the default branch has a specified record: $OUTPUT"
+if [ "$STATUS" -eq 0 ]; then
+    assert_eq "D"$'\t'"$path" "$(git diff-tree -r --no-commit-id --name-status HEAD -- "$path")"
+    assert_eq '- 2026-11-09 021-plan: export — R-01 — complete — #7' "$(git show "HEAD:$entry")"
+    approve_export_head || exit 1
+    run bash "$B/check-review.sh" --pr "$pr" "$id"
+    assert_eq 0 "$STATUS" "the closed head passes: $OUTPUT"
+    land_piece || exit 1
+    run bash "$B/doctor.sh" --json
+    assert_eq 0 "$STATUS"
+    assert_eq '[0,0]' "$(jq -c '[.trace["planned-closed"],.trace["planned-unknown"]]' <<< "$OUTPUT")"
+    assert_not_contains "$OUTPUT" 'Closed without a log entry'
+    assert_not_contains "$OUTPUT" 'Specified with no open tasks'
+fi
+
+it "only the default branch can authorize closing an already-merged record"
+git checkout -q "$DEFAULT"
+id=022-legacy
+path="specs/changes/$id.md"
+record "$id" T1 none
+git add "$path" && git commit -qm 'Merge a non-specified record' && git update-ref "$integration" HEAD || exit 1
+git checkout -qb flip-step
+legacy_refusal="close-change.sh: $path is already on origin/$DEFAULT: a change merged with its record closes inside the next relevant PR, before that PR's final review (review.md, Closing)"
+run bash "$B/close-change.sh" --pr "$pr" "$id" 'legacy — R-01 — complete — #7'
+assert_eq 1 "$STATUS"
+assert_eq "$legacy_refusal" "$OUTPUT"
+sed -i.bak 's/\*\*Step\*\*: review/**Step**: specified/' "$path"; rm "$path.bak"
+git commit -qam 'Change Step only on the implementing branch' || exit 1
+run bash "$B/close-change.sh" --pr "$pr" "$id" 'legacy — R-01 — complete — #7'
+assert_eq 1 "$STATUS"
+assert_eq "$legacy_refusal" "$OUTPUT"
+run bash "$B/doctor.sh"
+assert_contains "$OUTPUT" "Merged without closing: $id records" "doctor also uses the default branch copy"
+
+it "an owner disposition can change Step and close with remaining tasks"
+git checkout -q "$DEFAULT"
+id=023-rebound
+path="specs/changes/$id.md"
+record "$id" T1 none '## Tasks' '- [ ] Rebound elsewhere'
+sed -i.bak 's/\*\*Step\*\*: review/**Step**: specified/' "$path"; rm "$path.bak"
+git add "$path" && git commit -qm 'Merge specified intent' && git update-ref "$integration" HEAD || exit 1
+git checkout -qb disposition
+sed -i.bak 's/\*\*Step\*\*: specified/**Step**: review/' "$path"; rm "$path.bak"
+git commit -qam 'Record the owner disposition' && approve_head || exit 1
+run bash "$B/close-change.sh" --pr "$pr" "$id" 'export variant — R-01 — rebound — #7'
+assert_eq 0 "$STATUS" "changed Step lets the reviewed owner disposition close: $OUTPUT"
 finish

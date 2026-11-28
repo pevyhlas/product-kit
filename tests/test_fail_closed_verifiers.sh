@@ -46,8 +46,10 @@ case "$VERIFY_FAULT:$*" in
     doc-index-eof:*'ls-files -z -- specs') printf 'specs/results/pending.log'; exit 0 ;;
     squash-empty:*'diff --no-renames --name-only -z '*) exit 0 ;;
     squash-eof:*'diff --no-renames --name-only -z '*) printf 'one.txt'; exit 0 ;;
-    close-default-fail:*'ls-tree --name-only main -- :(literal)specs/changes/'*|close-default-fail:*'cat-file -e main:specs/changes/'*)
+    close-default-fail:*'ls-tree main -- :(literal)specs/changes/'*)
         exit 5 ;;
+    specified-blob-fail:*"cat-file blob $VERIFY_SPECIFIED_OID")
+        "$REAL_GIT" "$@"; exit 5 ;;
     close-log-fail:*'ls-tree HEAD -- :(literal).prdkit/history/log.md') exit 5 ;;
 esac
 exec "$REAL_GIT" "$@"
@@ -397,6 +399,27 @@ assert_contains "$OUTPUT" 'could not check for specs/changes/001-example.md on m
 assert_eq "$before_head" "$(git rev-parse HEAD)" 'HEAD unchanged after producer failure'
 assert_file "$record"
 if [ "$(git rev-parse HEAD)" != "$before_head" ]; then git checkout -qb retry-default "$before_head" || exit 1; fi
+
+it 'default-branch Step is not trusted when the committed object read fails'
+specified_ref=refs/remotes/origin/main
+git update-ref "$specified_ref" main &&
+    git symbolic-ref refs/remotes/origin/HEAD "$specified_ref" || exit 1
+printf '# Change: Example\n\n## State\n**Step**: specified\n' |
+    trusted_edit "$specified_ref" "$record" || exit 1
+VERIFY_SPECIFIED_OID="$(git rev-parse "$specified_ref:$record")" || exit 1
+export VERIFY_SPECIFIED_OID
+for verifier in status doctor; do
+    fault specified-blob-fail bash "$B/$verifier.sh" --json
+    failed "$verifier must not accept the output of a failed object read"
+    assert_contains "$OUTPUT" 'Incomplete output from git'
+done
+fault specified-blob-fail bash "$B/close-change.sh" "${close_args[@]}"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "$record is already on origin/main"
+assert_eq "$before_head" "$(git rev-parse HEAD)" 'cannot close without proof of default Step'
+assert_file "$record"
+git symbolic-ref --delete refs/remotes/origin/HEAD &&
+    git update-ref -d "$specified_ref" || exit 1
 
 it 'a failed folded-log lookup is not a successful absence'
 before_index="$(git hash-object .git/index)"

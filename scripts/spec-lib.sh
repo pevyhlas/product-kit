@@ -157,6 +157,85 @@ SPEC_SKIP_AWK='function spec_skip(line) {
     return 0
 }'
 
+SPEC_CHANGE_TASK_AWK='function change_task(line) {
+    return line ~ /^[[:space:]]*[-*+][[:blank:]]+\[[ xX]\][[:blank:]]+[^[:blank:]]/
+}'
+
+# Opt-in state uses literal fields, not the legacy display Step (which can come
+# from elsewhere). Keep its Markdown rules separate from legacy projections.
+SPEC_SPECIFIED_AWK="$SPEC_CHANGE_TASK_AWK"'
+function specified_scan(line,   s,tail,mark,at,run,depth,hidden) {
+    s = line; sub(/^(   |  | )/, "", s)
+    if (specified_fence != "") {
+        tail = s; sub(/[ \t]+$/, "", tail)
+        if (index(tail, specified_fence) == 1 && (tail ~ /^`+$/ || tail ~ /^~+$/)) specified_fence = ""
+        return
+    }
+    hidden = specified_comment
+    if (!hidden && match(s, /^```+|^~~~+/)) {
+        mark = substr(s, 1, RLENGTH); tail = substr(s, RLENGTH + 1)
+        if (substr(mark, 1, 1) == "~" || !index(tail, "`")) { specified_fence = mark; return }
+    }
+    # Comments can start after prose. Ignore escaped openers and inline code spans.
+    tail = line
+    while (length(tail)) {
+        if (specified_comment) {
+            at = index(tail, "-->"); if (!at) break
+            specified_comment = 0; tail = substr(tail, at + 3)
+        } else {
+            if (!match(tail, /<!--|\\.|`+/)) break
+            mark = substr(tail, RSTART, RLENGTH); tail = substr(tail, RSTART + RLENGTH)
+            if (mark == "<!--") specified_comment = 1
+            else if (substr(mark, 1, 1) == "`") {
+                run = tail
+                while (match(run, /`+/)) {
+                    at = RLENGTH; run = substr(run, RSTART + RLENGTH)
+                    if (at == length(mark)) { tail = run; break }
+                }
+            }
+        }
+    }
+    if (hidden) return
+    if (match(s, /^#+/) && substr(s, RLENGTH + 1) ~ /^([ \t]|$)/) {
+        depth = RLENGTH
+        if (depth <= 2) {
+            specified_section = ""
+            if (depth == 2) {
+                s = substr(s, 3); sub(/[ \t]+#+[ \t]*$/, "", s)
+                gsub(/^[ \t]+|[ \t]+$/, "", s)
+                specified_section = s
+                if (s == "State") specified_states++
+            }
+        }
+        return
+    }
+    if (specified_section == "State" && s ~ /^\*\*Step\*\*:/) {
+        specified_steps++
+        if (line == "**Step**: specified") specified_literal = 1
+    }
+    if (specified_section == "Tasks" && change_task(line) && line ~ /^[[:space:]]*[-*+][[:blank:]]+\[ \]/) specified_open++
+}
+function specified_tasks() {
+    return (specified_states == 1 && specified_steps == 1 && specified_literal) ? specified_open + 0 : "-"
+}'
+
+# A checked count, or "-" when the record does not opt in. With no file
+# argument, the caller supplies an already checked committed blob on stdin.
+spec_specified_tasks() {
+    local expected="" tasks
+    if [ "$#" -gt 0 ]; then
+        verify_lf_file "$1" || return 1
+        expected="$(wc -l < "$1")" || return 1
+    fi
+    # shellcheck disable=SC2016 # awk fields
+    tasks="$(verify_lines awk -v expected="$expected" "$SPEC_SPECIFIED_AWK"'
+        { specified_scan($0) }
+        END { if (expected != "" && NR != expected) exit 1; print specified_tasks() }
+    ' "$@")" || return 1
+    [[ "$tasks" =~ ^(-|0|[1-9][0-9]*)$ ]] || return 1
+    printf '%s\n' "$tasks"
+}
+
 # The default order; a canonical lifecycle header can replace it with **Stages**: A > B > C.
 # Load once per consumer invocation, then pass stage_order and stage_custom to ranking awk.
 SPEC_STAGE_DEFAULT='idea>demo>mvp>private preview>public preview>paid preview>ga>sunset>retired'
@@ -1833,13 +1912,14 @@ spec_changes() { # root
 # Optional change metadata. Only doctor receives duplicate-field diagnostics as rows.
 # Header-only mode emits no task rows (for bounds and close). Create checks only Tags.
 # task, part (empty for unassigned), checked (0/1), source line, issue (malformed/outside);
-# tags, normalized value, source line, issue. No semantic dependency on tags.
+# tags, normalized value, source line, issue. Status also emits the open task count
+# for specified records. No semantic dependency on tags.
 spec_change_metadata() { # file [tags|status|create]
     local file="$1" expected rows mode="${2:-}" kind label line
     verify_lf_file "$file" || return 1
     expected="$(wc -l < "$file")" || return 1
     # shellcheck disable=SC2016 # the single-quoted program uses awk fields
-    rows="$(verify_lines awk -v expected="$expected" -v mode="$mode" "$SPEC_METADATA_SKIP_AWK $SPEC_HEADER_AWK"'
+    rows="$(verify_lines awk -v expected="$expected" -v mode="$mode" "$SPEC_METADATA_SKIP_AWK $SPEC_HEADER_AWK $SPEC_SPECIFIED_AWK"'
         function tag_list(value,   a, i, n, tag, out) {
             n = split(value, a, ",")
             for (i = 1; i <= n; i++) {
@@ -1849,7 +1929,7 @@ spec_change_metadata() { # file [tags|status|create]
             }
             return out
         }
-        { if (metadata_skip($0)) next }
+        { if (mode == "status") specified_scan($0); if (metadata_skip($0)) next }
         /^##+[[:space:]]/ {
             if (!section) {
                 section = 1
@@ -1862,7 +1942,7 @@ spec_change_metadata() { # file [tags|status|create]
             next
         }
         !section { metadata_header($0); next }
-        (mode == "" || mode == "status") && tasks && /^[[:space:]]*[-*+][[:blank:]]+\[[ xX]\][[:blank:]]+[^[:blank:]]/ {
+        (mode == "" || mode == "status") && tasks && change_task($0) {
             s = $0
             sub(/^[[:space:]]*[-*+][[:blank:]]+\[/, "", s)
             checked = (substr(s, 1, 1) != " ")
@@ -1882,6 +1962,7 @@ spec_change_metadata() { # file [tags|status|create]
         }
         END {
             if (NR != expected) exit 1
+            if (mode == "status" && (open = specified_tasks()) != "-") print "specified\037" open
             n = split(mode == "create" ? "Tags" : "Parts Journeys Tags", labels, " ")
             for (i = 1; i <= n; i++) {
                 label = labels[i]
@@ -2234,19 +2315,24 @@ spec_objects_local() { # root -> 0 safe in place, 1 probe error, 2 old Git in a 
     [ "$((10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]}))" -ge 2045 ] || return 2
 }
 
-# Records committed at <rev> with no child or outcome checkpoint keeping them open.
-# Reviews are native GitHub reviews, not record text: T0 and not-yet-reviewed records are listed too.
-# Committed objects only; prints change ids.
-spec_unclosed_changes() { # root rev
-    local root="$1" rev="$2" path paths record_text
-    paths="$(GIT_NO_LAZY_FETCH=1 verify_lines git -C "$root" ls-tree --name-only "$rev" -- specs/changes/)" || return 1
-    while IFS= read -r path; do
+# Committed objects only. An unclosed record has no child, outcome checkpoint
+# or explicit specified Step keeping it open. T0 and not-yet-reviewed records
+# qualify too. Report zero-task specified records separately.
+spec_default_change_rows() { # root rev -> kind, id
+    local root="$1" rev="$2" path paths row meta regular record_text
+    paths="$(GIT_NO_LAZY_FETCH=1 verify_lines git -C "$root" ls-tree "$rev" -- specs/changes/)" || return 1
+    while IFS= read -r row; do
+        path="${row#*$'\t'}"; meta="${row%%$'\t'*}"
         case "$path" in specs/changes/*.md) ;; *) continue ;; esac
-        record_text="$(GIT_NO_LAZY_FETCH=1 verify_lines git -C "$root" cat-file blob "$rev:$path")" || return 1
+        [[ "$meta" =~ ^(100644|100755|120000)\ blob\ [0-9a-f]{40}([0-9a-f]{24})?$ ]] ||
+            { printf 'Invalid committed change record: %s\n' "$path" >&2; return 1; }
+        regular=1; case "$meta" in 120000\ *) regular=0 ;; esac
+        record_text="$(GIT_NO_LAZY_FETCH=1 verify_lines git -C "$root" cat-file blob "${meta##* }")" || return 1
         [ -n "$record_text" ] || { printf 'Empty committed change record: %s\n' "$path" >&2; return 1; }
         printf '%s\n' "$record_text" |
-            awk -v id="$(spec_field "$(basename "$path" .md)")" "$SPEC_SKIP_AWK $SPEC_CHANGE_TAG_AWK"'
+            awk -v id="$(spec_field "$(basename "$path" .md)")" -v regular="$regular" "$SPEC_SKIP_AWK $SPEC_CHANGE_TAG_AWK $SPEC_SPECIFIED_AWK"'
             function trim(s) { gsub(/`/, "", s); gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+            { if (regular) specified_scan($0) }
             { $0 = change_without_tags($0) }
             { gsub(/\037/, " "); if (spec_skip($0)) next }
             /\*\*Parent\*\*:/ && !seen_parent {
@@ -2257,8 +2343,18 @@ spec_unclosed_changes() { # root rev
             sec != "## State" { next }
             /^### Outcome checkpoint[[:space:]]*$/ { checkpoint = 1 }
             END {
-                print id "\037" parent "\037" (!checkpoint)
+                print id "\037" parent "\037" (!checkpoint) "\037" specified_tasks()
             }' || return 1
-    done <<< "$paths" | awk -F '\037' '{ id[++n] = $1; flagged[n] = $3; if ($2 != "") named[$2] = 1 }
-        END { for (i = 1; i <= n; i++) if (flagged[i] && !(id[i] in named)) print id[i] }'
+    done <<< "$paths" | awk -F '\037' '
+        { id[++n] = $1; flagged[n] = $3; tasks[n] = $4; if ($2 != "") named[$2] = 1 }
+        END {
+            for (i = 1; i <= n; i++) {
+                if (tasks[i] == "0") print "specified-empty" FS id[i]
+                if (tasks[i] == "-" && flagged[i] && !(id[i] in named)) print "unclosed" FS id[i]
+            }
+        }'
+}
+
+spec_unclosed_changes() { # root rev -> change ids
+    spec_default_change_rows "$1" "$2" | awk -F '\037' '$1 == "unclosed" { print $2 }'
 }

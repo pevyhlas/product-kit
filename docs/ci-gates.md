@@ -426,9 +426,9 @@ agent definition or tier-map findings, old history paths, malformed or overlong 
 spec links to history, and a change record
 deleted in history without its log entry (`check-review.sh` fails the same at close).
 It reports unsupported kit layouts and formats as findings. Advisories include spec files over their reading budgets,
-cited IDs that are undefined or retired (in spec files and tests), a reviewed change record
-still on the default branch and in the checkout with no child or outcome checkpoint keeping it
-open (merged without closing, including T0 and records with no verdict), trace
+cited IDs that are undefined or retired (in spec files and tests), a change record still
+on the default branch and in the checkout with no child, outcome checkpoint or committed
+`specified` step keeping it open (merged without closing, including T0 and records with no verdict), trace
 drift (`Code:` paths not in the repository, stale `planned:` markers, unallocated R/Q items and
 parts, change records restating or citing undefined IDs), past-due hold reminders and expired waivers,
 open inbox items and their age, retained resolved items, local machine paths in
@@ -460,7 +460,9 @@ Byte-based agent context budgets are separate. Compaction due is an advisory at 
 since the latest compaction line in either log order, including pending `.prdkit/history/log/<id>.md`
 files.
 
-The "Merged without closing" advisory needs the default-branch ref and its tree and blob
-objects locally; it does not need branch ancestry. Fetch full history (for example, use
+Doctor also flags [specified records with no open tasks](troubleshooting.md), whether in the
+checkout or on the committed default branch.
+The default-branch checks need the ref and its tree and blob objects locally; they do not
+need branch ancestry. Fetch full history (for example, use
 `actions/checkout` with `fetch-depth: 0`) for the separate history-based "Closed without
 a log entry" check.

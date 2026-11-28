@@ -142,12 +142,22 @@ if [ -n "$folded" ]; then
 fi
 default="$(spec_default_branch "$root")" || refuse "could not identify the default branch"
 if [ -n "$default" ]; then
-    existing="$(verify_lines git -C "$root" ls-tree --name-only "$default" -- ":(literal)$path")" ||
+    existing="$(verify_lines git -C "$root" ls-tree "$default" -- ":(literal)$path")" ||
         refuse "could not check for $path on $default"
     if [ -n "$existing" ]; then
-        refuse "$path is already on $default: a change merged with its record closes inside the next relevant PR, before that PR's final review (review.md, Closing)"
+        meta="${existing%%$'\t'*}"
+        if ! [[ "${existing#*$'\t'}" = "$path" && "$meta" =~ ^100(644|755)\ blob\ [0-9a-f]{40}([0-9a-f]{24})?$ ]] ||
+            ! default_record="$(verify_lines git -C "$root" cat-file blob "${meta##* }" 2>/dev/null)" ||
+            ! default_tasks="$(spec_specified_tasks <<< "$default_record" 2>/dev/null)" || [ "$default_tasks" = - ]; then
+            refuse "$path is already on $default: a change merged with its record closes inside the next relevant PR, before that PR's final review (review.md, Closing)"
+        fi
     fi
 fi
+open_tasks="$(spec_specified_tasks "$root/$path")" || refuse "could not check the Step and Tasks in $path at HEAD"
+case "$open_tasks" in
+    -|0) ;;
+    *) refuse "$path is specified and still has open tasks: finish or delete its tasks, or change Step for an owner disposition, first" ;;
+esac
 
 # Check the actual resolved base inside the gate as well as the frozen preflight tips.
 check() { PRDKIT_CLOSE_CHECK_HISTORY=1 bash "$SCRIPT_DIR/check-review.sh" --pr "$pr" --repo "$root" --head HEAD ${base_args[@]+"${base_args[@]}"} "$id" 2>&1; }
