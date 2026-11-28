@@ -11,6 +11,13 @@ change by change.
 
 ## [Unreleased]
 
+### Fixed
+
+- `new-change.sh` no longer blocks numbering because an unrelated checkout uses the old history
+  layout. It warns once per checkout and still counts its claims without changing it. Unreadable
+  or ambiguous history, and old layouts in the current checkout or integration tips, still block
+  allocation.
+
 ## [3.3.2] — 2026-11-27 — per-PR approval policy guard
 
 ### Fixed

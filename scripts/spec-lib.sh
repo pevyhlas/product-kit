@@ -220,7 +220,6 @@ _spec_dir_used() {
 
 _spec_has_canon() { [ -f "$1/specs/product.md" ] || [ -f "$1/specs/architecture.md" ] || [ -f "$1/specs/SPEC.md" ]; }
 
-# Detection only: never use the old paths as inputs to history or numbering.
 _spec_history_move_required() {
     printf '%s\n' "Old history paths remain ($1). Move any that exist, then commit the move (see CHANGELOG):" \
         '  mkdir -p .prdkit/history' \
@@ -230,67 +229,83 @@ _spec_history_move_required() {
     return 1
 }
 spec_require_history_layout() { # root [--head] -> physical paths, index (including sparse entries), optionally HEAD
+    local old
+    old="$(spec_old_history_checkout "$@")" || return "$?"
+    [ -z "$old" ] || _spec_history_move_required "$old"
+}
+
+spec_old_history_checkout() { # root [--head|--filesystem] -> diagnostic context when old paths exist
     local path old head
     for path in specs/log.md specs/log specs/archive.md; do
         if [ -e "$1/$path" ] || [ -L "$1/$path" ]; then
-            _spec_history_move_required "$1"; return 1
+            printf '%s\n' "$1"; return
         fi
     done
+    [ "${2:-}" != --filesystem ] || return 0
     if [ "$(git -C "$1" rev-parse --is-inside-work-tree 2>/dev/null)" = true ]; then
         old="$(verify_lines git -C "$1" ls-files -- ':(top)specs/log.md' ':(top)specs/log' ':(top)specs/archive.md')" ||
             { echo "Cannot check the Git index for old history paths at $1" >&2; return 1; }
-        [ -z "$old" ] || { _spec_history_move_required "$1"; return 1; }
+        if [ -n "$old" ]; then printf '%s\n' "$1"; return; fi
         [ "${2:-}" = --head ] || return 0
         # A staged deletion does not establish that the history has moved.
         if head="$(_spec_archive_git -C "$1" rev-parse --verify --quiet HEAD)"; then
-            spec_require_history_head "$1" "$head" || return "$?"
+            old="$(spec_old_history_head "$1" "$head")" || return "$?"
+            if [ -n "$old" ]; then printf 'HEAD of %s; restore any staged deletions before moving\n' "$1"; fi
         elif [ "$?" -ne 1 ]; then
             echo "Cannot identify HEAD for the history check at $1" >&2
             return 1
         fi
     fi
 }
-spec_require_history_head() ( # root, frozen HEAD
+spec_old_history_head() ( # root, frozen HEAD -> old paths
     if [ "${SPEC_HISTORY_VIEW_ROOT:-}" != "$1" ]; then
         spec_open_history_view "$1" || return 1
         trap spec_close_history_view EXIT
     fi
-    spec_require_history_tips "$1" "$2" "HEAD of $1; restore any staged deletions before moving"
+    spec_old_history_at "$1" "$2"
 )
+spec_old_history_at() { # root, commit -> old paths
+    if ! verify_lines _spec_history_git "$1" ls-tree --name-only "$2" -- specs/log.md specs/log specs/archive.md; then
+        if [ "${SPEC_HISTORY_VIEW_ROOT:-}" = "$1" ] && [ -n "$SPEC_HISTORY_VIEW" ]; then
+            echo "Legacy history layout unchecked at $2: the local object store could not supply the tree on this partial clone's older Git" >&2
+            return 2
+        fi
+        echo "Cannot check $2 for old history paths" >&2
+        return 1
+    fi
+}
 spec_require_history_tips() { # root, frozen tips [diagnostic context]
     local rev old
     while IFS= read -r rev; do
         [ -n "$rev" ] || continue
-        if ! old="$(verify_lines _spec_history_git "$1" ls-tree --name-only "$rev" -- specs/log.md specs/log specs/archive.md)"; then
-            if [ "${SPEC_HISTORY_VIEW_ROOT:-}" = "$1" ] && [ -n "$SPEC_HISTORY_VIEW" ]; then
-                echo "Legacy history layout unchecked at $rev: the local object store could not supply the tree on this partial clone's older Git" >&2
-                return 2
-            fi
-            echo "Cannot check $rev for old history paths" >&2
-            return 1
-        fi
+        old="$(spec_old_history_at "$1" "$rev")" || return "$?"
         [ -z "$old" ] || { _spec_history_move_required "${3:-commit $rev; update stale branches and refs after moving}"; return 1; }
     done <<< "$2"
 }
 
 spec_require_layout() { # root
-    local name line nr=0
+    local name
     for name in product-spec targets features archive; do
         if _spec_dir_used "$1/specs/$name"; then
             printf 'Unsupported specs/%s/ layout: expected specs/SPEC.md or split specs/product.md and specs/architecture.md, specs/changes/<id>.md records and .prdkit/history/archive.md history.\n' "$name" >&2
             return 1
         fi
     done
-    if [ -f "$1/.prdkit/history/archive.md" ]; then
+    _spec_reject_feature_counter "$1/.prdkit/history/archive.md" .prdkit/history/archive.md
+}
+
+_spec_reject_feature_counter() { # file diagnostic-path
+    local line nr=0
+    if [ -f "$1" ]; then
         while IFS= read -r line || [ -n "$line" ]; do
             nr=$((nr + 1))
             _spec_trim "${line//[*_\`#|>]/}"
             case "$_spec_t" in
                 [Ll][Aa][Ss][Tt]' '0.[Xx]' '[Ff][Ee][Aa][Tt][Uu][Rr][Ee]*)
-                    printf 'Unsupported feature counter in .prdkit/history/archive.md:%s: current archives reserve change numbers with **Log condensed through**: <number>.\n' "$nr" >&2
+                    printf 'Unsupported feature counter in %s:%s: current archives reserve change numbers with **Log condensed through**: <number>.\n' "$2" "$nr" >&2
                     return 1 ;;
             esac
-        done < "$1/.prdkit/history/archive.md" || return 1
+        done < "$1" || return 1
     fi
 }
 
@@ -354,7 +369,7 @@ spec_archive_log_details() ( # root [diagnostic-path]
     _spec_archive_log_file "$1/$path" "$diagnostic"
 )
 
-_spec_archive_log_file() { # file diagnostic-path [diagnostic-context]
+_spec_archive_log_file() { # file diagnostic-path [diagnostic-context [folded-log-path]]
     local parsed expected end index pointer line floor floor_line context="${3:-}"
     if [ ! -e "$1" ] && [ ! -L "$1" ]; then echo 0; return 0; fi
     if [ ! -f "$1" ] || ! review_file_without_nul "$1"; then
@@ -366,26 +381,33 @@ _spec_archive_log_file() { # file diagnostic-path [diagnostic-context]
         end="$(tail -c 1 "$1" && printf x)" || return 1
         [ "$end" = $'\nx' ] || expected=$((expected + 1))
     fi
-    parsed="$(LC_ALL=C awk -v expected="$expected" "$SPEC_METADATA_SKIP_AWK"'
+    parsed="$(LC_ALL=C awk -v expected="$expected" -v log_path="${4:-.prdkit/history/log.md}" "$SPEC_METADATA_SKIP_AWK"'
         function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
         function number(s) { return s ~ /^[0-9]+$/ && length(s) <= 9 }
         function fail(why) { print NR ": " why; bad = 1; exit 1 }
         # Parse only at the field boundary. Ordinary prose after the code span is not a set.
         function git_pointer(s,    sha, tail) {
-            if (!match(s, /^;[ \t]*those entries:[ \t]*`git show [0-9a-fA-F]+:\.prdkit\/history\/log\.md`/)) return ""
+            if (!match(s, /^;[ \t]*those entries:[ \t]*`git show [0-9a-fA-F]+:[^`]+`/)) return ""
+            sha = substr(s, 1, RLENGTH); sub(/^.*`git show /, "", sha)
+            if (substr(sha, index(sha, ":") + 1) != log_path "`") return ""
             tail = trim(substr(s, RLENGTH + 1))
             if (tail != "" && tail != "." && tail !~ /^[.;][ \t]+[^[:space:];,]/) return ""
             if (continuation(sub_tail(tail))) return ""
-            sha = substr(s, 1, RLENGTH); sub(/^.*`git show /, "", sha); sub(/:.*/, "", sha)
+            sub(/:.*/, "", sha)
             if (length(sha) < 7 || length(sha) > 64) return ""
             return sha
         }
         function sub_tail(s) { sub(/^[.;]/, "", s); return s }
+        function old_pointer(s) {
+            if (s !~ /^(—|–|-) entries at `git show [0-9a-fA-F]+:/) return 0
+            sub(/^[^:]+:/, "", s); sub(/\.$/, "", s)
+            return s == log_path "`"
+        }
         function value(s,    lead, rest, raw, semi, list, fields, n, i, bounds, pair, lo, hi, prev) {
             s = trim(s)
             # Older archives also used a bare value, an "as of" date, or a dash and
             # "entries at" annotation. Do not accept arbitrary text in the metadata lane.
-            if (s == "<NNN, or none>; those entries: `git show <sha>:.prdkit/history/log.md`." || s ~ /^through [0-9]+$/) return
+            if (s == "<NNN, or none>; those entries: `git show <sha>:" log_path "`." || s ~ /^through [0-9]+$/) return
             raw = s; sub(/[ \t;].*$/, "", raw)
             rest = trim(substr(s, length(raw) + 1))
             lead = tolower(raw); gsub(/[*_`]/, "", lead)
@@ -397,13 +419,12 @@ _spec_archive_log_file() { # file diagnostic-path [diagnostic-context]
             if (lead != "none" && lead != "n/a" && !number(lead)) fail("expected a cutoff number or none")
             cutoff = lead + 0; prev = cutoff
             if (rest == "" || rest == "." || rest == "|" || git_pointer(rest) != "" ||
-                rest ~ /^as of [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\.?$/ ||
-                rest ~ /^(—|–|-) entries at `git show [0-9a-fA-F]+:\.prdkit\/history\/log\.md`\.?$/) return
-            if (!match(rest, /^;[ \t]*also[ \t]+/)) fail("expected ; also <IDs and ranges>; or ; those entries: `git show <sha>:.prdkit/history/log.md`")
+                rest ~ /^as of [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\.?$/ || old_pointer(rest)) return
+            if (!match(rest, /^;[ \t]*also[ \t]+/)) fail("expected ; also <IDs and ranges>; or ; those entries: `git show <sha>:" log_path "`")
             if (NR != label_line || lead == "n/a" || tolower(raw) != lead)
                 fail("keep the sparse field on the cutoff line and use a plain number or none")
             rest = substr(rest, RLENGTH + 1); semi = index(rest, ";")
-            if (!semi || (pointer = git_pointer(substr(rest, semi))) == "") fail("expected ; those entries: `git show <sha>:.prdkit/history/log.md` after the sparse set")
+            if (!semi || (pointer = git_pointer(substr(rest, semi))) == "") fail("expected ; those entries: `git show <sha>:" log_path "` after the sparse set")
             list = trim(substr(rest, 1, semi - 1))
             if (list == "" || list ~ /,$/) fail("empty ID or range")
             n = split(list, fields, ",")
@@ -624,6 +645,158 @@ spec_number_claims_at() ( # root commit -> allocated log and record numbers, no 
     _spec_history_git "$1" cat-file blob "$blob" |
         sed -n 's/^- [0-9-]* \([0-9][0-9][0-9]*-[a-z0-9-]*\):.*/committed log \1/p'
 )
+
+# Numbering only: combine the working, staged and committed claims of an unrelated
+# old-layout checkout. A sparse or staged-away path must not hide an allocation.
+# Use a private scratch view for the existing planned-marker reader; never populate
+# sparse paths, refresh the index, or fetch objects in the other checkout.
+spec_legacy_numbering() ( # checkout [--git] -> claim rows and "legacy archive <details>" rows
+    local root="$1" mode="${2:-}" tmp dir file head
+    shopt -s nullglob
+    set -o pipefail
+    tmp="$(mktemp -d)" || return 1
+    trap 'rm -rf -- "$tmp"' EXIT
+    cd "$root" || return 1
+    for dir in specs specs/log specs/changes specs/product specs/architecture specs/parts specs/decisions \
+               specs/product/*/ specs/architecture/*/ specs/parts/*/ .prdkit .prdkit/history .prdkit/history/log; do
+        dir="${dir%/}"
+        if [ -e "$dir" ] || [ -L "$dir" ]; then
+            [ -d "$dir" ] && [ -r "$dir" ] && [ -x "$dir" ] && [ ! -L "$dir" ] || {
+                printf '%s: expected a readable directory\n' "$root/$dir" >&2
+                return 1
+            }
+        fi
+    done
+    for file in specs/log.md specs/log/[0-9]*.md specs/archive.md specs/changes/[0-9]*.md \
+                .prdkit/history/log.md .prdkit/history/log/[0-9]*.md .prdkit/history/archive.md; do
+        [ -e "$file" ] || [ -L "$file" ] || continue
+        [ -f "$file" ] && [ -r "$file" ] && [ ! -L "$file" ] || {
+            printf '%s: expected a readable regular file\n' "$root/$file" >&2
+            return 1
+        }
+        _spec_legacy_numbering_file "$file" "$file" "$root/$file" || return 1
+    done
+    spec_planned_changes "$root" | _spec_legacy_plan_claims || return 1
+    [ "$mode" = --git ] || return 0
+
+    spec_open_history_view "$root" || return 1
+    trap 'spec_close_history_view; rm -rf -- "$tmp"' EXIT
+    _spec_archive_git -C "$root" ls-files -z --stage -- specs .prdkit > "$tmp/paths" || return 1
+    _spec_legacy_numbering_snapshot "$root" "$tmp/paths" "$tmp/index" 'Git index' || return 1
+    if head="$(_spec_archive_git -C "$root" rev-parse --verify --quiet HEAD)"; then
+        _spec_history_git "$root" ls-tree -r -t -z "$head" -- specs .prdkit > "$tmp/paths" || return 1
+        _spec_legacy_numbering_snapshot "$root" "$tmp/paths" "$tmp/head" HEAD
+    else
+        # No committed tree in an unborn checkout.
+        [ "$?" -eq 1 ]
+    fi
+)
+
+_spec_legacy_numbering_snapshot() { # root, NUL-delimited inventory, scratch directory, source
+    local root="$1" scratch="$3" source="$4" path entry meta oid count=0 expected
+    local index_re='^100(644|755) ([0-9a-f]{40}([0-9a-f]{24})?) 0$'
+    local tree_re='^100(644|755) blob ([0-9a-f]{40}([0-9a-f]{24})?)$'
+    expected="$(verify_nul_count "$2")" || return 1
+    mkdir "$scratch" || return 1
+    while IFS= read -r -d '' entry; do
+        count=$((count + 1))
+        meta="${entry%%$'\t'*}"; path="${entry#*$'\t'}"
+        _spec_legacy_numbering_path "$path" || continue
+        case "$path" in
+            specs|specs/log|specs/changes|specs/product|specs/architecture|specs/parts|specs/decisions|\
+            .prdkit|.prdkit/history|.prdkit/history/log)
+                if [[ "$meta" = '040000 tree '* ]]; then continue; fi
+                printf '%s: expected a directory in %s\n' "$root/$path" "$source" >&2
+                return 1 ;;
+        esac
+        if [[ "$source" = HEAD && "$meta" =~ $tree_re || "$source" = 'Git index' && "$meta" =~ $index_re ]]; then
+            oid="${BASH_REMATCH[2]}"
+        else
+            printf '%s: expected a regular, unambiguous file in %s\n' "$root/$path" "$source" >&2
+            return 1
+        fi
+        _spec_legacy_numbering_blob "$root" "$path" "$oid" "$scratch" "$source" || return 1
+    done < "$2"
+    [ "$count" -eq "$expected" ] || return 1
+    spec_planned_changes "$scratch" | _spec_legacy_plan_claims
+}
+
+_spec_legacy_numbering_path() { # Git path -> relevant numbering input or its container
+    local tail
+    case "$1" in
+        specs|specs/log|specs/changes|specs/product|specs/architecture|specs/parts|specs/decisions|\
+        .prdkit|.prdkit/history|.prdkit/history/log|specs/log.md|specs/archive.md|\
+        .prdkit/history/log.md|.prdkit/history/archive.md) return 0 ;;
+        specs/log/[0-9]*.md|specs/changes/[0-9]*.md|.prdkit/history/log/[0-9]*.md)
+            tail="${1#specs/changes/}"; tail="${tail#*/log/}"
+            [[ "$tail" != */* ]]
+            return ;;
+    esac
+    spec_file_path "$1"
+}
+
+_spec_legacy_numbering_blob() { # root path oid scratch-tree context
+    local root="$1" path="$2" oid="$3" scratch="$4" diag="$1/$2 ($5)"
+    if spec_file_path "$path"; then
+        mkdir -p "$scratch/${path%/*}" || return 1
+        _spec_history_git "$root" cat-file blob "$oid" > "$scratch/$path" || return 1
+    elif [[ "$path" = specs/changes/* ]]; then
+        # Records claim by name; their contents are not numbering inputs.
+        _spec_legacy_numbering_file /dev/null "$path" "$diag"
+    else
+        _spec_history_git "$root" cat-file blob "$oid" > "$scratch/history-input" &&
+            _spec_legacy_numbering_file "$scratch/history-input" "$path" "$diag"
+    fi
+}
+
+_spec_legacy_numbering_file() { # file relative-path diagnostic-path
+    local id row log_path=.prdkit/history/log.md
+    case "$2" in
+        specs/changes/*)
+            id="${2##*/}"; id="${id%.md}"; row="${id%%-*}"
+            if is_change_id "$id" && [ "${#row}" -le 9 ]; then
+                printf 'change record %s\n' "$id"
+            elif [[ "$id" = [0-9][0-9][0-9]*-* ]]; then
+                printf '%s: ambiguous change record name\n' "$3" >&2
+                return 1
+            fi ;;
+        */archive.md)
+            [ "$2" != specs/archive.md ] || log_path=specs/log.md
+            _spec_reject_feature_counter "$1" "$3" || return 1
+            row="$(_spec_archive_log_file "$1" "$3" '' "$log_path")" || return 1
+            printf 'legacy archive %s%s%s\n' "$row" "$SPEC_SEP" "$2" ;;
+        */log.md)
+            verify_lf_file "$1" allow-empty || { printf '%s: incomplete or unreadable folded log\n' "$3" >&2; return 1; }
+            # Prose and compaction rows are not claims. A date and an ID-like
+            # field, however, must conform to the closed-row format.
+            LC_ALL=C awk -v path="$3" "$SPEC_METADATA_SKIP_AWK"'
+                { if (metadata_skip($0)) next }
+                /^- [0-9-]+ [0-9]/ {
+                    if ($0 !~ /^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9][0-9]+-[a-z0-9]+(-[a-z0-9]+)*: [[:space:]]*[^[:space:]]/ ||
+                        index($3, "-") > 10) {
+                        print path ":" NR ": ambiguous closed-change row" > "/dev/stderr"
+                        exit 1
+                    }
+                    sub(/:$/, "", $3); print "closed change", $3
+                }
+            ' "$1" ;;
+        */log/*)
+            id="${2##*/}"; id="${id%.md}"; row="${id%%-*}"
+            if [ "${#row}" -gt 9 ] || ! spec_log_entry_valid "$1" "$id"; then
+                printf '%s: malformed log entry\n' "$3" >&2
+                return 1
+            fi
+            printf 'closed change %s\n' "$id" ;;
+    esac
+    return 0
+}
+
+_spec_legacy_plan_claims() {
+    local id
+    while IFS= read -r id; do
+        [ -z "$id" ] || printf 'planned in the spec %s\n' "$id" || return 1
+    done
+}
 
 spec_archive_log_covers() { # normalized index, change ID (or just its number)
     local cutoff="${1%% *}" n="${2%%-*}" range

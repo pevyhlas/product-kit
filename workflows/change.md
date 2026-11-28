@@ -20,6 +20,12 @@ change ID explicitly to later helpers when it differs from the branch. Add `--pr
 when opening a programme parent or continuing follow-up queue; it includes the commented outcome
 checkpoint scaffold even if a customized change template omits it.
 
+Numbering requires the current history layout in the current checkout, the base of any new
+worktree, and the integration tips it reads. An unrelated checkout with the old layout is a
+read-only numbering source: it warns once, but its records, closed history, and `planned:`
+markers still count. If those claims cannot be read reliably, stop and follow the diagnostic;
+do not bypass the number lock by creating a record by hand.
+
 For a product/programme, use [planning.md](planning.md) to discover work across intent and design.
 For ready work, use [implementation.md](implementation.md). One implementation change normally
 belongs to one PR; larger outcomes use bounded children when useful.

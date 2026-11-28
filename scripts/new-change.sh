@@ -112,7 +112,11 @@ generate_slug() {
 list_checkouts() {
     local wt line worktrees checkout="" bare=false
     echo "$REPO_ROOT"
-    for wt in "$REPO_ROOT/.worktrees"/*; do [ -d "$wt" ] && echo "$wt"; done
+    for wt in "$REPO_ROOT/.worktrees"/*; do
+        [ -d "$wt" ] || continue
+        # An alias of a registered worktree is the same numbering source.
+        (cd "$wt" && pwd -P) || return 1
+    done
     if [ "$HAS_GIT" = true ]; then
         worktrees="$(spec_worktrees "$REPO_ROOT")" || return 1
         while IFS= read -r line; do
@@ -140,6 +144,7 @@ list_claimed() {
 list_spec_claims() {
     local checkout path name entries planned
     while IFS= read -r checkout; do
+        is_legacy_checkout "$checkout" && continue
         spec_require_layout "$checkout" || return 1
         for path in "$checkout"/specs/changes/[0-9]*.md; do
             [ -f "$path" ] && { name="${path##*/}"; echo "change record ${name%.md}"; }
@@ -151,15 +156,30 @@ list_spec_claims() {
             [ -z "$name" ] || printf 'planned in the spec %s\n' "$name"
         done <<< "$planned"
     done <<< "$CHECKOUTS"
+    [ -z "$LEGACY_CLAIMS" ] || printf '%s\n' "$LEGACY_CLAIMS" || return 1
     return 0
 }
 
-list_archive_details() {
-    local checkouts checkout
-    checkouts="$(sort -u <<< "$CHECKOUTS")" || return 1
+is_legacy_checkout() {
+    local checkout
     while IFS= read -r checkout; do
+        [ "$checkout" != "$1" ] || return 0
+    done <<< "$LEGACY_CHECKOUTS"
+    return 1
+}
+
+legacy_checkout_notice() { # severity message path
+    printf "[prdkit] %s: %s; use git worktree remove '%s' or cleanup-change.sh --closed.\n" \
+        "$1" "$2" "${3//\'/\'\\\'\'}" >&2
+}
+
+list_archive_details() {
+    local checkout
+    while IFS= read -r checkout; do
+        is_legacy_checkout "$checkout" && continue
         spec_archive_log_details "$checkout" "$checkout/.prdkit/history/archive.md" || return 1
-    done <<< "$checkouts"
+    done <<< "$CHECKOUTS"
+    [ -z "$LEGACY_ARCHIVES" ] || printf '%s\n' "$LEGACY_ARCHIVES" || return 1
     [ "$HAS_GIT" = true ] || return 0
     spec_archive_log_integration "$REPO_ROOT" "$INTEGRATION_TIPS" details
 }
@@ -285,20 +305,56 @@ AUTO_NUMBER=false
 # Both automatic and explicit allocation must see a complete, valid archive index from
 # every checkout. Keep the lock through record creation; a malformed index cannot be overridden.
 acquire_number_lock
-CHECKOUTS="$(list_checkouts | awk '!seen[$0]++')" || exit 1
+CHECKOUTS="$(list_checkouts)" || exit 1
+CHECKOUTS="$(awk '!seen[$0]++' <<< "$CHECKOUTS")" || exit 1
 if [ "$HAS_GIT" = true ]; then
     spec_open_history_view "$REPO_ROOT" ||
         { echo "[prdkit] Error: could not set up local integration history reads" >&2; exit 1; }
 fi
-while IFS= read -r checkout; do
-    spec_require_history_layout "$checkout" --head || exit 1
-done <<< "$CHECKOUTS"
+# The destination is this checkout or a new worktree from its HEAD. Neither
+# may use the compatibility reader; the same applies to integration tips.
+spec_require_history_layout "$REPO_ROOT" --head || exit 1
 INTEGRATION_TIPS=""
 if [ "$HAS_GIT" = true ]; then
     INTEGRATION_TIPS="$(spec_integration_tips "$REPO_ROOT")" ||
         { echo "[prdkit] Error: could not identify local integration tips" >&2; exit 1; }
     spec_require_history_tips "$REPO_ROOT" "$INTEGRATION_TIPS" || exit 1
 fi
+LEGACY_CHECKOUTS="" LEGACY_CLAIMS="" LEGACY_ARCHIVES=""
+while IFS= read -r checkout; do
+    [ "$checkout" != "$REPO_ROOT" ] && [ -d "$checkout" ] || continue
+    if [ ! -r "$checkout" ] || [ ! -x "$checkout" ]; then
+        legacy_checkout_notice Error 'cannot read numbering inputs in' "$checkout"
+        exit 1
+    fi
+    checkout_mode=--filesystem
+    if [ -e "$checkout/.git" ] || [ -L "$checkout/.git" ]; then checkout_mode=--git; fi
+    if [ "$checkout_mode" = --git ]; then
+        actual_checkout="$(git -C "$checkout" rev-parse --show-toplevel)" &&
+            [ "$checkout" = "$actual_checkout" ] ||
+            { legacy_checkout_notice Error 'cannot identify numbering inputs in' "$checkout"; exit 1; }
+        history_mode=--head
+    else
+        history_mode=--filesystem
+    fi
+    if ! old="$(spec_old_history_checkout "$checkout" "$history_mode")"; then
+        legacy_checkout_notice Error 'cannot check history layout in' "$checkout"
+        exit 1
+    fi
+    [ -n "$old" ] || continue
+    if ! legacy_rows="$(spec_legacy_numbering "$checkout" "$checkout_mode")"; then
+        legacy_checkout_notice Error 'cannot read old-layout numbering inputs in' "$checkout"
+        exit 1
+    fi
+    legacy_checkout_notice Warning 'reading old history as a read-only numbering source' "$checkout"
+    LEGACY_CHECKOUTS="${LEGACY_CHECKOUTS:+$LEGACY_CHECKOUTS$'\n'}$checkout"
+    while IFS= read -r row; do
+        case "$row" in
+            'legacy archive '*) LEGACY_ARCHIVES="${LEGACY_ARCHIVES:+$LEGACY_ARCHIVES$'\n'}${row#legacy archive }" ;;
+            ?*) LEGACY_CLAIMS="${LEGACY_CLAIMS:+$LEGACY_CLAIMS$'\n'}$row" ;;
+        esac
+    done <<< "$legacy_rows"
+done <<< "$CHECKOUTS"
 ARCHIVE_DETAILS="$(list_archive_details)"
 COMMITTED_CLAIMS="$(list_committed_claims)"
 CLAIMS="$(list_claimed)" || exit 1
@@ -329,13 +385,14 @@ while IFS= read -r checkout; do
 done <<< "$CHECKOUTS"
 
 if [ "$AUTO_NUMBER" = false ]; then
-    while IFS="$SPEC_SEP" read -r index _; do
+    while IFS="$SPEC_SEP" read -r index _ _ _ _ source; do
         spec_archive_log_covers "$index" "$NUM" || continue
         cutoff="${index%% *}"
+        source="${source:-.prdkit/history/archive.md}"
         if [ "$((10#$NUM))" -le "$cutoff" ]; then
-            printf '[prdkit] Error: change number %s is reserved: .prdkit/history/archive.md condenses the log through %03d; omit --number or use a number above %03d.\n' "$NUM" "$cutoff" "$HIGH_WATER" >&2
+            printf '[prdkit] Error: change number %s is reserved: %s condenses the log through %03d; omit --number or use a number above %03d.\n' "$NUM" "$source" "$cutoff" "$HIGH_WATER" >&2
         else
-            printf '[prdkit] Error: change number %s is reserved by the condensed log index in .prdkit/history/archive.md; omit --number or use a number above %03d.\n' "$NUM" "$HIGH_WATER" >&2
+            printf '[prdkit] Error: change number %s is reserved by the condensed log index in %s; omit --number or use a number above %03d.\n' "$NUM" "$source" "$HIGH_WATER" >&2
         fi
         exit 1
     done <<< "$ARCHIVE_DETAILS"
