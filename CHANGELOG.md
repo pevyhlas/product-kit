@@ -13,10 +13,23 @@ change by change.
 
 ### Fixed
 
-- Under `owner-approval: per-pr`, changes to the review policy surface after a T3 owner approval
-  require fresh approval on the exact head unless the changed paths match the trusted merge
-  base. The gate reports that base for carried approval or identifies the first offending
-  commit and path.
+- Under `owner-approval: per-pr`, a carried T3 owner approval now survives a policy-surface
+  change that came from the target branch: each net policy path since the approval must match
+  the head's single merge base with the trusted target (mode and object ID, or absent in both),
+  and `owner_approval.base` reports that merge base. The PR's own policy edits, a merge
+  resolution that differs from the base, an approved PR edit and a base edit to the same path,
+  multiple merge bases and unreadable trees still require a fresh owner approval on the exact head.
+
+## [3.3.2] — 2026-11-27 — per-PR approval policy guard
+
+### Fixed
+
+- Under `owner-approval: per-pr`, a carried T3 owner approval no longer counts when the net diff
+  from the approved commit to the head touches `.prdkit`, `.product-kit` (including the gitlink)
+  or `.github/workflows/`, contains a path Git quotes (such as a non-ASCII filename), or cannot be
+  read; the PR then needs a fresh owner approval on the exact head. A policy edit later reverted
+  in full still carries. When the gate finds a policy change, it names the first commit and path
+  ([Per-PR owner approval](docs/ci-gates.md#per-pr-owner-approval)).
 
 ## [3.3.1] — 2026-11-27 — optional per-PR owner approval
 
