@@ -494,6 +494,21 @@ online; assert_eq 1 "$STATUS"
 assert_contains "$OUTPUT" 'multiple merge bases'
 assert_contains "$OUTPUT" "fresh owner approval on the exact head $h"
 assert_not_contains "$OUTPUT" '"owner_approval"'
+assert_not_contains "$OUTPUT" '"owner_approval_policy_change"'
+assert_not_contains "$OUTPUT" 'touches the policy surface'
+mkdir -p .github/workflows
+printf 'on: push\n' > .github/workflows/ambiguous.yml
+git add .github/workflows/ambiguous.yml; git commit -qm 'add workflow after integration'
+ambiguous_policy="$(git rev-parse HEAD)"
+carry_reviews "$merge_approved"
+online; assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'multiple merge bases'
+assert_eq "$ambiguous_policy .github/workflows/ambiguous.yml" \
+    "$(jq -r '.owner_approval_policy_change | [.commit,.path] | join(" ")' <<< "$OUTPUT")"
+assert_not_contains "$OUTPUT" '"owner_approval":'
+run bash "$CHECK" --pr "$PR" 001-reviewed
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "single trusted merge base for the carried T3 owner approval on $merge_approved, and $ambiguous_policy (.github/workflows/ambiguous.yml) touches the policy surface"
 git update-ref refs/remotes/origin/main "$per_pr_base"
 
 it 'only net policy changes under the exact prefixes stop a carry'

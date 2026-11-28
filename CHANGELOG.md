@@ -25,8 +25,9 @@ change by change.
   change that came from the target branch: each net policy path since the approval must match
   the head's single merge base with the trusted target (mode and object ID, or absent in both),
   and `owner_approval.base` reports that merge base. The PR's own policy edits, a merge
-  resolution that differs from the base, an approved PR edit and a base edit to the same path,
-  multiple merge bases and unreadable trees still require a fresh owner approval on the exact head.
+  resolution that differs from the base (including one combining a PR edit and a base edit to the
+  same path), multiple merge bases and unreadable trees still require a fresh owner approval on the
+  exact head; the gate names the oldest commit and path when it can read them.
 
 ## [3.3.2] — 2026-11-27 — per-PR approval policy guard
 
