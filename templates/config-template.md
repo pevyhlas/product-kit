@@ -44,11 +44,19 @@ a branch can add workflows using it. The native gate rejects `review-publisher-i
 An ID listed in both keys counts only as owner. The PR author is always ineligible.
 Reviewers submit normal reviews under their own accounts.
 
-`owner-approval` accepts `exact-head` (also the default when absent) or `per-pr`.
-`per-pr` lets a T3 owner approval carry forward on the same PR from an ancestor of the
-current head; independent reviews still require the exact head. Use `per-pr` only for
-pre-production stages and set it back to `exact-head` before production. Changing this
-setting requires owner review; the gate reads it from the trusted default branch.
+`owner-approval` is owner-reviewed policy read from the trusted default branch:
+
+- `exact-head` (also the default when absent): require approval on the current head.
+- `exact-head-opt-in`: require the current head unless that T3 owner opts in on this PR.
+  The owner posts `owner-approval: carry` on its own line in a PR conversation comment
+  and leaves it unedited. Editing or deleting it removes that marker; a later
+  `CHANGES_REQUESTED` or `DISMISSED` review by that owner ends carry. The marker only
+  enables carry of that owner's own approval.
+- `per-pr`: allow T3 owner approval to carry on every PR without a marker. Use only for
+  pre-production stages; set it back to `exact-head` before production.
+
+Carry requires a verified ancestor and the policy-surface check. Independent reviews
+still require the exact head.
 
 Optionally use `review-lenses` in `## Configuration` to assign accounts to the existing
 reviewer identities in trusted `.prdkit/memory/agents.md`. Use each lowercase name

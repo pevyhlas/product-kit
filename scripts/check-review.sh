@@ -5,8 +5,8 @@
 # Use committed policy from the trusted default branch, even for other PR targets.
 # Exit 0 requires host authority; a would-pass offline preview exits 3.
 # Require the exact PR head, its effective tier's approvals and no eligible open objection.
-# Only trusted per-PR policy can let a T3 owner's approval carry from an ancestor, and only
-# when the diff from that ancestor to the head does not touch the policy surface.
+# Only trusted policy (per-PR or that owner's opt-in) lets a T3 owner approval carry from an ancestor. Net
+# changes on the policy surface must match the head's single merge base with the trusted target.
 # With lenses, only a mapped independent publisher covers an area; T3 requires design.
 # PR-authored record text does not grant approval.
 #
@@ -72,7 +72,8 @@ problems=(); tier=""; record_at=""; record_only=false; start=""
 authority=none; pr_head=""; approvals='[]'; blocking='[]'; head_is_pr_head=false
 lenses=""; areas='[]'; reviews_fetched=false
 owner_approval=exact-head; owner_evidence=""; carried_owner=null; rejected_owner_commits='[]'
-owner_policy_change=""; owner_policy_problem=""
+owner_policy_change=""; owner_policy_problem=""; owner_policy_base=""
+owner_opt_in='{}'; owner_opt_in_unavailable=false
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 if [ -z "$policy_at" ]; then
     problems+=("No trusted integration base: origin/HEAD does not resolve here, so there is no policy to check against; establish it (git remote set-head origin --auto) with its history fetched")
@@ -95,7 +96,7 @@ if github_review_policy "$root" "$policy_at"; then
     owner_approval="$REVIEW_OWNER_APPROVAL"
     if $online; then
         if github_review_fetch "$pr_url" "$work" "$head" "${base_canonical#refs/remotes/origin/}"; then
-            if [ "$owner_approval" = per-pr ]; then reviews_fetched=true
+            if [ "$owner_approval" != exact-head ]; then reviews_fetched=true
             elif github_review_decide "$work" "$head"; then authority=host; head_is_pr_head=true
             else problems+=("$RC_ERROR"); fi
         else problems+=("$RC_ERROR"); fi
@@ -226,32 +227,57 @@ t0_violations() { # from to
         $ok || printf '%s\n' "$file"
     done <<< "$raw"
 }
-first_owner_policy_path() { # raw diff -> the first policy path, if any
+first_owner_policy_path() { # newline-delimited failing paths; raw diff on stdin
     local meta file
     while IFS=$'\t' read -r meta file; do
         [ -n "$meta" ] || continue
-        if kit_policy_path "$file" || [[ "$file" == .github/workflows/* ]]; then
+        if [[ "$1" == *$'\n'"$file"$'\n'* ]]; then
             printf '%s\n' "$file"
             return
         fi
     done
 }
-owner_policy_change_since() { # approved head -> JSON evidence, or empty if no policy change
-    local approved="$1" tip="$2" raw commits commit file
+owner_policy_tree_entry() { # revision and literal path -> raw entry, or empty for absence
+    GIT_NO_REPLACE_OBJECTS=1 git -C "$root" --literal-pathspecs ls-tree --full-tree "$1" -- "$2"
+}
+owner_policy_change_since() { # approved head merge-base (empty: no base) -> set owner_policy_change or owner_policy_base
+    local approved="$1" tip="$2" merge_base="$3" raw commits commit meta file head_entry base_entry
+    local policy_diff=false failing=$'\n'
     local GIT_NO_LAZY_FETCH=1
     export GIT_NO_LAZY_FETCH
     raw="$(review_raw_diff diff "$approved" "$tip" --)" || return 1
-    [ -n "$(first_owner_policy_path <<< "$raw")" ] || return 0
+    while IFS=$'\t' read -r meta file; do
+        [ -n "$meta" ] || continue
+        if kit_policy_path "$file" || [[ "$file" == .github/workflows/* ]]; then
+            policy_diff=true
+            # Git-quoted paths are never exempt. For everything else, a failed read is
+            # not absence; successful reads include the mode and object ID.
+            if [[ "$file" == \"* ]] || [ -z "$merge_base" ] ||
+                ! head_entry="$(owner_policy_tree_entry "$tip" "$file")" ||
+                ! base_entry="$(owner_policy_tree_entry "$merge_base" "$file")" ||
+                [ "$head_entry" != "$base_entry" ]; then
+                failing+="$file"$'\n'
+            fi
+        fi
+    done <<< "$raw"
+    if ! $policy_diff; then
+        # Even without a policy difference, the merge base tree must be available.
+        GIT_NO_REPLACE_OBJECTS=1 git -C "$root" ls-tree "$merge_base" >/dev/null || return 1
+        return 0
+    elif [ "$failing" = $'\n' ]; then
+        owner_policy_base="$merge_base"
+        return 0
+    fi
 
-    # The net diff decides whether carry is barred. Walk ancestors first for the diagnostic,
-    # including merges (diff against each parent) and roots of merged unrelated history.
+    # Only failing net paths count. Walk ancestors first for the diagnostic, including
+    # merges (diff against each parent) and roots of merged unrelated history.
     commits="$(GIT_NO_REPLACE_OBJECTS=1 git -C "$root" rev-list --date-order --reverse "$approved..$tip" --)" || return 1
     while IFS= read -r commit; do
         [ -n "$commit" ] || continue
         raw="$(review_raw_diff diff-tree -r -m --root --no-commit-id "$commit" --)" || return 1
-        file="$(first_owner_policy_path <<< "$raw")"
+        file="$(first_owner_policy_path "$failing" <<< "$raw")"
         if [ -n "$file" ]; then
-            jq -cn --arg commit "$commit" --arg path "$file" '{$commit,$path}'
+            owner_policy_change="$(jq -cn --arg commit "$commit" --arg path "$file" '{$commit,$path}')"
             return
         fi
     done <<< "$commits"
@@ -384,17 +410,31 @@ if [ -n "$lenses" ] && [ "$tier" = T3 ] && [[ ",$lenses," != *,design=* ]]; then
     problems+=("T3 requires a review-lenses mapping for design")
 fi
 if $reviews_fetched; then
-    if [ "$tier" = T3 ]; then
+    if [ "$tier" = T3 ] && [ "$owner_approval" = exact-head-opt-in ]; then
+        if ! owner_opt_in="$(github_review_owner_opt_in "$work" 2>/dev/null)"; then
+            owner_opt_in='{}'; owner_opt_in_unavailable=true
+        fi
+    fi
+    if [ "$tier" = T3 ] && { [ "$owner_approval" = per-pr ] || [ "$owner_opt_in" != '{}' ]; }; then
         if github_review_per_pr_owners "$root" "$work" "$head"; then
             authority=host; head_is_pr_head=true
             if [ "$carried_owner" != null ]; then
                 approved="$(jq -r .commit <<< "$carried_owner")"
-                if ! owner_policy_change="$(owner_policy_change_since "$approved" "$head")"; then
+                if ! $base_trusted || [ -z "$start" ]; then
+                    owner_policy_problem="Cannot establish a single trusted merge base for the carried T3 owner approval on $approved: obtain a fresh owner approval on the exact head $head"
+                    # Without a base every net policy path fails; name the oldest one when readable.
+                    if owner_policy_change_since "$approved" "$head" "" 2>/dev/null && [ -n "$owner_policy_change" ]; then
+                        changed_at="$(jq -r '"\(.commit) (\(.path))"' <<< "$owner_policy_change")"
+                        owner_policy_problem="Cannot establish a single trusted merge base for the carried T3 owner approval on $approved, and $changed_at touches the policy surface: obtain a fresh owner approval on the exact head $head"
+                    fi
+                elif ! owner_policy_change_since "$approved" "$head" "$start"; then
                     owner_policy_problem="Cannot read the policy diff for the carried T3 owner approval on $approved: fetch the complete local history and trees or obtain a fresh owner approval on the exact head $head"
                 elif [ -n "$owner_policy_change" ]; then
                     changed_at="$(jq -r '"\(.commit) (\(.path))"' <<< "$owner_policy_change")"
                     owner_policy_problem="T3 owner approval on $approved does not carry over: $changed_at touches the policy surface; obtain a fresh owner approval on the exact head $head"
-                elif owner_evidence="$(github_review_owner_evidence "$root" "$head" "$carried_owner")"; then
+                elif owner_evidence="$(github_review_owner_evidence "$root" "$head" "$carried_owner")" &&
+                    { [ -z "$owner_policy_base" ] ||
+                        owner_evidence="$(jq -c --arg base "$owner_policy_base" '. + {$base}' <<< "$owner_evidence")"; }; then
                     # Keep the reviews entry shape used by the trusted launcher.
                     approvals="$(jq -c --argjson owner "$carried_owner" '. + [$owner | del(.commit)] | sort_by(.reviewer)' <<< "$approvals")"
                 else
@@ -438,7 +478,17 @@ if [ "$authority" = host ]; then
             elif ! jq -e 'any(.[]; .role=="owner")' <<< "$approvals" >/dev/null; then
                 if [ "$owner_approval" = per-pr ]; then
                     problems+=("T3 also requires a review-owner APPROVED review under per-PR policy (on $head or an ancestor)")
-                else problems+=("T3 also requires a review-owner APPROVED review on the exact PR head $head"); fi
+                else
+                    owner_required="T3 also requires a review-owner APPROVED review on the exact PR head $head"
+                    if $owner_opt_in_unavailable; then
+                        problems+=("$owner_required; the owner approval opt-in could not be read")
+                    else
+                        problems+=("$owner_required")
+                        if [ "$owner_approval" = exact-head-opt-in ] && [ "$owner_opt_in" = '{}' ]; then
+                            problems+=("This repository allows owner-approval: carry in a review-owner's unedited PR conversation comment")
+                        fi
+                    fi
+                fi
             fi
         fi ;;
     esac
@@ -476,7 +526,9 @@ else
 fi
 if ! $json; then
     if [ -n "$owner_evidence" ]; then
-        jq -r '"T3 owner approval is per-PR, given on \(.commit). Commits since approval:",
+        jq -r '(if .mode=="exact-head-opt-in" then
+                    "T3 owner approval opted in via \(.opt_in.kind) \(.opt_in.url), given on \(.commit). Commits since approval:"
+                else "T3 owner approval is per-PR, given on \(.commit). Commits since approval:" end),
             (.commits_since[] | "  " + .), (select(.more > 0) | "  +\(.more) more")' <<< "$owner_evidence"
     fi
     if [ "$rejected_owner_commits" != '[]' ]; then

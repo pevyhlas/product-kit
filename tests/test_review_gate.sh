@@ -261,6 +261,7 @@ owner_policy '- owner-approval: per-pr'
 GH_STUB_PAGE_SIZE=1 online; assert_eq 0 "$STATUS" "$OUTPUT"
 assert_eq "per-pr 1003 $rid $approved 0" \
     "$(jq -r '.owner_approval | [.mode,.reviewer,.review,.commit,.more] | join(" ")' <<< "$OUTPUT")"
+assert_eq false "$(jq '.owner_approval | has("base")' <<< "$OUTPUT")"
 assert_eq "publisher owner" "$(jq -r '[.reviews[].role]|join(" ")' <<< "$OUTPUT")"
 commits="$(git log --format='%h %s' "$approved..$h")"
 assert_eq "$commits" "$(jq -r '.owner_approval.commits_since[]' <<< "$OUTPUT")"
@@ -413,19 +414,102 @@ git config core.quotePath false
 assert_policy_carry_refused "$h" '"odd-\303\251.txt"'
 git config --unset core.quotePath
 
-it 'a policy change introduced by a merge is attributed to the merge commit'
-git checkout -q --detach "$approved"
-git commit -q --allow-empty -m 'main line follow-up'
-main_line="$(git rev-parse HEAD)"
-git checkout -q --detach "$approved"
-git commit -q --allow-empty -m 'side follow-up'
-side="$(git rev-parse HEAD)"
-git checkout -q --detach "$main_line"
-git merge -q --no-ff --no-commit "$side"
-printf '\nPolicy update at merge.\n' >> .prdkit/memory/config.md
-git add .prdkit/memory/config.md; git commit -qm 'merge with policy edit'
-carry_reviews "$approved"
-assert_policy_carry_refused "$h" .prdkit/memory/config.md
+it 'a carried approval accepts policy changes that match the merged trusted base, not its tip'
+per_pr_base="$(git rev-parse origin/main)"
+git checkout -q --detach "$per_pr_base"
+mkdir -p .github/workflows
+printf 'name: old check\n' > .github/workflows/old.yml
+git add .github/workflows; git commit -qm 'baseline workflow'
+merge_fork="$(git rev-parse HEAD)"
+git checkout "$approved" -- specs/changes/001-reviewed.md
+git commit -qm 'implement change'
+merge_approved="$(git rev-parse HEAD)"
+
+git checkout -q --detach "$merge_fork"
+mkdir -p .prdkit/history/log
+history_path='.prdkit/history/log/002-[closed].md'
+printf -- '- 2026-01-02 002-earlier: completed\n' > "$history_path"
+git add -- "$history_path"; git commit -qm 'record a completed change'
+printf '\nBase policy update.\n' >> .prdkit/memory/config.md
+git rm -q .github/workflows/old.yml
+git add .prdkit/memory/config.md; git commit -qm 'update base policy'
+merged_base="$(git rev-parse HEAD)"
+git update-ref refs/remotes/origin/main "$merged_base"
+{ git show "$merged_base:.prdkit/memory/config.md"; printf '\nNot merged yet.\n'; } |
+    trusted_edit refs/remotes/origin/main .prdkit/memory/config.md
+
+git checkout -q --detach "$merge_approved"
+git merge -q --no-ff -m 'update from trusted base' "$merged_base"
+printf 'ordinary follow-up after updating\n' > source.txt
+git add source.txt; git commit -qm 'follow up after update'
+merged_head="$(git rev-parse HEAD)"
+assert_eq "$merged_base" "$(git merge-base origin/main "$merged_head")"
+carry_reviews "$merge_approved"
+online; assert_eq 0 "$STATUS" "$OUTPUT"
+assert_eq "$merge_approved $merged_base" \
+    "$(jq -r '.owner_approval | [.commit,.base] | join(" ")' <<< "$OUTPUT")"
+assert_not_contains "$OUTPUT" '"owner_approval_policy_change"'
+
+it 'a PR policy change introduced by merging the base is attributed to the merge commit'
+git checkout -q --detach "$merge_approved"
+git merge -q --no-ff --no-commit "$merged_base"
+mkdir -p .github/workflows
+printf 'name: new check\n' > .github/workflows/new.yml
+git add .github/workflows; git commit -qm 'merge with a PR workflow edit'
+carry_reviews "$merge_approved"
+assert_policy_carry_refused "$h" .github/workflows/new.yml
+
+it 'a merge resolution that differs from the trusted base voids carry'
+git checkout -q --detach "$merge_approved"
+git merge -q --no-ff --no-commit "$merged_base"
+printf '\nDifferent resolution.\n' >> .prdkit/memory/config.md
+git add .prdkit/memory/config.md; git commit -qm 'merge with a different policy resolution'
+carry_reviews "$merge_approved"
+assert_policy_carry_refused "$merged_base" .prdkit/memory/config.md
+
+it 'a clean merge of approved PR and base edits to the same path still needs fresh approval'
+git checkout -q --detach "$merge_approved"
+{ printf '# PR policy notes\n'; git show HEAD:.prdkit/memory/config.md; } > .prdkit/memory/config.md
+git add .prdkit/memory/config.md; git commit -qm 'document PR policy changes'
+same_path_approved="$(git rev-parse HEAD)"
+git merge -q --no-ff -m 'combine two policy edits' "$merged_base"
+carry_reviews "$same_path_approved"
+assert_policy_carry_refused "$merged_base" .prdkit/memory/config.md
+
+it 'a mode difference from the trusted base voids carry even with identical blob content'
+git checkout -q --detach "$merged_head"
+chmod +x "$history_path"
+git update-index --chmod=+x -- "$history_path"
+git commit -qm 'change mode only'
+carry_reviews "$merge_approved"
+assert_policy_carry_refused "$(git rev-parse "$merged_base^")" "$history_path"
+
+it 'a carried owner approval needs one trusted merge base even without a net policy change'
+feature_tip="$(git commit-tree "$merge_approved^{tree}" -p "$merge_approved" -p "$merged_base" -m 'feature integrates target')"
+target_tip="$(git commit-tree "$merged_base^{tree}" -p "$merged_base" -p "$merge_approved" -m 'target integrates feature')"
+git update-ref refs/remotes/origin/main "$target_tip"
+git checkout -q --detach "$feature_tip"
+carry_reviews "$merge_approved"
+online; assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'multiple merge bases'
+assert_contains "$OUTPUT" "fresh owner approval on the exact head $h"
+assert_not_contains "$OUTPUT" '"owner_approval"'
+assert_not_contains "$OUTPUT" '"owner_approval_policy_change"'
+assert_not_contains "$OUTPUT" 'touches the policy surface'
+mkdir -p .github/workflows
+printf 'on: push\n' > .github/workflows/ambiguous.yml
+git add .github/workflows/ambiguous.yml; git commit -qm 'add workflow after integration'
+ambiguous_policy="$(git rev-parse HEAD)"
+carry_reviews "$merge_approved"
+online; assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'multiple merge bases'
+assert_eq "$ambiguous_policy .github/workflows/ambiguous.yml" \
+    "$(jq -r '.owner_approval_policy_change | [.commit,.path] | join(" ")' <<< "$OUTPUT")"
+assert_not_contains "$OUTPUT" '"owner_approval":'
+run bash "$CHECK" --pr "$PR" 001-reviewed
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "single trusted merge base for the carried T3 owner approval on $merge_approved, and $ambiguous_policy (.github/workflows/ambiguous.yml) touches the policy surface"
+git update-ref refs/remotes/origin/main "$per_pr_base"
 
 it 'only net policy changes under the exact prefixes stop a carry'
 git checkout -q --detach "$first_policy"
@@ -448,6 +532,13 @@ case "$REVIEW_DIFF_FAULT:$*" in
         "$REAL_GIT" "$@"
         exit 5 ;;
 esac
+case "$*" in
+    *" ls-tree "*" $REVIEW_TREE_FAULT -- .github/workflows/old.yml"|*" ls-tree $REVIEW_TREE_FAULT")
+        if [ -n "$REVIEW_TREE_FAULT" ]; then
+            "$REAL_GIT" "$@"
+            exit 5
+        fi ;;
+esac
 exec "$REAL_GIT" "$@"
 SH
 chmod +x "$_SCRATCH_CWD/git-fault/git"
@@ -464,6 +555,25 @@ for fault in diff diff-tree; do
     assert_not_contains "$OUTPUT" '"owner_approval'
 done
 
+it 'an unreadable tree entry is not evidence of a matching policy deletion'
+git update-ref refs/remotes/origin/main "$merged_base"
+git checkout -q --detach "$merged_head"
+carry_reviews "$merge_approved"
+for unreadable in "$h" "$merged_base"; do
+    REAL_GIT="$real_git" REVIEW_TREE_FAULT="$unreadable" PATH="$_SCRATCH_CWD/git-fault:$PATH" \
+        assert_policy_carry_refused "$merged_base" .github/workflows/old.yml
+done
+git update-ref refs/remotes/origin/main "$per_pr_base"
+
+it 'an unreadable merge base tree voids carry even without policy changes'
+git checkout -q --detach "$first_policy^"
+carry_reviews "$approved"
+REAL_GIT="$real_git" REVIEW_TREE_FAULT="$(git merge-base origin/main "$h")" \
+    PATH="$_SCRATCH_CWD/git-fault:$PATH" online
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "fresh owner approval on the exact head $h"
+assert_not_contains "$OUTPUT" '"owner_approval"'
+
 it 'per-PR policy does not change owner objections at T1 or T2'
 for level in T1 T2; do
     git checkout -q --detach "$BASE"
@@ -478,5 +588,250 @@ for level in T1 T2; do
     online; assert_eq 1 "$STATUS" "$level requires an exact-head approval to clear the owner's objection"
     assert_contains "$OUTPUT" '"blocking":[{"reviewer":1003,'
     fx_owner_review 7 APPROVED "$h"; online; assert_eq 0 "$STATUS" "$OUTPUT"
+done
+
+owner_comment() { # body timestamp [author ID] [extra host fields]
+    local extra="${4:-}"
+    jq --arg body "$1" --arg at "$2" --argjson author "${3:-1003}" --argjson extra "${extra:-null}" '
+        ((last.fullDatabaseId // "2000" | tonumber) + 1 | tostring) as $id |
+        . + [({fullDatabaseId:$id,body:$body,createdAt:$at,updatedAt:$at,lastEditedAt:null,
+            author:{__typename:"User",databaseId:$author},url:("https://github.com/owner/repo/pull/7#issuecomment-"+$id)} * ($extra // {}))]
+    ' "$comments" > "$comments.next" && mv "$comments.next" "$comments"
+}
+reset_opt_in() {
+    printf '[]\n' > "$comments"
+    carry_reviews "$1"
+}
+assert_opt_in_exact_required() {
+    online
+    assert_eq 1 "$STATUS" "$_CURRENT"
+    assert_contains "$OUTPUT" '"authority":"host"'
+    assert_contains "$OUTPUT" "requires a review-owner APPROVED review on the exact PR head $h"
+    assert_not_contains "$OUTPUT" '"owner_approval":'
+}
+
+it 'only the trusted config enables exact-head-opt-in; all three values parse'
+mkdir "$GH_STUB_DIR/comments"; comments="$GH_STUB_DIR/comments/7.json"
+carry='owner-approval: carry'; exact_line='owner-approval: exact-head'
+hint='This repository allows owner-approval: carry'
+t1='2026-01-03T00:00:00Z'; t2='2026-01-04T00:00:00Z'; t3='2026-01-05T00:00:00Z'
+owner_policy '- owner-approval: exact-head-opt-in'
+git checkout -q --detach origin/main
+git checkout "$merge_approved" -- specs/changes/001-reviewed.md
+git commit -qm 'implement T3 change'; opt_approved="$(git rev-parse HEAD)"
+git commit -q --allow-empty -m "$carry"
+opt_head="$(git rev-parse HEAD)"
+reset_opt_in "$opt_approved"
+for mode in exact-head exact-head-opt-in per-pr; do
+    owner_policy "- owner-approval: $mode"
+    online
+    assert_contains "$OUTPUT" '"authority":"host"' "$mode parses"
+done
+owner_policy '- owner-approval: sticky'
+online; assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'exact-head, exact-head-opt-in or per-pr'
+git update-ref refs/remotes/origin/main "$BASE"
+: > "$GH_STUB_DIR/requests"
+owner_comment "$carry" "$t1"
+assert_opt_in_exact_required
+assert_not_contains "$OUTPUT" "$hint"
+assert_not_contains "$(cat "$GH_STUB_DIR/requests")" PrdkitOwnerComments
+owner_policy '- owner-approval: exact-head-opt-in'
+
+it 'an owner comment on a later page enables carry with its provenance'
+reset_opt_in "$opt_approved"
+owner_comment 'Earlier discussion.' "$t1"
+owner_comment $'I expect follow-ups.\r\nowner-approval: carry  \r\nThanks.' "$t2"
+: > "$GH_STUB_DIR/requests"
+GH_STUB_PAGE_SIZE=1 online; assert_eq 0 "$STATUS" "$_CURRENT"
+assert_contains "$(cat "$GH_STUB_DIR/requests")" 'page PrdkitOwnerComments pr=7 after=cursor-1'
+assert_contains "$(cat "$GH_STUB_DIR/requests")" 'body createdAt updatedAt lastEditedAt url'
+assert_contains "$(cat "$GH_STUB_DIR/requests")" 'state submittedAt commit { oid } author { __typename'
+assert_eq "exact-head-opt-in $opt_approved 0 comment 2002 https://github.com/owner/repo/pull/7#issuecomment-2002 1003 $t2" \
+    "$(jq -r '.owner_approval | [.mode,.commit,.more, (.opt_in | .kind,.id,.url,.author,.at)] | join(" ")' <<< "$OUTPUT")"
+assert_eq 'at author id kind url' "$(jq -r '.owner_approval.opt_in | keys | join(" ")' <<< "$OUTPUT")"
+assert_eq "$(git log --format='%h %s' "$opt_approved..$h")" "$(jq -r '.owner_approval.commits_since[]' <<< "$OUTPUT")"
+assert_eq 'review reviewer role' "$(jq -r '.reviews[]|select(.role=="owner") | keys | join(" ")' <<< "$OUTPUT")"
+
+it 'owner review bodies do not opt in, whether submitted or pending'
+reset_opt_in "$opt_approved"
+fx_owner_review 7 COMMENTED "$h" "{\"body\":\"$carry\",\"submittedAt\":\"$t1\"}"
+assert_opt_in_exact_required
+fx_owner_review 7 PENDING "$h" "{\"body\":\"$carry\",\"submittedAt\":null,\"createdAt\":\"$t2\"}"
+assert_opt_in_exact_required
+jq 'map(del(.body,.url,.createdAt))' "$f" > "$f.next" && mv "$f.next" "$f"
+owner_comment "$carry" "$t1"
+online; assert_eq 0 "$STATUS" 'the pending review does not interfere with the valid comment'
+assert_eq "$t1" "$(jq -r '.owner_approval.opt_in.at' <<< "$OUTPUT")"
+
+it 'untrusted authors, PR text and decorated lines do not opt in'
+reset_opt_in "$opt_approved"
+fx_pr 7 "$h" "{\"body\":\"$carry\"}"
+owner_comment "$carry" "$t1" 1009 '{"author":{"login":"owner"}}'
+fx_review 7 "$carry" '{"author":{"__typename":"Bot","databaseId":1003}}'
+owner_comment "Please use $carry" "$t1"
+owner_comment "$carry today" "$t1"
+owner_comment $'> owner-approval: carry\n`owner-approval: carry`\n    owner-approval: carry\nowner-approval: carry\t' "$t1"
+assert_opt_in_exact_required
+assert_contains "$OUTPUT" "$hint"
+assert_eq 2 "$(jq -r '.problems|length' <<< "$OUTPUT")" 'one problem and one hint'
+
+it 'a marker only permits carry for its author'
+reset_opt_in "$opt_approved"
+printf '[]\n' > "$f"; publisher_review APPROVED "$h"
+fx_owner_review 7 APPROVED "$opt_approved" '{"author":{"__typename":"User","databaseId":1005}}'
+owner_comment "$carry" "$t1"
+assert_opt_in_exact_required
+owner_comment "$carry" "$t2" 1005
+online; assert_eq 0 "$STATUS" "$_CURRENT"
+assert_eq '1005 1005' "$(jq -r '.owner_approval | [.reviewer,.opt_in.author] | join(" ")' <<< "$OUTPUT")"
+
+it 'an edited owner comment cannot opt in, even if it is newest or edited in the same second'
+reset_opt_in "$opt_approved"
+owner_comment 'Earlier discussion.' "$t1"
+owner_comment "$carry" "$t2" 1003 "{\"updatedAt\":\"$t3\"}"
+assert_opt_in_exact_required
+owner_comment "$carry" "$t3" 1003 "{\"lastEditedAt\":\"$t3\"}"
+assert_opt_in_exact_required
+
+it 'edited comments neither replace nor revoke an earlier unedited carry'
+reset_opt_in "$opt_approved"
+owner_comment "$carry" "$t1"
+owner_comment "$carry" "$t2" 1003 "{\"updatedAt\":\"$t3\"}"
+online; assert_eq 0 "$STATUS" "$_CURRENT"
+assert_eq 2001 "$(jq -r '.owner_approval.opt_in.id' <<< "$OUTPUT")"
+owner_comment "$exact_line" "$t2" 1003 "{\"updatedAt\":\"$t3\"}"
+online; assert_eq 0 "$STATUS" "$_CURRENT"
+assert_eq 2001 "$(jq -r '.owner_approval.opt_in.id' <<< "$OUTPUT")"
+
+it 'missing or invalid comment timestamps cannot opt in and do not invalidate other comments'
+for edit in 'del(.[0].createdAt)' 'del(.[0].updatedAt)' \
+    '.[0].createdAt="invalid"' '.[0].updatedAt="invalid"' \
+    '.[0] |= (.createdAt="2026-02-30T00:00:00Z" | .updatedAt=.createdAt)'; do
+    reset_opt_in "$opt_approved"
+    owner_comment "$carry" "$t2"
+    jq "$edit" "$comments" > "$comments.next" && mv "$comments.next" "$comments"
+    assert_opt_in_exact_required
+    assert_contains "$OUTPUT" "$hint"
+    owner_comment "$carry" "$t1"
+    online; assert_eq 0 "$STATUS" "$edit does not invalidate a separate qualifying comment"
+    assert_eq 2002 "$(jq -r '.owner_approval.opt_in.id' <<< "$OUTPUT")"
+done
+
+it 'exact-head in a comment has no special effect and a deleted carry no longer counts'
+reset_opt_in "$opt_approved"
+owner_comment "$exact_line" "$t1"
+assert_opt_in_exact_required
+owner_comment "$carry"$'\n'"$exact_line" "$t2"
+owner_comment "$exact_line" "$t3"
+online; assert_eq 0 "$STATUS" "$_CURRENT"
+assert_eq 2002 "$(jq -r '.owner_approval.opt_in.id' <<< "$OUTPUT")"
+jq 'del(.[1])' "$comments" > "$comments.next" && mv "$comments.next" "$comments"
+assert_opt_in_exact_required
+
+it 'a later or tied objection or dismissal revokes carry until a newer eligible comment'
+after='2026-01-06T00:00:00Z'
+for state in CHANGES_REQUESTED DISMISSED; do
+    reset_opt_in "$opt_approved"
+    owner_comment "$carry" "$t1"
+    fx_owner_review 7 "$state" "$opt_approved" "{\"body\":\"$carry\",\"submittedAt\":\"$t2\"}"
+    assert_opt_in_exact_required
+    if [ "$state" = CHANGES_REQUESTED ]; then
+        assert_eq 1003 "$(jq '.blocking[].reviewer' <<< "$OUTPUT")"
+    fi
+    fx_owner_review 7 APPROVED "$opt_approved" "{\"submittedAt\":\"$t3\"}"
+    assert_opt_in_exact_required
+    assert_contains "$OUTPUT" "$hint"
+    owner_comment "$carry" "$t2"
+    assert_opt_in_exact_required
+    owner_comment "$carry" "$after" 1003 '{"updatedAt":"2026-01-07T00:00:00Z"}'
+    assert_opt_in_exact_required
+    owner_comment "$carry" "$after"
+    owner_comment "$carry" "$t1"
+    online; assert_eq 0 "$STATUS" 'a new marker and qualifying approval restore carry'
+    assert_eq "2004 $after" "$(jq -r '.owner_approval.opt_in | [.id,.at] | join(" ")' <<< "$OUTPUT")"
+done
+
+it 'unavailable or incomplete comment pages discard even a valid marker'
+reset_opt_in "$opt_approved"
+owner_comment "$carry" "$t1"
+owner_comment 'A second page.' "$t2"
+for fault in graphql:PrdkitOwnerComments graphql:PrdkitOwnerComments:cursor-1; do
+    : > "$GH_STUB_DIR/requests"
+    GH_STUB_FAIL="$fault" GH_STUB_PAGE_SIZE=1 assert_opt_in_exact_required
+    assert_contains "$OUTPUT" 'owner approval opt-in could not be read'
+    assert_not_contains "$OUTPUT" "$hint"
+    if [[ "$fault" == *cursor-1 ]]; then
+        assert_contains "$(cat "$GH_STUB_DIR/requests")" 'endCursor=cursor-1'
+    fi
+done
+query='query PrdkitOwnerComments { fixture }'
+route="$GH_STUB_DIR/routes/graphql_PrdkitOwnerComments.json"
+GH_STUB_PAGE_SIZE=1 gh api graphql -f query="$query" -F number=7 > "$GH_STUB_DIR/first-comment"
+for edit in '.data.repository.pullRequest.comments.pageInfo.hasNextPage=false' \
+    '.data.repository.pullRequest.headRefOid="1111111111111111111111111111111111111111"' '.errors=[{"message":"partial"}]'; do
+    jq "$edit" "$GH_STUB_DIR/first-comment" > "$route"
+    assert_opt_in_exact_required
+    assert_contains "$OUTPUT" 'owner approval opt-in could not be read'
+done
+rm "$route"
+fx_owner_review 7 APPROVED "$h"
+GH_STUB_FAIL=graphql:PrdkitOwnerComments online
+assert_eq 0 "$STATUS" 'comment failure cannot invalidate an exact-head approval'
+assert_not_contains "$OUTPUT" '"owner_approval"'
+assert_not_contains "$OUTPUT" 'could not be read'
+
+it 'opt-in reuses the merge-aware policy-surface guard'
+git update-ref refs/remotes/origin/main "$merged_base"
+{ git show "$merged_base:.prdkit/memory/config.md" | sed 's/^- owner-approval: per-pr$/- owner-approval: exact-head-opt-in/'; } |
+    trusted_edit refs/remotes/origin/main .prdkit/memory/config.md
+git checkout -q --detach "$merged_head"
+reset_opt_in "$merge_approved"; owner_comment "$carry" "$t1"
+online; assert_eq 0 "$STATUS" "$_CURRENT"
+assert_eq "exact-head-opt-in $merge_approved $merged_base" \
+    "$(jq -r '.owner_approval|[.mode,.commit,.base]|join(" ")' <<< "$OUTPUT")"
+mkdir -p .github/workflows
+printf 'name: PR workflow change\n' > .github/workflows/new.yml
+git add .github/workflows/new.yml; git commit -qm 'edit review policy'
+carry_reviews "$merge_approved"
+assert_policy_carry_refused "$h" .github/workflows/new.yml
+
+it 'opt-in does not let an older owner approval clear an objection at T2'
+owner_policy '- owner-approval: exact-head-opt-in'
+git checkout -q --detach origin/main
+mkdir -p specs/changes
+printf '# Change\n**Tier**: T2\n## State\n' > specs/changes/001-reviewed.md
+git add specs; git commit -qm 'implement T2 change'; t2_old="$(git rev-parse HEAD)"
+git commit -q --allow-empty -m 'new exact head'
+reset_opt_in "$t2_old"
+owner_comment "$carry" "$t1"
+fx_owner_review 7 CHANGES_REQUESTED "$t2_old" "{\"submittedAt\":\"$t2\"}"
+fx_owner_review 7 APPROVED "$t2_old" "{\"body\":\"$carry\",\"submittedAt\":\"$t3\"}"
+: > "$GH_STUB_DIR/requests"
+online; assert_eq 1 "$STATUS" "$_CURRENT"
+assert_eq 1003 "$(jq '.blocking[].reviewer' <<< "$OUTPUT")"
+assert_not_contains "$(cat "$GH_STUB_DIR/requests")" PrdkitOwnerComments
+fx_owner_review 7 APPROVED "$h" '{"submittedAt":"2026-01-06T00:00:00Z"}'
+online; assert_eq 0 "$STATUS" "exact-head approval still clears the objection: $OUTPUT"
+
+it 'legacy modes ignore comment and review-body markers without a comments request'
+git checkout -q --detach "$opt_head"
+for mode in exact-head per-pr; do
+    owner_policy "- owner-approval: $mode"
+    reset_opt_in "$opt_approved"
+    : > "$GH_STUB_DIR/requests"
+    online; before="$OUTPUT"; before_status="$STATUS"
+    requests_before="$(cat "$GH_STUB_DIR/requests")"
+    : > "$GH_STUB_DIR/requests"
+    if [ "$mode" = per-pr ]; then marker="$exact_line"; else marker="$carry"; fi
+    owner_comment "$marker" "$t1"
+    body_changed="$(jq --arg body "$marker" 'last.body=$body' "$f")"
+    printf '%s\n' "$body_changed" > "$f"
+    online
+    assert_eq "$before_status" "$STATUS" "$mode exit code is unchanged"
+    assert_eq "$before" "$OUTPUT" "$mode JSON is unchanged"
+    assert_eq "$requests_before" "$(cat "$GH_STUB_DIR/requests")" "$mode requests are unchanged"
+    assert_not_contains "$requests_before" PrdkitOwnerComments
+    assert_not_contains "$requests_before" 'body createdAt url'
 done
 finish

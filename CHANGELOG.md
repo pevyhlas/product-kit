@@ -16,6 +16,21 @@ change by change.
 - Spec-first changes can merge a spec with `**Step**: specified` and keep their tasks and
   `planned:` markers open for implementing PRs. Status shows remaining tasks and age, doctor
   advises when no tasks remain, and the final implementing PR closes the existing record.
+- Trusted `owner-approval: exact-head-opt-in` keeps T3 owner approval exact-head unless the
+  owner posts an unedited `owner-approval: carry` conversation comment on that PR. Editing
+  or deleting the comment removes that opt-in, and a later change request or dismissed review
+  by that owner ends carry. Carry uses the same merge-aware policy guard as `per-pr` and
+  reports the opt-in comment.
+
+### Fixed
+
+- Under `owner-approval: per-pr`, a carried T3 owner approval now survives a policy-surface
+  change that came from the target branch: each net policy path since the approval must match
+  the head's single merge base with the trusted target (mode and object ID, or absent in both),
+  and `owner_approval.base` reports that merge base. The PR's own policy edits, a merge
+  resolution that differs from the base (including one combining a PR edit and a base edit to the
+  same path), multiple merge bases and unreadable trees still require a fresh owner approval on the
+  exact head; the gate names the oldest commit and path when it can read them.
 
 ## [3.3.2] — 2026-11-27 — per-PR approval policy guard
 
