@@ -225,19 +225,24 @@ and only from a commit that is still an ancestor of the current head. An objecti
 that owner voids approval until a later qualifying approval. Publishers, reviewers covering
 lenses, and agents still need the exact head; T1 and T2 are unchanged.
 
-If the diff from the approved commit to the head changes `.prdkit` or anything under it,
-`.product-kit` or anything under it (including the gitlink), or a path under
-`.github/workflows/`, T3 requires a fresh owner approval on the exact head. Paths Git quotes
-in the raw diff also stop carry, as does an unreadable diff. For a policy change, the gate
-reports the first commit in the range, oldest first, that touches the policy surface, and
-the path it changed (`owner_approval_policy_change: {commit, path}` in JSON). An exact-head
-owner approval is unaffected.
+The gate needs a single readable merge base between the trusted `--base` and the PR head
+(the change start, not the target branch's current tip). For each net change since approval
+to `.prdkit`, `.product-kit` (including the gitlink), anything under either, or a path under
+`.github/workflows/`, the head's tree entry must match that merge base: same mode and Git
+object ID, or absent in both. Paths Git quotes in the raw diff, an unreadable diff, and an
+unreadable tree entry also stop carry. If the approved PR and the base edit the same path
+and the merged result differs from the base, the owner must approve the exact head again,
+even if the merge was clean. For a path that stops carry, the gate reports the oldest
+commit since approval that touches a failing path (`owner_approval_policy_change: {commit, path}`
+in JSON). An exact-head owner approval is unaffected.
 
 If the gate uses a carried approval, it names the approved commit and lists up to 20
 commits since then, with a `+N more` line if needed. JSON includes the qualifying owner in `reviews`
 and adds `owner_approval` with `mode`, `reviewer`, `review`, `commit`, `commits_since`
-and `more` (the number omitted). If it cannot verify ancestry for an otherwise deciding
-approval, it reports the rejected SHA in `owner_approval_not_ancestors`.
+and `more` (the number omitted). If carry survives a policy change that matches the
+merge base, `owner_approval.base` contains that commit SHA; the field is omitted when
+no policy path changed. If the gate cannot verify ancestry for an otherwise deciding approval,
+it reports the rejected SHA in `owner_approval_not_ancestors`.
 
 ### Trusted all-PR execution — `check-pr-review.sh`
 
