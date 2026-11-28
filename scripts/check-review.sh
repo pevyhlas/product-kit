@@ -5,7 +5,7 @@
 # Use committed policy from the trusted default branch, even for other PR targets.
 # Exit 0 requires host authority; a would-pass offline preview exits 3.
 # Require the exact PR head, its effective tier's approvals and no eligible open objection.
-# Only trusted per-PR policy can let a T3 owner's approval carry from an ancestor. Net
+# Only trusted policy (per-PR or that owner's opt-in) lets a T3 owner approval carry from an ancestor. Net
 # changes on the policy surface must match the head's single merge base with the trusted target.
 # With lenses, only a mapped independent publisher covers an area; T3 requires design.
 # PR-authored record text does not grant approval.
@@ -73,6 +73,7 @@ authority=none; pr_head=""; approvals='[]'; blocking='[]'; head_is_pr_head=false
 lenses=""; areas='[]'; reviews_fetched=false
 owner_approval=exact-head; owner_evidence=""; carried_owner=null; rejected_owner_commits='[]'
 owner_policy_change=""; owner_policy_problem=""; owner_policy_base=""
+owner_opt_in='{}'; owner_opt_in_unavailable=false
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 if [ -z "$policy_at" ]; then
     problems+=("No trusted integration base: origin/HEAD does not resolve here, so there is no policy to check against; establish it (git remote set-head origin --auto) with its history fetched")
@@ -95,7 +96,7 @@ if github_review_policy "$root" "$policy_at"; then
     owner_approval="$REVIEW_OWNER_APPROVAL"
     if $online; then
         if github_review_fetch "$pr_url" "$work" "$head" "${base_canonical#refs/remotes/origin/}"; then
-            if [ "$owner_approval" = per-pr ]; then reviews_fetched=true
+            if [ "$owner_approval" != exact-head ]; then reviews_fetched=true
             elif github_review_decide "$work" "$head"; then authority=host; head_is_pr_head=true
             else problems+=("$RC_ERROR"); fi
         else problems+=("$RC_ERROR"); fi
@@ -409,7 +410,12 @@ if [ -n "$lenses" ] && [ "$tier" = T3 ] && [[ ",$lenses," != *,design=* ]]; then
     problems+=("T3 requires a review-lenses mapping for design")
 fi
 if $reviews_fetched; then
-    if [ "$tier" = T3 ]; then
+    if [ "$tier" = T3 ] && [ "$owner_approval" = exact-head-opt-in ]; then
+        if ! owner_opt_in="$(github_review_owner_opt_in "$work" 2>/dev/null)"; then
+            owner_opt_in='{}'; owner_opt_in_unavailable=true
+        fi
+    fi
+    if [ "$tier" = T3 ] && { [ "$owner_approval" = per-pr ] || [ "$owner_opt_in" != '{}' ]; }; then
         if github_review_per_pr_owners "$root" "$work" "$head"; then
             authority=host; head_is_pr_head=true
             if [ "$carried_owner" != null ]; then
@@ -472,7 +478,17 @@ if [ "$authority" = host ]; then
             elif ! jq -e 'any(.[]; .role=="owner")' <<< "$approvals" >/dev/null; then
                 if [ "$owner_approval" = per-pr ]; then
                     problems+=("T3 also requires a review-owner APPROVED review under per-PR policy (on $head or an ancestor)")
-                else problems+=("T3 also requires a review-owner APPROVED review on the exact PR head $head"); fi
+                else
+                    owner_required="T3 also requires a review-owner APPROVED review on the exact PR head $head"
+                    if $owner_opt_in_unavailable; then
+                        problems+=("$owner_required; the owner approval opt-in could not be read")
+                    else
+                        problems+=("$owner_required")
+                        if [ "$owner_approval" = exact-head-opt-in ] && [ "$owner_opt_in" = '{}' ]; then
+                            problems+=("This repository allows owner-approval: carry in a review-owner's unedited PR conversation comment")
+                        fi
+                    fi
+                fi
             fi
         fi ;;
     esac
@@ -510,7 +526,9 @@ else
 fi
 if ! $json; then
     if [ -n "$owner_evidence" ]; then
-        jq -r '"T3 owner approval is per-PR, given on \(.commit). Commits since approval:",
+        jq -r '(if .mode=="exact-head-opt-in" then
+                    "T3 owner approval opted in via \(.opt_in.kind) \(.opt_in.url), given on \(.commit). Commits since approval:"
+                else "T3 owner approval is per-PR, given on \(.commit). Commits since approval:" end),
             (.commits_since[] | "  " + .), (select(.more > 0) | "  +\(.more) more")' <<< "$owner_evidence"
     fi
     if [ "$rejected_owner_commits" != '[]' ]; then
