@@ -495,7 +495,7 @@ git -C "$PROJ2" add -A >/dev/null 2>&1; git -C "$PROJ2" commit -qm installed >/d
 SCRIPT2="$PROJ2/.prdkit/scripts/bash/new-change.sh"
 cd "$PROJ2" || exit 1
 
-it "any old history path blocks numbering, even if absent in a sparse checkout or only on an integration tip"
+it "old history paths in the current checkout or integration tips still block numbering"
 mkdir -p specs
 for legacy in specs/log.md specs/log specs/archive.md; do
     if [ "$legacy" = specs/log ]; then mkdir "$legacy"; else : > "$legacy"; fi
@@ -507,6 +507,11 @@ for legacy in specs/log.md specs/log specs/archive.md; do
     assert_not_contains "$OUTPUT" 'CHANGE_ID'
     if [ "$legacy" = specs/log ]; then rmdir "$legacy"; else rm "$legacy"; fi
 done
+printf -- '- 2026-10-17 001-done: closed\n' > specs/log.md
+run bash "$SCRIPT2" --no-worktree --short-name current-old "desc"
+assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" "Old history paths remain ($PROJ2)"
+rm specs/log.md
 git checkout -qb history-old-tip
 printf '%s\n' '**Allocated through**: 090' > specs/archive.md
 git add specs/archive.md && git commit -qm 'old archive' || exit 1
@@ -525,7 +530,7 @@ assert_contains "$OUTPUT" 'git mv specs/archive.md .prdkit/history/archive.md'
 git update-ref -d refs/remotes/origin/main
 git branch -q -D history-old-tip
 
-it "an old close in a sibling HEAD is not hidden by staging its deletion"
+it "a close in an unrelated old-layout HEAD stays reserved after a staged deletion"
 sibling="$PROJ2/.worktrees/maintenance"
 git worktree add -qb maintenance "$sibling" HEAD || exit 1
 mkdir -p "$sibling/specs"
@@ -534,11 +539,11 @@ git -C "$sibling" add specs/log.md && git -C "$sibling" commit -qm 'old close' &
     git -C "$sibling" rm -q specs/log.md || exit 1
 assert_eq 'D  specs/log.md' "$(git -C "$sibling" status --porcelain)"
 run bash "$SCRIPT2" --json --no-branch --short-name staged-delete "desc"
-assert_eq 1 "$STATUS"
-assert_contains "$OUTPUT" 'git mv specs/log.md .prdkit/history/log.md'
-assert_not_contains "$OUTPUT" 'CHANGE_ID'
-run test ! -d specs/changes
-assert_eq 0 "$STATUS" 'no record allocated'
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '"CHANGE_ID":"002-staged-delete"'
+assert_contains "$OUTPUT" "git worktree remove"
+assert_contains "$OUTPUT" 'cleanup-change.sh --closed'
+if [ "$STATUS" -eq 0 ]; then rm specs/changes/002-staged-delete.md; fi
 run bash -c 'cd "$1" && bash .prdkit/scripts/bash/doctor.sh --json' _ "$sibling"
 assert_eq 1 "$STATUS"
 assert_eq 1 "$(jq '.findings | length' <<< "$OUTPUT")"
@@ -546,6 +551,95 @@ assert_contains "$OUTPUT" 'git mv specs/log.md .prdkit/history/log.md'
 assert_eq 'D  specs/log.md' "$(git -C "$sibling" status --porcelain)"
 git -C "$sibling" restore --source=HEAD --staged --worktree -- specs/log.md &&
     git worktree remove "$sibling" && git branch -qD maintenance || exit 1
+
+it "read-only old-layout sources reserve folded and per-file closes, archive bounds, records and plans"
+legacy_repo="$(make_inited_project)"; track_tmp "$legacy_repo"
+legacy_parent="$(mktemp -d)" || exit 1
+track_tmp "$legacy_parent"
+(
+    cd "$legacy_repo" || exit 1
+    git add -A && git commit -qm installed &&
+        git worktree add -qb maintenance "$legacy_parent/outside worktree" HEAD || exit 1
+) || exit 1
+legacy_repo="$(cd "$legacy_repo" && pwd -P)"
+legacy_parent="$(cd "$legacy_parent" && pwd -P)"
+outside="$legacy_parent/outside worktree"
+diag="$legacy_parent/diagnostic"
+capture_diagnostics() { "$@" 2>"$diag"; }
+cd "$legacy_repo" || exit 1
+legacy_next() { # expected number with optional extra description; leave no new claim
+    local id="$1-probe"
+    run capture_diagnostics bash .prdkit/scripts/bash/new-change.sh --json --no-branch --short-name probe "desc"
+    assert_eq 0 "$STATUS" "${2:-legacy numbering source is readable}"
+    assert_contains "$OUTPUT" "\"CHANGE_ID\":\"$id\""
+    if [ "$STATUS" -eq 0 ]; then rm -f specs/changes/*-probe.md; fi
+}
+mkdir -p "$outside/specs/log" "$outside/specs/changes"
+printf -- '- 2026-10-17 010-folded: closed\n' > "$outside/specs/log.md"
+legacy_next 011 'a folded old log raises the allocation floor'
+printf -- '- 2026-10-17 020-entry: closed\n' > "$outside/specs/log/020-entry.md"
+legacy_next 021 'a per-change old log file raises the allocation floor'
+cat > "$outside/specs/archive.md" <<'MD'
+**Log condensed through**: 009; also 030-039; those entries: `git show abc1234:specs/log.md`.
+**Allocated through**: 040
+MD
+legacy_next 041 'an old condensed index and its independent floor count'
+printf '# Change: Open\n' > "$outside/specs/changes/050-open.md"
+legacy_next 051 'an old checkout record raises the allocation floor'
+printf '# Product spec\n\n- A future change (planned: 060-planned)\n' > "$outside/specs/product.md"
+(
+    cd "$outside" || exit 1
+    git add specs && git commit -qm 'old claims' &&
+        git sparse-checkout set --no-cone '/*' '!/specs/archive.md' '!/specs/changes/050-open.md' '!/specs/product.md'
+) || exit 1
+assert_eq 'S specs/archive.md' "$(git -C "$outside" ls-files -t -- specs/archive.md)"
+assert_eq 'S specs/product.md' "$(git -C "$outside" ls-files -t -- specs/product.md)"
+old_status="$(git -C "$outside" status --porcelain=v1)"
+old_index="$(git -C "$outside" ls-files --stage -t)"
+# .worktrees/* can also hold an unregistered checkout. A numbered branch must not
+# stand in for its record or for the outside worktree's plan.
+mkdir -p .worktrees/unregistered/specs/changes
+printf -- '- 2026-10-17 055-standalone: closed\n' > .worktrees/unregistered/specs/log.md
+for number in 009 039 055; do
+    run capture_diagnostics bash .prdkit/scripts/bash/new-change.sh --no-worktree --number "$number" --short-name claimed "desc"
+    assert_eq 1 "$STATUS" "$number is already allocated"
+    assert_contains "$(cat "$diag")" "change number $number is "
+done
+ln -s "$outside" .worktrees/alias
+run capture_diagnostics bash .prdkit/scripts/bash/new-change.sh --json --short-name legacy-next "desc"
+assert_eq 0 "$STATUS" 'default allocation proceeds past the old plan'
+assert_contains "$OUTPUT" '"CHANGE_ID":"061-legacy-next"'
+assert_file "$legacy_repo/.worktrees/061-legacy-next/specs/changes/061-legacy-next.md"
+assert_contains "$(cat "$diag")" "git worktree remove '$outside'"
+assert_contains "$(cat "$diag")" 'cleanup-change.sh --closed'
+assert_eq 1 "$(grep -Fc "$outside" "$diag")" 'one warning for the outside worktree'
+assert_eq 1 "$(grep -c 'Warning:.*unregistered' "$diag")" 'one warning for the unregistered checkout'
+run capture_diagnostics bash .prdkit/scripts/bash/new-change.sh --json --no-worktree --short-name in-place-legacy "desc"
+assert_eq 0 "$STATUS"
+assert_contains "$OUTPUT" '"CHANGE_ID":"062-in-place-legacy"'
+assert_eq 1 "$(grep -Fc '.worktrees/unregistered' "$diag")"
+assert_eq "$old_status" "$(git -C "$outside" status --porcelain=v1)"
+assert_eq "$old_index" "$(git -C "$outside" ls-files --stage -t)"
+
+it "an unreadable or ambiguous old index fails closed with cleanup remedies"
+bad_sibling="$legacy_repo/.worktrees/broken"
+mkdir -p "$bad_sibling/specs"
+for problem in missing-target duplicate; do
+    if [ "$problem" = missing-target ]; then
+        ln -s nowhere "$bad_sibling/specs/archive.md"
+    else
+        printf '**Allocated through**: 100\n**Allocated through**: 200\n' > "$bad_sibling/specs/archive.md"
+    fi
+    run capture_diagnostics bash .prdkit/scripts/bash/new-change.sh --json --no-worktree --short-name refused "desc"
+    assert_eq 1 "$STATUS"
+    assert_eq '' "$OUTPUT" 'no result on stdout'
+    assert_contains "$(cat "$diag")" "$bad_sibling"
+    assert_contains "$(cat "$diag")" 'git worktree remove'
+    assert_contains "$(cat "$diag")" 'cleanup-change.sh --closed'
+    rm "$bad_sibling/specs/archive.md"
+done
+assert_eq '' "$(git branch --list '*-refused')"
+cd "$PROJ2" || exit 1
 
 it "only committed integration policy adds trusted un-checked-out tips to the history snapshot"
 primary=refs/remotes/origin/main

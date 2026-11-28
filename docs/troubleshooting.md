@@ -15,7 +15,8 @@
 | `close-change.sh`: “could not create the hard link” | Check the `ln` error. If the filesystem does not support hard links in `.prdkit/history/log/`, move the checkout to one that does and retry the same close. The record is still open; no log entry needs cleanup. |
 | Status or doctor: missing, blank or duplicate State field | In `## State`, give `**Waiting on**:` and `**Next**:` one nonblank line each. For examples, use a fence or start an HTML comment on its own line. Inline `<!--` is ordinary field text. |
 | Doctor: malformed log entry | Make `.prdkit/history/log/<id>.md` one line, `- <date> <id>: <what changed>`, naming the change its file name gives |
-| Old history paths remain | Move them with the `git mv` commands in the diagnostic and commit the move. Refresh stale worktrees and integration refs before allocating or closing a change |
+| Old history paths remain | Move them with the `git mv` commands in the diagnostic and commit the move. For allocation, also update any integration tip named in the error. |
+| `new-change.sh`: old history in an unrelated checkout | A readable checkout only warns; its numbers still count and it is not changed. If the helper cannot read its claims, allocation stops. Inspect the named path, then use `git worktree remove <path>` or `cleanup-change.sh --closed` as appropriate. |
 | Doctor: close row over 200 characters | Keep intent, IDs and parts, disposition, and PR. Leave details on the PR |
 | Status or doctor: merged without closing | Close it in the next relevant PR, carried by that PR's record before its final review ([review workflow](../workflows/review.md#closing)); a change that spans PRs is a parent with an outcome checkpoint |
 | Doctor: local machine path | Rewrite it relative to the repository, or as `org/repo` plus a path for another repository |
