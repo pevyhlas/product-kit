@@ -574,4 +574,223 @@ for level in T1 T2; do
     assert_contains "$OUTPUT" '"blocking":[{"reviewer":1003,'
     fx_owner_review 7 APPROVED "$h"; online; assert_eq 0 "$STATUS" "$OUTPUT"
 done
+
+owner_comment() { # body timestamp [author ID] [extra host fields]
+    local extra="${4:-}"
+    jq --arg body "$1" --arg at "$2" --argjson author "${3:-1003}" --argjson extra "${extra:-null}" '
+        ((last.fullDatabaseId // "2000" | tonumber) + 1 | tostring) as $id |
+        . + [({fullDatabaseId:$id,body:$body,createdAt:$at,
+            author:{__typename:"User",databaseId:$author},url:("https://github.com/owner/repo/pull/7#issuecomment-"+$id)} * ($extra // {}))]
+    ' "$comments" > "$comments.next" && mv "$comments.next" "$comments"
+}
+reset_opt_in() {
+    printf '[]\n' > "$comments"
+    carry_reviews "$1"
+}
+assert_opt_in_exact_required() {
+    online
+    assert_eq 1 "$STATUS" "$_CURRENT"
+    assert_contains "$OUTPUT" '"authority":"host"'
+    assert_contains "$OUTPUT" "requires a review-owner APPROVED review on the exact PR head $h"
+    assert_not_contains "$OUTPUT" '"owner_approval":'
+}
+
+it 'only the trusted config enables exact-head-opt-in; all three values parse'
+mkdir "$GH_STUB_DIR/comments"; comments="$GH_STUB_DIR/comments/7.json"
+carry='owner-approval: carry'; revoke='owner-approval: exact-head'
+hint='This repository allows owner-approval: carry'
+t1='2026-01-03T00:00:00Z'; t2='2026-01-04T00:00:00Z'; t3='2026-01-05T00:00:00Z'
+owner_policy '- owner-approval: exact-head-opt-in'
+git checkout -q --detach origin/main
+git checkout "$merge_approved" -- specs/changes/001-reviewed.md
+git commit -qm 'implement T3 change'; opt_approved="$(git rev-parse HEAD)"
+git commit -q --allow-empty -m "$carry"
+opt_head="$(git rev-parse HEAD)"
+reset_opt_in "$opt_approved"
+for mode in exact-head exact-head-opt-in per-pr; do
+    owner_policy "- owner-approval: $mode"
+    online
+    assert_contains "$OUTPUT" '"authority":"host"' "$mode parses"
+done
+owner_policy '- owner-approval: sticky'
+online; assert_eq 1 "$STATUS"
+assert_contains "$OUTPUT" 'exact-head, exact-head-opt-in or per-pr'
+git update-ref refs/remotes/origin/main "$BASE"
+: > "$GH_STUB_DIR/requests"
+owner_comment "$carry" "$t1"
+assert_opt_in_exact_required
+assert_not_contains "$OUTPUT" "$hint"
+assert_not_contains "$(cat "$GH_STUB_DIR/requests")" PrdkitOwnerComments
+owner_policy '- owner-approval: exact-head-opt-in'
+
+it 'an owner comment on a later page enables carry with its provenance'
+reset_opt_in "$opt_approved"
+owner_comment 'Earlier discussion.' "$t1"
+owner_comment $'I expect follow-ups.\r\nowner-approval: carry  \r\nThanks.' "$t2"
+: > "$GH_STUB_DIR/requests"
+GH_STUB_PAGE_SIZE=1 online; assert_eq 0 "$STATUS" "$_CURRENT"
+assert_contains "$(cat "$GH_STUB_DIR/requests")" 'page PrdkitOwnerComments pr=7 after=cursor-1'
+assert_eq "exact-head-opt-in $opt_approved 0 comment 2002 https://github.com/owner/repo/pull/7#issuecomment-2002 1003 $t2" \
+    "$(jq -r '.owner_approval | [.mode,.commit,.more, (.opt_in | .kind,.id,.url,.author,.at)] | join(" ")' <<< "$OUTPUT")"
+assert_eq "$(git log --format='%h %s' "$opt_approved..$h")" "$(jq -r '.owner_approval.commits_since[]' <<< "$OUTPUT")"
+assert_eq 'review reviewer role' "$(jq -r '.reviews[]|select(.role=="owner") | keys | join(" ")' <<< "$OUTPUT")"
+
+it 'a submitted owner review body can opt in without itself being an approval'
+reset_opt_in "$opt_approved"
+fx_owner_review 7 COMMENTED "$h" "{\"body\":\"$carry\",\"submittedAt\":\"$t1\"}"
+rid="$(jq -r 'last.fullDatabaseId' "$f")"
+: > "$GH_STUB_DIR/requests"
+online; assert_eq 0 "$STATUS" "$_CURRENT"
+assert_contains "$(cat "$GH_STUB_DIR/requests")" 'body createdAt url author { __typename'
+assert_eq "review $rid https://github.com/owner/repo/pull/7#pullrequestreview-$rid 1003 $t1" \
+    "$(jq -r '.owner_approval.opt_in | [.kind,.id,.url,.author,.at] | join(" ")' <<< "$OUTPUT")"
+
+it 'a host-visible pending review uses creation time for its marker but does not itself approve'
+reset_opt_in "$opt_approved"
+fx_owner_review 7 PENDING "$h" "{\"body\":\"$carry\",\"submittedAt\":null,\"createdAt\":\"$t2\"}"
+online; assert_eq 0 "$STATUS" "$_CURRENT"
+assert_eq "$opt_approved $t2" "$(jq -r '.owner_approval|[.commit,.opt_in.at]|join(" ")' <<< "$OUTPUT")"
+printf '[]\n' > "$f"; publisher_review APPROVED "$h"
+fx_owner_review 7 PENDING "$h" "{\"body\":\"$carry\",\"submittedAt\":null,\"createdAt\":\"$t2\"}"
+assert_opt_in_exact_required
+
+it 'untrusted authors, PR text and decorated lines do not opt in'
+reset_opt_in "$opt_approved"
+fx_pr 7 "$h" "{\"body\":\"$carry\"}"
+owner_comment "$carry" "$t1" 1009 '{"author":{"login":"owner"}}'
+fx_review 7 "$carry" '{"author":{"__typename":"Bot","databaseId":1003}}'
+owner_comment "Please use $carry" "$t1"
+owner_comment "$carry today" "$t1"
+owner_comment $'> owner-approval: carry\n`owner-approval: carry`\n    owner-approval: carry\nowner-approval: carry\t' "$t1"
+assert_opt_in_exact_required
+assert_contains "$OUTPUT" "$hint"
+assert_eq 2 "$(jq -r '.problems|length' <<< "$OUTPUT")" 'one problem and one hint'
+
+it 'a marker only permits carry for its author'
+reset_opt_in "$opt_approved"
+printf '[]\n' > "$f"; publisher_review APPROVED "$h"
+fx_owner_review 7 APPROVED "$opt_approved" '{"author":{"__typename":"User","databaseId":1005}}'
+owner_comment "$carry" "$t1"
+assert_opt_in_exact_required
+owner_comment "$carry" "$t2" 1005
+online; assert_eq 0 "$STATUS" "$_CURRENT"
+assert_eq '1005 1005' "$(jq -r '.owner_approval | [.reviewer,.opt_in.author] | join(" ")' <<< "$OUTPUT")"
+
+it 'creation and submission times decide carry, regardless of page order or edits'
+reset_opt_in "$opt_approved"
+owner_comment "$revoke" "$t2"
+owner_comment "$carry" "$t1" 1003 "{\"lastEditedAt\":\"$t3\"}"
+assert_opt_in_exact_required
+owner_comment "$carry" "$t3"
+online; assert_eq 0 "$STATUS" 'a later carry restores the opt-in'
+assert_eq 2003 "$(jq -r '.owner_approval.opt_in.id' <<< "$OUTPUT")"
+owner_comment "$carry" "$t3"
+owner_comment "$revoke" "$t3"
+owner_comment "$carry" "$t3"
+assert_opt_in_exact_required
+reset_opt_in "$opt_approved"
+owner_comment "$carry" "$t1"
+owner_comment "$revoke"$'\n'"$carry" "$t2"
+assert_opt_in_exact_required
+printf '[]\n' > "$comments"
+assert_opt_in_exact_required
+
+it 'an objection or dismissal revokes carry even if its body says carry'
+for state in CHANGES_REQUESTED DISMISSED; do
+    reset_opt_in "$opt_approved"
+    owner_comment "$carry" "$t1"
+    fx_owner_review 7 "$state" "$opt_approved" "{\"body\":\"$carry\",\"submittedAt\":\"$t2\"}"
+    assert_opt_in_exact_required
+    if [ "$state" = CHANGES_REQUESTED ]; then
+        assert_eq 1003 "$(jq '.blocking[].reviewer' <<< "$OUTPUT")"
+    fi
+    fx_owner_review 7 APPROVED "$opt_approved" "{\"submittedAt\":\"$t3\"}"
+    assert_opt_in_exact_required
+    assert_contains "$OUTPUT" "$hint"
+    owner_comment "$carry" '2026-01-06T00:00:00Z'
+    online; assert_eq 0 "$STATUS" 'a new marker and qualifying approval restore carry'
+done
+
+it 'unavailable or incomplete comment pages discard even a valid marker'
+reset_opt_in "$opt_approved"
+owner_comment "$carry" "$t1"
+owner_comment 'A second page.' "$t2"
+for fault in graphql:PrdkitOwnerComments graphql:PrdkitOwnerComments:cursor-1; do
+    : > "$GH_STUB_DIR/requests"
+    GH_STUB_FAIL="$fault" GH_STUB_PAGE_SIZE=1 assert_opt_in_exact_required
+    assert_contains "$OUTPUT" 'owner approval opt-in could not be read'
+    assert_not_contains "$OUTPUT" "$hint"
+    if [[ "$fault" == *cursor-1 ]]; then
+        assert_contains "$(cat "$GH_STUB_DIR/requests")" 'endCursor=cursor-1'
+    fi
+done
+query='query PrdkitOwnerComments { fixture }'
+route="$GH_STUB_DIR/routes/graphql_PrdkitOwnerComments.json"
+GH_STUB_PAGE_SIZE=1 gh api graphql -f query="$query" -F number=7 > "$GH_STUB_DIR/first-comment"
+for edit in '.data.repository.pullRequest.comments.pageInfo.hasNextPage=false' \
+    '.data.repository.pullRequest.headRefOid="1111111111111111111111111111111111111111"' '.errors=[{"message":"partial"}]'; do
+    jq "$edit" "$GH_STUB_DIR/first-comment" > "$route"
+    assert_opt_in_exact_required
+    assert_contains "$OUTPUT" 'owner approval opt-in could not be read'
+done
+rm "$route"
+fx_owner_review 7 APPROVED "$h"
+GH_STUB_FAIL=graphql:PrdkitOwnerComments online
+assert_eq 0 "$STATUS" 'comment failure cannot invalidate an exact-head approval'
+assert_not_contains "$OUTPUT" '"owner_approval"'
+assert_not_contains "$OUTPUT" 'could not be read'
+
+it 'opt-in reuses the merge-aware policy-surface guard'
+git update-ref refs/remotes/origin/main "$merged_base"
+{ git show "$merged_base:.prdkit/memory/config.md" | sed 's/^- owner-approval: per-pr$/- owner-approval: exact-head-opt-in/'; } |
+    trusted_edit refs/remotes/origin/main .prdkit/memory/config.md
+git checkout -q --detach "$merged_head"
+reset_opt_in "$merge_approved"; owner_comment "$carry" "$t1"
+online; assert_eq 0 "$STATUS" "$_CURRENT"
+assert_eq "exact-head-opt-in $merge_approved $merged_base" \
+    "$(jq -r '.owner_approval|[.mode,.commit,.base]|join(" ")' <<< "$OUTPUT")"
+mkdir -p .github/workflows
+printf 'name: PR workflow change\n' > .github/workflows/new.yml
+git add .github/workflows/new.yml; git commit -qm 'edit review policy'
+carry_reviews "$merge_approved"
+assert_policy_carry_refused "$h" .github/workflows/new.yml
+
+it 'opt-in does not let an older owner approval clear an objection at T2'
+owner_policy '- owner-approval: exact-head-opt-in'
+git checkout -q --detach origin/main
+mkdir -p specs/changes
+printf '# Change\n**Tier**: T2\n## State\n' > specs/changes/001-reviewed.md
+git add specs; git commit -qm 'implement T2 change'; t2_old="$(git rev-parse HEAD)"
+git commit -q --allow-empty -m 'new exact head'
+reset_opt_in "$t2_old"
+owner_comment "$carry" "$t1"
+fx_owner_review 7 CHANGES_REQUESTED "$t2_old" "{\"submittedAt\":\"$t2\"}"
+fx_owner_review 7 APPROVED "$t2_old" "{\"body\":\"$carry\",\"submittedAt\":\"$t3\"}"
+: > "$GH_STUB_DIR/requests"
+online; assert_eq 1 "$STATUS" "$_CURRENT"
+assert_eq 1003 "$(jq '.blocking[].reviewer' <<< "$OUTPUT")"
+assert_not_contains "$(cat "$GH_STUB_DIR/requests")" PrdkitOwnerComments
+fx_owner_review 7 APPROVED "$h" '{"submittedAt":"2026-01-06T00:00:00Z"}'
+online; assert_eq 0 "$STATUS" "exact-head approval still clears the objection: $OUTPUT"
+
+it 'legacy modes ignore comment and review-body markers without a comments request'
+git checkout -q --detach "$opt_head"
+for mode in exact-head per-pr; do
+    owner_policy "- owner-approval: $mode"
+    reset_opt_in "$opt_approved"
+    : > "$GH_STUB_DIR/requests"
+    online; before="$OUTPUT"; before_status="$STATUS"
+    requests_before="$(cat "$GH_STUB_DIR/requests")"
+    : > "$GH_STUB_DIR/requests"
+    if [ "$mode" = per-pr ]; then marker="$revoke"; else marker="$carry"; fi
+    owner_comment "$marker" "$t1"
+    body_changed="$(jq --arg body "$marker" 'last.body=$body' "$f")"
+    printf '%s\n' "$body_changed" > "$f"
+    online
+    assert_eq "$before_status" "$STATUS" "$mode exit code is unchanged"
+    assert_eq "$before" "$OUTPUT" "$mode JSON is unchanged"
+    assert_eq "$requests_before" "$(cat "$GH_STUB_DIR/requests")" "$mode requests are unchanged"
+    assert_not_contains "$requests_before" PrdkitOwnerComments
+    assert_not_contains "$requests_before" 'body createdAt url'
+done
 finish

@@ -167,7 +167,7 @@ checking trusted policy, the tier floor and T0 paths. It enforces these minimums
 | --- | --- |
 | T0 | None required. The structural checks and complete live host read must still pass. |
 | T1, T2 | At least one independent `review-publishers` account. |
-| T3 | At least one independent `review-publishers` account **and** one `review-owner` account. The owner needs the exact head by default; see [Per-PR owner approval](#per-pr-owner-approval) for the opt-in. |
+| T3 | At least one independent `review-publishers` account **and** one `review-owner` account. The owner needs the exact head by default; see [Per-PR owner approval](#per-pr-owner-approval) for carry options. |
 
 The PR author counts for neither role. An account listed in both keys counts **only as owner**;
 commit authorship is irrelevant. By default, only the account’s latest submitted review
@@ -214,16 +214,34 @@ See [the configuration template](../templates/config-template.md) for key syntax
 
 ### Per-PR owner approval
 
-In `.prdkit/memory/config.md`, `owner-approval: exact-head` is the default, including when
-the key is absent. `owner-approval: per-pr` is for pre-production stages only; set it back
-to `exact-head` before production. Changing it is an owner-reviewed policy change. The gate
-reads the key from the trusted default branch, never from the PR.
+The gate reads `owner-approval` from `.prdkit/memory/config.md` on the trusted default
+branch, never from the PR. Changing it requires owner review.
 
-At T3 under `per-pr`, each owner's latest `APPROVED`, `CHANGES_REQUESTED` or `DISMISSED`
-review decides; comments and pending reviews do not. Approval carries only on the same PR
-and only from a commit that is still an ancestor of the current head. An objection from
-that owner voids approval until a later qualifying approval. Publishers, reviewers covering
-lenses, and agents still need the exact head; T1 and T2 are unchanged.
+| Mode | T3 owner approval |
+| --- | --- |
+| `exact-head` (also when unset) | Approve the current head. Markers have no effect. |
+| `exact-head-opt-in` | Approve the current head unless that owner has opted in to carry their own approval on this PR. |
+| `per-pr` | Allow carry on every PR without a marker. Use only for pre-production stages; set it back to `exact-head` before production. |
+
+To opt in under `exact-head-opt-in`, a configured `review-owner` posts `owner-approval: carry`
+on its own line in a PR conversation comment or PR review. Post
+`owner-approval: exact-head` the same way to revoke it. The gate matches raw lines exactly
+after removing trailing spaces and a trailing carriage return. It uses the account GitHub
+reports, not any name in the text. PR descriptions, commit messages, change records and other
+accounts cannot opt an owner in.
+
+For each owner, the newest marker, `CHANGES_REQUESTED` review or `DISMISSED` review decides,
+by comment creation or review submission time (creation time for a draft review if GitHub
+returns it). An objection, dismissal or a body containing
+both markers counts as a revocation, and revocations win timestamp ties. Edits can change the
+marker without reordering it; a deleted comment no longer counts. A marker is not an approval.
+If the gate cannot read all comment pages, it ignores opt-in and requires exact-head approval.
+
+When carry is allowed for an owner, that owner's latest `APPROVED`, `CHANGES_REQUESTED` or
+`DISMISSED` review decides; comments and pending reviews are not approval decisions. Approval
+carries only on the same PR and only from a commit that is still an ancestor of the current
+head. An objection from that owner voids approval until a later qualifying approval.
+Publishers, reviewers covering lenses, and agents still need the exact head; T1 and T2 are unchanged.
 
 The gate needs a single readable merge base between the trusted `--base` and the PR head
 (the change start, not the target branch's current tip). For each net change since approval
@@ -239,8 +257,11 @@ in JSON). An exact-head owner approval is unaffected.
 If the gate uses a carried approval, it names the approved commit and lists up to 20
 commits since then, with a `+N more` line if needed. JSON includes the qualifying owner in `reviews`
 and adds `owner_approval` with `mode`, `reviewer`, `review`, `commit`, `commits_since`
-and `more` (the number omitted). If carry survives a policy change that matches the
-merge base, `owner_approval.base` contains that commit SHA; the field is omitted when
+and `more` (the number omitted). In `exact-head-opt-in` mode, `owner_approval.opt_in`
+identifies the winning marker: `kind` (`comment` or `review`), `id` (string), `url`,
+`author` (numeric account ID) and `at` (creation or submission timestamp).
+If carry survives a policy change that matches the merge base, `owner_approval.base`
+contains that commit SHA; the field is omitted when
 no policy path changed. If the gate cannot verify ancestry for an otherwise deciding approval,
 it reports the rejected SHA in `owner_approval_not_ancestors`.
 

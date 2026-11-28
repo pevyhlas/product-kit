@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
-# Read a single GitHub PR's reviews. No review bodies, commit authors or credentials are inputs.
+# Read a single GitHub PR's reviews and, for owner opt-in, its conversation comments.
 #
 # Invariants:
 # Only the latest exact-head submission per eligible non-author account can grant approval by default.
-# A T3 per-PR owner instead needs a latest deciding approval on a verified ancestor or the head.
+# A T3 owner under per-PR policy (or with an active opt-in) needs a latest deciding approval
+# on a verified ancestor or the head. Opt-in markers apply only to their host-identified owner.
 # Undismissed objections on any PR commit require a later eligible approval by that account.
 # Report open objections separately from approvals after complete, consistent pagination.
 # With lenses, publisher eligibility is the union of accounts mapped to trusted reviewers.
 # Only the single raw Configuration section can establish policy.
 #
 # Threat model:
-# Review text and candidate policy are untrusted. Trust the authenticated GitHub response;
-# a host failure, malformed page or changed PR binding cannot produce a host verdict.
+# Candidate policy and arbitrary review text cannot grant approval. Trust the authenticated GitHub
+# response for account identity and read only the exact marker lines for opt-in.
+# Unavailable, malformed or mismatched pages cannot grant approval or opt-in.
 # shellcheck disable=SC2034,SC2016 # Public outputs; jq/GraphQL variables are literal.
 
 github_review_policy() {
@@ -100,8 +102,9 @@ github_review_policy() {
             }
             if (count["review-publisher-isolation"]) fail("review-publisher-isolation is unsupported by the native review gate", "review-publisher-isolation")
             mode=values["owner-approval"]
-            if (count["owner-approval"] && (count["owner-approval"]!=1 || (mode!="exact-head" && mode!="per-pr")))
-                fail("Expected one owner-approval value: exact-head or per-pr", "owner-approval")
+            if (count["owner-approval"] && (count["owner-approval"]!=1 ||
+                (mode!="exact-head" && mode!="exact-head-opt-in" && mode!="per-pr")))
+                fail("Expected one owner-approval value: exact-head, exact-head-opt-in or per-pr", "owner-approval")
             print pub ";" values["review-owner"] ";" lenses ";" (mode ? mode : "exact-head")
         }')" || { RC_ERROR="${fields:-Cannot parse trusted review policy}"; return 1; }
     fields="$(printf '%s' "$fields" | tr -d ' \t\r' | sed 's/bot://g;s/user://g')"
@@ -118,16 +121,29 @@ github_review_policy() {
     RC_ERROR=""
 }
 
-github_review_page() { # repo number cursor; exec in a dedicated process
-    local repo="$1" number="$2" cursor="$3" query args=()
+github_review_page() { # repo number cursor [connection [owner-approval mode]]; exec in a dedicated process
+    local repo="$1" number="$2" cursor="$3" connection="${4:-reviews}" query body_fields="" actor_type="" args=()
+    if [ "${5:-}" = exact-head-opt-in ]; then
+        body_fields='body createdAt url '; actor_type='__typename '
+    fi
     query='query PrdkitReviews($owner:String!, $name:String!, $number:Int!, $endCursor:String) {
       repository(owner:$owner,name:$name) { nameWithOwner pullRequest(number:$number) {
         number state headRefOid baseRefName author { ... on User { databaseId } ... on Bot { databaseId } }
         reviews(first:100,after:$endCursor) { totalCount nodes {
-          fullDatabaseId state submittedAt commit { oid } author { ... on User { databaseId } ... on Bot { databaseId } }
+          fullDatabaseId state submittedAt commit { oid } '"$body_fields"'author { '"$actor_type"'... on User { databaseId } ... on Bot { databaseId } }
         } pageInfo { hasNextPage endCursor } }
       } }
     }'
+    if [ "$connection" = comments ]; then
+        query='query PrdkitOwnerComments($owner:String!, $name:String!, $number:Int!, $endCursor:String) {
+          repository(owner:$owner,name:$name) { nameWithOwner pullRequest(number:$number) {
+            number state headRefOid baseRefName author { ... on User { databaseId } ... on Bot { databaseId } }
+            comments(first:100,after:$endCursor) { totalCount nodes {
+              fullDatabaseId body createdAt url author { __typename ... on User { databaseId } }
+            } pageInfo { hasNextPage endCursor } }
+          } }
+        }'
+    fi
     [ -z "$cursor" ] || args=(-f "endCursor=$cursor")
     exec gh api graphql --hostname github.com -f query="$query" -f owner="${repo%/*}" -f name="${repo#*/}" \
         -F number="$number" ${args[@]+"${args[@]}"}
@@ -149,23 +165,32 @@ github_review_latest() {
 }
 
 github_review_fetch() { # URL private-work expected-head expected-base
-    local url="$1" work="$2" expected="$3" base="$4" repo number cursor="" next count=0 total="" page_total
+    local url="$1" work="$2" expected="$3" base="$4"
     local re='^https://github\.com/([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)/pull/([1-9][0-9]*)$'
     RC_ERROR='--pr must be a github.com pull request URL'
     [[ "$url" =~ $re ]] || return 1
-    repo="${BASH_REMATCH[1]}"; number="${BASH_REMATCH[2]}"
+    review_repo="${BASH_REMATCH[1]}"; review_number="${BASH_REMATCH[2]}"
     RC_ERROR='online review checks require gh and jq'
     command -v gh >/dev/null && command -v jq >/dev/null || return 1
     RC_ERROR='Incomplete, malformed or non-advancing GitHub review pages'
-    : > "$work/pages"; : > "$work/cursors"
+    github_review_fetch_pages "$work" reviews || return 1
+    pr_head="$(jq -r '.headRefOid' "$work/validated")" || return 1
+    RC_ERROR='The PR head or target differs from the checked head and trusted base'
+    [ "$pr_head" = "$expected" ] && [ "$(jq -r .baseRefName "$work/validated")" = "$base" ] || return 1
+}
+
+github_review_fetch_pages() { # private work directory and GitHub connection (reviews or comments)
+    local work="$1" connection="$2" cursor="" next count=0 total="" page_total page_count
+    : > "$work/pages" && : > "$work/cursors" || return 1
     while :; do
-        (github_review_page "$repo" "$number" "$cursor") > "$work/page" || return 1
-        jq -esc --argjson number "$number" '
+        (github_review_page "$review_repo" "$review_number" "$cursor" "$connection" "$REVIEW_OWNER_APPROVAL") > "$work/page" || return 1
+        jq -esc --argjson number "$review_number" --arg connection "$connection" '
           def id: type=="number" and .>0 and .==floor and .<9007199254740992;
           def sha: type=="string" and test("^[0-9a-f]{40}\\z");
+          def timestamp: type=="string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z");
           if length==1 and (.[0].errors // [])==[] then .[0].data.repository.pullRequest else null end |
           select(.number==$number and .state=="OPEN" and (.headRefOid|sha) and (.baseRefName|type=="string") and
-            (.author.databaseId|id) and (.reviews as $r |
+            (.author.databaseId|id) and (.[$connection] as $r |
               ($r.totalCount|type=="number" and .>=0 and .==floor) and
               ($r.nodes|type=="array" and length<=100) and
               ($r.pageInfo.hasNextPage|type=="boolean") and
@@ -173,30 +198,69 @@ github_review_fetch() { # URL private-work expected-head expected-base
               ($r.pageInfo.endCursor==null or ($r.pageInfo.endCursor|type=="string" and length>0 and (test("[[:cntrl:]]")|not))) and
               (if $r.pageInfo.hasNextPage then ($r.nodes|length)>0 and $r.pageInfo.endCursor!=null else true end) and
               all($r.nodes[]; (.fullDatabaseId|tostring|test("^[1-9][0-9]*\\z")) and
-                ((.state=="PENDING" and .submittedAt==null) or ((.state|IN("APPROVED","COMMENTED","DISMISSED","CHANGES_REQUESTED")) and
-                (.submittedAt|type=="string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z")) and
-                (.author.databaseId|id) and (.commit.oid|sha))))))' "$work/page" > "$work/validated" || return 1
+                (if $connection=="comments" then
+                    (.createdAt|timestamp) and (.body|type=="string") and (.url|type=="string" and length>0) and
+                    (has("author") and (.author==null or (.author.__typename|type=="string"))) and
+                    (if .author.__typename=="User" then (.author.databaseId|id) else true end)
+                 else
+                    ((.state=="PENDING" and .submittedAt==null) or
+                     ((.state|IN("APPROVED","COMMENTED","DISMISSED","CHANGES_REQUESTED")) and
+                      (.submittedAt|timestamp) and (.author.databaseId|id) and (.commit.oid|sha)))
+                 end))))' "$work/page" > "$work/validated" || return 1
         cat "$work/validated" >> "$work/pages" || return 1
-        next="$(jq -r '.reviews.pageInfo.endCursor // ""' "$work/validated")" || return 1
+        next="$(jq -r ".$connection.pageInfo.endCursor // \"\"" "$work/validated")" || return 1
         if [ -n "$next" ]; then
             if grep -Fxq -- "$next" "$work/cursors"; then return 1; fi
             printf '%s\n' "$next" >> "$work/cursors" || return 1
         fi
-        page_total="$(jq -r .reviews.totalCount "$work/validated")" || return 1
+        page_total="$(jq -r ".$connection.totalCount" "$work/validated")" || return 1
         [ -z "$total" ] || [ "$total" = "$page_total" ] || return 1
         total="$page_total"
-        count=$((count + $(jq '.reviews.nodes|length' "$work/validated")))
-        if jq -e '.reviews.pageInfo.hasNextPage' "$work/validated" >/dev/null; then
+        page_count="$(jq ".$connection.nodes|length" "$work/validated")" || return 1
+        count=$((count + page_count))
+        if jq -e ".$connection.pageInfo.hasNextPage" "$work/validated" >/dev/null; then
             [ "$count" -lt "$total" ] || return 1
             cursor="$next"
         else break; fi
     done
-    jq -se '([.[] | del(.reviews.nodes,.reviews.pageInfo)] | unique | length)==1 and
-        (.[0].reviews.totalCount as $n | [.[].reviews.nodes[].fullDatabaseId|tostring] |
+    jq -se --arg connection "$connection" '
+        ([.[] | del(.[$connection].nodes,.[$connection].pageInfo)] | unique | length)==1 and
+        (.[0][$connection].totalCount as $n | [.[][$connection].nodes[].fullDatabaseId|tostring] |
          length==$n and (unique|length)==$n)' "$work/pages" >/dev/null || return 1
-    pr_head="$(jq -r '.headRefOid' "$work/validated")" || return 1
-    RC_ERROR='The PR head or target differs from the checked head and trusted base'
-    [ "$pr_head" = "$expected" ] && [ "$(jq -r .baseRefName "$work/validated")" = "$base" ] || return 1
+}
+
+github_review_owner_opt_in() { # private work directory; output a map of owner IDs to active markers
+    local work="$1" comments="$1/owner-comments"
+    mkdir "$comments" && github_review_fetch_pages "$comments" comments || return 1
+    jq -nce --arg owners "$REVIEW_OWNERS" --slurpfile reviews "$work/pages" --slurpfile comments "$comments/pages" '
+        def binding: {number,state,headRefOid,baseRefName,author};
+        def timestamp: type=="string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z");
+        def marker($kind; $at; $void):
+            (.body | split("\n") | map(sub(" *\\r? *\\z"; ""))) as $lines |
+            ($void or ($lines|index("owner-approval: exact-head")!=null)) as $revoke |
+            select($revoke or ($lines|index("owner-approval: carry")!=null)) |
+            {kind:$kind, id:(.fullDatabaseId|tostring), url, author:.author.databaseId, at:$at, $revoke};
+        ($reviews[0]|binding) as $pr |
+        ($owners|split(",")) as $own |
+        def owner: .author.__typename=="User" and .author.databaseId!=$pr.author.databaseId and
+            ((.author.databaseId|tostring) as $id | $own|index($id)!=null);
+        if ($comments[0]|binding)!=$pr then error("PR binding changed") else
+            [$reviews[].reviews.nodes[]] as $all_reviews |
+            if any($all_reviews[]; (has("author")|not) or
+                (.author!=null and (.author.__typename|type!="string")) or
+                (.author.__typename=="User" and (.author.databaseId|type!="number")) or
+                (owner and ((.body|type!="string") or (.url|type!="string" or length==0) or
+                    ((.submittedAt // .createdAt)|timestamp|not)))) then
+                error("Malformed review marker input")
+            else
+                [($comments[].comments.nodes[] | select(owner) | marker("comment"; .createdAt; false)),
+                 ($all_reviews[] | select(owner) |
+                    marker("review"; (.submittedAt // .createdAt); (.state|IN("CHANGES_REQUESTED","DISMISSED"))))] |
+                # A revocation wins when GitHub reports the same second for both actions.
+                group_by(.author) | map(max_by([.at, .revoke]) | select(.revoke|not) |
+                    {key:(.author|tostring), value:del(.revoke)}) | from_entries
+            end
+        end'
 }
 
 github_review_decide() { # private-work head [file of verified owner approval commits]
@@ -205,7 +269,8 @@ github_review_decide() { # private-work head [file of verified owner approval co
     # Replay each account's submissions in time order (host order breaks timestamp ties).
     # GitHub marks the original review DISMISSED, so only still-live requests open blockers.
     decisions="$(jq -sc --arg publishers "$REVIEW_PUBLISHERS" --arg owners "$REVIEW_OWNERS" --arg head "$expected" \
-        --argjson per_pr "$per_pr" --rawfile ancestors "$ancestors" '
+        --argjson per_pr "$per_pr" --arg mode "$REVIEW_OWNER_APPROVAL" --argjson opt_in "${owner_opt_in:-"{}"}" \
+        --rawfile ancestors "$ancestors" '
         ($ancestors|split("\n")|map({key:.,value:true})|from_entries) as $verified |
         .[0].author.databaseId as $maker | ($publishers|split(",")) as $pub | ($owners|split(",")) as $own |
         [.[].reviews.nodes[] | select(.state!="PENDING" and .author.databaseId!=$maker) |
@@ -214,7 +279,9 @@ github_review_decide() { # private-work head [file of verified owner approval co
         group_by(.author.databaseId) | map(reduce (sort_by(.submittedAt)[]) as $r
            ({approval:null,blocking:[]};
             ($r | {reviewer:.author.databaseId,review:(.fullDatabaseId|tostring),role}) as $entry |
-            if $per_pr and $r.role=="owner" then
+            if $per_pr and $r.role=="owner" and
+                ($mode!="exact-head-opt-in" or
+                    ($r.author.__typename=="User" and ($opt_in | has($r.author.databaseId|tostring)))) then
                 if $r.state=="APPROVED" then
                     if $r.commit.oid==$head then .approval=$entry | .blocking=[] | .rejected=null
                     elif $verified[$r.commit.oid] then
@@ -244,9 +311,12 @@ github_review_decide() { # private-work head [file of verified owner approval co
 github_review_per_pr_owners() { # root private-work head
     local root="$1" work="$2" head="$3" candidates commit
     # Use only this PR's validated pages; prove ancestry once per distinct approval SHA.
-    candidates="$(jq -sr --arg owners "$REVIEW_OWNERS" --arg head "$head" '
-        .[0].author.databaseId as $maker | ($owners|split(",")) as $own |
+    candidates="$(jq -sr --arg owners "$REVIEW_OWNERS" --arg head "$head" --arg mode "$REVIEW_OWNER_APPROVAL" \
+        --argjson opt_in "${owner_opt_in:-"{}"}" '
+        .[0].author.databaseId as $maker |
+        (if $mode=="exact-head-opt-in" then $opt_in|keys else $owners|split(",") end) as $own |
         [.[].reviews.nodes[] | select(.state=="APPROVED" and .author.databaseId!=$maker) |
+         select($mode!="exact-head-opt-in" or .author.__typename=="User") |
          select((.author.databaseId|tostring) as $id | $own|index($id)!=null) |
          .commit.oid | select(.!=$head)] | unique[]' "$work/pages")" || return 1
     : > "$work/owner-ancestors" || return 1
@@ -267,7 +337,9 @@ github_review_owner_evidence() { # root head carried-owner JSON
     commits="$(GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -C "$root" log --no-notes --no-show-signature \
         --no-decorate --no-color --format='%h %s' --max-count=20 "$range" --)" || return 1
     count="$(GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -C "$root" rev-list --count "$range" --)" || return 1
-    jq -cn --argjson owner "$owner" --arg commits "$commits" --argjson count "$count" '
+    jq -cn --argjson owner "$owner" --arg commits "$commits" --argjson count "$count" \
+        --arg mode "$REVIEW_OWNER_APPROVAL" --argjson opt_in "${owner_opt_in:-"{}"}" '
         ($commits|split("\n")) as $listed |
-        $owner | del(.role) + {mode:"per-pr", commits_since:$listed, more:($count - ($listed|length))}'
+        $owner | del(.role) + {$mode, commits_since:$listed, more:($count - ($listed|length))} |
+        if $mode=="exact-head-opt-in" then . + {opt_in:$opt_in[(.reviewer|tostring)]} else . end'
 }

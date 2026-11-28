@@ -11,6 +11,12 @@ change by change.
 
 ## [Unreleased]
 
+### Added
+
+- Trusted `owner-approval: exact-head-opt-in` keeps T3 owner approval exact-head unless the
+  owner opts in to carry their own approval on that PR. Carry uses the same merge-aware
+  policy guard as `per-pr` and reports the opt-in comment or review.
+
 ### Fixed
 
 - Under `owner-approval: per-pr`, a carried T3 owner approval now survives a policy-surface

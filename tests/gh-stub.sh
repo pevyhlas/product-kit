@@ -53,7 +53,7 @@ if [ "$endpoint" = graphql ]; then
     route="graphql:$operation"
 fi
 case "${GH_STUB_FAIL:-}" in
-    "$route"|"$endpoint"|"$alias_route") echo "gh stub: injected failure: $route" >&2; exit 1 ;;
+    "$route"|"$endpoint"|"$alias_route"|"$route:$after") echo "gh stub: injected failure: $route" >&2; exit 1 ;;
 esac
 override="$GH_STUB_DIR/routes/$(printf '%s' "$route" | tr '/?&=:' '_____').json"
 if [ "$operation" = PrdkitReviews ] && [ -f "$GH_STUB_DIR/routes/graphql_PrdkitReviews-$number.json" ]; then
@@ -98,31 +98,33 @@ if [ "${GH_STUB_FULL_RULE_PAGES:-false}" = true ] && [[ "$route" == rules/branch
 fi
 if [ "$endpoint" = graphql ]; then
     case "$operation" in
-        PrdkitReviews)
+        PrdkitReviews|PrdkitOwnerComments)
             [ "$owner/$name" = owner/repo ] || exit 1
             pr="$GH_STUB_DIR/pulls/$number.json"
-            reviews="$GH_STUB_DIR/reviews/$number.json"
-            [ -f "$pr" ] && [ -f "$reviews" ] || exit 1
+            connection=reviews
+            if [ "$operation" = PrdkitOwnerComments ]; then connection=comments; fi
+            items="$GH_STUB_DIR/$connection/$number.json"
+            [ -f "$pr" ] && [ -f "$items" ] || exit 1
             page_size="${GH_STUB_PAGE_SIZE:-100}"; offset=0
             if [ -n "$after" ]; then
                 case "$after" in cursor-*) offset="${after#cursor-}" ;; *) exit 1 ;; esac
                 case "$offset" in ''|*[!0-9]*) exit 1 ;; esac
                 [ "$offset" -gt 0 ] && [ $((offset % page_size)) -eq 0 ] || exit 1
             fi
-            total="$(jq length "$reviews")"
+            total="$(jq length "$items")"
             [ "$offset" -le "$total" ] || exit 1
             while :; do
                 printf 'page %s pr=%s after=%s\n' "$operation" "$number" "$after" >> "$GH_STUB_DIR/requests"
                 next=$((offset + page_size)); more=false
                 [ "$next" -ge "$total" ] || more=true
-                jq -n --slurpfile pr "$pr" --slurpfile reviews "$reviews" \
+                jq -n --slurpfile pr "$pr" --slurpfile items "$items" --arg connection "$connection" \
                     --argjson offset "$offset" --argjson size "$page_size" --argjson more "$more" --arg cursor "cursor-$next" '
                     $pr[0] as $p | {data:{repository:{nameWithOwner:"owner/repo",pullRequest:{
                         number:$p.number, author:$p.author,
                         state:(if $p.merged_at!=null then "MERGED" else ($p.state|ascii_upcase) end),
                         headRefOid:$p.head.sha, headRefName:$p.head.ref, baseRefName:$p.base.ref,
                         createdAt:$p.created_at, merged:($p.merged_at != null),
-                        reviews:{totalCount:($reviews[0]|length),nodes:$reviews[0][$offset:($offset+$size)],
+                         ($connection):{totalCount:($items[0]|length),nodes:$items[0][$offset:($offset+$size)],
                             pageInfo:{hasNextPage:$more,endCursor:$cursor}}}}}}' | emit
                 if [ "${GH_STUB_PARTIAL:-}" = "$route" ] || [ "${GH_STUB_PARTIAL:-}" = "$endpoint" ]; then break; fi
                 if ! $paginate || ! $more; then break; fi

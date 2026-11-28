@@ -212,9 +212,10 @@ bash .prdkit/scripts/bash/doctor.sh --strict   # spec integrity, reading budgets
 
 `check-review.sh --pr <url>` checks the exact PR head: no approval at T0, an independent
 publisher at T1–T3, and a separate owner approval at T3. The online gate requires `gh` and `jq` at every
-tier. Local structure is only a preview. An owner-reviewed change on the default branch can opt
-into [`owner-approval: per-pr`](docs/ci-gates.md#per-pr-owner-approval) for pre-production stages;
-set it back to `exact-head` before production. See [CI gates](docs/ci-gates.md).
+tier. Local structure is only a preview. T3 owners approve the `exact-head` by default.
+Trusted default-branch policy can also allow [approval carry](docs/ci-gates.md#per-pr-owner-approval):
+`exact-head-opt-in` lets an owner opt in on one PR with a comment or review marker;
+`per-pr` allows carry on every PR for pre-production stages. See [CI gates](docs/ci-gates.md).
 The tier governs the review work in addition to this host check:
 
 | Tier | When                                           | Independent reviewers        |
