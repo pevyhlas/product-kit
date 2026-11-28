@@ -641,7 +641,26 @@ assert_not_contains "$OUTPUT" 'Specified with no open tasks'
 run bash "$B/status.sh" --json
 assert_eq '[2,false]' "$(jq -c '.changes[] | select(.id == "021-plan") | [.open_tasks,.merged_unclosed]' <<< "$OUTPUT")"
 
-git checkout -qb deliver-rest
+it "an indented comment example does not hide visible tasks from status or close"
+git checkout -qb indented-example || exit 1
+sed -i.bak '/^- \[ \] /d' "$path"; rm "$path.bak"
+cat >> "$path" <<'MD'
+
+    <!-- displayed as indented code
+
+- [ ] Finish delivery
+MD
+git commit -qam 'Add an indented example before an open task' && approve_export_head || exit 1
+before="$(git rev-parse HEAD)"
+run bash "$B/status.sh" --json
+assert_eq '[1]' "$(jq -c '[.changes[] | select(.id == "021-plan") | .open_tasks]' <<< "$OUTPUT")"
+run bash "$B/close-change.sh" --pr "$pr" "$id" 'export — R-01 — complete — #7'
+assert_eq 1 "$STATUS" 'the visible task prevents closing'
+assert_contains "$OUTPUT" 'is specified and still has open tasks'
+assert_eq "$before" "$(git rev-parse HEAD)" 'the task prevents a closing commit'
+
+it "the final implementing PR closes the specified record"
+git checkout -qb deliver-rest "$DEFAULT" || exit 1
 sed -i.bak '/^- \[ \] /d' "$path"; rm "$path.bak"
 sed -i.bak 's/, planned: 021-plan//' specs/product.md; rm specs/product.md.bak
 printf 'second\nthird\n' >> src/export.txt

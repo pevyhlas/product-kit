@@ -19,7 +19,7 @@
 | Doctor: close row over 200 characters | Keep intent, IDs and parts, disposition, and PR. Leave details on the PR |
 | Status or doctor: merged without closing | Close the non-specified record in the next relevant PR, carried by that PR's record before final review ([review workflow](../workflows/review.md#review-carrier)). Editing Step only on the implementing branch does not change the default-branch check. |
 | Doctor: specified with no open tasks | Close it in this PR with `close-change.sh`, or change Step in a reviewed edit. |
-| `close-change.sh`: specified and still has open tasks | Finish and delete the remaining task lines, or change Step in a reviewed [owner disposition](../workflows/review.md#closing). |
+| `close-change.sh`: specified and still has open tasks | Finish and delete the remaining task lines, or change Step in a reviewed [owner disposition](../workflows/review.md#closing). An open checkbox line anywhere, even in a comment or code example, blocks closing until removed. |
 | Doctor: local machine path | Rewrite it relative to the repository, or as `org/repo` plus a path for another repository |
 | Doctor: raw evidence under `specs/` | `git rm --cached` it, keep it under `.prdkit/cache/evidence/`, and link it from Acceptance |
 | The owner's answer was asked for again | Fold the answer into the canonical spec/policy with its words, date and source; then remove the resolved inbox item. Relayed verbatim answers need no re-asking |

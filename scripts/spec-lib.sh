@@ -161,62 +161,16 @@ SPEC_CHANGE_TASK_AWK='function change_task(line) {
     return line ~ /^[[:space:]]*[-*+][[:blank:]]+\[[ xX]\][[:blank:]]+[^[:blank:]]/
 }'
 
-# Opt-in state uses literal fields, not the legacy display Step (which can come
-# from elsewhere). Keep its Markdown rules separate from legacy projections.
-SPEC_SPECIFIED_AWK="$SPEC_CHANGE_TASK_AWK"'
-function specified_scan(line,   s,tail,mark,at,run,depth,hidden) {
-    s = line; sub(/^(   |  | )/, "", s)
-    if (specified_fence != "") {
-        tail = s; sub(/[ \t]+$/, "", tail)
-        if (index(tail, specified_fence) == 1 && (tail ~ /^`+$/ || tail ~ /^~+$/)) specified_fence = ""
-        return
-    }
-    hidden = specified_comment
-    if (!hidden && match(s, /^```+|^~~~+/)) {
-        mark = substr(s, 1, RLENGTH); tail = substr(s, RLENGTH + 1)
-        if (substr(mark, 1, 1) == "~" || !index(tail, "`")) { specified_fence = mark; return }
-    }
-    # Comments can start after prose. Ignore escaped openers and inline code spans.
-    tail = line
-    while (length(tail)) {
-        if (specified_comment) {
-            at = index(tail, "-->"); if (!at) break
-            specified_comment = 0; tail = substr(tail, at + 3)
-        } else {
-            if (!match(tail, /<!--|\\.|`+/)) break
-            mark = substr(tail, RSTART, RLENGTH); tail = substr(tail, RSTART + RLENGTH)
-            if (mark == "<!--") specified_comment = 1
-            else if (substr(mark, 1, 1) == "`") {
-                run = tail
-                while (match(run, /`+/)) {
-                    at = RLENGTH; run = substr(run, RSTART + RLENGTH)
-                    if (at == length(mark)) { tail = run; break }
-                }
-            }
-        }
-    }
-    if (hidden) return
-    if (match(s, /^#+/) && substr(s, RLENGTH + 1) ~ /^([ \t]|$)/) {
-        depth = RLENGTH
-        if (depth <= 2) {
-            specified_section = ""
-            if (depth == 2) {
-                s = substr(s, 3); sub(/[ \t]+#+[ \t]*$/, "", s)
-                gsub(/^[ \t]+|[ \t]+$/, "", s)
-                specified_section = s
-                if (s == "State") specified_states++
-            }
-        }
-        return
-    }
-    if (specified_section == "State" && s ~ /^\*\*Step\*\*:/) {
-        specified_steps++
-        if (line == "**Step**: specified") specified_literal = 1
-    }
-    if (specified_section == "Tasks" && change_task(line) && line ~ /^[[:space:]]*[-*+][[:blank:]]+\[ \]/) specified_open++
+# These literal rules see every raw line, including examples. They deliberately
+# ignore Markdown structure and the legacy display Step.
+SPEC_SPECIFIED_LINES_AWK='
+function specified_line(line) {
+    if (line ~ /^[[:space:]]*\*\*Step\*\*:/) specified_steps++
+    if (line == "**Step**: specified") specified_literal = 1
+    if (line ~ /^[[:space:]]*[-*+][[:blank:]]+\[ \][[:blank:]]+[^[:blank:]]/) specified_open++
 }
 function specified_tasks() {
-    return (specified_states == 1 && specified_steps == 1 && specified_literal) ? specified_open + 0 : "-"
+    return (specified_steps == 1 && specified_literal) ? specified_open + 0 : "-"
 }'
 
 # A checked count, or "-" when the record does not opt in. With no file
@@ -228,8 +182,8 @@ spec_specified_tasks() {
         expected="$(wc -l < "$1")" || return 1
     fi
     # shellcheck disable=SC2016 # awk fields
-    tasks="$(verify_lines awk -v expected="$expected" "$SPEC_SPECIFIED_AWK"'
-        { specified_scan($0) }
+    tasks="$(verify_lines awk -v expected="$expected" "$SPEC_SPECIFIED_LINES_AWK"'
+        { specified_line($0) }
         END { if (expected != "" && NR != expected) exit 1; print specified_tasks() }
     ' "$@")" || return 1
     [[ "$tasks" =~ ^(-|0|[1-9][0-9]*)$ ]] || return 1
@@ -1919,7 +1873,7 @@ spec_change_metadata() { # file [tags|status|create]
     verify_lf_file "$file" || return 1
     expected="$(wc -l < "$file")" || return 1
     # shellcheck disable=SC2016 # the single-quoted program uses awk fields
-    rows="$(verify_lines awk -v expected="$expected" -v mode="$mode" "$SPEC_METADATA_SKIP_AWK $SPEC_HEADER_AWK $SPEC_SPECIFIED_AWK"'
+    rows="$(verify_lines awk -v expected="$expected" -v mode="$mode" "$SPEC_METADATA_SKIP_AWK $SPEC_HEADER_AWK $SPEC_CHANGE_TASK_AWK $SPEC_SPECIFIED_LINES_AWK"'
         function tag_list(value,   a, i, n, tag, out) {
             n = split(value, a, ",")
             for (i = 1; i <= n; i++) {
@@ -1929,7 +1883,7 @@ spec_change_metadata() { # file [tags|status|create]
             }
             return out
         }
-        { if (mode == "status") specified_scan($0); if (metadata_skip($0)) next }
+        { if (mode == "status") specified_line($0); if (metadata_skip($0)) next }
         /^##+[[:space:]]/ {
             if (!section) {
                 section = 1
@@ -2317,22 +2271,24 @@ spec_objects_local() { # root -> 0 safe in place, 1 probe error, 2 old Git in a 
 
 # Committed objects only. An unclosed record has no child, outcome checkpoint
 # or explicit specified Step keeping it open. T0 and not-yet-reviewed records
-# qualify too. Report zero-task specified records separately.
-spec_default_change_rows() { # root rev -> kind, id
-    local root="$1" rev="$2" path paths row meta regular record_text
-    paths="$(GIT_NO_LAZY_FETCH=1 verify_lines git -C "$root" ls-tree "$rev" -- specs/changes/)" || return 1
+# qualify too. Doctor also requests typed rows for zero-task specified records.
+spec_unclosed_changes() ( # root rev [--rows]
+    set -o pipefail
+    local root="$1" rev="$2" mode="${3:-}" path paths row meta regular record_text parsed pinned
+    export GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1
+    paths="$(verify_lines git -C "$root" ls-tree "$rev" -- specs/changes/)" || return 1
     while IFS= read -r row; do
         path="${row#*$'\t'}"; meta="${row%%$'\t'*}"
         case "$path" in specs/changes/*.md) ;; *) continue ;; esac
-        [[ "$meta" =~ ^(100644|100755|120000)\ blob\ [0-9a-f]{40}([0-9a-f]{24})?$ ]] ||
-            { printf 'Invalid committed change record: %s\n' "$path" >&2; return 1; }
-        regular=1; case "$meta" in 120000\ *) regular=0 ;; esac
-        record_text="$(GIT_NO_LAZY_FETCH=1 verify_lines git -C "$root" cat-file blob "${meta##* }")" || return 1
+        regular=0
+        if [[ "$meta" =~ ^100(644|755)\ blob\ [0-9a-f]{40}([0-9a-f]{24})?$ ]]; then regular=1; fi
+        # Keep the legacy read (and Git diagnostics for non-blobs such as gitlinks).
+        record_text="$(verify_lines git -C "$root" cat-file blob "$rev:$path")" || return 1
         [ -n "$record_text" ] || { printf 'Empty committed change record: %s\n' "$path" >&2; return 1; }
-        printf '%s\n' "$record_text" |
-            awk -v id="$(spec_field "$(basename "$path" .md)")" -v regular="$regular" "$SPEC_SKIP_AWK $SPEC_CHANGE_TAG_AWK $SPEC_SPECIFIED_AWK"'
+        parsed="$(printf '%s\n' "$record_text" |
+            awk -v id="$(spec_field "$(basename "$path" .md)")" -v regular="$regular" "$SPEC_SKIP_AWK $SPEC_CHANGE_TAG_AWK $SPEC_SPECIFIED_LINES_AWK"'
             function trim(s) { gsub(/`/, "", s); gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
-            { if (regular) specified_scan($0) }
+            { if (regular) specified_line($0) }
             { $0 = change_without_tags($0) }
             { gsub(/\037/, " "); if (spec_skip($0)) next }
             /\*\*Parent\*\*:/ && !seen_parent {
@@ -2344,17 +2300,21 @@ spec_default_change_rows() { # root rev -> kind, id
             /^### Outcome checkpoint[[:space:]]*$/ { checkpoint = 1 }
             END {
                 print id "\037" parent "\037" (!checkpoint) "\037" specified_tasks()
-            }' || return 1
-    done <<< "$paths" | awk -F '\037' '
+            }')" || return 1
+        if [ "${parsed##*"$SPEC_SEP"}" != - ]; then
+            # Tie the exemption to the regular blob from ls-tree, even if rev moved.
+            pinned="$(verify_lines git -C "$root" cat-file blob "${meta##* }")" || return 1
+            [ "$record_text" = "$pinned" ] ||
+                { printf 'Committed change record changed while reading: %s\n' "$path" >&2; return 1; }
+        fi
+        printf '%s\n' "$parsed"
+    done <<< "$paths" | awk -F '\037' -v mode="$mode" '
         { id[++n] = $1; flagged[n] = $3; tasks[n] = $4; if ($2 != "") named[$2] = 1 }
         END {
             for (i = 1; i <= n; i++) {
-                if (tasks[i] == "0") print "specified-empty" FS id[i]
-                if (tasks[i] == "-" && flagged[i] && !(id[i] in named)) print "unclosed" FS id[i]
+                if (mode == "--rows" && tasks[i] == "0") print "specified-empty" FS id[i]
+                if (tasks[i] == "-" && flagged[i] && !(id[i] in named))
+                    print (mode == "--rows" ? "unclosed" FS : "") id[i]
             }
         }'
-}
-
-spec_unclosed_changes() { # root rev -> change ids
-    spec_default_change_rows "$1" "$2" | awk -F '\037' '$1 == "unclosed" { print $2 }'
-}
+)

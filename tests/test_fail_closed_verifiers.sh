@@ -421,6 +421,39 @@ assert_file "$record"
 git symbolic-ref --delete refs/remotes/origin/HEAD &&
     git update-ref -d "$specified_ref" || exit 1
 
+it 'a default-branch change gitlink preserves legacy failure bytes in text and JSON'
+gitlink_index="$_SCRATCH_CWD/gitlink-index"
+GIT_INDEX_FILE="$gitlink_index" git read-tree main &&
+    GIT_INDEX_FILE="$gitlink_index" git update-index --add --cacheinfo "160000,$before_head,$record" &&
+    gitlink_tree="$(GIT_INDEX_FILE="$gitlink_index" git write-tree)" &&
+    gitlink_commit="$(git commit-tree "$gitlink_tree" -p main -m 'Default record is a gitlink')" &&
+    git update-ref "$specified_ref" "$gitlink_commit" &&
+    git symbolic-ref refs/remotes/origin/HEAD "$specified_ref" || exit 1
+# Reproduce main's stderr using the native Git diagnostic for this Git version.
+expected_err="$_SCRATCH_CWD/gitlink-expected.err"
+if git cat-file blob "origin/main:$record" >/dev/null 2>"$expected_err"; then exit 1; fi
+printf '%s\n' 'Incomplete output from git: producer or reader failed' >> "$expected_err"
+: > "$_SCRATCH_CWD/gitlink-expected.out"
+printf '1\n' > "$_SCRATCH_CWD/gitlink-expected.exit"
+for verifier in status doctor; do
+    if [ "$verifier" = doctor ]; then
+        printf '%s\n' 'Incomplete output from spec_unclosed_changes: producer or reader failed' >> "$expected_err"
+    fi
+    for format in text json; do
+        args=()
+        [ "$format" != json ] || args=(--json)
+        rc=0
+        bash "$B/$verifier.sh" ${args[@]+"${args[@]}"} >"$_SCRATCH_CWD/gitlink.out" 2>"$_SCRATCH_CWD/gitlink.err" || rc=$?
+        printf '%s\n' "$rc" > "$_SCRATCH_CWD/gitlink.exit"
+        for stream in out err exit; do
+            run cmp "$_SCRATCH_CWD/gitlink-expected.$stream" "$_SCRATCH_CWD/gitlink.$stream"
+            assert_eq 0 "$STATUS" "$verifier $format $stream matches legacy: $OUTPUT"
+        done
+    done
+done
+git symbolic-ref --delete refs/remotes/origin/HEAD &&
+    git update-ref -d "$specified_ref" || exit 1
+
 it 'a failed folded-log lookup is not a successful absence'
 before_index="$(git hash-object .git/index)"
 fault close-log-fail bash "$B/close-change.sh" "${close_args[@]}"

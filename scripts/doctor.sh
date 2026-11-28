@@ -871,7 +871,7 @@ if $in_git; then
     base="$(spec_default_branch "$root")"
     if $compaction_verified && [ -n "$base" ] && spec_objects_local "$root"; then
         named=" $(printf '%s\n' "$open_changes" | awk -F "$SEP" '{ v = $7; gsub(/`/, "", v); if (v != "") printf "%s ", v }')"
-        rows="$(verify_lines spec_default_change_rows "$root" "$base")"
+        rows="$(verify_lines spec_unclosed_changes "$root" "$base" --rows)"
         unclosed=""; n=0
         while IFS="$SEP" read -r kind cid; do
             case "$kind" in

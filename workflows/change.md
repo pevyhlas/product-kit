@@ -94,11 +94,14 @@ read [review.md](review.md).
 ### Spec first, delivery later
 
 Open a change normally, write its delivery tasks, and put the exact line `**Step**: specified`
-under `## State` to opt in. The spec-only PR lands the authorized delta with the record, its
-tasks and its `planned:` markers still open: no close commit or log entry. Review the delta at
-the level it edits; review proof of delivery in the implementing PRs.
+under `## State` to opt in. It must be the only `**Step**:` line in the whole record, with no
+surrounding whitespace. An additional Step line, even inside an example, prevents opt-in.
+The spec-only PR lands the authorized delta with the record, its tasks and its `planned:` markers
+still open: no close commit or log entry. Review the delta at the level it edits; review proof of
+delivery in the implementing PRs.
 
 Each implementing PR uses the same record and deletes only the task lines it delivers (or
 records an authorized drop as above). Keep Step `specified` while delivery remains. The last PR
 removes the remaining tasks, reconciles the markers and [closes the change](review.md#closing).
-Moving into or out of `specified` is a reviewed edit.
+An open checkbox line anywhere in the record, including in a comment or code example, blocks
+closing until removed. Moving into or out of `specified` is a reviewed edit.
