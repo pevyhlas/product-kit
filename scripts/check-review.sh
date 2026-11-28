@@ -239,7 +239,7 @@ first_owner_policy_path() { # newline-delimited failing paths; raw diff on stdin
 owner_policy_tree_entry() { # revision and literal path -> raw entry, or empty for absence
     GIT_NO_REPLACE_OBJECTS=1 git -C "$root" --literal-pathspecs ls-tree --full-tree "$1" -- "$2"
 }
-owner_policy_change_since() { # approved head merge-base -> set owner_policy_change or owner_policy_base
+owner_policy_change_since() { # approved head merge-base (empty: no base) -> set owner_policy_change or owner_policy_base
     local approved="$1" tip="$2" merge_base="$3" raw commits commit meta file head_entry base_entry
     local policy_diff=false failing=$'\n'
     local GIT_NO_LAZY_FETCH=1
@@ -251,7 +251,7 @@ owner_policy_change_since() { # approved head merge-base -> set owner_policy_cha
             policy_diff=true
             # Git-quoted paths are never exempt. For everything else, a failed read is
             # not absence; successful reads include the mode and object ID.
-            if [[ "$file" == \"* ]] ||
+            if [[ "$file" == \"* ]] || [ -z "$merge_base" ] ||
                 ! head_entry="$(owner_policy_tree_entry "$tip" "$file")" ||
                 ! base_entry="$(owner_policy_tree_entry "$merge_base" "$file")" ||
                 [ "$head_entry" != "$base_entry" ]; then
@@ -416,6 +416,11 @@ if $reviews_fetched; then
                 approved="$(jq -r .commit <<< "$carried_owner")"
                 if ! $base_trusted || [ -z "$start" ]; then
                     owner_policy_problem="Cannot establish a single trusted merge base for the carried T3 owner approval on $approved: obtain a fresh owner approval on the exact head $head"
+                    # Without a base every net policy path fails; name the oldest one when readable.
+                    if owner_policy_change_since "$approved" "$head" "" 2>/dev/null && [ -n "$owner_policy_change" ]; then
+                        changed_at="$(jq -r '"\(.commit) (\(.path))"' <<< "$owner_policy_change")"
+                        owner_policy_problem="Cannot establish a single trusted merge base for the carried T3 owner approval on $approved, and $changed_at touches the policy surface: obtain a fresh owner approval on the exact head $head"
+                    fi
                 elif ! owner_policy_change_since "$approved" "$head" "$start"; then
                     owner_policy_problem="Cannot read the policy diff for the carried T3 owner approval on $approved: fetch the complete local history and trees or obtain a fresh owner approval on the exact head $head"
                 elif [ -n "$owner_policy_change" ]; then
