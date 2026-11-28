@@ -14,8 +14,10 @@ change by change.
 ### Added
 
 - Trusted `owner-approval: exact-head-opt-in` keeps T3 owner approval exact-head unless the
-  owner opts in to carry their own approval on that PR. Carry uses the same merge-aware
-  policy guard as `per-pr` and reports the opt-in comment or review.
+  owner posts an unedited `owner-approval: carry` conversation comment on that PR. Editing
+  or deleting the comment removes that opt-in, and a later change request or dismissed review
+  by that owner ends carry. Carry uses the same merge-aware policy guard as `per-pr` and
+  reports the opt-in comment.
 
 ### Fixed
 

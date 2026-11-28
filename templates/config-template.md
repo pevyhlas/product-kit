@@ -49,8 +49,9 @@ Reviewers submit normal reviews under their own accounts.
 - `exact-head` (also the default when absent): require approval on the current head.
 - `exact-head-opt-in`: require the current head unless that T3 owner opts in on this PR.
   The owner posts `owner-approval: carry` on its own line in a PR conversation comment
-  or review. `owner-approval: exact-head`, an objection or a dismissal revokes it.
-  The marker only enables carry of that owner's own approval.
+  and leaves it unedited. Editing or deleting it removes that marker; a later
+  `CHANGES_REQUESTED` or `DISMISSED` review by that owner ends carry. The marker only
+  enables carry of that owner's own approval.
 - `per-pr`: allow T3 owner approval to carry on every PR without a marker. Use only for
   pre-production stages; set it back to `exact-head` before production.
 

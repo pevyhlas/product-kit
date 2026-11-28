@@ -133,12 +133,12 @@ dismisses the objection on GitHub, they must dismiss that specific review. Use `
 to find its review ID and commit.
 
 With `owner-approval: exact-head-opt-in`, still require the exact head unless a T3 owner opts
-in by posting `owner-approval: carry` on its own line in a PR conversation comment or review.
-Only that owner's approval can carry. `owner-approval: exact-head` on its own line,
-`CHANGES_REQUESTED`, or `DISMISSED` revokes opt-in when it is the latest event by creation or
-submission time. Revocation wins if both markers appear in one body or timestamps tie. Edits
-do not reorder events, and deleted comments no longer count. If comments cannot be read
-completely, require exact-head approval. `owner-approval: per-pr` allows carry without markers.
+in by posting `owner-approval: carry` on its own line in a PR conversation comment and leaving
+it unedited. Only that owner's approval can carry. Editing or deleting the comment removes
+that marker. To revoke carry, the owner must have a `CHANGES_REQUESTED` or `DISMISSED` review
+with a submission time at or after the latest eligible comment's creation time. If comments
+cannot be read completely, require exact-head approval. `owner-approval: per-pr` allows carry
+without markers.
 
 Where carry is allowed, the T3 owner's latest `APPROVED`, `CHANGES_REQUESTED` or `DISMISSED`
 review decides. Approval can carry on this PR only from an ancestor of the current head,

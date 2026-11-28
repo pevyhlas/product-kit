@@ -224,18 +224,17 @@ branch, never from the PR. Changing it requires owner review.
 | `per-pr` | Allow carry on every PR without a marker. Use only for pre-production stages; set it back to `exact-head` before production. |
 
 To opt in under `exact-head-opt-in`, a configured `review-owner` posts `owner-approval: carry`
-on its own line in a PR conversation comment or PR review. Post
-`owner-approval: exact-head` the same way to revoke it. The gate matches raw lines exactly
-after removing trailing spaces and a trailing carriage return. It uses the account GitHub
-reports, not any name in the text. PR descriptions, commit messages, change records and other
-accounts cannot opt an owner in.
+on its own line in a PR conversation comment and leaves it unedited. The gate matches raw lines
+exactly after removing trailing spaces and a trailing carriage return. It uses the account GitHub
+reports, not any name in the text. Review bodies, PR descriptions, commit messages, change
+records and other accounts cannot opt an owner in.
 
-For each owner, the newest marker, `CHANGES_REQUESTED` review or `DISMISSED` review decides,
-by comment creation or review submission time (creation time for a draft review if GitHub
-returns it). An objection, dismissal or a body containing
-both markers counts as a revocation, and revocations win timestamp ties. Edits can change the
-marker without reordering it; a deleted comment no longer counts. A marker is not an approval.
-If the gate cannot read all comment pages, it ignores opt-in and requires exact-head approval.
+An edited or deleted comment no longer counts; post a new one to opt in again. GitHub must
+report valid and equal creation and update timestamps and no edit for the comment to count.
+For each owner, the latest eligible comment must be newer than that owner's latest
+`CHANGES_REQUESTED` or `DISMISSED` review, using the review's submission time. On a timestamp
+tie, carry is off. No comment can revoke carry. A marker is not an approval. If comment pages
+are incomplete or do not match the checked PR, the gate requires exact-head approval.
 
 When carry is allowed for an owner, that owner's latest `APPROVED`, `CHANGES_REQUESTED` or
 `DISMISSED` review decides; comments and pending reviews are not approval decisions. Approval
@@ -258,8 +257,8 @@ If the gate uses a carried approval, it names the approved commit and lists up t
 commits since then, with a `+N more` line if needed. JSON includes the qualifying owner in `reviews`
 and adds `owner_approval` with `mode`, `reviewer`, `review`, `commit`, `commits_since`
 and `more` (the number omitted). In `exact-head-opt-in` mode, `owner_approval.opt_in`
-identifies the winning marker: `kind` (`comment` or `review`), `id` (string), `url`,
-`author` (numeric account ID) and `at` (creation or submission timestamp).
+identifies the unedited comment: `kind` (`comment`), `id` (string), `url`,
+`author` (numeric account ID) and `at` (creation timestamp).
 If carry survives a policy change that matches the merge base, `owner_approval.base`
 contains that commit SHA; the field is omitted when
 no policy path changed. If the gate cannot verify ancestry for an otherwise deciding approval,

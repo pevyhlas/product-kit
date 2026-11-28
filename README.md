@@ -214,7 +214,9 @@ bash .prdkit/scripts/bash/doctor.sh --strict   # spec integrity, reading budgets
 publisher at T1–T3, and a separate owner approval at T3. The online gate requires `gh` and `jq` at every
 tier. Local structure is only a preview. T3 owners approve the `exact-head` by default.
 Trusted default-branch policy can also allow [approval carry](docs/ci-gates.md#per-pr-owner-approval):
-`exact-head-opt-in` lets an owner opt in on one PR with a comment or review marker;
+`exact-head-opt-in` lets an owner carry approval on one PR with an unedited `owner-approval: carry`
+conversation comment. Editing or deleting the comment removes that opt-in; a later change request
+or dismissed review by that owner also ends it.
 `per-pr` allows carry on every PR for pre-production stages. See [CI gates](docs/ci-gates.md).
 The tier governs the review work in addition to this host check:
 

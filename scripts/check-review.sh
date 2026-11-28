@@ -480,7 +480,7 @@ if [ "$authority" = host ]; then
                     else
                         problems+=("$owner_required")
                         if [ "$owner_approval" = exact-head-opt-in ] && [ "$owner_opt_in" = '{}' ]; then
-                            problems+=("This repository allows owner-approval: carry in a review-owner's PR comment or review")
+                            problems+=("This repository allows owner-approval: carry in a review-owner's unedited PR conversation comment")
                         fi
                     fi
                 fi

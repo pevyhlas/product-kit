@@ -579,7 +579,7 @@ owner_comment() { # body timestamp [author ID] [extra host fields]
     local extra="${4:-}"
     jq --arg body "$1" --arg at "$2" --argjson author "${3:-1003}" --argjson extra "${extra:-null}" '
         ((last.fullDatabaseId // "2000" | tonumber) + 1 | tostring) as $id |
-        . + [({fullDatabaseId:$id,body:$body,createdAt:$at,
+        . + [({fullDatabaseId:$id,body:$body,createdAt:$at,updatedAt:$at,lastEditedAt:null,
             author:{__typename:"User",databaseId:$author},url:("https://github.com/owner/repo/pull/7#issuecomment-"+$id)} * ($extra // {}))]
     ' "$comments" > "$comments.next" && mv "$comments.next" "$comments"
 }
@@ -597,7 +597,7 @@ assert_opt_in_exact_required() {
 
 it 'only the trusted config enables exact-head-opt-in; all three values parse'
 mkdir "$GH_STUB_DIR/comments"; comments="$GH_STUB_DIR/comments/7.json"
-carry='owner-approval: carry'; revoke='owner-approval: exact-head'
+carry='owner-approval: carry'; exact_line='owner-approval: exact-head'
 hint='This repository allows owner-approval: carry'
 t1='2026-01-03T00:00:00Z'; t2='2026-01-04T00:00:00Z'; t3='2026-01-05T00:00:00Z'
 owner_policy '- owner-approval: exact-head-opt-in'
@@ -630,29 +630,24 @@ owner_comment $'I expect follow-ups.\r\nowner-approval: carry  \r\nThanks.' "$t2
 : > "$GH_STUB_DIR/requests"
 GH_STUB_PAGE_SIZE=1 online; assert_eq 0 "$STATUS" "$_CURRENT"
 assert_contains "$(cat "$GH_STUB_DIR/requests")" 'page PrdkitOwnerComments pr=7 after=cursor-1'
+assert_contains "$(cat "$GH_STUB_DIR/requests")" 'body createdAt updatedAt lastEditedAt url'
+assert_contains "$(cat "$GH_STUB_DIR/requests")" 'state submittedAt commit { oid } author { __typename'
 assert_eq "exact-head-opt-in $opt_approved 0 comment 2002 https://github.com/owner/repo/pull/7#issuecomment-2002 1003 $t2" \
     "$(jq -r '.owner_approval | [.mode,.commit,.more, (.opt_in | .kind,.id,.url,.author,.at)] | join(" ")' <<< "$OUTPUT")"
+assert_eq 'at author id kind url' "$(jq -r '.owner_approval.opt_in | keys | join(" ")' <<< "$OUTPUT")"
 assert_eq "$(git log --format='%h %s' "$opt_approved..$h")" "$(jq -r '.owner_approval.commits_since[]' <<< "$OUTPUT")"
 assert_eq 'review reviewer role' "$(jq -r '.reviews[]|select(.role=="owner") | keys | join(" ")' <<< "$OUTPUT")"
 
-it 'a submitted owner review body can opt in without itself being an approval'
+it 'owner review bodies do not opt in, whether submitted or pending'
 reset_opt_in "$opt_approved"
 fx_owner_review 7 COMMENTED "$h" "{\"body\":\"$carry\",\"submittedAt\":\"$t1\"}"
-rid="$(jq -r 'last.fullDatabaseId' "$f")"
-: > "$GH_STUB_DIR/requests"
-online; assert_eq 0 "$STATUS" "$_CURRENT"
-assert_contains "$(cat "$GH_STUB_DIR/requests")" 'body createdAt url author { __typename'
-assert_eq "review $rid https://github.com/owner/repo/pull/7#pullrequestreview-$rid 1003 $t1" \
-    "$(jq -r '.owner_approval.opt_in | [.kind,.id,.url,.author,.at] | join(" ")' <<< "$OUTPUT")"
-
-it 'a host-visible pending review uses creation time for its marker but does not itself approve'
-reset_opt_in "$opt_approved"
-fx_owner_review 7 PENDING "$h" "{\"body\":\"$carry\",\"submittedAt\":null,\"createdAt\":\"$t2\"}"
-online; assert_eq 0 "$STATUS" "$_CURRENT"
-assert_eq "$opt_approved $t2" "$(jq -r '.owner_approval|[.commit,.opt_in.at]|join(" ")' <<< "$OUTPUT")"
-printf '[]\n' > "$f"; publisher_review APPROVED "$h"
+assert_opt_in_exact_required
 fx_owner_review 7 PENDING "$h" "{\"body\":\"$carry\",\"submittedAt\":null,\"createdAt\":\"$t2\"}"
 assert_opt_in_exact_required
+jq 'map(del(.body,.url,.createdAt))' "$f" > "$f.next" && mv "$f.next" "$f"
+owner_comment "$carry" "$t1"
+online; assert_eq 0 "$STATUS" 'the pending review does not interfere with the valid comment'
+assert_eq "$t1" "$(jq -r '.owner_approval.opt_in.at' <<< "$OUTPUT")"
 
 it 'untrusted authors, PR text and decorated lines do not opt in'
 reset_opt_in "$opt_approved"
@@ -676,26 +671,51 @@ owner_comment "$carry" "$t2" 1005
 online; assert_eq 0 "$STATUS" "$_CURRENT"
 assert_eq '1005 1005' "$(jq -r '.owner_approval | [.reviewer,.opt_in.author] | join(" ")' <<< "$OUTPUT")"
 
-it 'creation and submission times decide carry, regardless of page order or edits'
+it 'an edited owner comment cannot opt in, even if it is newest or edited in the same second'
 reset_opt_in "$opt_approved"
-owner_comment "$revoke" "$t2"
-owner_comment "$carry" "$t1" 1003 "{\"lastEditedAt\":\"$t3\"}"
+owner_comment 'Earlier discussion.' "$t1"
+owner_comment "$carry" "$t2" 1003 "{\"updatedAt\":\"$t3\"}"
 assert_opt_in_exact_required
-owner_comment "$carry" "$t3"
-online; assert_eq 0 "$STATUS" 'a later carry restores the opt-in'
-assert_eq 2003 "$(jq -r '.owner_approval.opt_in.id' <<< "$OUTPUT")"
-owner_comment "$carry" "$t3"
-owner_comment "$revoke" "$t3"
-owner_comment "$carry" "$t3"
-assert_opt_in_exact_required
-reset_opt_in "$opt_approved"
-owner_comment "$carry" "$t1"
-owner_comment "$revoke"$'\n'"$carry" "$t2"
-assert_opt_in_exact_required
-printf '[]\n' > "$comments"
+owner_comment "$carry" "$t3" 1003 "{\"lastEditedAt\":\"$t3\"}"
 assert_opt_in_exact_required
 
-it 'an objection or dismissal revokes carry even if its body says carry'
+it 'edited comments neither replace nor revoke an earlier unedited carry'
+reset_opt_in "$opt_approved"
+owner_comment "$carry" "$t1"
+owner_comment "$carry" "$t2" 1003 "{\"updatedAt\":\"$t3\"}"
+online; assert_eq 0 "$STATUS" "$_CURRENT"
+assert_eq 2001 "$(jq -r '.owner_approval.opt_in.id' <<< "$OUTPUT")"
+owner_comment "$exact_line" "$t2" 1003 "{\"updatedAt\":\"$t3\"}"
+online; assert_eq 0 "$STATUS" "$_CURRENT"
+assert_eq 2001 "$(jq -r '.owner_approval.opt_in.id' <<< "$OUTPUT")"
+
+it 'missing or invalid comment timestamps cannot opt in and do not invalidate other comments'
+for edit in 'del(.[0].createdAt)' 'del(.[0].updatedAt)' \
+    '.[0].createdAt="invalid"' '.[0].updatedAt="invalid"' \
+    '.[0] |= (.createdAt="2026-02-30T00:00:00Z" | .updatedAt=.createdAt)'; do
+    reset_opt_in "$opt_approved"
+    owner_comment "$carry" "$t2"
+    jq "$edit" "$comments" > "$comments.next" && mv "$comments.next" "$comments"
+    assert_opt_in_exact_required
+    assert_contains "$OUTPUT" "$hint"
+    owner_comment "$carry" "$t1"
+    online; assert_eq 0 "$STATUS" "$edit does not invalidate a separate qualifying comment"
+    assert_eq 2002 "$(jq -r '.owner_approval.opt_in.id' <<< "$OUTPUT")"
+done
+
+it 'exact-head in a comment has no special effect and a deleted carry no longer counts'
+reset_opt_in "$opt_approved"
+owner_comment "$exact_line" "$t1"
+assert_opt_in_exact_required
+owner_comment "$carry"$'\n'"$exact_line" "$t2"
+owner_comment "$exact_line" "$t3"
+online; assert_eq 0 "$STATUS" "$_CURRENT"
+assert_eq 2002 "$(jq -r '.owner_approval.opt_in.id' <<< "$OUTPUT")"
+jq 'del(.[1])' "$comments" > "$comments.next" && mv "$comments.next" "$comments"
+assert_opt_in_exact_required
+
+it 'a later or tied objection or dismissal revokes carry until a newer eligible comment'
+after='2026-01-06T00:00:00Z'
 for state in CHANGES_REQUESTED DISMISSED; do
     reset_opt_in "$opt_approved"
     owner_comment "$carry" "$t1"
@@ -707,8 +727,14 @@ for state in CHANGES_REQUESTED DISMISSED; do
     fx_owner_review 7 APPROVED "$opt_approved" "{\"submittedAt\":\"$t3\"}"
     assert_opt_in_exact_required
     assert_contains "$OUTPUT" "$hint"
-    owner_comment "$carry" '2026-01-06T00:00:00Z'
+    owner_comment "$carry" "$t2"
+    assert_opt_in_exact_required
+    owner_comment "$carry" "$after" 1003 '{"updatedAt":"2026-01-07T00:00:00Z"}'
+    assert_opt_in_exact_required
+    owner_comment "$carry" "$after"
+    owner_comment "$carry" "$t1"
     online; assert_eq 0 "$STATUS" 'a new marker and qualifying approval restore carry'
+    assert_eq "2004 $after" "$(jq -r '.owner_approval.opt_in | [.id,.at] | join(" ")' <<< "$OUTPUT")"
 done
 
 it 'unavailable or incomplete comment pages discard even a valid marker'
@@ -782,7 +808,7 @@ for mode in exact-head per-pr; do
     online; before="$OUTPUT"; before_status="$STATUS"
     requests_before="$(cat "$GH_STUB_DIR/requests")"
     : > "$GH_STUB_DIR/requests"
-    if [ "$mode" = per-pr ]; then marker="$revoke"; else marker="$carry"; fi
+    if [ "$mode" = per-pr ]; then marker="$exact_line"; else marker="$carry"; fi
     owner_comment "$marker" "$t1"
     body_changed="$(jq --arg body "$marker" 'last.body=$body' "$f")"
     printf '%s\n' "$body_changed" > "$f"

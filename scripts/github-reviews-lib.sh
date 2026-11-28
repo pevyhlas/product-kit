@@ -122,15 +122,15 @@ github_review_policy() {
 }
 
 github_review_page() { # repo number cursor [connection [owner-approval mode]]; exec in a dedicated process
-    local repo="$1" number="$2" cursor="$3" connection="${4:-reviews}" query body_fields="" actor_type="" args=()
+    local repo="$1" number="$2" cursor="$3" connection="${4:-reviews}" query actor_type="" args=()
     if [ "${5:-}" = exact-head-opt-in ]; then
-        body_fields='body createdAt url '; actor_type='__typename '
+        actor_type='__typename '
     fi
     query='query PrdkitReviews($owner:String!, $name:String!, $number:Int!, $endCursor:String) {
       repository(owner:$owner,name:$name) { nameWithOwner pullRequest(number:$number) {
         number state headRefOid baseRefName author { ... on User { databaseId } ... on Bot { databaseId } }
         reviews(first:100,after:$endCursor) { totalCount nodes {
-          fullDatabaseId state submittedAt commit { oid } '"$body_fields"'author { '"$actor_type"'... on User { databaseId } ... on Bot { databaseId } }
+          fullDatabaseId state submittedAt commit { oid } author { '"$actor_type"'... on User { databaseId } ... on Bot { databaseId } }
         } pageInfo { hasNextPage endCursor } }
       } }
     }'
@@ -139,7 +139,7 @@ github_review_page() { # repo number cursor [connection [owner-approval mode]]; 
           repository(owner:$owner,name:$name) { nameWithOwner pullRequest(number:$number) {
             number state headRefOid baseRefName author { ... on User { databaseId } ... on Bot { databaseId } }
             comments(first:100,after:$endCursor) { totalCount nodes {
-              fullDatabaseId body createdAt url author { __typename ... on User { databaseId } }
+              fullDatabaseId body createdAt updatedAt lastEditedAt url author { __typename ... on User { databaseId } }
             } pageInfo { hasNextPage endCursor } }
           } }
         }'
@@ -199,7 +199,7 @@ github_review_fetch_pages() { # private work directory and GitHub connection (re
               (if $r.pageInfo.hasNextPage then ($r.nodes|length)>0 and $r.pageInfo.endCursor!=null else true end) and
               all($r.nodes[]; (.fullDatabaseId|tostring|test("^[1-9][0-9]*\\z")) and
                 (if $connection=="comments" then
-                    (.createdAt|timestamp) and (.body|type=="string") and (.url|type=="string" and length>0) and
+                    (.body|type=="string") and (.url|type=="string" and length>0) and
                     (has("author") and (.author==null or (.author.__typename|type=="string"))) and
                     (if .author.__typename=="User" then (.author.databaseId|id) else true end)
                  else
@@ -234,12 +234,13 @@ github_review_owner_opt_in() { # private work directory; output a map of owner I
     mkdir "$comments" && github_review_fetch_pages "$comments" comments || return 1
     jq -nce --arg owners "$REVIEW_OWNERS" --slurpfile reviews "$work/pages" --slurpfile comments "$comments/pages" '
         def binding: {number,state,headRefOid,baseRefName,author};
-        def timestamp: type=="string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z");
-        def marker($kind; $at; $void):
-            (.body | split("\n") | map(sub(" *\\r? *\\z"; ""))) as $lines |
-            ($void or ($lines|index("owner-approval: exact-head")!=null)) as $revoke |
-            select($revoke or ($lines|index("owner-approval: carry")!=null)) |
-            {kind:$kind, id:(.fullDatabaseId|tostring), url, author:.author.databaseId, at:$at, $revoke};
+        def timestamp: type=="string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z") and
+            (. as $at | try (fromdateiso8601 | todateiso8601 == $at) catch false);
+        # A reported edit also disqualifies a comment when both timestamps have the same second.
+        def carry_comment:
+            select(.createdAt==.updatedAt and (.createdAt|timestamp) and .lastEditedAt==null) |
+            select(.body | split("\n") | any(sub(" *\\r? *\\z"; "") == "owner-approval: carry")) |
+            {kind:"comment", id:(.fullDatabaseId|tostring), url, author:.author.databaseId, at:.createdAt, revoke:false};
         ($reviews[0]|binding) as $pr |
         ($owners|split(",")) as $own |
         def owner: .author.__typename=="User" and .author.databaseId!=$pr.author.databaseId and
@@ -248,14 +249,12 @@ github_review_owner_opt_in() { # private work directory; output a map of owner I
             [$reviews[].reviews.nodes[]] as $all_reviews |
             if any($all_reviews[]; (has("author")|not) or
                 (.author!=null and (.author.__typename|type!="string")) or
-                (.author.__typename=="User" and (.author.databaseId|type!="number")) or
-                (owner and ((.body|type!="string") or (.url|type!="string" or length==0) or
-                    ((.submittedAt // .createdAt)|timestamp|not)))) then
-                error("Malformed review marker input")
+                (.author.__typename=="User" and (.author.databaseId|type!="number"))) then
+                error("Malformed review author")
             else
-                [($comments[].comments.nodes[] | select(owner) | marker("comment"; .createdAt; false)),
-                 ($all_reviews[] | select(owner) |
-                    marker("review"; (.submittedAt // .createdAt); (.state|IN("CHANGES_REQUESTED","DISMISSED"))))] |
+                [($comments[].comments.nodes[] | select(owner) | carry_comment),
+                 ($all_reviews[] | select(owner and (.state|IN("CHANGES_REQUESTED","DISMISSED"))) |
+                     {author:.author.databaseId, at:.submittedAt, revoke:true})] |
                 # A revocation wins when GitHub reports the same second for both actions.
                 group_by(.author) | map(max_by([.at, .revoke]) | select(.revoke|not) |
                     {key:(.author|tostring), value:del(.revoke)}) | from_entries
